@@ -169,7 +169,10 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
-    std::optional<uint32_t> act_block_h_override = std::nullopt);
+    std::optional<uint32_t> act_block_h_override = std::nullopt,
+    bool enable_channels_padding = true,
+    bool is_shard_height_tile_multiple = true,
+    bool is_shard_width_tile_multiple = true);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype);

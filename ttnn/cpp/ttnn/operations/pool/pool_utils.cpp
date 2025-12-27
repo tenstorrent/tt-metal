@@ -9,6 +9,7 @@
 #include "tt-metalium/constants.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
@@ -174,7 +175,7 @@ FactoryParameters get_factory_parameters(
 }
 
 uint32_t calculate_L1_usage(
-    const Tensor& input,
+    DataType input_dtype,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -207,7 +208,7 @@ uint32_t calculate_L1_usage(
 
     FactoryParameters params = get_factory_parameters(
         num_shards_c,
-        input.dtype(),
+        input_dtype,
         output_dtype,
         kernel_h,
         kernel_w,
@@ -301,7 +302,9 @@ uint32_t calculate_L1_usage(
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
-    const Tensor& input_tensor,
+    const DataType& input_dtype,
+    const Layout& input_layout,
+    CoreCoord compute_grid_size,
     const SlidingWindowConfig& sliding_window_config,
     uint32_t channels,
     Pool2DType pool_type,
@@ -312,7 +315,6 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const DataType& output_dtype) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
-    auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     struct l1_usage_config {
         uint32_t l1_usage{};
@@ -327,7 +329,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
 
-    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
     bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
 
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
@@ -348,7 +350,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             return {std::numeric_limits<uint32_t>::max(), input_parallel_config};
         }
         uint32_t l1_usage = calculate_L1_usage(
-            input_tensor,
+            input_dtype,
             sliding_window_config.channels,
             sliding_window_config.get_pad_h(),
             sliding_window_config.get_pad_w(),
@@ -421,23 +423,6 @@ void validate_input_params(
     // Support both (1, 1, nhw, c) and (n, h, w, c) formats
     bool is_flattened_format =
         (input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels);
-    bool is_nhwc_format =
-        (input_shape[0] == batch_size && input_shape[1] == input_h && input_shape[2] == input_w &&
-         input_shape[3] == channels);
-
-    // Unflattened tesnor currently supported for non_block formats only.
-    TT_FATAL(
-        is_flattened_format || (is_nhwc_format && !is_block_float(input_tensor.dtype())),
-        "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
-        "flattened format (1, 1, {}, {}) is supported. Unflattened format ({}, {}, {}, {}) is not supported for block "
-        "format inputs.",
-        input_shape,
-        nhw,
-        channels,
-        batch_size,
-        input_h,
-        input_w,
-        channels);
 
     if (is_in_tiled && is_flattened_format) {
         const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
@@ -475,13 +460,11 @@ void validate_input_params(
 
     // check that padding is not excessive (should not be more than half the kernel size)
     TT_FATAL(
-        pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2 &&
-            pad_right <= kernel_size[1] / 2,
-        "Pool2D: Padding ({}, {}, {}, {}) should not exceed half of kernel size ({}, {})",
+        pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2,
+        "Pool2D: Padding ({}, {}, {}) should not exceed half of kernel size ({}, {})",
         pad_top,
         pad_bottom,
         pad_left,
-        pad_right,
         kernel_size[0],
         kernel_size[1]);
 

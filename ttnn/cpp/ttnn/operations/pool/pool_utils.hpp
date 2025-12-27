@@ -87,7 +87,9 @@ std::optional<sliding_window::ParallelConfig> determine_valid_parallel_config(
     uint32_t act_block_h_override = 0);
 
 std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_shard(
-    const Tensor& input_tensor,
+    const DataType& input_dtype,
+    const Layout& input_layout,
+    CoreCoord compute_grid_size,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t channels,
     Pool2DType pool_type,
@@ -109,7 +111,7 @@ FactoryParameters get_factory_parameters(
     const Layout& output_layout);
 
 uint32_t calculate_L1_usage(
-    const Tensor& input,
+    DataType input_dtype,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
