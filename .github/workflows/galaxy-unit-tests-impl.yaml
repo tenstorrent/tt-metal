@@ -239,8 +239,8 @@ jobs:
         if: ${{ matrix.test-group.model == 'tttv2-modules' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
-          HF_HOME: /mnt/MLPerf/huggingface/
-          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct/
+          HF_HOME: /mnt/MLPerf/huggingface
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
         run: |
           pytest models/common/tests/modules/mlp/test_mlp_2d.py \
             --tb=short \
