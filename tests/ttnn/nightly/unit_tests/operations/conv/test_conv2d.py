@@ -5292,7 +5292,7 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer):
 
-    num = 96
+    num = 256-16
     groups = num
     input_channels = num
     output_channels = num

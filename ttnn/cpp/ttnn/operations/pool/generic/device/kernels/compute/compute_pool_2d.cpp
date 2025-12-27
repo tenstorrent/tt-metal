@@ -153,6 +153,13 @@ void MAIN {
         cb_push_back(in_idx_cb_id, 1);
     }
 
+    // Calculate weight_ntiles using effective tiles formula (matches reader kernel)
+    // This accounts for packing of kernel positions and channels
+    constexpr uint32_t weight_ntiles = (window_size_hw * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
+
+    // Wait for all weight tiles to be available before starting computation
+    cb_wait_front(weight_cb_id, weight_ntiles);
+
     uint32_t tilize_stick_counter = 0;
     uint32_t sticks_left = nsticks_per_core_by_nblocks;
     uint32_t n = 0;
@@ -261,7 +268,11 @@ void MAIN {
                         cb_wait_front(curr_in_cb_id, MAX_EFFECTIVE_TILES);
                         // UNPACK((tt::compute::common::print_full_tile(weight_cb_id, 0)));
                         for (uint32_t i = 0; i < effective_tiles; ++i) {
-                            mul_tiles(curr_in_cb_id, weight_cb_id, i, 0, j * tiles_to_reduce + i);
+                            // Calculate weight tile index based on current channel block
+                            // For depthwise conv, each channel tile (c_i * max_tiles_per_iter + i)
+                            // corresponds to its weight tile at the same index
+                            uint32_t weight_tile_idx = c_i * max_tiles_per_iter + i;
+                            mul_tiles(curr_in_cb_id, weight_cb_id, i, weight_tile_idx, j * tiles_to_reduce + i);
                         }
                         cb_pop_front(curr_in_cb_id, MAX_EFFECTIVE_TILES);
 
