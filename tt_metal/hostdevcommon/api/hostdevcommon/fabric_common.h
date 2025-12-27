@@ -200,11 +200,6 @@ struct RoutingFieldsConstants {
     };
 };
 
-// Ensure FORCE_INLINE is available (fallback for host builds)
-#ifndef FORCE_INLINE
-#define FORCE_INLINE inline
-#endif
-
 // Centralized routing encoding functions (stateless, buffer-based primitives)
 namespace routing_encoding {
 
@@ -230,7 +225,7 @@ namespace routing_encoding {
  *   Pattern: FWD FWD WR (bits 0-1: 10, bits 2-3: 10, bits 4-5: 01)
  *   Result: buffer[0] = 0b01'10'10 = 0x1A
  */
-FORCE_INLINE void encode_1d_unicast(uint8_t num_hops, uint32_t* buffer, uint32_t num_words) {
+inline void encode_1d_unicast(uint8_t num_hops, uint32_t* buffer, uint32_t num_words) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
     // Zero-initialize
@@ -273,7 +268,7 @@ FORCE_INLINE void encode_1d_unicast(uint8_t num_hops, uint32_t* buffer, uint32_t
  * @param buffer Output buffer (uint32_t array)
  * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
  */
-FORCE_INLINE void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t* buffer, uint32_t num_words) {
+inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t* buffer, uint32_t num_words) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
     for (uint32_t i = 0; i < num_words; i++) {
@@ -330,7 +325,7 @@ FORCE_INLINE void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uin
  * @param max_buffer_size Size of buffer (8/16/24/32 bytes)
  * @param prepend_one_hop If true, adds one extra forward hop at the start (used by routers)
  */
-FORCE_INLINE void encode_2d_unicast(
+inline void encode_2d_unicast(
     uint8_t ns_hops,
     uint8_t ew_hops,
     uint8_t ns_dir,
@@ -396,7 +391,7 @@ FORCE_INLINE void encode_2d_unicast(
  * @param segment_length Length of this segment
  * @param buffer Output buffer (uint8_t array)
  */
-FORCE_INLINE void encode_2d_mcast_segment(
+inline void encode_2d_mcast_segment(
     uint8_t direction, uint32_t branch_forward, uint32_t start_hop, uint32_t segment_length, uint8_t* buffer) {
     using MeshFields = RoutingFieldsConstants::Mesh;
 

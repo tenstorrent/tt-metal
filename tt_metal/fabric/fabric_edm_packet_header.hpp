@@ -15,9 +15,13 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "internal/risc_attribs.h"
 #else
 #include <tt_stl/assert.hpp>
 #endif
+
+// Include fabric_common.h for RoutingFieldsConstants and routing_encoding namespace
+#include "hostdevcommon/fabric_common.h"
 
 // These functions have different behavior on host or device.
 // This causes problems trying to detect unused parameters.
@@ -701,7 +705,7 @@ struct LowLatencyRoutingFieldsT {
      * Automatically refills from route_buffer when value is exhausted.
      * This is the core operation used by the router at each hop.
      */
-    FORCE_INLINE void consume_and_shift() {
+    inline void consume_and_shift() {
         value >>= LowLatencyFields::FIELD_WIDTH;
 
         if constexpr (ExtensionWords > 0) {
@@ -722,7 +726,7 @@ struct LowLatencyRoutingFieldsT {
      * Copy routing fields to volatile destination (packet header).
      * Needed because router updates a cached copy then writes back to packet.
      */
-    FORCE_INLINE void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
+    inline void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
         dest->value = this->value;
         if constexpr (ExtensionWords > 0) {
             for (uint32_t i = 0; i < ExtensionWords; i++) {
@@ -746,7 +750,7 @@ struct LowLatencyRoutingFieldsT<0> {
     /**
      * Consume current hop (no refill needed in 16-hop mode)
      */
-    FORCE_INLINE void consume_and_shift() {
+    inline void consume_and_shift() {
         value >>= LowLatencyFields::FIELD_WIDTH;
         // No refill logic - compiles to single shift instruction
     }
@@ -754,7 +758,7 @@ struct LowLatencyRoutingFieldsT<0> {
     /**
      * Copy to packet header (value only in 16-hop mode)
      */
-    FORCE_INLINE void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
+    inline void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
 } __attribute__((packed));
 
 // Template for 1D packet headers with variable routing field sizes
@@ -835,9 +839,9 @@ public:
 
         // Helper to set 2-bit field at specific hop position
         auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
-            const uint32_t word_idx = hop_index / LowLatencyRoutingFieldsConstants::BASE_HOPS;
-            const uint32_t bit_pos = (hop_index % LowLatencyRoutingFieldsConstants::BASE_HOPS) *
-                                     LowLatencyRoutingFieldsConstants::FIELD_WIDTH;
+            using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+            const uint32_t word_idx = hop_index / LowLatencyFields::BASE_HOPS;
+            const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
 
             if (word_idx == 0) {
                 result.value |= (field_value << bit_pos);
@@ -855,15 +859,16 @@ public:
         }
 
         // Build pattern: FORWARD_ONLY before multicast range, WRITE_AND_FORWARD within range, WRITE_ONLY at end
+        using LowLatencyFields = RoutingFieldsConstants::LowLatency;
         for (uint32_t hop = 0; hop < start_hop - 1; hop++) {
-            set_hop_field(hop, LowLatencyRoutingFieldsConstants::FORWARD_ONLY);
+            set_hop_field(hop, LowLatencyFields::FORWARD_ONLY);
         }
 
         for (uint32_t hop = start_hop - 1; hop < end_hop; hop++) {
-            set_hop_field(hop, LowLatencyRoutingFieldsConstants::WRITE_AND_FORWARD);
+            set_hop_field(hop, LowLatencyFields::WRITE_AND_FORWARD);
         }
 
-        set_hop_field(end_hop, LowLatencyRoutingFieldsConstants::WRITE_ONLY);
+        set_hop_field(end_hop, LowLatencyFields::WRITE_ONLY);
 
         return result;
     }
