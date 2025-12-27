@@ -181,7 +181,8 @@ private:
         IDevice* device,
         const CoreCoord& worker_core,
         ProfilerDataBufferSource data_source,
-        const std::optional<ProfilerOptionalMetadata>& metadata);
+        const std::optional<ProfilerOptionalMetadata>& metadata,
+        const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
 
     // Read marker data to be displayed
     void readDeviceMarkerData(
@@ -271,7 +272,8 @@ public:
         const std::vector<CoreCoord>& virtual_cores,
         ProfilerReadState state = ProfilerReadState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
-        const std::optional<ProfilerOptionalMetadata>& metadata = {});
+        const std::optional<ProfilerOptionalMetadata>& metadata = {},
+        const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
 
     void dumpRoutingInfo() const;
 

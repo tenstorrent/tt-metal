@@ -20,9 +20,17 @@ constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT 
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions) {
     std::optional<uint32_t> profiler_program_support_count = rtoptions.get_profiler_program_support_count();
     const bool do_profiler_sum = rtoptions.get_profiler_sum();
+    const bool debug_dump_enabled = rtoptions.get_experimental_device_debug_dump_enabled();
 
     if (!profiler_program_support_count.has_value()) {
         profiler_program_support_count = DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;
+        if (debug_dump_enabled) {
+            profiler_program_support_count = profiler_program_support_count.value() / 2;
+            log_info(
+                tt::LogMetal,
+                "Device Debug Dump enabled: reducing profiler program support count to {} to maintain same DRAM usage",
+                profiler_program_support_count.value());
+        }
     }
 
     const uint32_t profiler_l1_program_min_optional_marker_count =
@@ -46,11 +54,6 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             profiler_program_support_count.value());
     }
 
-    // if (rtoptions.get_experimental_device_debug_dump_enabled()) {
-    //     // Using 2 buffers so half the bank size to keep overall profiler size the same
-    //     dram_bank_size_per_risc_bytes_single_program /= 2;
-    // }
-
     const uint32_t dram_bank_size_per_risc_bytes =
         dram_bank_size_per_risc_bytes_single_program * profiler_program_support_count.value();
 
@@ -63,6 +66,16 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
 uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
     llrt::RunTimeOptions& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     return get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
+}
+
+uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions) {
+    const uint32_t per_buffer_size = get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
+    const bool debug_dump_enabled = rtoptions.get_experimental_device_debug_dump_enabled();
+
+    if (debug_dump_enabled) {
+        return per_buffer_size * 2;
+    }
+    return per_buffer_size;
 }
 
 ProfilerStateManager::ProfilerStateManager() : do_sync_on_close(true) {}
@@ -159,18 +172,13 @@ void ProfilerStateManager::start_debug_dump_thread(
                     lock, interval, [&] { return this->stop_debug_dump_thread.load(); })) {
                 log_info(tt::LogMetal, "Reading device profiler results during cleanup");
                 for (auto* device : active_devices) {
-                    // First, call pollDebugDumpResults one final time to process any remaining data
-                    // This ensures all markers are captured even if buffers never stalled
                     {
                         auto profiler_it = this->device_profiler_map.find(device->id());
                         TT_ASSERT(profiler_it != this->device_profiler_map.end());
                         DeviceProfiler& profiler = profiler_it->second;
-                        // Final poll: process all buffers with data, even if not stalled
                         profiler.pollDebugDumpResults(
                             device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
                     }
-
-                    // Then read any remaining data using the standard read path
                     constexpr auto state = ProfilerReadState::LAST_FD_READ;
                     detail::ReadDeviceProfilerResultsInternal(device, virtual_cores_map.at(device->id()), state, {});
 
@@ -188,7 +196,6 @@ void ProfilerStateManager::start_debug_dump_thread(
                         profiler.processResults(
                             device, virtual_cores_map.at(device->id()), state, ProfilerDataBufferSource::DRAM, {});
                     }
-
                     // cleanup_device_profilers() handles the final dump
                 }
                 break;

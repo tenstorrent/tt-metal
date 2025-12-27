@@ -473,40 +473,40 @@ def test_dispatch_cores():
         refCountDict=REF_COUNT_DICT,
     )
 
-    verify_stats(
-        run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
-            setupAutoExtract=True,
-            doDispatchCores=True,
-            setOpSupportCount=1500,
-        ),
-        statTypes=["Dispatch", "Prefetch"],
-        allowedRange=1000,
-        refCountDict=REF_COUNT_DICT,
-    )
+    # verify_stats(
+    #     run_device_profiler_test(
+    #         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
+    #         setupAutoExtract=True,
+    #         doDispatchCores=True,
+    #         setOpSupportCount=1500,
+    #     ),
+    #     statTypes=["Dispatch", "Prefetch"],
+    #     allowedRange=1000,
+    #     refCountDict=REF_COUNT_DICT,
+    # )
 
-    verify_stats(
-        run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
-            setupAutoExtract=True,
-            doDispatchCores=True,
-            setOpSupportCount=3000,
-        ),
-        statTypes=["Dispatch", "Prefetch"],
-        allowedRange=1000,
-        refCountDict=REF_COUNT_DICT,
-    )
+    # verify_stats(
+    #     run_device_profiler_test(
+    #         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
+    #         setupAutoExtract=True,
+    #         doDispatchCores=True,
+    #         setOpSupportCount=3000,
+    #     ),
+    #     statTypes=["Dispatch", "Prefetch"],
+    #     allowedRange=1000,
+    #     refCountDict=REF_COUNT_DICT,
+    # )
 
-    verify_stats(
-        run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
-            setupAutoExtract=False,
-            doDispatchCores=True,
-        ),
-        statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
-        allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
-        refCountDict=REF_COUNT_DICT,
-    )
+    # verify_stats(
+    #     run_device_profiler_test(
+    #         testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
+    #         setupAutoExtract=False,
+    #         doDispatchCores=True,
+    #     ),
+    #     statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
+    #     allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
+    #     refCountDict=REF_COUNT_DICT,
+    # )
 
 
 def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):

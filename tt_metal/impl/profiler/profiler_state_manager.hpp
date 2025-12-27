@@ -34,6 +34,7 @@ void ReadDeviceProfilerResultsInternal(
 
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes();
+uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions);
 
 struct ProfilerStateManager {
 public:
