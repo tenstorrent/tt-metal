@@ -71,6 +71,7 @@ tiktoken==0.12.0
 timm>=1.0.22
 toolz==1.1.0
 torch==2.9.1 ; platform_machine == 'aarch64'
+torchcodec==0.9.1 ; platform_machine == 'aarch64'
 torch-fidelity==0.3.0
 torchmetrics==1.8.2
 torchvision==0.24.1 ; platform_machine == 'aarch64'
@@ -100,4 +101,5 @@ seaborn==0.13.2
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.9.1 ; platform_machine == 'x86_64'
+torchcodec==0.9.1 ; platform_machine == 'x86_64'
 torchvision==0.24.1 ; platform_machine == 'x86_64'
