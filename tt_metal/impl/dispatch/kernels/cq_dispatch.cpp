@@ -279,6 +279,8 @@ void notify_host_of_dispatch_progress() {
 #else
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_dispatch_progress_ptr, dispatch_progress_addr, 4);
+    noc_nonposted_writes_num_issued[noc_index]++;
+    noc_nonposted_writes_acked[noc_index]++;
 #endif
     noc_async_writes_flushed();
 }
