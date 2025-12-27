@@ -231,8 +231,3 @@ inline void _llk_math_transpose_dest_init_()
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 }
-
-inline void _llk_math_transpose_dest_uninit_()
-{
-    // No state to restore - all states are transient or default
-}

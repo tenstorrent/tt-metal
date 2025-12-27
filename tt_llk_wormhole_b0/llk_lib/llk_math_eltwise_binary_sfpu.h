@@ -74,8 +74,3 @@ inline void _llk_math_eltwise_binary_sfpu_init_()
     eltwise_binary_sfpu_configure_addrmod<sfpu_op>();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
-
-inline void _llk_math_eltwise_binary_sfpu_uninit_()
-{
-    // No state to restore - all states are transient or default
-}

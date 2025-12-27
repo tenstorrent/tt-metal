@@ -411,11 +411,6 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-inline void _llk_math_eltwise_binary_uninit_()
-{
-    // No state to restore - all states are transient or default
-}
-
 /*************************************************************************
  * LLK eltwise_bcast_row_tile math implementation for SDPA
 

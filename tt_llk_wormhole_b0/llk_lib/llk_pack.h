@@ -178,11 +178,6 @@ inline void _llk_pack_init_(
     }
 }
 
-inline void _llk_pack_uninit_(const std::uint32_t face_r_dim = FACE_R_DIM)
-{
-    TT_SETADCXX(p_setadc::PAC, face_r_dim * FACE_C_DIM - 1, 0x0);
-}
-
 template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
