@@ -104,6 +104,22 @@ inline uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t
 template uint32_t get_cq_completion_rd_ptr<true>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 template uint32_t get_cq_completion_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
+uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
+    uint32_t progress;
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+    uint32_t dispatch_progress_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+        CommandQueueHostAddrType::DISPATCH_PROGRESS);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        &progress,
+        sizeof(uint32_t),
+        dispatch_progress_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
+        mmio_device_id,
+        channel);
+    return progress;
+}
+
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type) {
     // Sub Device manager state must be correct (from device init)
     // If core type is active ethernet, it does not include fabric routers which were created using slow dispatch

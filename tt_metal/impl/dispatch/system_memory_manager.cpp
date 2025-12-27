@@ -45,30 +45,47 @@ bool wrap_ge(uint32_t a, uint32_t b) {
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
-template <typename FuncBody, typename FuncWait, typename OnTimeout>
+// GetProgress is optional - if provided, timeout only triggers if BOTH wait_condition is true AND no progress made
+template <typename FuncBody, typename FuncWait, typename OnTimeout, typename GetProgress>
 void loop_and_wait_with_timeout(
     const FuncBody& func_body,
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
-    std::chrono::duration<float> timeout_duration) {
+    std::chrono::duration<float> timeout_duration,
+    const GetProgress& get_progress = nullptr) {
     if (timeout_duration.count() > 0.0f) {
-        auto start_time = std::chrono::high_resolution_clock::now();
+        auto last_progress_time = std::chrono::high_resolution_clock::now();
+        uint32_t last_progress_value = 0;
 
-        do {
+        // Initialize progress tracking if get_progress is provided
+        last_progress_value = get_progress();
+
+        while (true) {
             func_body();
-            if (wait_condition()) {
-                // If somehow finished up the operation, we don't need to yield
-                std::this_thread::yield();
+
+            // Check if progress was made (if progress tracking is enabled)
+            uint32_t current_progress = get_progress();
+            if (current_progress != last_progress_value) {
+                last_progress_value = current_progress;
+                last_progress_time = std::chrono::high_resolution_clock::now();
+            }
+
+            // Check if operation is finished
+            if (!wait_condition()) {
+                break;
             }
 
             auto current_time = std::chrono::high_resolution_clock::now();
-            auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
+            auto elapsed = std::chrono::duration<float>(current_time - last_progress_time).count();
 
             if (elapsed >= timeout_duration.count()) {
                 on_timeout();
                 break;
             }
-        } while (wait_condition());
+
+            // Sleep briefly to avoid busy-waiting
+            std::this_thread::yield();
+        }
     } else {
         do {
             func_body();
@@ -458,10 +475,16 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
+        // Get dispatch progress for timeout detection
+        auto get_dispatch_progress = [&]() -> uint32_t {
+            return get_cq_dispatch_progress(this->device_id, cq_id, this->cq_size);
+        };
+
         auto timeout_duration =
             tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
 
-        loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
+        loop_and_wait_with_timeout(
+            fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
     };
 
     wait_for_fetch_q_space();
@@ -484,17 +507,10 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     // Body of the operation to be timed out
-    auto wait_operation_body =
-        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle]() -> uint32_t {
+    auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-
-        if (exit_condition.load()) {
-            return write_ptr_and_toggle;
-        }
-
-        return write_ptr_and_toggle;
     };
 
     // Condition to check if the operation should continue
@@ -512,11 +528,17 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
+    // Get dispatch progress for timeout detection
+    auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
+        return get_cq_dispatch_progress(this->device_id, cq_id, this->cq_size);
+    };
+
     loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations());
+        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
+        get_dispatch_progress);
 
     return write_ptr_and_toggle;
 }

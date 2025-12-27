@@ -213,6 +213,8 @@ void Device::configure_command_queue_programs() {
                 CommandQueueHostAddrType::COMPLETION_Q_WR);
             uint32_t host_completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
                 CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t dispatch_progress = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::DISPATCH_PROGRESS);
             uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
                 CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start / sizeof(uint32_t));
@@ -232,6 +234,7 @@ void Device::configure_command_queue_programs() {
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
                      get_absolute_cq_offset(channel, cq_id, cq_size)) >>
                     4;
+                pointers[dispatch_progress / sizeof(uint32_t)] = 0;
 
                 tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
                     pointers.data(),

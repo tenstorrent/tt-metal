@@ -46,6 +46,8 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> host_completion_q_wr_ptr;  // 26
     std::optional<uint32_t> dev_completion_q_wr_ptr;
     std::optional<uint32_t> dev_completion_q_rd_ptr;
+    std::optional<uint32_t> host_dispatch_progress_ptr;
+    std::optional<uint32_t> dev_dispatch_progress_ptr;
 
     std::optional<uint32_t> fabric_header_rb_base;
     std::optional<uint32_t> fabric_header_rb_entries;

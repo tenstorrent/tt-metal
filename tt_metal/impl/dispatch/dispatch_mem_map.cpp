@@ -131,6 +131,8 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_pcie_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
             // At this point fabric context is not initialized yet
             // Hardcode to 128B (more than enough space) for now
@@ -152,6 +154,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
         } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);

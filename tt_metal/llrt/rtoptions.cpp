@@ -119,6 +119,7 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
+    TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
 
     // ========================================
     // WATCHER SYSTEM
@@ -863,6 +864,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
         case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
             this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
+
+        // TT_METAL_DISPATCH_PROGRESS_UPDATE_MS
+        // Dispatch kernel progress update period in milliseconds.
+        // Default: 100ms
+        // Usage: export TT_METAL_DISPATCH_PROGRESS_UPDATE_MS=200
+        case EnvVarID::TT_METAL_DISPATCH_PROGRESS_UPDATE_MS:
+            this->dispatch_progress_update_ms = std::stoul(value);
             break;
 
         // ========================================
