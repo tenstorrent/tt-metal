@@ -103,11 +103,12 @@ jobs:
       - name: Run pytest with ASan
         timeout-minutes: 10
         env:
-          LD_PRELOAD: ${{ env.ASAN_RT_SO }}
           ASAN_SYMBOLIZER_PATH: ${{ env.ASAN_SYMBOLIZER_PATH }}
           ASAN_OPTIONS: "color=always:detect_leaks=1:detect_stack_use_after_return=1"
           LSAN_OPTIONS: "suppressions=/work/tt_metal/test/lsan.supp"
           UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
           PYTHONPATH: /work
         run: |
+          # Set LD_PRELOAD here (not in env:) to avoid bash preload errors
+          export LD_PRELOAD="${ASAN_RT_SO}"
           pytest tests/ttnn/unit_tests/tensor -v --timeout=60 -x -m "not disable_fast_runtime_mode"
