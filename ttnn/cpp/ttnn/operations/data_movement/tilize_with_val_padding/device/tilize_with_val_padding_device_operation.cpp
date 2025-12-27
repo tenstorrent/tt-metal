@@ -28,8 +28,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     if (!operation_attributes.use_multicore) {
         return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory{};
     }
-    const auto& a = tensor_args.input_tensor;
-    auto* device = a.device();
+    auto* device = input_tensor.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -49,7 +48,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
         if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-            uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) /
+            uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
                                         (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
             // Compute grid area and initial blocks-per-core using integer math.
             uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
