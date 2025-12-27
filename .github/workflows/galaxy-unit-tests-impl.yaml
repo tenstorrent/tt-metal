@@ -243,8 +243,8 @@ jobs:
           HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
         run: |
           pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+            -m "not slow" \
             --tb=short \
-            --m "not slow" \
             --cov=models.common.modules.mlp.mlp_2d \
             --cov-report=term-missing \
             --cov-config=models/common/tests/setup.cfg
