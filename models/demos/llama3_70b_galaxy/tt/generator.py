@@ -734,6 +734,8 @@ class Generator:
 
     def process_decode_output_host(self, tt_out, is_tokens=True):
         if isinstance(tt_out, tuple):
+            if isinstance(tt_out[0], tuple):
+                tt_out = tt_out[0]
             tt_log_probs = tt_out[1]
             tt_out = tt_out[0]
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
