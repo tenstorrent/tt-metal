@@ -1,12 +1,95 @@
 # Compressing the debug sections cuts the size of ttnn.so by half for builds with debug info.
-add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--compress-debug-sections=zstd>)
+# Check for zstd compressed debug sections support (better compression ratio)
+include(CheckCXXCompilerFlag)
+include(CheckLinkerFlag)
 
-# Use mold by default if it is available.
+check_cxx_compiler_flag(
+    "-gz=zstd"
+    COMPILER_SUPPORTS_GZ_ZSTD
+)
+check_linker_flag(
+    CXX
+    "-Wl,--compress-debug-sections=zstd"
+    LINKER_SUPPORTS_COMPRESS_ZSTD
+)
+
+if(COMPILER_SUPPORTS_GZ_ZSTD AND LINKER_SUPPORTS_COMPRESS_ZSTD)
+    message(STATUS "Using zstd compressed debug sections")
+    add_compile_options(-gz=zstd)
+    add_link_options(-Wl,--compress-debug-sections=zstd)
+else()
+    # Fallback to default -gz compression (typically zlib)
+    check_cxx_compiler_flag(
+        "-gz"
+        COMPILER_SUPPORTS_GZ
+    )
+    check_linker_flag(
+        CXX
+        "-Wl,--compress-debug-sections=zlib"
+        LINKER_SUPPORTS_COMPRESS_ZLIB
+    )
+
+    if(COMPILER_SUPPORTS_GZ AND LINKER_SUPPORTS_COMPRESS_ZLIB)
+        message(STATUS "Using zlib compressed debug sections")
+        add_compile_options(-gz)
+        add_link_options(-Wl,--compress-debug-sections=zlib)
+    else()
+        message(STATUS "Compressed debug sections not supported, skipping")
+    endif()
+endif()
+
+# Use mold by default if it is available and version >= 1.6 (LTO support).
+# Fall back to LLD >= 17 if mold is unavailable or too old.
 if(NOT DEFINED CMAKE_LINKER_TYPE)
-    find_program(MOLD ld.mold)
-    if(MOLD)
-        message(STATUS "Linker not specified. Using mold linker: ${MOLD}")
-        set(CMAKE_LINKER_TYPE MOLD)
+    find_program(MOLD_EXECUTABLE ld.mold)
+    if(MOLD_EXECUTABLE)
+        # Get mold version (output format: "mold X.Y.Z (...)")
+        execute_process(
+            COMMAND
+                ${MOLD_EXECUTABLE} --version
+            OUTPUT_VARIABLE MOLD_VERSION_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(MOLD_VERSION_OUTPUT MATCHES "mold ([0-9]+\\.[0-9]+)")
+            set(MOLD_VERSION "${CMAKE_MATCH_1}")
+            if(MOLD_VERSION VERSION_GREATER_EQUAL "1.6")
+                message(STATUS "Linker not specified. Using mold linker ${MOLD_VERSION}: ${MOLD_EXECUTABLE}")
+                set(CMAKE_LINKER_TYPE MOLD)
+            else()
+                message(STATUS "mold ${MOLD_VERSION} found but version < 1.6 (no LTO support), checking for LLD")
+            endif()
+        else()
+            message(STATUS "Could not determine mold version, checking for LLD")
+        endif()
+    endif()
+
+    # If mold wasn't selected, try LLD >= 17
+    if(NOT CMAKE_LINKER_TYPE)
+        find_program(LLD_EXECUTABLE ld.lld)
+        if(LLD_EXECUTABLE)
+            # Get LLD version (output format: "LLD X.Y.Z (...)" or "Ubuntu LLD X.Y.Z (...)")
+            execute_process(
+                COMMAND
+                    ${LLD_EXECUTABLE} --version
+                OUTPUT_VARIABLE LLD_VERSION_OUTPUT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            if(LLD_VERSION_OUTPUT MATCHES "LLD ([0-9]+)")
+                set(LLD_VERSION "${CMAKE_MATCH_1}")
+                if(LLD_VERSION VERSION_GREATER_EQUAL "17")
+                    message(STATUS "Linker not specified. Using LLD linker ${LLD_VERSION}: ${LLD_EXECUTABLE}")
+                    set(CMAKE_LINKER_TYPE LLD)
+                else()
+                    message(STATUS "LLD ${LLD_VERSION} found but version < 17, using default linker")
+                endif()
+            else()
+                message(STATUS "Could not determine LLD version, using default linker")
+            endif()
+        else()
+            message(STATUS "Neither mold >= 1.6 nor LLD >= 17 found, using default linker")
+        endif()
     endif()
 endif()
 
