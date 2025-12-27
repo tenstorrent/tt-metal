@@ -160,9 +160,9 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
 def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
+    torch_config = transformers.ViTConfig.from_pretrained(model_name)
+    model = transformers.models.vit.modeling_vit.ViTAttention(torch_config).eval()
+    config = ttnn_optimized_sharded_vit.update_model_config(torch_config, batch_size)
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     result = model(torch_hidden_states)
@@ -288,9 +288,9 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
 def test_vit_layer(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    torch_config = transformers.ViTConfig.from_pretrained(model_name)
     model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
+    config = ttnn_optimized_sharded_vit.update_model_config(torch_config, batch_size)
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     result = model(torch_hidden_states)
