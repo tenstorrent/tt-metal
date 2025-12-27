@@ -6,6 +6,7 @@ import os
 
 import torch
 from transformers import FalconForCausalLM
+from transformers.cache_utils import DynamicCache
 
 import ttnn
 from models.common.utility_functions import tt_tensors_to_torch_tensors
@@ -244,6 +245,10 @@ def get_rand_falcon_inputs(
 
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
+
+    # Convert layer_past from legacy tuple format to DynamicCache
+    if layer_past is not None:
+        layer_past = DynamicCache.from_legacy_cache(layer_past)
 
     if not generate_attention_inputs:
         return (layer_past, tt_layer_past, kv_len)
