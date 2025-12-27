@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Configure datasets library to use soundfile backend instead of torchcodec
+# This avoids the FFmpeg/torchcodec dependency issue
+import datasets.config
 import pytest
 import torch
 import transformers
@@ -9,6 +12,8 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+datasets.config.AUDIO_BACKEND = "soundfile"
 
 import ttnn
 from models.common.utility_functions import is_blackhole, torch_random
