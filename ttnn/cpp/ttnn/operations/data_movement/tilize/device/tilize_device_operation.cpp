@@ -119,54 +119,51 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     }
     if (!operation_attributes.enough_space_height) {
         return program::TilizeMultiCoreBlockProgramFactory{};
-    } else {
-        const auto& a = tensor_args.input_tensor;
-        auto sub_core_grids = operation_attributes.sub_core_grids;
+    }
+    auto sub_core_grids = operation_attributes.sub_core_grids;
 
-        uint32_t num_tiles_per_row = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
-        uint32_t num_tiles_per_col = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
-        int32_t ntiles = a.physical_volume() / tt::constants::TILE_HW;
-        uint32_t ntiles_per_block = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-        uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
+    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
 
-        auto* device = a.device();
-        auto grid_size = device->compute_with_storage_grid_size();
-        CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-        CoreRangeSet default_grid(default_cores);
-        CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+    auto* device = input_tensor_a.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-        size_t grid_area = available_grid.num_cores();
-        const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
-        const uint32_t ncores =
-            nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    size_t grid_area = available_grid.num_cores();
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
 
-        constexpr uint32_t threshold_row_block = 32;
-        if (num_tiles_per_row > threshold_row_block) {
-            if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) /
-                                            (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
-                // Compute grid area and initial blocks-per-core using integer math.
-                uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block) {
+        if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
+            uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            // Compute grid area and initial blocks-per-core using integer math.
+            uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
 
-                // Adjust nblocks_per_core_wh and determine the optimal block size.
-                auto [adjusted_nblocks_per_core, single_block_size] =
-                    closest_square_larger_than_b(nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
-                nblocks_per_core_wh = adjusted_nblocks_per_core;
+            // Adjust nblocks_per_core_wh and determine the optimal block size.
+            auto [adjusted_nblocks_per_core, single_block_size] =
+                closest_square_larger_than_b(nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
+            nblocks_per_core_wh = adjusted_nblocks_per_core;
 
-                const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
-                const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
-                const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-                const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
+            const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
+            const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
+            const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+            const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
 
-                if (ncores < ncores_block) {
-                    return program::TilizeMultiCoreBlockProgramFactory{};
-                }
+            if (ncores < ncores_block) {
+                return program::TilizeMultiCoreBlockProgramFactory{};
             }
         }
-        return program::TilizeMultiCoreInterleavedProgramFactory{};
     }
+    return program::TilizeMultiCoreInterleavedProgramFactory{};
 }
 
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
