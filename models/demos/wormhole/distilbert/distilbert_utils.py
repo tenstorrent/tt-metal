@@ -91,7 +91,7 @@ def squad_divide_chunks(dataset_question, dataset_context, dataset_reference, ba
 
 
 def squadv2_1K_samples_input(tokenizer, seq_len, attention_mask, token_type_ids, microbatch=8):
-    squadv2_dataset = load_dataset("squad_v2", use_auth_token=False, streaming=True)["validation"]
+    squadv2_dataset = load_dataset("squad_v2", token=False, streaming=True)["validation"]
     dataset_iter = iter(squadv2_dataset)
     dataset_question = []
     dataset_context = []
