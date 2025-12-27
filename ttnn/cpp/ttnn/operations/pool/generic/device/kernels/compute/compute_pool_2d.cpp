@@ -23,7 +23,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
-// #include "api/tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
@@ -43,7 +43,7 @@ void MAIN {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(2);
 
-    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(3);
+    constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
     constexpr uint32_t in_c = get_compile_time_arg_val(4);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
     constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
@@ -139,8 +139,8 @@ void MAIN {
     uint32_t current_idx_col;
     uint32_t current_idx_row;
     if constexpr (return_indices) {
-        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
-        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(1);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(2);
         current_idx_col = start_col;
         current_idx_row = start_row;
 
@@ -160,8 +160,16 @@ void MAIN {
     // Wait for all weight tiles to be available before starting computation
     cb_wait_front(weight_cb_id, weight_ntiles);
 
+    // if max out sticks is non-zero then this will be used as the number of out sticks for every core
+    // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
+    // runtime args are used while for grid sample the max out sticks is set
+    uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : get_arg_val<uint32_t>(0);
+    uint32_t last_tile_height =
+        num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
+
     uint32_t tilize_stick_counter = 0;
-    uint32_t sticks_left = nsticks_per_core_by_nblocks;
+    uint32_t tilize_stick_total = 0;
+    uint32_t sticks_left = num_out_sticks_this_core;
     uint32_t n = 0;
     uint32_t curr_in_cb_id = in_cb_id_0;
     uint32_t MAX_EFFECTIVE_TILES = (window_size_hw * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
@@ -248,7 +256,7 @@ void MAIN {
                     // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
                     // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
                     // smaller than 9 as the excess sticks are just filled with padding values
-                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
                     max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
                         data_dst_idx, index_dst_idx);
                 } else {
@@ -370,6 +378,7 @@ void MAIN {
                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
                         tilize_stick_counter++;
+                        tilize_stick_total++;
                     } else {
                         pack_untilize_dest<max_tiles_per_iter>(
                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
@@ -377,24 +386,23 @@ void MAIN {
                     }
                     tile_regs_release();
 
-                    if (tilize_stick_counter == TILE_HEIGHT) {
-                        PACK(DPRINT << "TILIZE" << ENDL());
+                    bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
+                    if (tilize_stick_counter == TILE_HEIGHT ||
+                        (last_tile && tilize_stick_counter == last_tile_height)) {
+                        if (last_tile && last_tile_height != TILE_HEIGHT) {
+                            cb_wait_front(pre_tilize_cb_id, last_tile_height * in_ntiles_c);
+                            // if the last tile is not whole we won't have pushed enough sticks, so we need to
+                            // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
+                            // before calling tilize
+                            uint32_t filler_stick_tiles =
+                                (TILE_HEIGHT - last_tile_height) *
+                                ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
+                            cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
+                        }
+                        cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
-                        // PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
 
-                        // Workaround until #27504 is not closed
-                        // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
-                        // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
-                        // to unpack_A_hw_configure.
-                        tensix_sync();
-                        unary_op_init_common(pre_tilize_cb_id, out_cb_id);
-                        // UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
-                        //     pre_tilize_cb_id)));
-                        // UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE,
-                        // UnpackToDestEn>(
-                        //     false /*transpose of faces*/, false /*transpose within 16x16 face*/, pre_tilize_cb_id)));
-
-                        tensix_sync();
+                        unpack_tilizeA_B_uninit(curr_in_cb_id);
                         pack_reconfig_data_format(out_cb_id);
 
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
@@ -404,6 +412,8 @@ void MAIN {
                         // PACK((tt::compute::common::print_full_tile(out_cb_id, 0, true)));
 
                         cb_push_back(out_cb_id, in_ntiles_c);
+                        cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
                         if constexpr (is_output_block_format) {
                             pack_reconfig_data_format(pre_tilize_cb_id);

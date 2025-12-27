@@ -5261,7 +5261,7 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
     (
         # (1, 32, 32, 40, 40, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (no activation)
-        (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (SILU activation)
+        (1, 32, 32, 3, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu", False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (SILU activation)
         # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (0, 0), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (RELU activation)
         # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True),
 

@@ -549,7 +549,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         params.in_ntiles_c,             // 0 - in_ntiles_c (FIXED: use calculated value)
         kernel_h * kernel_w,            // 1
         params.split_reader,            // 2 - split_reader (FIXED: use calculated value)
-        out_nhw_per_core,               // 3
+        0,                              // 3 - max_out_sticks_per_core (0 = use runtime args like pool2d)
         in_c_per_shard_ceil,            // 4
         in_nblocks_c,                   // 5
         params.max_rows_for_reduction,  // 6 - max_rows_for_reduction (FIXED: use calculated value)
@@ -729,6 +729,38 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         "out_nhw_per_core={}, expected_sticks={}",
         out_nhw_per_core,
         out_nhw_per_core * in_c_per_shard_ceil / in_nblocks_c);
+
+    // Set runtime args for compute kernel (same pattern as pool2d factory)
+    // This passes out_nhw_this_core to each core since compile arg 3 is set to 0
+    const uint32_t max_out_nhw_per_core = out_nhw_per_core;
+    const uint32_t total_out_nhw = ashape[0] * out_h * out_w;
+    const uint32_t rectangular_x = is_block_sharded ? parallel_config.grid.ranges()[0].end_coord.x + 1
+                                                    : parallel_config.grid.bounding_box().grid_size().x;
+    const bool is_width_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
+
+    for (uint32_t core_i = 0; core_i < num_cores; core_i++) {
+        const uint32_t core_x_i = core_i % rectangular_x;
+        const uint32_t core_y_i = core_i / rectangular_x;
+        const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
+
+        uint32_t total_out_nhw_processed;
+        if (is_block_sharded) {
+            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
+        } else if (is_width_sharded) {
+            total_out_nhw_processed = 0;
+        } else {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+        }
+
+        uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
+        std::vector<uint32_t> compute_rt_args = {out_nhw_this_core};
+
+        SetRuntimeArgs(program, compute_kernel, core, compute_rt_args);
+    }
+
+    log_debug(tt::LogOp, "Set compute kernel runtime args for {} cores", num_cores);
 
     // Suppress unused variable warnings for kernel handles (they are stored in the program)
     (void)reader0_kernel;
