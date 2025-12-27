@@ -9,6 +9,12 @@ from datasets import load_dataset
 from huggingface_hub import snapshot_download
 from loguru import logger
 
+# Configure datasets library to use soundfile backend instead of torchcodec
+# This avoids the FFmpeg/torchcodec dependency issue when loading audio datasets
+import datasets.config
+
+datasets.config.AUDIO_BACKEND = "soundfile"
+
 
 BH_MODELS = [
     "distil-whisper/distil-large-v3",

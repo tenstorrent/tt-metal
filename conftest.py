@@ -2,10 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Configure datasets library to use soundfile backend instead of torchcodec
+# This must be set before importing datasets to avoid FFmpeg/torchcodec dependency issues
+# when loading audio datasets like librispeech_asr_dummy
+import os
+
+os.environ["DATASETS_AUDIO_BACKEND"] = "soundfile"
+
 import pytest
 import torch
 import random
-import os
 import numpy as np
 from functools import partial
 from operator import contains, eq, getitem

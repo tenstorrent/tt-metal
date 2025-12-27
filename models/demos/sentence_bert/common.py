@@ -35,12 +35,19 @@ def load_torch_model(reference_model, target_prefix="", model_location_generator
 
     new_state_dict = {}
     if target_prefix == "":
-        module_state_dict = {k: v for k, v in state_dict.items()}
+        module_state_dict = {k: v for k, v in state_dict.items() if k is not None}
     else:
-        module_state_dict = {k: v for k, v in state_dict.items() if (target_prefix in k)}
+        module_state_dict = {k: v for k, v in state_dict.items() if (k is not None and target_prefix in k)}
     new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in module_state_dict.items()]
+    keys = [name for name, parameter in reference_model.state_dict().items() if name is not None]
+    values = [parameter for name, parameter in module_state_dict.items() if name is not None]
+
+    if len(keys) != len(values):
+        raise ValueError(
+            f"Mismatch between model keys ({len(keys)}) and loaded state dict values ({len(values)}). "
+            f"Model keys: {list(reference_model.state_dict().keys())[:5]}... "
+            f"State dict keys: {list(module_state_dict.keys())[:5]}..."
+        )
 
     for i in range(len(keys)):
         new_state_dict[keys[i]] = values[i]

@@ -7,6 +7,9 @@ from os import listdir
 from os.path import isfile, join
 from typing import Optional
 
+# Configure datasets library to use soundfile backend instead of torchcodec
+# This avoids the FFmpeg/torchcodec dependency issue
+import datasets.config
 import jiwer
 import pytest
 import torch
@@ -22,6 +25,8 @@ from transformers import (
     WhisperForConditionalGeneration,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+datasets.config.AUDIO_BACKEND = "soundfile"
 
 import ttnn
 from models.common.utility_functions import is_blackhole

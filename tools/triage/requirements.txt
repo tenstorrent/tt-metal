@@ -1,1 +1,1 @@
-pycapnp==2.0.0
+pycapnp==2.2.1

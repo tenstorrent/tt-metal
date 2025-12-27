@@ -1,6 +1,6 @@
-datasets
-transformers
-tqdm
-numpy
-loguru
-ml_dtypes
+datasets==4.4.2
+loguru==0.7.3
+ml-dtypes==0.5.4
+numpy==2.2.6
+tqdm==4.67.1
+transformers==4.57.3

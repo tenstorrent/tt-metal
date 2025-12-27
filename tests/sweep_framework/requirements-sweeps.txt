@@ -1,6 +1,7 @@
-termcolor
-beautifultable
-faster-fifo
+beautifultable==1.1.0
+elasticsearch==9.2.0
+faster-fifo==1.5.2
+ijson==3.4.0.post0
 # For PostgreSQL database connectivity
-psycopg-binary == 3.2.9
-ijson
+psycopg-binary==3.3.2
+termcolor==3.2.0
