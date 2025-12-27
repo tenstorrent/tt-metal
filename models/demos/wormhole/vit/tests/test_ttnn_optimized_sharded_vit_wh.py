@@ -165,7 +165,11 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output = model(torch_hidden_states)[0]
+    result = model(torch_hidden_states)
+    if isinstance(result, tuple):
+        torch_output = result[0]
+    else:
+        torch_output = result
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -289,7 +293,11 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output = model(torch_hidden_states)[0]
+    result = model(torch_hidden_states)
+    if isinstance(result, tuple):
+        torch_output = result[0]
+    else:
+        torch_output = result
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
