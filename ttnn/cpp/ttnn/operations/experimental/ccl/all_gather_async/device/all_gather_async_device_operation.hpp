@@ -50,7 +50,7 @@ struct AllGatherAsyncDeviceOperation {
         const std::optional<uint32_t>& num_buffers_per_channel,
         bool reverse_order,
         const std::optional<CoreRangeSet>& sub_core_grid,
-        const MeshDevice* mesh_device);
+        const MeshDevice* optional_mesh_device);
 };
 
 enum class AllGatherAsyncVersion {
