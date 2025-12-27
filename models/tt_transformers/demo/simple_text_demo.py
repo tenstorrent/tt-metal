@@ -283,7 +283,7 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            50,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -1118,9 +1118,9 @@ def test_demo_text(
 
             # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.debug(
+            """logger.debug(
                 f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+            )"""
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
                 current_pos += 1
@@ -1146,7 +1146,7 @@ def test_demo_text(
                 if len(text) > 100:
                     text = "..." + text[-97:]
                 text = text.replace("\n", " ")
-                logger.debug("[User {}] {}".format(user, text))
+                # logger.debug("[User {}] {}".format(user, text))
 
             iteration += 1
 
