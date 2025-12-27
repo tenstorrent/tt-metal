@@ -543,8 +543,10 @@ void DispatchKernel::CreateKernel() {
     // Device frequency is in MHz, progress update period is in milliseconds
     // cycles = (frequency_MHz * 1e6) * (period_ms / 1000)
     uint64_t dispatch_progress_update_cycles = 0;
-    uint32_t progress_update_ms = MetalContext::instance().rtoptions().get_dispatch_progress_update_ms();
-    if (progress_update_ms > 0) {
+    auto& rtoptions = MetalContext::instance().rtoptions();
+    uint32_t progress_update_ms = rtoptions.get_dispatch_progress_update_ms();
+    auto timeout_duration = rtoptions.get_timeout_duration_for_operations();
+    if (progress_update_ms > 0 && timeout_duration > std::chrono::duration<float>(0)) {
         int device_freq_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id());
         // Convert: MHz * ms = (freq * 1e6 Hz) * (ms / 1000) = freq * 1000 * ms
         dispatch_progress_update_cycles = static_cast<uint64_t>(device_freq_mhz) * 1000 * progress_update_ms;
