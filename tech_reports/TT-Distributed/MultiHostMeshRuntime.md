@@ -74,7 +74,7 @@ This proposal assumes that the devices comprising the logical mesh are connected
 
 **Crucially, Determinism is Required:** As mandated by the SPMD model for the definition phase, both the runtime itself *and* the user's application code (including workload generation functions) **must be deterministic**. This means using deterministic algorithms and data structures (e.g., avoiding hash maps with non-deterministic iteration order if the order affects workload generation). If any host process diverges due to non-determinism, the system's behavior becomes undefined.
 
-Python bindings (e.g., pybind11) require additional care regarding determinism:
+Python bindings (e.g., nanobind) require additional care regarding determinism:
 
 1.  **Python Garbage Collection (GC) and Resource Deallocation:**
     *   **Problem:** Standard Python GC timing is non-deterministic across different processes (ranks). If C++ resource deallocation (like freeing a `MeshBuffer`) directly modifies allocator state (which is necessary for correct subsequent allocations) and is tied *only* to the Python object's destruction (e.g., via `__del__`), this critical state change will occur at different times on different ranks, leading to divergence.
