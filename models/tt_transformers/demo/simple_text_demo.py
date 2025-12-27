@@ -463,25 +463,6 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # DP-2-b1 - single user, data-parallel=2, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-            2,  # data_parallel
-            False,  # token_accuracy
-            False,  # stress_test
-            True,  # enable_trace
-            None,  # num_layers, if None -> defaults to all layers
-            "full",  # performs both prefill and decode
-        ),
         (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -740,7 +721,6 @@ def prepare_generator_args(
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
-        "DP-2-b1",  # DP 2 latency
         "DP-4-b1",  # DP 4 latency
         "DP-8-b1",  # DP 8 latency
         "DP-4-b32",  # DP 4 throughput
@@ -777,7 +757,6 @@ def prepare_generator_args(
             "N300": (1, 2),
             "N150x4": (1, 4),
             "T3K": (1, 8),
-            "N300x4": (2, 4),
             "TG": (8, 4),
             "P150": (1, 1),
             "P300": (1, 2),
