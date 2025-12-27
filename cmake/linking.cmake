@@ -112,11 +112,27 @@ if(TT_ENABLE_LTO)
 
         set(TT_LTO_ENABLED ON)
 
-        # Enable one-definition-rule (ODR) warnings.
+        # Check for fat LTO objects support (allows object files to be used with or without LTO)
+        check_cxx_compiler_flag(
+            "-ffat-lto-objects"
+            COMPILER_SUPPORTS_FAT_LTO_OBJECTS
+        )
+        check_linker_flag(
+            CXX
+            "-ffat-lto-objects"
+            LINKER_SUPPORTS_FAT_LTO_OBJECTS
+        )
+        if(COMPILER_SUPPORTS_FAT_LTO_OBJECTS AND LINKER_SUPPORTS_FAT_LTO_OBJECTS)
+            message(STATUS "Using fat LTO objects")
+            add_compile_options(-ffat-lto-objects)
+            add_link_options(-ffat-lto-objects)
+        endif()
+
+        # Enable one-definition-rule (ODR) warnings for Release/RelWithDebInfo builds.
         # Only works when LTO is enabled.
         add_compile_options(
-            -Wodr
-            -Wno-error=odr # TODO(21850): Relaxing odr to warn until current errors are addressed.
+            $<$<CONFIG:Release,RelWithDebInfo>:-Wodr>
+            $<$<CONFIG:Release,RelWithDebInfo>:-Wno-error=odr> # TODO(21850): Relaxing odr to warn until current errors are addressed.
         )
 
         # Make sure all thinLTO jobs are passed to the linker in bulk.
@@ -131,7 +147,7 @@ if(TT_ENABLE_LTO)
         # Limit size of lto cache to the least of 2GB, 10% disk space, or 10000 files.
         # By default pruning happens in 20 minute intervals. Add prune_interval to change.
         add_link_options(
-            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=10000>
+            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=3g:cache_size=10%:cache_size_files=10000>
         )
 
         # Mozilla rec for non-pgo builds. Default is 100. pgo builds can get away with 5-10.
