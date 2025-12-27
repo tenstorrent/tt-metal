@@ -13,6 +13,7 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 
@@ -52,15 +53,52 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize(
     "generation_length",
-    (10,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (3,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+@pytest.mark.parametrize(
+    "data_parallel",
+    (1, 4),  # Add data parallel configurations (1 = no DP, 4 = DP-4)
+    ids=["DP-1", "DP-4"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
-    max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    page_params,
+    mesh_device,
+    reset_seeds,
+    ensure_gc,
+    generation_length,
+    data_parallel,
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    # Get number of devices
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+
+    # Validate data_parallel configuration
+    if data_parallel > num_devices or num_devices % data_parallel != 0:
+        pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
+
+    # Calculate global batch size (batch_size is per DP group)
+    global_batch_size = batch_size * data_parallel
+
+    # Create submeshes for data parallel
+    submesh_devices = create_submeshes(mesh_device, data_parallel)
+
+    # Use the first submesh for this test (or you can iterate over all submeshes)
+    test_device = submesh_devices[0] if data_parallel > 1 else mesh_device
+
+    # Get the mesh shape for the test device (submesh or full mesh)
+    if data_parallel > 1 and isinstance(test_device, ttnn.MeshDevice):
+        test_mesh_shape = test_device.shape
+    elif isinstance(mesh_device, ttnn.MeshDevice):
+        test_mesh_shape = mesh_device.shape
+    else:
+        test_mesh_shape = (1, 1)
+
+    model_args = ModelArgs(test_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -78,7 +116,7 @@ def test_decoder_inference(
 
     # Setup RoPE transformation matrices
     rope_setup = RotarySetup(
-        mesh_device,
+        test_device,
         model_args.max_batch_size,
         model_args.head_dim,
         model_args.max_seq_len,
@@ -88,7 +126,7 @@ def test_decoder_inference(
 
     if model_args.rope_theta_local is not None:
         rope_setup_local = RotarySetup(
-            mesh_device,
+            test_device,
             model_args.max_batch_size,
             model_args.head_dim,
             model_args.max_seq_len,
@@ -109,30 +147,32 @@ def test_decoder_inference(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
+        # Implied shuffling of blocks (adjusted for data parallel)
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
+        reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            global_batch_size, paged_attention_config.max_num_blocks // (global_batch_size // data_parallel)
         )
+        # Extract the page table for this submesh
+        page_table_submesh = page_table[0:batch_size, :]
         page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
+            page_table_submesh,
+            device=test_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
+                test_device,
                 dims=(None, -2) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=model_args.cluster_shape,
+                mesh_shape=test_mesh_shape,
             ),
         )
 
     # Initialize TT model
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = TT_CCL(test_device)
     tt_model = TransformerBlock(
         args=model_args,
-        mesh_device=mesh_device,
+        mesh_device=test_device,
         tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
@@ -150,12 +190,12 @@ def test_decoder_inference(
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = ttnn.from_torch(
         current_pos,
-        device=mesh_device,
+        device=test_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
+            test_device,
             dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-            mesh_shape=model_args.cluster_shape,
+            mesh_shape=test_mesh_shape,
         ),
     )
     for i in range(generation_length):
@@ -190,10 +230,10 @@ def test_decoder_inference(
         )
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(test_device, dims=(1, 3), mesh_shape=test_mesh_shape),
         )
 
-        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
+        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(batch_size, model_args.dim)
         # In this test all users have the same position
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
 
@@ -215,12 +255,12 @@ def test_decoder_inference(
         current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
-            device=mesh_device,
+            device=test_device,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
+                test_device,
                 dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=model_args.cluster_shape,
+                mesh_shape=test_mesh_shape,
             ),
         )
 

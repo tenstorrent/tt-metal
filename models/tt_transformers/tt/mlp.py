@@ -260,7 +260,9 @@ class MLP(LightweightModule):
             self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_reduce_scatter_links=self.model_config["MLP_RS_CONFIG"]["num_links"]
+            if mode == "decode"
+            else self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,
             sharded=(mode == "decode"),
             memory_config=(
@@ -268,9 +270,14 @@ class MLP(LightweightModule):
                 if mode == "decode"
                 else ttnn.DRAM_MEMORY_CONFIG
             ),
+            rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == "decode" else 10,
+            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"] if mode == "decode" else 2,
         )
 
         # Ensure dim 0 and 1 are 1

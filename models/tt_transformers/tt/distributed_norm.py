@@ -8,10 +8,11 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False):
+    def __init__(self, norm, args, tt_ccl, TG=False, ag_config_key=None):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.ag_config_key = ag_config_key
 
         if TG:
             core_grid_ln = (
@@ -78,12 +79,18 @@ class DistributedNorm(LightweightModule):
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
+                num_links=self.args.model_config[self.ag_config_key]["num_links"]
+                if self.ag_config_key and mode == "decode"
+                else 1,
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
+                chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
+                if self.ag_config_key and mode == "decode"
+                else 10,
+                num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
+                if self.ag_config_key and mode == "decode"
+                else 2,
                 num_buffers_per_channel=2,
             )
         else:
