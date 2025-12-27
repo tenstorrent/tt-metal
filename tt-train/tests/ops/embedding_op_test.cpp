@@ -53,7 +53,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
         }
     }
     auto target_tensor = autograd::create_tensor(
-        ttml::core::from_vector(target_vector, ttnn::Shape({batch_size, sentence_size, embedding_dim}), device));
+        ttml::core::from_vector(target_vector, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}), device));
     auto result = ttml::ops::mse_loss(embeddings, target_tensor);
     result->backward();
 
