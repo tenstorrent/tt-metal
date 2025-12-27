@@ -58,10 +58,10 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     auto weight_grad_data = ttml::core::to_vector(weight_grad_tensor);
     for (uint32_t i = 0; i < num_embeddings; i++) {
         for (uint32_t j = 0; j < embedding_dim; j++) {
+            size_t idx =
+                (0 * num_embeddings * embedding_dim) + (0 * num_embeddings * embedding_dim) + (i * embedding_dim) + j;
             EXPECT_NEAR(
-                weight_grad_data[embedding_dim * i + j],
-                -static_cast<float>(i) / sentence_size / embedding_dim / batch_size * 2.F,
-                1e-2);
+                weight_grad_data[idx], -static_cast<float>(i) / sentence_size / embedding_dim / batch_size * 2.F, 1e-2);
         }
     }
 }
