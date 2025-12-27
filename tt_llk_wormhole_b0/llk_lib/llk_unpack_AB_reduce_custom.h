@@ -157,10 +157,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
  * This function should NOT be used as a substitute for native reduce unpacking cleanup.
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
-inline void _llk_unpack_AB_reduce_block_max_row_uninit_(const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_AB_reduce_block_max_row_uninit_()
 {
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    TTI_SETADCXX(p_setadc::UNP_AB, (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);
 }
