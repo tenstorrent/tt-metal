@@ -107,30 +107,29 @@ uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) 
     } else if (max_hops <= 24) {
         return 24;
     } else {
-        return 32;  // Maximum route buffer size (supports up to 32-hop 2D paths)
+        return Limits::MAX_2D_ROUTE_BUFFER_SIZE;  // Maximum route buffer size
     }
 }
 
 void FabricContext::compute_packet_specifications() {
     // Query topology to determine optimal header sizes
     if (this->is_2D_routing_enabled()) {
+        // 2D mode: only set 2D-related values
         max_2d_hops_ = get_max_2d_hops_from_topology();
         routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
-        max_1d_hops_ = 32;  // Not used for 2D, but set default
     } else {
+        // 1D mode: only set 1D-related values
         max_1d_hops_ = get_max_1d_hops_from_topology();
 
         // Current memory map limits: ROUTING_PATH_SIZE_1D = 256 bytes supports max 32 hops
         // (32 chips × 8 bytes per routing entry = 256 bytes)
         // Support for >32 hops requires L1 memory map updates and larger routing tables
         TT_FATAL(
-            max_1d_hops_ <= 32,
+            max_1d_hops_ <= Limits::MAX_1D_HOPS,
             "1D routing with >32 hops (max_hops={}) requires L1 memory map updates. "
-            "Current allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max 32 hops.",
-            max_1d_hops_);
-
-        routing_2d_buffer_size_ = 32;  // Default for 2D (unused in 1D mode)
-        max_2d_hops_ = 0;              // Not used for 1D
+            "Current allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max {} hops.",
+            max_1d_hops_,
+            Limits::MAX_1D_HOPS);
     }
 
     // Compute actual packet sizes based on topology
@@ -214,7 +213,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
     this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
-    // Compute packet specifications based on topology (Phase 1)
+    // Compute packet specifications based on topology
     this->compute_packet_specifications();
 
     // Query tensix config from MetalContext at init time

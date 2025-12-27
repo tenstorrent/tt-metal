@@ -122,7 +122,7 @@ struct __attribute__((packed)) compressed_route_2d_t {
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
 // ============================================================================
-// Dynamic Packet Header Configuration (Phase 1)
+// Dynamic Packet Header Configuration
 // ============================================================================
 
 // Centralized build-time configuration for packet headers
@@ -147,7 +147,7 @@ struct FabricHeaderConfig {
 #endif
 
     // Validation (Fail fast)
-    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 1, "Phase 1 only supports up to 1 extension word (32 hops)");
+    static_assert(LOW_LATENCY_EXTENSION_WORDS <= 1, "Only supports up to 1 extension word (32 hops)");
 };
 
 // Centralized routing field constants (single source of truth)
@@ -222,8 +222,12 @@ namespace routing_encoding {
  * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
  *
  * Example: 3 hops with num_words=1
- *   Pattern: FWD FWD WR (bits 0-1: 10, bits 2-3: 10, bits 4-5: 01)
+ *   Hop 0 (bits 0-1): FORWARD_ONLY = 0b10
+ *   Hop 1 (bits 2-3): FORWARD_ONLY = 0b10
+ *   Hop 2 (bits 4-5): WRITE_ONLY = 0b01
  *   Result: buffer[0] = 0b01'10'10 = 0x1A
+ *
+ * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
  */
 inline void encode_1d_unicast(uint8_t num_hops, uint32_t* buffer, uint32_t num_words) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
@@ -267,6 +271,15 @@ inline void encode_1d_unicast(uint8_t num_hops, uint32_t* buffer, uint32_t num_w
  * @param range_hops Number of hops in multicast range
  * @param buffer Output buffer (uint32_t array)
  * @param num_words Size of buffer (1 for ≤16 hops, 2 for ≤32 hops)
+ *
+ * Example: starting 3 hops away, multicasting to 2 chips (start_hop=3, range_hops=2)
+ *   Hop 0 (bits 0-1): FORWARD_ONLY = 0b10
+ *   Hop 1 (bits 2-3): FORWARD_ONLY = 0b10
+ *   Hop 2 (bits 4-5): WRITE_AND_FORWARD = 0b11 (start of multicast range)
+ *   Hop 3 (bits 6-7): WRITE_ONLY = 0b01 (end of range)
+ *   Result: buffer[0] = 0b01'11'10'10 = 0x7A
+ *
+ * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
  */
 inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t* buffer, uint32_t num_words) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
@@ -438,18 +451,6 @@ static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) intra_mesh_routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
-
-    // 2D Direction constants (kept for backward compatibility during transition)
-    // TODO: Remove after Phase 1 - use RoutingFieldsConstants::Mesh instead
-    static const uint8_t NOOP = 0b0000;
-    static const uint8_t FORWARD_EAST = 0b0001;
-    static const uint8_t FORWARD_WEST = 0b0010;
-    static const uint8_t FORWARD_NORTH = 0b0100;
-    static const uint8_t FORWARD_SOUTH = 0b1000;
-    static const uint8_t WRITE_AND_FORWARD_EAST = 0b0001;
-    static const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
-    static const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
-    static const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
 
     // Compressed routing uses much smaller encoding
     // 1D: 0 byte (num_hops passed from caller is the compressed info)
