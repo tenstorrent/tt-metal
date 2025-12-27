@@ -530,31 +530,27 @@ def test_avg_pool2d_compute_kernel_config(
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
         ([2, 32, 1024, 1024], 8),
-        ([1, 512, 256, 256], 8),
         ([1, 320, 384, 384], 6),
-        ([1, 64, 96, 96], 4),
         ([1, 256, 81, 81], 2),
     ),
 )
 @pytest.mark.parametrize(
-    "kernel_size",
+    "kernel_size, padding",
     (
         # Wide and normal reductions go to normal kernels
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
-        (2, 2),
-        (3, 3),
-        (5, 5),
+        [(2, 2), (1, 1)],
+        [(3, 3), (2, 2)],
+        [(4, 4), (0, 0)],
+        [(4, 4), (2, 2)],
+        [(5, 5), (2, 2)],
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     ((2, 2),),
-)
-@pytest.mark.parametrize(
-    "padding",
-    ((1, 1),),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
