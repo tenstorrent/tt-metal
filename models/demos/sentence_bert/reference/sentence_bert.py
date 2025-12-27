@@ -289,7 +289,8 @@ BERT_SELF_ATTENTION_CLASSES = {
 class BertAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = BERT_SELF_ATTENTION_CLASSES[config._attn_implementation](
+        attn_implementation = getattr(config, "_attn_implementation", "eager")
+        self.self = BERT_SELF_ATTENTION_CLASSES[attn_implementation](
             config, position_embedding_type=position_embedding_type
         )
         self.output = BertSelfOutput(config)
@@ -496,8 +497,8 @@ class BertModel(nn.Module):
 
         self.pooler = BertPooler(config) if add_pooling_layer else None
 
-        self.attn_implementation = config._attn_implementation
-        self.position_embedding_type = config.position_embedding_type
+        self.attn_implementation = getattr(config, "_attn_implementation", "eager")
+        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
 
     def forward(
         self,
