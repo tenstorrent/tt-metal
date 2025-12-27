@@ -239,6 +239,7 @@ jobs:
         if: ${{ matrix.test-group.model == 'tttv2' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
+          HF_HUB_OFFLINE: 1
           HF_HOME: /mnt/MLPerf/huggingface
           HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
         run: |
