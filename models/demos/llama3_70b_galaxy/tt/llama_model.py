@@ -146,6 +146,7 @@ class TtTransformer(LightweightModule):
             mode="prefill",
             mesh_sub_device_manager_id_prefill=mesh_sub_device_manager_id_prefill,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
@@ -168,6 +169,7 @@ class TtTransformer(LightweightModule):
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
             save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
         self.mesh_device.set_sub_device_stall_group(
