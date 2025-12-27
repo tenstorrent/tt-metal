@@ -995,51 +995,7 @@ def test_demo_text(
             generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
-
-        if mode == "prefill" or mode == "full":
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
-
-            logger.info(f"Starting prefill...")
-            profiler.start(f"inference_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
-                input_tokens_prefill_pt,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-            )
-            prefilled_token = torch.argmax(logits, dim=-1)
-            profiler.end(f"inference_prefill", iteration=batch_idx)
-            logger.info(f"Prefill finished")
-        else:
-            # CI expects profiler to have these measurement keys so
-            # they must be inserted regardless of whether we run prefill or not
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            profiler.start(f"inference_prefill", iteration=batch_idx)
-            profiler.end(f"inference_prefill", iteration=batch_idx)
-            logger.info(f"Skipping prefill forward pass when decode mode is enabled")
-
-            prefilled_token = torch.zeros(global_batch_size, 1, 1)
-
-        # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
-        for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
-            all_outputs[user].append(user_tok)
-
-        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
-
-        # Use device sampling for all cases when supported
-
+        # Use device sampling for all cases when supported (prefill + decode)
         device_sampling_params = (
             SamplingParams(
                 temperature=sampling_params["temperature"],
@@ -1064,6 +1020,57 @@ def test_demo_text(
             sampling_params["temperature"] = sampling_params["temperature"][0]
             sampling_params["top_p"] = sampling_params["top_p"][0]
             sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+
+        prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
+
+        if mode == "prefill" or mode == "full":
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                sampling_params=prefill_sampling_params,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
+
+            logger.info(f"Starting prefill...")
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            prefill_out = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                sampling_params=prefill_sampling_params,
+            )
+            if prefill_sampling_params is not None:
+                prefilled_token, prefill_log_probs = prefill_out
+            else:
+                logits = prefill_out
+                prefilled_token = torch.argmax(logits, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Prefill finished")
+        else:
+            # CI expects profiler to have these measurement keys so
+            # they must be inserted regardless of whether we run prefill or not
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Skipping prefill forward pass when decode mode is enabled")
+
+            prefilled_token = torch.zeros(global_batch_size, 1, 1)
+
+        # Keep track of generated outputs to print out every iteration
+        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
+        for user in range(global_batch_size):
+            user_tok = int(prefilled_token[user].item())
+            all_outputs[user].append(user_tok)
+
+        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
+
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
 
