@@ -99,8 +99,7 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
-# TODO(afuller): Re-enable this after we sort out compatibility with old tools.
-# include(linking)
+include(linking)
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
@@ -168,6 +167,7 @@ target_link_libraries(
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
+    -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
     -Werror
