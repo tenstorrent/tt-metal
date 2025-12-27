@@ -55,137 +55,137 @@ jobs:
             ]')
 
           MODEL_TESTS=$(jq -n '[
+            {
+              "name": "t3k falcon7b tests",
+              "model": "falcon7b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_falcon7b_tests",
+              "timeout": 30,
+              "owner_id": "UBHPP2NDP" # Joseph Chu
+            },
+            {
+              "name": "t3k falcon40b tests",
+              "model": "falcon40b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_falcon40b_tests",
+              "timeout": 30,
+              "owner_id": "U053W15B6JF" # Djordje Ivanovic
+            },
+            {
+              "name": "t3k llama3-small tests",
+              "model": "llama3-small",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3-small_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
+              "name": "t3k llama3.2-11b tests",
+              "model": "llama3.2-11b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-11b_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            {
+              "name": "t3k llama3.2-11b-vision tests",
+              "model": "llama3.2-11b-vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-11b-vision_unit_tests",
+              "timeout": 30,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k n300 mesh llama3.2-11b-vision tests",
+              "model": "n300 mesh llama3.2-11b-vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests",
+              "timeout": 30,
+              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
+            },
+            {
+              "name": "t3k llama3.2-90b-vision tests",
+              "model": "llama3.2-90b-vision",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-90b-vision_unit_tests",
+              "timeout": 30,
+              "label": "pipeline-functional",
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
             # {
-            #   "name": "t3k falcon7b tests",
-            #   "model": "falcon7b",
+            #   "name": "t3k llama3.1-70b tests",
+            #   "model": "llama3.1-70b",
             #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_falcon7b_tests",
-            #   "timeout": 30,
-            #   "owner_id": "UBHPP2NDP" # Joseph Chu
-            # },
-            # {
-            #   "name": "t3k falcon40b tests",
-            #   "model": "falcon40b",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_falcon40b_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U053W15B6JF" # Djordje Ivanovic
-            # },
-            # {
-            #   "name": "t3k llama3-small tests",
-            #   "model": "llama3-small",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3-small_tests",
+            #   "cmd": "run_t3000_llama3.1-70b_tests",
             #   "timeout": 30,
             #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
             # },
-            # {
-            #   "name": "t3k llama3.2-11b tests",
-            #   "model": "llama3.2-11b",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3.2-11b_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            # },
-            # {
-            #   "name": "t3k llama3.2-11b-vision tests",
-            #   "model": "llama3.2-11b-vision",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3.2-11b-vision_unit_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03FJB5TM5Y" # Colman Glagovich
-            # },
-            # {
-            #   "name": "t3k n300 mesh llama3.2-11b-vision tests",
-            #   "model": "n300 mesh llama3.2-11b-vision",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03FJB5TM5Y" # Colman Glagovich
-            # },
-            # {
-            #   "name": "t3k llama3.2-90b-vision tests",
-            #   "model": "llama3.2-90b-vision",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3.2-90b-vision_unit_tests",
-            #   "timeout": 30,
-            #   "label": "pipeline-functional",
-            #   "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            # },
-            # # {
-            # #   "name": "t3k llama3.1-70b tests",
-            # #   "model": "llama3.1-70b",
-            # #   "arch": "wormhole_b0",
-            # #   "cmd": "run_t3000_llama3.1-70b_tests",
-            # #   "timeout": 30,
-            # #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            # # },
-            # {
-            #   "name": "t3k llama3.2-90b tests",
-            #   "model": "llama3.2-90b",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3.2-90b_tests",
-            #   "timeout": 30,
-            #   "label": "pipeline-functional",
-            #   "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            # },
-            # {
-            #   "name": "t3k mistral tests",
-            #   "model": "mistral",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_mistral_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U0896VBAKFC" # Praktikkumar Prajapati
-            # },
-            # {
-            #   "name": "t3k mixtral tests",
-            #   "model": "mixtral",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_mixtral_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03PUAKE719" # Harry Zhou
-            # },
-            # {
-            #   "name": "t3k grok tests",
-            #   "model": "grok",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_grok_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
-            # },
-            # {
-            #   "name": "t3k unet shallow tests",
-            #   "model": "unet shallow",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_unet_shallow_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U06ECNVR0EN" # Evan Smal
-            # },
-            # {
-            #   "name": "t3k qwen25_vl tests",
-            #   "model": "qwen25_vl",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_qwen25_vl_unit_tests",
-            #   "timeout": 20,
-            #   "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            # },
-            # {
-            #   "name": "t3k gemma3-small tests",
-            #   "model": "gemma3-small",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_gemma3-small_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U08E1JCDVNX" # Pavle Petrovic
-            # },
-            # {
-            #   #Uses random weights for corresponding model initialization. Does not depend on MLPerf
-            #   "name": "t3k DiTs Image and Video Generation",
-            #   "model": "dits",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_tt_dit_tests",
-            #   "timeout": 20,
-            #   "owner_id": "U08TED0JM9D" # Samuel Adesoye
-            # },
+            {
+              "name": "t3k llama3.2-90b tests",
+              "model": "llama3.2-90b",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_llama3.2-90b_tests",
+              "timeout": 30,
+              "label": "pipeline-functional",
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            {
+              "name": "t3k mistral tests",
+              "model": "mistral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mistral_tests",
+              "timeout": 30,
+              "owner_id": "U0896VBAKFC" # Praktikkumar Prajapati
+            },
+            {
+              "name": "t3k mixtral tests",
+              "model": "mixtral",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_mixtral_tests",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719" # Harry Zhou
+            },
+            {
+              "name": "t3k grok tests",
+              "model": "grok",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_grok_tests",
+              "timeout": 30,
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
+            },
+            {
+              "name": "t3k unet shallow tests",
+              "model": "unet shallow",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_unet_shallow_tests",
+              "timeout": 30,
+              "owner_id": "U06ECNVR0EN" # Evan Smal
+            },
+            {
+              "name": "t3k qwen25_vl tests",
+              "model": "qwen25_vl",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_qwen25_vl_unit_tests",
+              "timeout": 20,
+              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
+            },
+            {
+              "name": "t3k gemma3-small tests",
+              "model": "gemma3-small",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_gemma3-small_tests",
+              "timeout": 30,
+              "owner_id": "U08E1JCDVNX" # Pavle Petrovic
+            },
+            {
+              #Uses random weights for corresponding model initialization. Does not depend on MLPerf
+              "name": "t3k DiTs Image and Video Generation",
+              "model": "dits",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_tt_dit_tests",
+              "timeout": 20,
+              "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
             {
               "name": "t3k/N300/N150 tttv2 module tests",
               "model": "tttv2 modules",
