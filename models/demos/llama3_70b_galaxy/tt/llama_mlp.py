@@ -113,9 +113,9 @@ class TtLlamaMLP(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1) -> ttnn.Tensor:
         if mode == "prefill":
-            return self.forward_prefill(x, mode)
+            return self.forward_prefill(x, batch_size=batch_size)
 
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
@@ -194,7 +194,7 @@ class TtLlamaMLP(LightweightModule):
 
         return w2_out_reduced
 
-    def forward_prefill(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, batch_size=1) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -213,7 +213,7 @@ class TtLlamaMLP(LightweightModule):
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096:
+        if seq_len < 4096 or batch_size > 1:
             w1_out = ttnn.linear(
                 x,
                 self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -236,12 +236,18 @@ class TtLlamaMLP(LightweightModule):
             )
 
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
+            w1_out,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=w1_out.memory_config(),
+            buffer_key="FF1",
+            dim=3,
+            batch_size=batch_size,
         )
         ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096:
+        if seq_len < 4096 or batch_size > 1:
             w3_out = ttnn.linear(
                 x,
                 self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -264,7 +270,13 @@ class TtLlamaMLP(LightweightModule):
             )
         ttnn.deallocate(x)
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+            w3_out,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=w3_out.memory_config(),
+            buffer_key="FF3",
+            dim=3,
+            batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
         w2_in = ttnn.mul(
@@ -280,7 +292,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w2_in)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096:
+        if seq_len < 4096 or batch_size > 1:
             w2_out = ttnn.linear(
                 w2_in_gathered,
                 self.w2_interleaved,
@@ -299,7 +311,12 @@ class TtLlamaMLP(LightweightModule):
             )
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
-            w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
+            w2_out,
+            cluster_axis=0,
+            num_links=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="FF2",
+            batch_size=batch_size,
         )
         ttnn.deallocate(w2_out)
 
