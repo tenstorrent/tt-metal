@@ -29,52 +29,6 @@
 
 namespace ttnn::operations::conv::conv2d {
 
-// Helper function to print tensor in 32x32 raw memory layout for debugging
-template <typename T>
-static void print_tensor_raw_memory_layout_on_device(const Tensor& tensor, const std::string& name) {
-    auto shape = tensor.logical_shape();
-
-    log_info(tt::LogOp, "DEBUG: === {} ===", name);
-    log_info(tt::LogOp, "DEBUG: Shape: [{}, {}, {}, {}]", shape[0], shape[1], shape[2], shape[3]);
-    log_info(tt::LogOp, "DEBUG: Layout: {}, Device: {}", tensor.layout(), tensor.device() != nullptr);
-
-    // Move to host and get raw data for visualization
-    auto host_tensor = tensor;
-    if (tensor.device() != nullptr) {
-        host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
-        log_info(tt::LogOp, "DEBUG: Moved tensor from device to host for visualization");
-    }
-
-    // Get raw buffer data without untilization to preserve memory layout
-    auto raw_buffer = tt::tt_metal::host_buffer::get_as<T>(host_tensor);
-    std::vector<T> data(raw_buffer.begin(), raw_buffer.end());
-    log_info(tt::LogOp, "DEBUG: Total elements: {}", data.size());
-    log_info(tt::LogOp, "DEBUG: RAW MEMORY LAYOUT (32x32):");
-
-    // Print exactly 32 values per row, showing raw memory layout
-    const uint32_t values_per_row = 32;
-    uint32_t total_elements = data.size();
-    uint32_t num_rows = (total_elements + values_per_row - 1) / values_per_row;
-
-    // for (uint32_t ii = 0; ii < total_elements; ++ii) {
-    //     log_info(tt::LogOp, "Element {} - {}", ii, static_cast<int>(static_cast<float>(data[ii])));
-    // }
-
-    for (uint32_t row = 0; row < num_rows; row++) {
-        std::string row_content = "DEBUG: " + std::to_string(row) + ": ";
-        for (uint32_t col = 0; col < values_per_row; col++) {
-            uint32_t idx = row * values_per_row + col;
-            if (idx < total_elements) {
-                row_content += std::to_string(static_cast<int>(static_cast<float>(data[idx]))) + " ";
-            } else {
-                row_content += "  ";  // padding for incomplete rows
-            }
-        }
-        log_info(tt::LogOp, row_content);
-    }
-    log_info(tt::LogOp, "DEBUG: ");
-}
-
 Result conv2d_L1(
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
@@ -339,10 +293,6 @@ Result conv2d_L1(
 
         log_info(tt::LogOp, "Pre conv input memory config: {}", input_tensor_post_tm.memory_config());
 
-        // DEBUG: Print weight tensor on device layout before conv2d call
-        log_info(tt::LogOp, "DEBUG: === WEIGHT TENSOR ON DEVICE BEFORE CONV2D ===");
-        print_tensor_raw_memory_layout_on_device<bfloat16>(weight_tensor_on_device, "WEIGHT TENSOR ON DEVICE");
-
         // call conv micro op
         auto conv_output = ttnn::prim::conv2d(
             input_tensor_post_tm,
@@ -391,11 +341,6 @@ Result conv2d_L1(
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
         }
-
-        // DEBUG: Print weight tensor on device layout before matmul (conv as matmul path)
-        log_info(tt::LogOp, "DEBUG: === WEIGHT TENSOR ON DEVICE BEFORE MATMUL (CONV AS MATMUL PATH) ===");
-        print_tensor_raw_memory_layout_on_device<bfloat16>(
-            weight_tensor_on_device, "WEIGHT TENSOR ON DEVICE (MATMUL PATH)");
 
         ttnn::Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,

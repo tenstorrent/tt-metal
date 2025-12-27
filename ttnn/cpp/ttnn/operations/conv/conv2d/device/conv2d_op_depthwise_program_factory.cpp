@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <hostdevcommon/common_values.hpp>
 #include <ttnn/operations/cb_utils.hpp>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <ttnn/operations/conv/conv2d/conv2d_utils.hpp>
@@ -589,14 +590,92 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         .compile_args = reader0_ct_args};
     auto reader0_kernel = CreateKernel(program, reader_kernel_path, parallel_config.grid, reader0_config);
 
-    uint64_t weight_buffer_addr = b.buffer()->address();
+    // ============================================================
+    // Weight Multicast Setup
+    // ============================================================
+    // Create semaphores for weight multicast synchronization
+    uint32_t weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, parallel_config.grid, INVALID);
+    uint32_t weights_mcast_receiver_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, parallel_config.grid, INVALID);
 
-    // TensorAccessor expects base address as single 32-bit value (like conv2d kernels)
-    std::vector<uint32_t> reader_args = {
-        static_cast<uint32_t>(weight_buffer_addr),
-        1  // weight buffer base address for TensorAccessor
-    };
-    SetRuntimeArgs(program, reader0_kernel, CoreCoord{0, 0}, reader_args);
+    uint64_t weight_buffer_addr = b.buffer()->address();
+    auto* device = a.device();
+
+    // Get all cores from the grid and identify sender/receivers
+    auto all_cores = corerange_to_cores(parallel_config.grid, std::nullopt, true);
+    uint32_t num_cores = all_cores.size();
+
+    log_debug(tt::LogOp, "Weight multicast setup: {} total cores", num_cores);
+
+    if (num_cores > 0) {
+        // First core is the sender
+        CoreCoord sender_core = all_cores[0];
+        CoreCoord sender_core_physical = device->worker_core_from_logical_core(sender_core);
+
+        log_debug(
+            tt::LogOp,
+            "Sender core: logical ({}, {}), physical ({}, {})",
+            sender_core.x,
+            sender_core.y,
+            sender_core_physical.x,
+            sender_core_physical.y);
+
+        // Calculate multicast destination coordinates (bounding box of all receiver cores)
+        // For simplicity, we use the bounding box of the entire grid
+        auto grid_start = parallel_config.grid.bounding_box().start_coord;
+        auto grid_end = parallel_config.grid.bounding_box().end_coord;
+
+        CoreCoord top_left_physical = device->worker_core_from_logical_core(grid_start);
+        CoreCoord bottom_right_physical = device->worker_core_from_logical_core(grid_end);
+
+        // Number of receivers (all cores except sender)
+        uint32_t num_dests = num_cores - 1;
+        uint32_t num_mcast_cores = num_cores - 1;
+
+        log_debug(
+            tt::LogOp,
+            "Multicast grid: logical ({},{}) to ({},{}), physical ({},{}) to ({},{})",
+            grid_start.x,
+            grid_start.y,
+            grid_end.x,
+            grid_end.y,
+            top_left_physical.x,
+            top_left_physical.y,
+            bottom_right_physical.x,
+            bottom_right_physical.y);
+
+        // Set up runtime args for sender core
+        std::vector<uint32_t> sender_args = {
+            static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr_dram_base
+            1,                                          // 1: is_sender = true
+            top_left_physical.x,                        // 2: weights_mcast_dest_noc_start_x
+            top_left_physical.y,                        // 3: weights_mcast_dest_noc_start_y
+            bottom_right_physical.x,                    // 4: weights_mcast_dest_noc_end_x
+            bottom_right_physical.y,                    // 5: weights_mcast_dest_noc_end_y
+            num_dests,                                  // 6: weights_mcast_num_dests
+            num_mcast_cores,                            // 7: weights_mcast_num_cores
+            weights_mcast_sender_semaphore_id,          // 8: weights_mcast_sender_semaphore_id
+            weights_mcast_receiver_semaphore_id         // 9: weights_mcast_receiver_semaphore_id
+        };
+        SetRuntimeArgs(program, reader0_kernel, sender_core, sender_args);
+
+        // Set up runtime args for receiver cores
+        for (uint32_t i = 1; i < num_cores; i++) {
+            CoreCoord receiver_core = all_cores[i];
+            std::vector<uint32_t> receiver_args = {
+                static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr_dram_base (unused but consistent)
+                0,                                          // 1: is_sender = false
+                sender_core_physical.x,                     // 2: weights_mcast_sender_noc_x
+                sender_core_physical.y,                     // 3: weights_mcast_sender_noc_y
+                weights_mcast_sender_semaphore_id,          // 4: weights_mcast_sender_semaphore_id
+                weights_mcast_receiver_semaphore_id         // 5: weights_mcast_receiver_semaphore_id
+            };
+            SetRuntimeArgs(program, reader0_kernel, receiver_core, receiver_args);
+        }
+
+        log_debug(
+            tt::LogOp, "Weight multicast: sender at ({}, {}), {} receivers", sender_core.x, sender_core.y, num_dests);
+    }
 
     auto reader1_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,

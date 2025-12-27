@@ -498,40 +498,133 @@ void kernel_main() {
         // This matches how the compute kernel processes tiles
         constexpr uint32_t weight_ntiles = (kernel_h * kernel_w * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
 
-        // Set up TensorAccessor for proper TILED tensor reading (like conv2d kernels)
-        // Tensor accessor args start after the base 47 pool kernel args
-        constexpr auto s_weight_args = TensorAccessorArgs<47>();
+        const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
+
+        // Get common runtime args
         uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(0);
         bool is_sender = get_arg_val<uint32_t>(1) != 0;
 
-        const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
-        const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+        if (is_sender) {
+            // ============================================================
+            // SENDER PATH - Read from DRAM and multicast to receivers
+            // ============================================================
 
-        // Load real weight data using TILED tensor reading
-        // Expected weight tensor format from Stage 2: [out_channels, kernel_positions, 1, 1] in TILED format
-        // For depthwise: out_channels = in_c, kernel_positions = kernel_h * kernel_w
-        constexpr uint32_t kernel_positions = kernel_h * kernel_w;
+            // Get sender-specific runtime args
+            uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
+            uint32_t weights_mcast_dest_noc_start_y = get_arg_val<uint32_t>(3);
+            uint32_t weights_mcast_dest_noc_end_x = get_arg_val<uint32_t>(4);
+            uint32_t weights_mcast_dest_noc_end_y = get_arg_val<uint32_t>(5);
+            uint32_t weights_mcast_num_dests = get_arg_val<uint32_t>(6);
+            uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(7);
+            uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(8));
+            uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(9));
 
-        // Reserve space in weight CB for ALL weight tiles
-        cb_reserve_back(weight_cb_id, weight_ntiles);
-        uint32_t weight_l1_addr = get_write_ptr(weight_cb_id);
+            // Set up semaphore pointers
+            volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
+            noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-        // Read all weight tiles using TensorAccessor (handles TILED format correctly)
-        // For TILED format with multiple channel tiles, read all tiles sequentially
-        for (uint32_t tile_id = 0; tile_id < weight_ntiles; tile_id++) {
-            noc_async_read_tile(tile_id, s_weight, weight_l1_addr);
-            weight_l1_addr += weight_tile_nbytes;
+            volatile tt_l1_ptr uint32_t* weights_mcast_sender_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_sender_semaphore_addr);
+
+            uint64_t weights_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+                weights_mcast_dest_noc_start_x,
+                weights_mcast_dest_noc_start_y,
+                weights_mcast_dest_noc_end_x,
+                weights_mcast_dest_noc_end_y,
+                weights_mcast_receiver_semaphore_addr);
+
+            // Set up TensorAccessor and reserve CB
+            constexpr auto s_weight_args = TensorAccessorArgs<47>();
+            const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+
+            cb_reserve_back(weight_cb_id, weight_ntiles);
+            uint32_t weight_l1_addr = get_write_ptr(weight_cb_id);
+            uint32_t weights_start_address = weight_l1_addr;
+
+            // Read all weight tiles from DRAM
+            for (uint32_t tile_id = 0; tile_id < weight_ntiles; tile_id++) {
+                noc_async_read_tile(tile_id, s_weight, weight_l1_addr);
+                weight_l1_addr += weight_tile_nbytes;
+            }
+            noc_async_read_barrier();
+
+            // Calculate total size for multicast
+            uint32_t weights_block_size_bytes = weight_ntiles * weight_tile_nbytes;
+
+            // Only do multicast if there are receivers
+            if (weights_mcast_num_dests > 0) {
+                // Wait for all receivers to signal ready
+                noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
+                noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
+
+                // Multicast weights to all receivers
+                uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
+                    weights_mcast_dest_noc_start_x,
+                    weights_mcast_dest_noc_start_y,
+                    weights_mcast_dest_noc_end_x,
+                    weights_mcast_dest_noc_end_y,
+                    weights_start_address);
+
+                noc_async_write_multicast(
+                    weights_start_address,
+                    weights_multicast_data_addr,
+                    weights_block_size_bytes,
+                    weights_mcast_num_cores,
+                    true);
+
+#ifdef ARCH_BLACKHOLE
+                noc_async_writes_flushed();
+#endif
+
+                // Signal receivers that data is ready
+                noc_semaphore_set_multicast(
+                    weights_mcast_receiver_semaphore_addr,
+                    weights_mcast_receiver_semaphore_noc_addr,
+                    weights_mcast_num_cores,
+                    false);
+            }
+
+            cb_push_back(weight_cb_id, weight_ntiles);
+
+            DPRINT << "Sender: Multicast " << weight_ntiles << " weight tiles to " << weights_mcast_num_dests
+                   << " receivers" << ENDL();
+
+        } else {
+            // ============================================================
+            // RECEIVER PATH - Wait for multicast from sender
+            // ============================================================
+
+            // Get receiver-specific runtime args
+            uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(2);
+            uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(3);
+            uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(4));
+            uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(5));
+
+            // Set up semaphore pointers
+            volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
+
+            uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(
+                weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
+
+            // Reserve space in CB (data will be written by multicast)
+            cb_reserve_back(weight_cb_id, weight_ntiles);
+
+            // Set receiver semaphore to INVALID (waiting state)
+            noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+            // Atomically increment sender's semaphore (signal "I'm ready")
+            noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+
+            // Wait for sender to multicast data and set semaphore to VALID
+            noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+
+            // Push to CB (data is now in CB from multicast)
+            cb_push_back(weight_cb_id, weight_ntiles);
+
+            DPRINT << "Receiver: Received " << weight_ntiles << " weight tiles via multicast" << ENDL();
         }
-        noc_async_read_barrier();
-
-        // Debug: print all weight tiles
-        for (uint32_t t = 0; t < weight_ntiles; t++) {
-            DPRINT << "Weight tile " << t << ENDL();
-            // tt::data_movement::common::print_bf16_pages(get_write_ptr(weight_cb_id) + t * weight_tile_nbytes, 32,
-            // 32);
-        }
-
-        cb_push_back(weight_cb_id, weight_ntiles);
     }
 
     // initialize the scalar CB

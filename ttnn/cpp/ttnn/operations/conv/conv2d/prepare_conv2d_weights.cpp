@@ -1115,16 +1115,6 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
         // Initialize output buffer to zeros
         std::fill(output_buffer.begin(), output_buffer.end(), static_cast<T>(0));
 
-        log_info(
-            tt::LogOp,
-            "DEBUG: out_channels={}, padded_out_channels={}, total_kernel_positions={}, "
-            "data_rows_per_stick={}, rows_per_stick_padded={}",
-            out_channels,
-            padded_out_channels,
-            total_kernel_positions,
-            data_rows_per_stick,
-            rows_per_stick_padded);
-
         // Track current absolute row position across all faces
         // Faces are treated as continuous: Face 0 (rows 0-15), Face 1 (rows 16-31), etc.
         uint32_t current_absolute_row = 0;
@@ -1181,23 +1171,6 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
                     if (output_idx < output_buffer.size()) {
                         output_buffer[output_idx] = value;
                     }
-
-                    if (kernel_pos < 3 && ch < 4) {
-                        log_info(
-                            tt::LogOp,
-                            "DEBUG: kernel_pos[{}] ch[{}] = {} -> abs_row={}, face={}, tile={}, face_in_tile={}, "
-                            "target_row={}, target_col={}, idx={}",
-                            kernel_pos,
-                            ch,
-                            static_cast<float>(value),
-                            absolute_row,
-                            face_idx,
-                            tile_idx,
-                            face_in_tile,
-                            target_row,
-                            target_col,
-                            output_idx);
-                    }
                 }
             }
 
@@ -1241,30 +1214,9 @@ Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weig
     uint32_t padded_kernel_positions = ((total_kernel_positions + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
     uint32_t padded_out_channels = ((out_channels + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
-    log_info(
-        tt::LogOp,
-        "DEBUG: 2D depthwise layout conversion - out_channels={}, padded_out_channels={}, kernel={}x{}, "
-        "total_positions={}, padded_positions={}",
-        out_channels,
-        padded_out_channels,
-        kernel_h,
-        kernel_w,
-        total_kernel_positions,
-        padded_kernel_positions);
-
     // Output shape with padded out_channels and padded kernel positions for face-by-face tile layout
     // The output shape uses padded_out_channels to ensure proper tilization when channels < 32
     ttnn::Shape output_conv_weight_tensor_shape{padded_out_channels, padded_kernel_positions, 1, 1};
-
-    log_info(
-        tt::LogOp,
-        "DEBUG: Output tensor shape - [{}x{}x{}x{}], {} padded output channels, {} padded kernel positions",
-        padded_out_channels,
-        padded_kernel_positions,
-        1,
-        1,
-        padded_out_channels,
-        padded_kernel_positions);
 
     // Create newly allocated buffer depending on the datatype of the weight tensor
     const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::Shape, ttnn::Shape, DataType)>>
@@ -1898,37 +1850,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 original_weights_shape[2],
                 original_weights_window_w);
 
-            // Debug: Print input tensor info
-            const auto& input_shape = weight_tensor_.logical_shape();
-            log_info(
-                tt::LogOp,
-                "DEBUG: Input weight tensor shape: [{}, {}, {}, {}], layout: {}, dtype: {}",
-                input_shape[0],
-                input_shape[1],
-                input_shape[2],
-                input_shape[3],
-                weight_tensor_.layout(),
-                weight_tensor_.dtype());
-
             weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout(weight_tensor_, weight_tensor_.dtype());
             is_2d_depthwise_layout = true;
-
-            // DEBUG: Print weight tensor raw memory layout after convert_conv_weight_tensor_to_2d_depthwise_layout
-            log_info(tt::LogOp, "DEBUG: === WEIGHT TENSOR AFTER CONVERT_CONV_WEIGHT_TENSOR_TO_2D_DEPTHWISE_LAYOUT ===");
-            print_tensor_raw_memory_layout_on_device<bfloat16>(
-                weight_tensor_, "WEIGHT TENSOR AFTER DEPTHWISE LAYOUT CONVERSION");
-
-            // Debug: Print output tensor info
-            const auto& output_shape = weight_tensor_.logical_shape();
-            log_info(
-                tt::LogOp,
-                "DEBUG: Output weight tensor shape: [{}, {}, {}, {}], layout: {}, dtype: {}",
-                output_shape[0],
-                output_shape[1],
-                output_shape[2],
-                output_shape[3],
-                weight_tensor_.layout(),
-                weight_tensor_.dtype());
 
         } else {
             log_info(
@@ -1967,11 +1890,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
     // For 2D depthwise layout, out_channels is padded to tile size (32) for proper tilization.
     // Use original_weights_out_channels for downstream calculations that need the original count.
     if (is_2d_depthwise_layout) {
-        log_info(
-            tt::LogOp,
-            "DEBUG: 2D depthwise layout - using original_weights_out_channels={} instead of padded out_channels={}",
-            original_weights_out_channels,
-            out_channels);
         // The tensor shape has padded channels, but we track the original for downstream use
         out_channels = original_weights_out_channels;
     } else {
@@ -1995,54 +1913,18 @@ static ttnn::Tensor prepare_conv_weights_internal(
         uint32_t padded_channels = weights_shape[0];  // Already padded to tile size
         uint32_t padded_kernel_positions = weights_shape[1];
 
-        log_info(
-            tt::LogOp,
-            "DEBUG: 2D depthwise - skipping regular weight prep, tensor shape=[{}, {}, {}, {}], "
-            "out_channels={}, out_channels_padded={}, out_channel_padding={}",
-            padded_channels,
-            padded_kernel_positions,
-            window_h,
-            window_w,
-            out_channels,
-            out_channels_padded,
-            out_channel_padding);
-
         // Reshape to [1, 1, padded_kernel_positions, padded_channels] for tilization
         // This matches the expected weight matrix shape for depthwise conv
         ttnn::Shape reshaped_shape({1, 1, padded_kernel_positions, padded_channels});
         weight_tensor_ = ttnn::reshape(weight_tensor_, reshaped_shape);
 
-        log_info(
-            tt::LogOp,
-            "DEBUG: 2D depthwise - after reshape to [{}, {}, {}, {}]",
-            reshaped_shape[0],
-            reshaped_shape[1],
-            reshaped_shape[2],
-            reshaped_shape[3]);
-
         // Tilize the tensor
         weight_tensor_ = ttnn::to_layout(weight_tensor_, Layout::TILE);
-
-        // DEBUG: Print weight tensor after tilization
-        log_info(tt::LogOp, "DEBUG: === WEIGHT TENSOR AFTER TILIZATION ===");
-        print_tensor_raw_memory_layout_on_device<bfloat16>(weight_tensor_, "WEIGHT TENSOR AFTER TILIZATION");
 
         // Set target shapes for consistency with downstream code
         ttnn::Shape target_shape({1, 1, padded_kernel_positions, out_channels});
         ttnn::Shape padded_target_shape({1, 1, padded_kernel_positions, out_channels_padded});
         weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
-
-        log_info(
-            tt::LogOp,
-            "DEBUG: 2D depthwise - final shape: target=[{}, {}, {}, {}], padded=[{}, {}, {}, {}]",
-            target_shape[0],
-            target_shape[1],
-            target_shape[2],
-            target_shape[3],
-            padded_target_shape[0],
-            padded_target_shape[1],
-            padded_target_shape[2],
-            padded_target_shape[3]);
     } else {
         // for conv op, pad the weights to block shape
         if (params.interleaved_mm_conv) {
