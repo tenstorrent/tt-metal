@@ -432,12 +432,14 @@ jobs:
             pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
 
-      - name: panoptic_deeplab tests (130 cores)
+      - name: panoptic_deeplab tests (110 cores)
+        env:
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          device_perf_model_name: "panoptic_deeplab_130_cores"
+          device_perf_model_name: "panoptic_deeplab_110_cores"
           commands: |
-            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_130_cores -m models_device_performance_bare_metal --timeout=600
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_110_cores -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
 
       - name: Merge test reports

@@ -695,5 +695,5 @@ ttnn/cpp/ttnn/operations/<operation>/
 │   └── kernels/                              # Kernel files (if any)
 ├── <operation>.hpp                           # Public API wrapper
 ├── <operation>.cpp                           # Public API implementation
-└── <operation>_pybind.cpp                    # Python bindings (if any)
+└── <operation>_nanobind.cpp                    # Python bindings (if any)
 ```
