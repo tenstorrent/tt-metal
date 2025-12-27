@@ -168,9 +168,9 @@ struct RoutingFieldsConstants {
     // 2D Constants (Mesh)
     struct Mesh {
         static constexpr uint32_t FIELD_WIDTH = 8;    // 8 bits per hop command
-        static constexpr uint32_t FIELD_MASK = 0xFF;  // 8-bit mask
+        static constexpr uint32_t FIELD_MASK = 0b1111;  // 4-bit mask
 
-        // Direction commands (4-bit encoding for each direction)
+        // Basic direction commands (4-bit encoding for each direction)
         static constexpr uint8_t NOOP = 0b0000;
         static constexpr uint8_t FORWARD_EAST = 0b0001;
         static constexpr uint8_t FORWARD_WEST = 0b0010;
@@ -186,6 +186,17 @@ struct RoutingFieldsConstants {
         // Multicast flags (combine NS and EW)
         static constexpr uint8_t WRITE_AND_FORWARD_NS = FORWARD_NORTH | FORWARD_SOUTH;  // 0b1100
         static constexpr uint8_t WRITE_AND_FORWARD_EW = FORWARD_EAST | FORWARD_WEST;    // 0b0011
+
+        // Multicast combination constants (used by 2D multicast router)
+        static constexpr uint8_t WRITE_AND_FORWARD_NE = FORWARD_NORTH | FORWARD_EAST;                   // 0b0101
+        static constexpr uint8_t WRITE_AND_FORWARD_NW = FORWARD_NORTH | FORWARD_WEST;                   // 0b0110
+        static constexpr uint8_t WRITE_AND_FORWARD_NEW = FORWARD_NORTH | WRITE_AND_FORWARD_EW;          // 0b0111
+        static constexpr uint8_t WRITE_AND_FORWARD_SE = FORWARD_SOUTH | FORWARD_EAST;                   // 0b1001
+        static constexpr uint8_t WRITE_AND_FORWARD_SW = FORWARD_SOUTH | FORWARD_WEST;                   // 0b1010
+        static constexpr uint8_t WRITE_AND_FORWARD_SEW = FORWARD_SOUTH | WRITE_AND_FORWARD_EW;          // 0b1011
+        static constexpr uint8_t WRITE_AND_FORWARD_NSE = WRITE_AND_FORWARD_NS | FORWARD_EAST;           // 0b1101
+        static constexpr uint8_t WRITE_AND_FORWARD_NSW = WRITE_AND_FORWARD_NS | FORWARD_WEST;           // 0b1110
+        static constexpr uint8_t WRITE_AND_FORWARD_NSEW = WRITE_AND_FORWARD_NS | WRITE_AND_FORWARD_EW;  // 0b1111
     };
 };
 

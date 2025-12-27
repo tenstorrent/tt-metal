@@ -45,6 +45,9 @@
 
 using namespace tt::tt_fabric;
 
+// Type alias for cleaner access to 2D mesh routing constants
+using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
+
 /*
 
 The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.
@@ -646,82 +649,82 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     using eth_chan_directions::WEST;
 
     switch (hop_cmd) {
-        case LowLatencyMeshRoutingFields::NOOP: break;
-        case LowLatencyMeshRoutingFields::FORWARD_EAST:
+        case MeshRoutingFields::NOOP: break;
+        case MeshRoutingFields::FORWARD_EAST:
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::FORWARD_WEST:
+        case MeshRoutingFields::FORWARD_WEST:
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, WEST>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_EW:
             // Line Mcast East<->West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, WEST>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::FORWARD_NORTH:
+        case MeshRoutingFields::FORWARD_NORTH:
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, NORTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
+        case MeshRoutingFields::FORWARD_SOUTH:
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NS:
             // Line Mcast North<->South
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East and West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, WEST, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, WEST, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East and West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, WEST, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East and West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, WEST, NORTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
+        case MeshRoutingFields::WRITE_AND_FORWARD_SE:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_SW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, WEST, SOUTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NE:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, EAST, NORTH>(
                 downstream_edm_interfaces_vc0, local_relay_interface);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: West
             ret_val = downstreams_have_space<DownstreamSenderVC0T, LocalRelayInterfaceT, WEST, NORTH>(
@@ -830,8 +833,8 @@ FORCE_INLINE
     using eth_chan_directions::WEST;
 
     switch (hop_cmd) {
-        case LowLatencyMeshRoutingFields::NOOP: break;
-        case LowLatencyMeshRoutingFields::FORWARD_EAST:
+        case MeshRoutingFields::NOOP: break;
+        case MeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == EAST) {
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
@@ -845,7 +848,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::FORWARD_WEST:
+        case MeshRoutingFields::FORWARD_WEST:
             if constexpr (my_direction == WEST) {
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
@@ -859,7 +862,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_EW:
             if constexpr (my_direction == WEST) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
@@ -880,7 +883,7 @@ FORCE_INLINE
             forward_to_local_destination<rx_channel_id>(
                 local_relay_interface, packet_start, payload_size_bytes, transaction_id);
             break;
-        case LowLatencyMeshRoutingFields::FORWARD_NORTH:
+        case MeshRoutingFields::FORWARD_NORTH:
             if constexpr (my_direction == NORTH) {
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
@@ -894,7 +897,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
+        case MeshRoutingFields::FORWARD_SOUTH:
             if constexpr (my_direction == SOUTH) {
                 forward_to_local_destination<rx_channel_id>(
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
@@ -908,7 +911,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NS:
             if constexpr (my_direction == SOUTH) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
@@ -929,7 +932,7 @@ FORCE_INLINE
             forward_to_local_destination<rx_channel_id>(
                 local_relay_interface, packet_start, payload_size_bytes, transaction_id);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.value++;
             }
@@ -977,7 +980,7 @@ FORCE_INLINE
             forward_to_local_destination<rx_channel_id>(
                 local_relay_interface, packet_start, payload_size_bytes, transaction_id);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.value++;
             }
@@ -1013,7 +1016,7 @@ FORCE_INLINE
             forward_to_local_destination<rx_channel_id>(
                 local_relay_interface, packet_start, payload_size_bytes, transaction_id);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
             if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                 cached_routing_fields.value++;
             }
@@ -1049,7 +1052,7 @@ FORCE_INLINE
             forward_to_local_destination<rx_channel_id>(
                 local_relay_interface, packet_start, payload_size_bytes, transaction_id);
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
             if constexpr (my_direction == SOUTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
@@ -1090,7 +1093,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
             if constexpr (my_direction == NORTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
@@ -1131,7 +1134,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NE:
             if constexpr (my_direction == SOUTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
@@ -1160,7 +1163,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_NW:
             if constexpr (my_direction == SOUTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
@@ -1189,7 +1192,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
+        case MeshRoutingFields::WRITE_AND_FORWARD_SE:
             if constexpr (my_direction == NORTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;
@@ -1218,7 +1221,7 @@ FORCE_INLINE
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
+        case MeshRoutingFields::WRITE_AND_FORWARD_SW:
             if constexpr (my_direction == NORTH) {
                 if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
                     cached_routing_fields.value++;

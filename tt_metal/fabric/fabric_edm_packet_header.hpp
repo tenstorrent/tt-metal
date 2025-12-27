@@ -677,24 +677,15 @@ public:
     }
 };
 
-// Base class for shared routing field constants
-struct LowLatencyRoutingFieldsConstants {
-    static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint64_t FIELD_MASK = 0b11;
-    static constexpr uint32_t NOOP = 0b00;
-    static constexpr uint32_t WRITE_ONLY = 0b01;
-    static constexpr uint32_t FORWARD_ONLY = 0b10;
-    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t BASE_HOPS = 16;               // Hops per 32-bit word
-    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern
-    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
-};
-
 // Primary template for 1D routing fields with route buffer (ExtensionWords >= 1)
 template <uint32_t ExtensionWords = 1>
-struct LowLatencyRoutingFieldsT : LowLatencyRoutingFieldsConstants {
+struct LowLatencyRoutingFieldsT {
+    // Type alias to reference centralized constants
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    // Template-specific constants
     static constexpr uint32_t ExtensionWords_v = ExtensionWords;  // For constexpr access
-    static constexpr uint32_t MAX_NUM_ENCODINGS = BASE_HOPS * (1 + ExtensionWords);
+    static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS * (1 + ExtensionWords);
 
     // Block >32 hops until memory map is updated
     static_assert(
@@ -711,7 +702,7 @@ struct LowLatencyRoutingFieldsT : LowLatencyRoutingFieldsConstants {
      * This is the core operation used by the router at each hop.
      */
     FORCE_INLINE void consume_and_shift() {
-        value >>= FIELD_WIDTH;
+        value >>= LowLatencyFields::FIELD_WIDTH;
 
         if constexpr (ExtensionWords > 0) {
             // Refill logic: when value is exhausted, load next word from buffer
@@ -743,9 +734,12 @@ struct LowLatencyRoutingFieldsT : LowLatencyRoutingFieldsConstants {
 
 // Partial specialization for 16-hop mode
 template <>
-struct LowLatencyRoutingFieldsT<0> : LowLatencyRoutingFieldsConstants {
+struct LowLatencyRoutingFieldsT<0> {
+    // Type alias to reference centralized constants
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
     static constexpr uint32_t ExtensionWords_v = 0;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = 16;  // 16 hops max
+    static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS;  // 16 hops max
 
     uint32_t value;  // Only field - no route_buffer member
 
@@ -753,7 +747,7 @@ struct LowLatencyRoutingFieldsT<0> : LowLatencyRoutingFieldsConstants {
      * Consume current hop (no refill needed in 16-hop mode)
      */
     FORCE_INLINE void consume_and_shift() {
-        value >>= FIELD_WIDTH;
+        value >>= LowLatencyFields::FIELD_WIDTH;
         // No refill logic - compiles to single shift instruction
     }
 
@@ -928,26 +922,15 @@ using LowLatencyPacketHeader = LowLatencyPacketHeaderT<FABRIC_1D_PKT_HDR_EXTENSI
 using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTENSION_WORDS>;
 #endif
 
+// 2D Mesh routing fields struct
+// This struct contains routing STATE (hop_index union) for 2D packet headers.
+// All constants are centralized in RoutingFieldsConstants::Mesh (fabric_common.h).
+// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh)
 struct LowLatencyMeshRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 8;
-    static constexpr uint32_t FIELD_MASK = 0b1111;
-    static constexpr uint32_t NOOP = 0b0000;
-    static constexpr uint32_t FORWARD_EAST = 0b0001;
-    static constexpr uint32_t FORWARD_WEST = 0b0010;
-    static constexpr uint32_t WRITE_AND_FORWARD_EW = 0b0011;
-    static constexpr uint32_t FORWARD_NORTH = 0b0100;
-    static constexpr uint32_t WRITE_AND_FORWARD_NE = 0b0101;
-    static constexpr uint32_t WRITE_AND_FORWARD_NW = 0b0110;
-    static constexpr uint32_t WRITE_AND_FORWARD_NEW = 0b0111;
-    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
-    static constexpr uint32_t WRITE_AND_FORWARD_SE = 0b1001;
-    static constexpr uint32_t WRITE_AND_FORWARD_SW = 0b1010;
-    static constexpr uint32_t WRITE_AND_FORWARD_SEW = 0b1011;
-    static constexpr uint32_t WRITE_AND_FORWARD_NS = 0b1100;
-    static constexpr uint32_t WRITE_AND_FORWARD_NSE = 0b1101;
-    static constexpr uint32_t WRITE_AND_FORWARD_NSW = 0b1110;
-    static constexpr uint32_t WRITE_AND_FORWARD_NSEW = 0b1111;
+    // Type alias to reference centralized constants
+    using MeshRoutingFields = RoutingFieldsConstants::Mesh;
 
+    // Routing state (the actual data members)
     union {
         uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
                          // Also used when doing noc inline dword write to update packet header in next hop
@@ -955,7 +938,7 @@ struct LowLatencyMeshRoutingFields {
         struct {
             uint16_t hop_index;
             uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
-            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast east branch
+            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast west branch
         };
     };
 };
