@@ -106,7 +106,7 @@ jobs:
             # # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
             # # { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U08TJ70UFRT", "mlperf": true },
             # { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 10, "owner_id": "U044T8U8DEF" },
-            { "name": "Galaxy tttv2 tests", "arch": "wormhole_b0", "model": "tttv2", "timeout": 60, "owner_id": "U07RY6B5FLJ"} # Gongyu Wang
+            { "name": "Galaxy tttv2 tests", "arch": "wormhole_b0", "model": "tttv2", "timeout": 7, "owner_id": "U07RY6B5FLJ"} # Gongyu Wang
           ]')
 
           # Filter matrix based on model selection

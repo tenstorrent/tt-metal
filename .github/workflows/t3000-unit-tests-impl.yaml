@@ -191,7 +191,7 @@ jobs:
               "model": "tttv2 modules",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_tttv2_modules_tests",
-              "timeout": 60,
+              "timeout": 5,
               "owner_id": "U07RY6B5FLJ" # Gongyu Wang
             }
           ]')
