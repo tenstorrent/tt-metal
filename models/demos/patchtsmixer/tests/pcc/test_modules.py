@@ -4,10 +4,21 @@ import torch
 import ttnn
 from models.demos.patchtsmixer.reference.pytorch_patchtsmixer import (
     PatchTSMixerGatedAttention,
+    PatchTSMixerNormLayer,
     PatchTSMixerPositionalEncoding,
 )
-from models.demos.patchtsmixer.tt.model_processing import preprocess_gated_attention, preprocess_positional_encoding
-from models.demos.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerGatedAttention, TtPatchTSMixerPositionalEncoding
+from models.demos.patchtsmixer.tt.model_processing import (
+    preprocess_gated_attention,
+    preprocess_layernorm,
+    preprocess_norm_layer_batchnorm,
+    preprocess_positional_encoding,
+)
+from models.demos.patchtsmixer.tt.patchtsmixer import (
+    TtPatchTSMixerBatchNorm,
+    TtPatchTSMixerGatedAttention,
+    TtPatchTSMixerLayerNorm,
+    TtPatchTSMixerPositionalEncoding,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -87,3 +98,72 @@ def test_patchtsmixer_positional_encoding(device, reset_seeds, pe_type):
     tt_out_torch = ttnn.to_torch(tt_out)
 
     assert_with_pcc(torch_out, tt_out_torch, 0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_patchtsmixer_norm_layer(device, reset_seeds):
+    torch.manual_seed(42)
+
+    B, C, N_p, D = 1, 2, 32, 32
+    torch_norm = PatchTSMixerNormLayer(d_model=D, norm_type="LayerNorm", eps=1e-5).eval()
+
+    base = "mixer_block.layers.0.patch_mixer"  # fake base
+    sd = torch_norm.state_dict()
+    state_dict = {
+        f"{base}.norm.weight": sd["norm.weight"],
+        f"{base}.norm.bias": sd["norm.bias"],
+    }
+
+    gamma, beta = preprocess_layernorm(state_dict, base, device=device)
+    parameters = {
+        f"{base}.norm.weight": gamma,
+        f"{base}.norm.bias": beta,
+    }
+
+    tt_norm = TtPatchTSMixerLayerNorm(device=device, base_address=base, parameters=parameters)
+
+    x = torch.randn(B, C, N_p, D)
+    torch_out = torch_norm(x)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_norm(tt_x)
+    tt_out_torch = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(torch_out, tt_out_torch, 0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_patchtsmixer_norm_layer_batchnorm(device, reset_seeds):
+    torch.manual_seed(42)
+
+    B, C, N_p, D = 1, 2, 32, 32
+    torch_norm = PatchTSMixerNormLayer(d_model=D, norm_type="BatchNorm", eps=1e-5)
+
+    base = "mixer_block.layers.0.patch_mixer"
+    sd = torch_norm.state_dict()
+    state_dict = {
+        f"{base}.norm.weight": sd["norm.weight"],
+        f"{base}.norm.bias": sd["norm.bias"],
+        f"{base}.norm.running_mean": sd["norm.running_mean"],
+        f"{base}.norm.running_var": sd["norm.running_var"],
+    }
+
+    w, b, m, v = preprocess_norm_layer_batchnorm(state_dict, base, device=device)
+    parameters = {
+        f"{base}.norm.weight": w,
+        f"{base}.norm.bias": b,
+        f"{base}.norm.running_mean": m,
+        f"{base}.norm.running_var": v,
+    }
+
+    tt_norm = TtPatchTSMixerBatchNorm(device=device, base_address=base, parameters=parameters)
+
+    x = torch.randn(B, C, N_p, D)
+    torch_out = torch_norm(x)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_norm(tt_x)
+    tt_out_torch = ttnn.to_torch(tt_out)
+
+    # BatchNorm is more sensitive to precision, use slightly relaxed threshold
+    assert_with_pcc(torch_out, tt_out_torch, 0.98)
