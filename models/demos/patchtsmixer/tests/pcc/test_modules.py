@@ -4,12 +4,14 @@ import torch
 import ttnn
 from models.demos.patchtsmixer.reference.pytorch_patchtsmixer import (
     PatchTSMixerGatedAttention,
+    PatchTSMixerMLP,
     PatchTSMixerNormLayer,
     PatchTSMixerPositionalEncoding,
 )
 from models.demos.patchtsmixer.tt.model_processing import (
     preprocess_gated_attention,
     preprocess_layernorm,
+    preprocess_linear,
     preprocess_norm_layer_batchnorm,
     preprocess_positional_encoding,
 )
@@ -17,6 +19,7 @@ from models.demos.patchtsmixer.tt.patchtsmixer import (
     TtPatchTSMixerBatchNorm,
     TtPatchTSMixerGatedAttention,
     TtPatchTSMixerLayerNorm,
+    TtPatchTSMixerMLP,
     TtPatchTSMixerPositionalEncoding,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -167,3 +170,50 @@ def test_patchtsmixer_norm_layer_batchnorm(device, reset_seeds):
 
     # BatchNorm is more sensitive to precision, use slightly relaxed threshold
     assert_with_pcc(torch_out, tt_out_torch, 0.98)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_patchtsmixer_mlp(device, reset_seeds):
+    torch.manual_seed(42)
+
+    in_features = 32
+    out_features = 32
+    expansion = 2
+    hidden = in_features * expansion
+
+    torch_mlp = PatchTSMixerMLP(in_features, out_features, expansion=expansion, dropout=0.1).eval()
+
+    base = "mixer_block.layers.0.feature_mixer.mlp"  # Fake path
+
+    sd = torch_mlp.state_dict()
+
+    state_dict = {
+        f"{base}.fc1.weight": sd["fc1.weight"],
+        f"{base}.fc1.bias": sd["fc1.bias"],
+        f"{base}.fc2.weight": sd["fc2.weight"],
+        f"{base}.fc2.bias": sd["fc2.bias"],
+    }
+
+    w1, b1 = preprocess_linear(state_dict, f"{base}.fc1", device=device)
+    w2, b2 = preprocess_linear(state_dict, f"{base}.fc2", device=device)
+
+    parameters = {
+        f"{base}.fc1.weight": w1,
+        f"{base}.fc1.bias": b1,
+        f"{base}.fc2.weight": w2,
+        f"{base}.fc2.bias": b2,
+    }
+
+    tt_mlp = TtPatchTSMixerMLP(device=device, base_address=base, parameters=parameters)
+
+    # input rank-4 last dim = in_features
+    B, C, Np = 1, 2, 32
+    x = torch.randn(B, C, Np, in_features)
+
+    torch_out = torch_mlp(x)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_mlp(tt_x)
+    tt_out_torch = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(torch_out, tt_out_torch, 0.99)
