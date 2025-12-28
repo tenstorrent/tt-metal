@@ -164,6 +164,11 @@ inline void _llk_pack_untilize_init_(
     }
 }
 
+inline void _llk_pack_untilize_uninit_(const std::uint32_t face_r_dim = FACE_R_DIM)
+{
+    TT_SETADCXX(p_setadc::PAC, face_r_dim * FACE_C_DIM - 1, 0x0);
+}
+
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
