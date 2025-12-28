@@ -23,8 +23,8 @@ bool run_command(const std::string& cmd, const std::string& log_file, const bool
     // Clear ASan/LSan environment variables for subprocesses to prevent the sanitizer
     // runtime from being injected into the cross-compiler toolchain. The sanitizers are
     // meant for testing our code, not external tools like the RISC-V compiler.
-    const std::string env_prefix = "env -u LD_PRELOAD -u ASAN_OPTIONS -u LSAN_OPTIONS -u UBSAN_OPTIONS ";
-    const std::string sanitized_cmd = env_prefix + cmd;
+    const std::string env_cleanup = "unset LD_PRELOAD ASAN_OPTIONS LSAN_OPTIONS UBSAN_OPTIONS; ";
+    const std::string sanitized_cmd = env_cleanup + cmd;
 
     if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
         {
