@@ -1,3 +1,5 @@
+import torch
+
 import ttnn
 
 
@@ -77,6 +79,28 @@ def preprocess_layernorm(state_dict, path: str, device=None):
     tt_gamma = ttnn.from_torch(gamma, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_beta = ttnn.from_torch(beta, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     return tt_gamma, tt_beta
+
+
+def preprocess_linear(state_dict, path: str, device=None, dtype=ttnn.bfloat16):
+    """
+    Converts a torch nn.Linear at `path` into TTNN
+    Expects:
+        state_dict[f"{path}.weight] shape (out, in)
+        state_dict[f"{path}.bias] shape (out, in)
+    Produces:
+        weight: (1, 1, in, out) TILE
+        bias: (1, 1, 1, out) TILE
+    """
+    w = state_dict[f"{path}.weight"]  # (out, in)
+    b = state_dict[f"{path}.bias"]  # (out, )
+
+    w = torch.transpose(w, 0, 1)  # (in out)
+    w = w.view(1, 1, w.shape[0], w.shape[1])  # (1, 1, in, out)
+    b = b.view(1, 1, 1, b.shape[0])  # (1, 1, 1, out)
+
+    tt_w = ttnn.from_torch(w, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    tt_b = ttnn.from_torch(b, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    return tt_w, tt_b
 
 
 def patchtsmixer_preprocessor(device, state_dict):
