@@ -95,3 +95,29 @@ class TtPatchTSMixerLayerNorm:
     def __call__(self, x):
         # x: (B, C, N_p, D)
         return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
+
+
+class TtPatchTSMixerMLP:
+    """
+    TTNN equivalent of PatchTSMixerMLP in inference mode (dropout ignored for now).
+
+    Expects input x to be rank-4 TILE on device.
+    Applies:
+        x = gelu(x @ W1 + b1)
+        x = x @ W2 + b2
+    """
+
+    def __init__(self, device, base_address: str, parameters: dict, eps: float = 0.0):
+        self.device = device
+        self.base = base_address
+
+        self.w1 = parameters[f"{self.base}.fc1.weight"]  # (1, 1, in, hidden)
+        self.b1 = parameters[f"{self.base}.fc1.bias"]  # (1, 1, 1, hidden)
+        self.w2 = parameters[f"{self.base}.fc2.weight"]  # (1, 1, hidden, out)
+        self.b2 = parameters[f"{self.base}.fc2.bias"]  # (1, 1, 1, out)
+
+    def __call__(self, x):
+        # x: (..., in_features) -> rank-4 i PatchTSMixer
+        x = ttnn.linear(x, self.w1, bias=self.b1, activation=ttnn.gelu)
+        x = ttnn.linear(x, self.w2, bias=self.b2)
+        return x
