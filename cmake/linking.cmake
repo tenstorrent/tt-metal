@@ -52,12 +52,12 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
             ERROR_QUIET
         )
         if(MOLD_VERSION_OUTPUT MATCHES "mold ([0-9.]+)")
-            set(MOLD_VERSION "${CMAKE_MATCH_1}")
-            if(MOLD_VERSION VERSION_GREATER_EQUAL "1.6")
-                message(STATUS "Linker not specified. Using mold linker ${MOLD_VERSION}: ${MOLD_EXECUTABLE}")
+            set(MOLD_VERSION_CACHED "${CMAKE_MATCH_1}")
+            if(MOLD_VERSION_CACHED VERSION_GREATER_EQUAL "1.6")
+                message(STATUS "Linker not specified. Using mold linker ${MOLD_VERSION_CACHED}: ${MOLD_EXECUTABLE}")
                 set(CMAKE_LINKER_TYPE MOLD)
             else()
-                message(STATUS "mold ${MOLD_VERSION} found but version < 1.6 (no LTO support), checking for LLD")
+                message(STATUS "mold ${MOLD_VERSION_CACHED} found but version < 1.6 (no LTO support), checking for LLD")
             endif()
         else()
             message(STATUS "Could not determine mold version, checking for LLD")
@@ -77,12 +77,12 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
                 ERROR_QUIET
             )
             if(LLD_VERSION_OUTPUT MATCHES "LLD ([0-9]+)")
-                set(LLD_VERSION "${CMAKE_MATCH_1}")
-                if(LLD_VERSION VERSION_GREATER_EQUAL "17")
-                    message(STATUS "Linker not specified. Using LLD linker ${LLD_VERSION}: ${LLD_EXECUTABLE}")
+                set(LLD_VERSION_CACHED "${CMAKE_MATCH_1}")
+                if(LLD_VERSION_CACHED VERSION_GREATER_EQUAL "17")
+                    message(STATUS "Linker not specified. Using LLD linker ${LLD_VERSION_CACHED}: ${LLD_EXECUTABLE}")
                     set(CMAKE_LINKER_TYPE LLD)
                 else()
-                    message(STATUS "LLD ${LLD_VERSION} found but version < 17, using default linker")
+                    message(STATUS "LLD ${LLD_VERSION_CACHED} found but version < 17, using default linker")
                 endif()
             else()
                 message(STATUS "Could not determine LLD version, using default linker")
@@ -94,32 +94,54 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
 endif()
 
 # Print the linker being used and its version
-
-# Helper to locate a linker executable, run `--version`, and print a simple regex-captured version
-macro(ttn_print_linker_version_simple _program _regex)
-    find_program(_LINKER_EXE ${_program})
-    if(_LINKER_EXE)
-        execute_process(
-            COMMAND
-                ${_LINKER_EXE} --version
-            OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-        if(_LINKER_VERSION_OUTPUT MATCHES "${_regex}")
-            message(STATUS "Linker version: ${CMAKE_MATCH_1}")
-        else()
-            message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
-        endif()
-    endif()
-endmacro()
-
 if(CMAKE_LINKER_TYPE)
     message(STATUS "Linker type: ${CMAKE_LINKER_TYPE}")
     if(CMAKE_LINKER_TYPE STREQUAL "MOLD")
-        ttn_print_linker_version_simple("ld.mold" "mold ([0-9.]+)")
+        # Reuse cached version from detection phase if available
+        if(DEFINED MOLD_VERSION_CACHED)
+            message(STATUS "Linker version: ${MOLD_VERSION_CACHED}")
+        else()
+            find_program(_LINKER_EXE ld.mold)
+            if(_LINKER_EXE)
+                execute_process(
+                    COMMAND
+                        ${_LINKER_EXE} --version
+                    OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                )
+                if(_LINKER_VERSION_OUTPUT MATCHES "mold ([0-9.]+)")
+                    message(STATUS "Linker version: ${CMAKE_MATCH_1}")
+                else()
+                    message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+                endif()
+                unset(_LINKER_VERSION_OUTPUT)
+            endif()
+            unset(_LINKER_EXE CACHE)
+        endif()
     elseif(CMAKE_LINKER_TYPE STREQUAL "LLD")
-        ttn_print_linker_version_simple("ld.lld" "LLD ([0-9.]+)")
+        # Reuse cached version from detection phase if available
+        if(DEFINED LLD_VERSION_CACHED)
+            message(STATUS "Linker version: ${LLD_VERSION_CACHED}")
+        else()
+            find_program(_LINKER_EXE ld.lld)
+            if(_LINKER_EXE)
+                execute_process(
+                    COMMAND
+                        ${_LINKER_EXE} --version
+                    OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                )
+                if(_LINKER_VERSION_OUTPUT MATCHES "LLD ([0-9.]+)")
+                    message(STATUS "Linker version: ${CMAKE_MATCH_1}")
+                else()
+                    message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+                endif()
+                unset(_LINKER_VERSION_OUTPUT)
+            endif()
+            unset(_LINKER_EXE CACHE)
+        endif()
     elseif(CMAKE_LINKER_TYPE STREQUAL "GNU" OR CMAKE_LINKER_TYPE STREQUAL "BFD")
         find_program(_LINKER_EXE ld)
         if(_LINKER_EXE)
@@ -136,10 +158,11 @@ if(CMAKE_LINKER_TYPE)
             else()
                 message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
             endif()
+            unset(_LINKER_VERSION)
+            unset(_LINKER_VERSION_OUTPUT)
         endif()
+        unset(_LINKER_EXE CACHE)
     endif()
-    unset(_LINKER_EXE CACHE)
-    unset(_LINKER_VERSION_OUTPUT)
 else()
     message(STATUS "Linker type: default (system ld)")
     find_program(_LINKER_EXE ld)
@@ -157,9 +180,10 @@ else()
         else()
             message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
         endif()
+        unset(_LINKER_VERSION)
+        unset(_LINKER_VERSION_OUTPUT)
     endif()
     unset(_LINKER_EXE CACHE)
-    unset(_LINKER_VERSION_OUTPUT)
 endif()
 
 set(TT_LTO_ENABLED OFF)
