@@ -19,20 +19,27 @@ bool run_command(const std::string& cmd, const std::string& log_file, const bool
     // ZoneText( cmd.c_str(), cmd.length());
     int ret;
     static std::mutex io_mutex;
+
+    // Clear ASan/LSan environment variables for subprocesses to prevent the sanitizer
+    // runtime from being injected into the cross-compiler toolchain. The sanitizers are
+    // meant for testing our code, not external tools like the RISC-V compiler.
+    const std::string env_cleanup = "unset LD_PRELOAD ASAN_OPTIONS LSAN_OPTIONS UBSAN_OPTIONS; ";
+    const std::string sanitized_cmd = env_cleanup + cmd;
+
     if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);
             std::cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
-            std::cout << cmd << std::endl << std::endl;
+            std::cout << sanitized_cmd << std::endl << std::endl;
         }
-        ret = system(cmd.c_str());
+        ret = system(sanitized_cmd.c_str());
         // {
         //     std::lock_guard<std::mutex> lk(io_mutex);
         //     cout << "===== DONE SYSTEM COMMAND: " << cmd << std::endl;
         // }
 
     } else {
-        std::string redirected_cmd = cmd + " >> " + log_file + " 2>&1";
+        std::string redirected_cmd = sanitized_cmd + " >> " + log_file + " 2>&1";
         ret = system(redirected_cmd.c_str());
     }
 
