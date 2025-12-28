@@ -480,6 +480,9 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
+        # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
+        # We can only enable it for batch 32 since the fused ops have certain batch size assumptions and batch 1 has not been extensively tested.
+        self.use_qk_fused = True if max_batch_size == 32 else False
         self.is_70b = False
         self.is_90b = False
         self.fuse_qkv = False
@@ -3265,14 +3268,88 @@ class DecodersPrecision:
         return inst
 
 
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
+def num_to_corerange(
+    x: int,
+    start_core: ttnn.CoreCoord = ttnn.CoreCoord(0, 0),
+) -> ttnn.CoreRange:
+    """
+    Construct a rectangular CoreRange of exactly ``x`` cores starting at
+    ``start_core`` on an 8×8 core grid.
+
+    The CoreRange is allocated in row-major order semantics but must form
+    a single contiguous rectangle representable by ``ttnn.CoreRange``.
+    The function validates that:
+      - ``start_core`` lies within the 8×8 grid
+      - At least ``x`` cores exist from ``start_core`` onward in row-major
+        traversal
+      - ``x`` can be expressed as a rectangular region starting at
+        ``start_core`` without exceeding grid bounds
+
+    Constraints:
+      - ``x`` must be positive
+      - ``x < 8`` or ``x`` must be a multiple of 8
+      - Rectangular allocation may fail even when linear availability
+        exists (e.g., when ``start_core.x != 0``)
+
+    This helper is intended for configuring sharded tensor layouts where
+    a rectangular core region is required (e.g., ``CoreRangeSet`` inputs).
+
+    Args:
+        x (int):
+            Number of cores to include in the CoreRange.
+
+        start_core (ttnn.CoreCoord, optional):
+            Lower-left corner of the CoreRange. Defaults to ``(0, 0)``.
+
+    Returns:
+        ttnn.CoreRange:
+            A rectangular CoreRange covering exactly ``x`` cores starting
+            at ``start_core``.
+
+    Raises:
+        AssertionError:
+            If the requested CoreRange cannot be formed within the grid
+            or violates shape or availability constraints.
+    """
+    GRID_X = 8
+    GRID_Y = 8
+
+    # --- basic sanity ---
+    assert x > 0, "x must be positive"
+    assert 0 <= start_core.x < GRID_X
+    assert 0 <= start_core.y < GRID_Y
+
+    sx, sy = start_core.x, start_core.y
+
+    # --- linear availability (row-major correctness) ---
+    remaining_linear_cores = (GRID_X - sx) + (GRID_Y - sy - 1) * GRID_X  # remainder of start row  # full rows below
+    assert remaining_linear_cores >= x, (
+        f"Not enough cores from start_core {start_core} "
+        f"to allocate {x} cores (only {remaining_linear_cores} available)"
+    )
+
+    # --- rectangular availability ---
+    remaining_x = GRID_X - sx
+    remaining_y = GRID_Y - sy
+
+    # --- shape rule (same as original) ---
+    assert x < GRID_X or x % GRID_X == 0, "x must be < 8 or a multiple of 8"
+
+    # --- choose rectangle dimensions ---
+    num_x = min(x, remaining_x)
     num_y = x // num_x
-    assert num_x * num_y == x
+
+    assert num_x * num_y == x, f"x={x} cannot form a rectangular CoreRange " f"starting at {start_core}"
+
+    # --- bounds check ---
+    assert num_y <= remaining_y, f"CoreRange height {num_y} exceeds available rows {remaining_y}"
+
+    end_x = sx + num_x - 1
+    end_y = sy + num_y - 1
+
     return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
+        start_core,
+        ttnn.CoreCoord(end_x, end_y),
     )
 
 

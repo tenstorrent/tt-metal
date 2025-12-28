@@ -382,11 +382,12 @@ class RotarySetup(LightweightModule):
         max_seq_len: int,
         rope_theta: float,
         rope_scaling: Optional[RopeScaling] = None,
+        use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
-
-        self.batch_size = batch_size
+        self.use_qk_fused = use_qk_fused
+        self.batch_size = batch_size * 2 if use_qk_fused else batch_size
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
@@ -395,7 +396,9 @@ class RotarySetup(LightweightModule):
             self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
         else:
             self.batch_size_per_device_group = self.batch_size
-        self.core_grid = device.compute_with_storage_grid_size()
+        self.core_grid = (
+            ttnn.CoreCoord(8, 8) if ttnn.get_arch_name() == "blackhole" else device.compute_with_storage_grid_size()
+        )
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
@@ -407,11 +410,8 @@ class RotarySetup(LightweightModule):
             datatype=datatype,
         )
 
-        self.batch_grid = (
-            ttnn.CoreGrid(y=4, x=8)
-            if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
-        )
+        self.batch_grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
+
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
@@ -461,6 +461,9 @@ class RotarySetup(LightweightModule):
         return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
     def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
+        if self.use_qk_fused:
+            position_idxs = position_idxs.repeat(2)
+
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
