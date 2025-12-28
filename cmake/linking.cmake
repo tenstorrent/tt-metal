@@ -94,40 +94,32 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
 endif()
 
 # Print the linker being used and its version
+
+# Helper to locate a linker executable, run `--version`, and print a simple regex-captured version
+macro(ttn_print_linker_version_simple _program _regex)
+    find_program(_LINKER_EXE ${_program})
+    if(_LINKER_EXE)
+        execute_process(
+            COMMAND
+                ${_LINKER_EXE} --version
+            OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(_LINKER_VERSION_OUTPUT MATCHES "${_regex}")
+            message(STATUS "Linker version: ${CMAKE_MATCH_1}")
+        else()
+            message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+        endif()
+    endif()
+endmacro()
+
 if(CMAKE_LINKER_TYPE)
     message(STATUS "Linker type: ${CMAKE_LINKER_TYPE}")
     if(CMAKE_LINKER_TYPE STREQUAL "MOLD")
-        find_program(_LINKER_EXE ld.mold)
-        if(_LINKER_EXE)
-            execute_process(
-                COMMAND
-                    ${_LINKER_EXE} --version
-                OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET
-            )
-            if(_LINKER_VERSION_OUTPUT MATCHES "mold ([0-9.]+)")
-                message(STATUS "Linker version: ${CMAKE_MATCH_1}")
-            else()
-                message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
-            endif()
-        endif()
+        ttn_print_linker_version_simple("ld.mold" "mold ([0-9.]+)")
     elseif(CMAKE_LINKER_TYPE STREQUAL "LLD")
-        find_program(_LINKER_EXE ld.lld)
-        if(_LINKER_EXE)
-            execute_process(
-                COMMAND
-                    ${_LINKER_EXE} --version
-                OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET
-            )
-            if(_LINKER_VERSION_OUTPUT MATCHES "LLD ([0-9.]+)")
-                message(STATUS "Linker version: ${CMAKE_MATCH_1}")
-            else()
-                message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
-            endif()
-        endif()
+        ttn_print_linker_version_simple("ld.lld" "LLD ([0-9.]+)")
     elseif(CMAKE_LINKER_TYPE STREQUAL "GNU" OR CMAKE_LINKER_TYPE STREQUAL "BFD")
         find_program(_LINKER_EXE ld)
         if(_LINKER_EXE)
