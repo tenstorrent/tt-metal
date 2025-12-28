@@ -51,7 +51,7 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
-        if(MOLD_VERSION_OUTPUT MATCHES "mold ([0-9]+\\.[0-9]+)")
+        if(MOLD_VERSION_OUTPUT MATCHES "mold ([0-9.]+) .*$")
             set(MOLD_VERSION "${CMAKE_MATCH_1}")
             if(MOLD_VERSION VERSION_GREATER_EQUAL "1.6")
                 message(STATUS "Linker not specified. Using mold linker ${MOLD_VERSION}: ${MOLD_EXECUTABLE}")
