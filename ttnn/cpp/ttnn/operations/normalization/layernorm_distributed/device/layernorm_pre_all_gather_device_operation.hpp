@@ -4,26 +4,27 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "layernorm_pre_all_gather_program_factory.hpp"
-#include "layernorm_pre_all_gather_2d_program_factory.hpp"
-
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization::layernorm {
+namespace ttnn::operations::normalization {
 
 struct LayerNormPreAllGatherDeviceOperation {
-    using operation_attributes_t = layernorm::operation_attributes_t;
-    using tensor_args_t = layernorm::tensor_args_t;
-    using spec_return_value_t = layernorm::spec_return_value_t;
-    using tensor_return_value_t = layernorm::tensor_return_value_t;
-    using program_factory_t =
-        std::variant<program::LayerNormPreAllGatherProgramFactory, program::LayerNormPreAllGather2DProgramFactory>;
+    using operation_attributes_t = LayerNormPreAllGatherOperationAttributes;
+    using tensor_args_t = LayerNormPreAllGatherTensorArgs;
+    using spec_return_value_t = LayerNormPreAllGatherSpecReturnValue;
+    using tensor_return_value_t = LayerNormPreAllGatherTensorReturnValue;
+    using program_factory_t = std::variant<
+        program::LayerNormPreAllGatherProgramFactory,
+        program::LayerNormPreAllGather2DProgramFactory,
+        program::LayerNormPreAllGatherWelfordProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,17 +39,16 @@ struct LayerNormPreAllGatherDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         LayerNormDistributedType norm_type,
-        DataType dtype,
+        tt::tt_metal::DataType dtype,
         const DeviceComputeKernelConfig& compute_kernel_config,
-        std::optional<bool> use_2d_core_grid,
-        const LayerNormDistributedDefaultProgramConfig& program_config,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
+        const LayerNormProgramConfig& program_config,
+        const std::optional<bool>& use_2d_core_grid);
 };
 
-}  // namespace ttnn::operations::normalization::layernorm
+}  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {
-constexpr auto layernorm_pre_all_gather = ttnn::register_operation<
-    "ttnn::prim::layernorm_pre_all_gather",
-    ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation>();
+constexpr auto layer_norm_pre_all_gather = ttnn::register_operation<
+    "ttnn::prim::layer_norm_pre_all_gather",
+    ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation>();
 }  // namespace ttnn::prim

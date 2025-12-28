@@ -5,26 +5,25 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "layernorm_distributed_types.hpp"
 
-namespace ttnn::operations::normalization::layernorm {
+namespace ttnn::operations::normalization {
 
-struct operation_attributes_t {
-    LayerNormDistributedType norm_type = LayerNormDistributedType::LAYERNORM;
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+struct LayerNormPreAllGatherOperationAttributes {
+    LayerNormDistributedType norm_type;
+    tt::tt_metal::DataType dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+    LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
-    LayerNormDistributedDefaultProgramConfig program_config;
 };
 
-struct tensor_args_t {
-    Tensor input;
-    std::optional<Tensor> preallocated_output;
+struct LayerNormPreAllGatherTensorArgs {
+    const Tensor& input;
 };
 
-using tensor_return_value_t = Tensor;
+using LayerNormPreAllGatherTensorReturnValue = Tensor;
+using LayerNormPreAllGatherSpecReturnValue = TensorSpec;
 
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::normalization::layernorm
+}  // namespace ttnn::operations::normalization

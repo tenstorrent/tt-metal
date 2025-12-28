@@ -36,15 +36,13 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
             LayerNormType::RMSNORM,
             DistributedLayerNormStage::PRE_ALL_GATHER);
     } else {
-        return operation::run(
-                   LayerNormPreAllGather{
-                       .norm_type = LayerNormDistributedType::RMSNORM,
-                       .dtype = dtype,
-                       .compute_kernel_config = kernel_config_val,
-                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                       .use_2d_core_grid = use_2d_core_grid},
-                   {input_tensor})
-            .at(0);
+        return ttnn::prim::layer_norm_pre_all_gather(
+            input_tensor,
+            LayerNormDistributedType::RMSNORM,
+            dtype,
+            kernel_config_val,
+            program_config.value_or(LayerNormDefaultProgramConfig{}),
+            use_2d_core_grid);
     }
 }
 
