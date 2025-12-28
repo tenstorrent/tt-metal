@@ -4,6 +4,7 @@ set(UNIT_TESTS_LLK_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dropout_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_impls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pack_rows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp
