@@ -453,8 +453,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         };
 
         // Handler for timeout
-        auto fetch_on_timeout = [&]() {
-            on_timeout_detected();
+        auto fetch_on_timeout = []() {
+            MetalContext::instance().on_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -504,10 +504,10 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     };
 
     // Handler for the timeout
-    auto on_timeout = [&exit_condition, this]() {
+    auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
 
-        this->on_timeout_detected();
+        MetalContext::instance().on_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
@@ -577,29 +577,6 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     }
     this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
-}
-
-void SystemMemoryManager::on_timeout_detected() const {
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-
-    // Serialize Inspector RPC data if enabled
-    if (rtoptions.get_serialize_inspector_on_dispatch_timeout()) {
-        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
-        Inspector::serialize_rpc();
-    }
-
-    // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
-    std::string command = rtoptions.get_dispatch_timeout_command_to_execute();
-    if (!command.empty()) {
-        log_info(LogAlways, "Timeout detected - executing command: {}", command);
-
-        int result = std::system(command.c_str());
-
-        if (result != 0) {
-            log_warning(
-                LogAlways, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
-        }
-    }
 }
 
 }  // namespace tt::tt_metal

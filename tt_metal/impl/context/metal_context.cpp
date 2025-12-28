@@ -202,6 +202,9 @@ void MetalContext::initialize(
     // Set fw_compile_hash for Inspector RPC build environment info
     Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
 
+    // Reset timeout detection state
+    timeout_detection_processed_ = false;
+
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
@@ -1715,6 +1718,33 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
 
     CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+}
+
+void MetalContext::on_timeout_detected() {
+    std::lock_guard<std::mutex> lock(timeout_detection_mutex_);
+
+    if (!timeout_detection_processed_) {
+        timeout_detection_processed_ = true;
+        log_info(tt::LogMetal, "Timeout detected");
+        // Serialize Inspector RPC data if enabled
+        if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
+            log_info(tt::LogMetal, "Serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+        }
+
+        // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
+        std::string command = rtoptions_.get_dispatch_timeout_command_to_execute();
+        if (!command.empty()) {
+            log_info(tt::LogMetal, "Executing command: {}", command);
+
+            int result = std::system(command.c_str());
+
+            if (result != 0) {
+                log_warning(
+                    tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
