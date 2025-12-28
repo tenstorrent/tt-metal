@@ -344,7 +344,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)cb_length);
-    reader_compile_time_args.push_back((std::uint32_t)Wt);
+    reader_compile_time_args.push_back((std::uint32_t)tiles_per_core_y);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
@@ -367,7 +367,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
