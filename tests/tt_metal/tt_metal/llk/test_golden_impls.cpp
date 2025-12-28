@@ -268,4 +268,13 @@ std::vector<uint32_t> gold_standard_tilize_w_elwadd(
     return tt::test_utils::pack_vector<uint32_t, bfloat16>(result_vec);
 }
 
+std::vector<uint32_t> gold_standard_pack_rows(const std::vector<uint32_t>& src_vec, const PackRowsConfig& config) {
+    // Each row = 16 datums = 8 uint32_t (bfloat16 pairs)
+    size_t num_uint32_to_extract = config.num_rows * 8;
+    size_t actual_count = std::min(num_uint32_to_extract, src_vec.size());
+    vector<uint32_t> dst_vec(actual_count);
+    std::copy_n(src_vec.begin(), actual_count, dst_vec.begin());
+    return dst_vec;
+}
+
 }  // namespace unit_tests::compute
