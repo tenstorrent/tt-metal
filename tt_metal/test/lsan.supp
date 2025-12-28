@@ -7,6 +7,8 @@
 # Bug: https://github.com/open-mpi/ompi/issues/12584
 # ASan Build with LeakSantizer complains about leaks in openmpi lib.
 leak:openmpi
+leak:libmpi
+leak:ompi_
 
 # The RISC-V cross-compiler toolchain (sfpi) is invoked at runtime to build
 # firmware. When LD_PRELOAD injects ASan into these subprocesses, LeakSanitizer
@@ -15,3 +17,15 @@ leak:openmpi
 leak:cc1plus
 leak:cc1
 leak:sfpi
+
+# Python and pybind11 don't free all memory at exit since the OS reclaims it.
+# These are not real leaks - just normal interpreter/binding behavior.
+leak:PyObject_Malloc
+leak:PyDict_Copy
+leak:PyBytes_FromStringAndSize
+leak:pybind11
+leak:python
+
+# PyTorch has internal allocations that aren't freed at process exit.
+leak:libtorch
+leak:torch::jit
