@@ -1,0 +1,67 @@
+name: "zzz Pytest Smoke tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout for tests"
+
+jobs:
+  pytest-smoke:
+    runs-on: tt-ubuntu-2204-${{ inputs.runner }}-stable
+    container:
+      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
+      volumes:
+        - ${{ github.workspace }}:/work
+        - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Checkout tests
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            tests/
+            models/
+            conftest.py
+            pytest.ini
+            tt_metal/test/lsan.supp
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /work/wheel/
+
+      - name: Install wheel
+        run: |
+          pip install /work/wheel/*.whl
+
+      - name: Run pytest with ASan
+        timeout-minutes: 10
+        env:
+          ASAN_OPTIONS: "color=always:detect_leaks=1:detect_stack_use_after_return=1"
+          LSAN_OPTIONS: "suppressions=/work/tt_metal/test/lsan.supp"
+          UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
+          PYTHONPATH: /work
+          LOGURU_LEVEL: INFO
+        run: |
+          export LD_PRELOAD="/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so"
+          pytest tests/ttnn/unit_tests/tensor -v --timeout=60 -x -m "not disable_fast_runtime_mode"
