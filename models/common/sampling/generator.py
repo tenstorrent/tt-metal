@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import random
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
@@ -270,6 +271,76 @@ class SamplingGenerator:
         ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grids)
         seeds_tt.deallocate()
         user_ids_tt.deallocate()
+
+
+class SamplingSeedManager:
+    def __init__(self, mesh_device, sub_core_grids):
+        self.seeds = list(123 * torch.ones(32, dtype=torch.int32))
+        self.user_ids = list(torch.arange(32))
+        self.rng_objects = [random.Random(seed) for seed in self.seeds]
+        self.next_rnd_values = list(torch.zeros(32, dtype=torch.int32))
+
+        self.mesh_device = mesh_device
+        self.sub_core_grids = sub_core_grids
+
+        self.preallocated_seeds_tensor = ttnn.allocate_tensor_on_device(
+            (32,),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.preallocated_users_tensor = ttnn.allocate_tensor_on_device(
+            (32,),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def update_seeds(self, seeds: list[int]):
+        if len(seeds) != len(self.seeds):
+            raise ValueError("New seeds and old seeds must have the same length")
+        for idx, seed in enumerate(seeds):
+            if seed is None or seed == 0:
+                # skip seed update when seed is None or 0
+                continue
+            self.seeds[idx] = seed
+            self.rng_objects[idx] = random.Random(seed)
+
+    def push_seeds_to_device(self, user_ids: list[int] = None):  # 5
+        # Update next random values for the given user_ids
+        self._set_next_rnd_values(user_ids)
+
+        # Push next random values to device
+        on_device_seeds_tensor = ttnn.from_torch(
+            self.next_rnd_values, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        ttnn.copy_host_to_device_tensor(on_device_seeds_tensor, self.preallocated_seeds_tensor)
+        on_device_seeds_tensor.deallocate()
+
+        # Push user ids to device
+        on_device_users_tensor = ttnn.from_torch(
+            self.user_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        ttnn.copy_host_to_device_tensor(on_device_users_tensor, self.preallocated_users_tensor)
+        on_device_users_tensor.deallocate()
+
+    def update_seeds_on_device(self):
+        ttnn.manual_seed(
+            seeds=self.preallocated_seeds_tensor,
+            user_ids=self.preallocated_users_tensor,
+            sub_core_grids=self.sub_core_grids,
+        )
+
+    def _set_next_rnd_values(self, user_ids: list[int] = None):
+        for idx, rng_object in enumerate(self.rng_objects):
+            # generate random number between 1 and 2**32 - 1 (uint32_t max value)
+            # WARNING: Do not put 0 inside range
+            if user_ids is not None and idx in user_ids:
+                self.next_rnd_values[idx] = rng_object.randint(1, 2**32 - 1)
+
+        return self.next_rnd_values
 
 
 def clamp(value, min_value, max_value):
