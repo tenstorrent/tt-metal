@@ -257,8 +257,8 @@ class OperationParameterExtractors:
                         tensor_shapes.append(tensor_config.shape)
                         break
 
-            # Extract from arg1 (weight tensor) - this might be UnparsedElement
-            # In the traced config, arg1 might be in a dict with "arg1" key, or directly as UnparsedElement
+            # Extract from arg1 (weight tensor)
+            # In the traced config, arg1 might be in a dict with "arg1" key
             for arg in config:
                 if isinstance(arg, dict):
                     # Case 1: {"arg1": {...}}
@@ -267,7 +267,7 @@ class OperationParameterExtractors:
                         if tensor_config:
                             tensor_shapes.append(tensor_config.shape)
                             break
-                    # Case 2: {"UnparsedElement": {...}} - this might be arg1
+                    # Case 2: String-encoded tensor vector (e.g., concat operation)
                     elif "UnparsedElement" in arg:
                         tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                         if tensor_config:
@@ -692,11 +692,15 @@ class OperationParameterExtractors:
 
     @staticmethod
     def extract_tensor_config(arg_data: Dict) -> Optional[TensorConfig]:
-        """Extract tensor configuration from argument data"""
+        """Extract tensor configuration from argument data
+
+        Note: Most UnparsedElements are now fixed by the tracer's post-processing.
+        This method only handles string-encoded tensor vectors (e.g., concat operations).
+        """
         if not isinstance(arg_data, dict):
             return None
 
-        # Handle UnparsedElement by parsing its element_info string
+        # Handle string-encoded tensor vectors (e.g., concat operation's arg0)
         if "UnparsedElement" in arg_data:
             unparsed_data = arg_data["UnparsedElement"]
             element_info = unparsed_data.get("element_info", "")
@@ -722,53 +726,12 @@ class OperationParameterExtractors:
                                 layout = "Layout::TILE"
                             if shape and dtype and layout and memory_config:
                                 return TensorConfig(shape, dtype, layout, memory_config)
-
-                    # Apply regex fixes for C++ style formats
-                    fixed_json_str = element_info
-
-                    # Step 1: Fix grid ranges INSIDE arrays FIRST (most common issue in matmul)
-                    # Pattern: [{"x":0,"y":0} - {"x":7,"y":1}] -> [{"x":0,"y":0}, {"x":7,"y":1}]
-                    fixed_json_str = re.sub(
-                        r'\[(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})\]', r"[\1, \2]", fixed_json_str
-                    )
-
-                    # Step 2: Fix grid ranges outside arrays: {"x":0,"y":0} - {"x":7,"y":1} -> {"x":0,"y":0}, {"x":7,"y":1}
-                    fixed_json_str = re.sub(
-                        r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})', r"\1, \2", fixed_json_str
-                    )
-
-                    # Step 3: Fix C++ style braces in values like "{32, 32}" -> "[32, 64]" (for shape strings)
-                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-
-                    # Step 4: Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
-                    fixed_json_str = re.sub(
-                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
-                    )
-
-                    # Parse the fixed JSON
-                    try:
-                        parsed_data = json.loads(fixed_json_str)
-                    except json.JSONDecodeError as e:
-                        # If still failing, try more aggressive fixes
-                        # Handle nested grid arrays that might have been missed
-                        fixed_json_str = re.sub(
-                            r'"grid":\s*\[(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})\]',
-                            r'"grid":[\1, \2]',
-                            fixed_json_str,
-                        )
-                        try:
-                            parsed_data = json.loads(fixed_json_str)
-                        except json.JSONDecodeError:
-                            # Last resort: return None if we can't parse
-                            return None
-
-                    # Extract tensor from arg0, arg1, etc. (first argument that contains Tensor)
-                    for key, value in parsed_data.items():
-                        if isinstance(value, dict) and "Tensor" in value:
-                            arg_data = value
-                            break
                 except Exception:
                     return None
+
+            # If it's an UnparsedElement but not a tensor vector, return None
+            # (should not happen with post-processed data)
+            return None
 
         # Handle nested structure like {arg0: {Tensor: ...}} or {arg1: {Tensor: ...}}
         if "Tensor" not in arg_data:
@@ -1149,6 +1112,75 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
+    def _extract_paged_update_cache_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for paged_update_cache operation
+
+        Extracts:
+        - arg0: cache_tensor (input_a)
+        - arg1: input_tensor (input_b)
+        - arg2: update_idxs_tensor (optional, often empty) - skip
+        - arg3: page_table_indices (input_c, INT32)
+        - arg4: nullopt - skip
+        - arg5: page_table (input_d, INT32)
+        """
+        try:
+            params = {}
+
+            # Extract input tensor configs from specific positions
+            input_configs = []
+            tensor_positions = [0, 1, 3, 5]  # cache, input, page_table_indices, page_table
+
+            for arg_idx in tensor_positions:
+                if len(config) > arg_idx:
+                    arg = config[arg_idx]
+                    if isinstance(arg, dict):
+                        arg_key = f"arg{arg_idx}"
+                        if arg_key in arg:
+                            tensor_config = OperationParameterExtractors.extract_tensor_config(arg[arg_key])
+                            if tensor_config:
+                                input_configs.append(tensor_config)
+
+            # Build params dict
+            if len(input_configs) >= 3:  # Need at least cache, input, and page_table_indices
+                # arg0: cache tensor
+                params["input_shape"] = input_configs[0].shape
+                params["input_a_dtype"] = input_configs[0].dtype.replace("DataType::", "")
+                params["input_a_layout"] = input_configs[0].layout.replace("Layout::", "")
+                params["input_a_memory_config"] = input_configs[0].memory_config
+
+                # arg1: input tensor
+                params["input_b_shape"] = input_configs[1].shape
+                params["input_b_dtype"] = input_configs[1].dtype.replace("DataType::", "")
+                params["input_b_layout"] = input_configs[1].layout.replace("Layout::", "")
+                params["input_b_memory_config"] = input_configs[1].memory_config
+
+                # arg3: page_table_indices
+                params["input_c_shape"] = input_configs[2].shape
+                params["input_c_dtype"] = input_configs[2].dtype.replace("DataType::", "")
+                params["input_c_layout"] = input_configs[2].layout.replace("Layout::", "")
+                params["input_c_memory_config"] = input_configs[2].memory_config
+
+                # arg5: page_table (if present)
+                if len(input_configs) > 3:
+                    params["input_d_shape"] = input_configs[3].shape
+                    params["input_d_dtype"] = input_configs[3].dtype.replace("DataType::", "")
+                    params["input_d_layout"] = input_configs[3].layout.replace("Layout::", "")
+                    params["input_d_memory_config"] = input_configs[3].memory_config
+
+                # Use cache tensor's memory config as output
+                params["output_memory_config"] = input_configs[0].memory_config
+
+                return params
+
+            return None
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting paged_update_cache parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
     def _extract_paged_scaled_dot_product_attention_decode_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for paged_scaled_dot_product_attention_decode operation
 
@@ -1171,7 +1203,7 @@ class OperationParameterExtractors:
                             if tensor_config:
                                 input_configs.append(tensor_config)
                         elif "UnparsedElement" in arg:
-                            # Handle UnparsedElement case (e.g., arg0)
+                            # Handle string-encoded tensor vectors
                             tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                             if tensor_config:
                                 input_configs.append(tensor_config)
@@ -1384,7 +1416,6 @@ class OperationParameterExtractors:
     def _extract_all_gather_async_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for all_gather_async operation
 
-        Handles UnparsedElement errors by extracting from element_info using regex.
         Extracts:
         - Input tensor config from arg0
         - Output memory config from arg5
@@ -1397,7 +1428,7 @@ class OperationParameterExtractors:
         try:
             params = {}
 
-            # Extract input tensor config from arg0 (handles UnparsedElement)
+            # Extract input tensor config from arg0
             input_shape = None
             input_dtype = None
             input_memory_config = None
@@ -1413,50 +1444,14 @@ class OperationParameterExtractors:
                             input_dtype = tensor_config.dtype.replace("DataType::", "")
                             input_memory_config = tensor_config.memory_config
                     elif "UnparsedElement" in arg0:
-                        # UnparsedElement case - extract from element_info using regex
-                        unparsed = arg0["UnparsedElement"]
-                        element_info = unparsed.get("element_info", "")
-
-                        # Try to use extract_tensor_config first (it handles UnparsedElement)
+                        # String-encoded tensor vector (should be rare, mostly for concat)
                         tensor_config = OperationParameterExtractors.extract_tensor_config(arg0)
                         if tensor_config:
                             input_shape = tensor_config.shape
                             input_dtype = tensor_config.dtype.replace("DataType::", "")
                             input_memory_config = tensor_config.memory_config
-                        else:
-                            # Fallback to regex extraction
-                            shape_match = re.search(r'"logical_shape":\[([^\]]+)\]', element_info)
-                            if shape_match:
-                                try:
-                                    input_shape = json.loads("[" + shape_match.group(1) + "]")
-                                except:
-                                    pass
 
-                            dtype_match = re.search(r'"dtype":"DataType::([^"]+)"', element_info)
-                            if dtype_match:
-                                input_dtype = dtype_match.group(1)
-
-                            # Extract memory config
-                            if "memory_config" in element_info:
-                                mem_layout_match = re.search(
-                                    r'"memory_layout":"TensorMemoryLayout::([^"]+)"', element_info
-                                )
-                                buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', element_info)
-
-                                input_memory_config = {}
-                                if mem_layout_match:
-                                    input_memory_config["memory_layout"] = mem_layout_match.group(1)
-                                if buffer_type_match:
-                                    input_memory_config["buffer_type"] = buffer_type_match.group(1)
-
-                                # Extract shard_spec if present
-                                if "shard_spec" in element_info and "nullopt" not in element_info:
-                                    shard_match = re.search(r'"shard_spec":\{([^}]+)\}', element_info)
-                                    if shard_match:
-                                        shard_info = shard_match.group(1)
-                                        input_memory_config["shard_spec"] = shard_info
-
-            # Extract output memory config from arg5 (handles UnparsedElement)
+            # Extract output memory config from arg5
             output_memory_config = None
 
             if len(config) > 5:
@@ -1489,60 +1484,9 @@ class OperationParameterExtractors:
                                         if buffer_type_match:
                                             output_memory_config["buffer_type"] = buffer_type_match.group(1)
                     elif "UnparsedElement" in arg5:
-                        # UnparsedElement case - extract from element_info
-                        unparsed = arg5["UnparsedElement"]
-                        element_info = unparsed.get("element_info", "")
-
-                        if "MemoryConfig" in element_info:
-                            mem_layout_match = re.search(r'"memory_layout":"TensorMemoryLayout::([^"]+)"', element_info)
-                            buffer_type_match = re.search(r'"buffer_type":"BufferType::([^"]+)"', element_info)
-
-                            output_memory_config = {}
-                            if mem_layout_match:
-                                output_memory_config["memory_layout"] = mem_layout_match.group(1)
-                            if buffer_type_match:
-                                output_memory_config["buffer_type"] = buffer_type_match.group(1)
-
-                            # Extract shard_spec if present - handle nested braces
-                            # Check for shard_spec specifically, not just absence of nullopt
-                            shard_spec_start = element_info.find('"shard_spec":{')
-                            if shard_spec_start != -1 and element_info.find('"shard_spec":"std::nullopt"') == -1:
-                                # Find shard_spec start
-                                shard_start = element_info.find('"shard_spec":{')
-                                if shard_start != -1:
-                                    # Find matching closing brace
-                                    brace_count = 0
-                                    start_pos = shard_start + len('"shard_spec":{')
-                                    shard_spec_str = None
-                                    for i in range(start_pos, len(element_info)):
-                                        if element_info[i] == "{":
-                                            brace_count += 1
-                                        elif element_info[i] == "}":
-                                            if brace_count == 0:
-                                                shard_spec_str = element_info[
-                                                    shard_start + len('"shard_spec":') : i + 1
-                                                ]
-                                                break
-                                            brace_count -= 1
-
-                                    if shard_spec_str:
-                                        try:
-                                            # Fix the " - " syntax in grid coordinates
-                                            fixed_shard = re.sub(
-                                                r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})',
-                                                r"[\1, \2]",
-                                                shard_spec_str,
-                                            )
-                                            # Fix shape format "{32, 64}" -> "[32, 64]"
-                                            fixed_shard = re.sub(
-                                                r'"shape":"\{(\d+),\s*(\d+)\}"', r'"shape":[\1, \2]', fixed_shard
-                                            )
-                                            # Parse as JSON
-                                            shard_spec_dict = json.loads(fixed_shard)
-                                            output_memory_config["shard_spec"] = shard_spec_dict
-                                        except Exception as e:
-                                            # Fallback: store as string for parse_memory_config to handle
-                                            output_memory_config["shard_spec"] = shard_spec_str
+                        # String-encoded data (should not happen with post-processed data)
+                        # Skip it as the data should be clean
+                        pass
 
             # Extract dim from arg2
             dim = OperationParameterExtractors._extract_int_parameter(config, "arg2")
@@ -1751,6 +1695,23 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "ttnn::transformer::paged_scaled_dot_product_attention_decode",
     extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+
+# Register paged_update_cache extractor (custom extractor for arg positions 0,1,3,5)
+OperationParameterExtractors.register_extractor(
+    "paged_update_cache",
+    extract_func=OperationParameterExtractors._extract_paged_update_cache_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::paged_update_cache",
+    extract_func=OperationParameterExtractors._extract_paged_update_cache_parameters,
+    transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::paged_update_cache",
+    extract_func=OperationParameterExtractors._extract_paged_update_cache_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
 )
 
@@ -2095,12 +2056,210 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor("fill_cache", extract_func=None, transform_func=None)
 OperationParameterExtractors.register_extractor("reshard", extract_func=None, transform_func=None)
 
+
+# Add custom extractor for scaled_dot_product_attention_decode (define before registration)
+def _extract_sdpa_decode_params(config: List) -> Optional[Dict]:
+    """Extract parameters for scaled_dot_product_attention_decode operation
+
+    Config is the arg_list directly: [{'arg0': {...}}, {'arg1': {...}}, ...]
+
+    Extracts:
+    - Input tensor configs from arg0 (Q), arg1 (K), arg2 (V), arg6 (cur_pos)
+    - Scalar parameters: arg3 (is_causal), arg8 (scale), arg9 (k_chunk_size)
+    - Output memory config from arg10
+    """
+    try:
+        params = {}
+
+        # Extract input tensor configs (arg0=Q, arg1=K, arg2=V, arg6=cur_pos)
+        input_configs = []
+        for arg_idx in [0, 1, 2, 6]:
+            if arg_idx < len(config):
+                arg_elem = config[arg_idx]
+                if isinstance(arg_elem, dict):
+                    if f"arg{arg_idx}" in arg_elem:
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg_elem[f"arg{arg_idx}"])
+                        if tensor_config:
+                            input_configs.append(tensor_config)
+                    elif "UnparsedElement" in arg_elem:
+                        # Try to extract from string-encoded tensor vector
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg_elem)
+                        if tensor_config:
+                            input_configs.append(tensor_config)
+
+        # Build input_shape dict for multi-input operation
+        if input_configs:
+            input_shape_dict = {}
+            tensor_keys = ["input_a", "input_b", "input_c", "input_d"]
+            for idx, tensor_config in enumerate(input_configs):
+                if idx < len(tensor_keys) and tensor_config and tensor_config.shape:
+                    key = tensor_keys[idx]
+                    input_shape_dict[key] = tensor_config.shape
+                    # Store dtype, layout, memory_config
+                    params[f"{key}_dtype"] = tensor_config.dtype.replace("DataType::", "")
+                    params[f"{key}_layout"] = tensor_config.layout.replace("Layout::", "")
+                    params[f"{key}_memory_config"] = tensor_config.memory_config
+
+            if input_shape_dict:
+                params["input_shape"] = input_shape_dict
+
+        # Extract scalar parameters
+        # arg3: is_causal
+        if len(config) > 3 and isinstance(config[3], dict) and "arg3" in config[3]:
+            arg3_val = config[3]["arg3"]
+            if isinstance(arg3_val, str):
+                params["is_causal"] = arg3_val
+
+        # arg8: scale
+        if len(config) > 8 and isinstance(config[8], dict) and "arg8" in config[8]:
+            arg8_val = config[8]["arg8"]
+            if isinstance(arg8_val, str):
+                try:
+                    params["scale"] = float(arg8_val)
+                except (ValueError, TypeError):
+                    params["scale"] = arg8_val
+
+        # arg9: k_chunk_size
+        if len(config) > 9 and isinstance(config[9], dict) and "arg9" in config[9]:
+            arg9_val = config[9]["arg9"]
+            if isinstance(arg9_val, str):
+                try:
+                    params["k_chunk_size"] = int(arg9_val)
+                except (ValueError, TypeError):
+                    params["k_chunk_size"] = arg9_val
+
+        # arg10: output_memory_config
+        if len(config) > 10 and isinstance(config[10], dict) and "arg10" in config[10]:
+            arg10_data = config[10]["arg10"]
+            if isinstance(arg10_data, dict) and "MemoryConfig" in arg10_data:
+                params["output_memory_config"] = arg10_data["MemoryConfig"]
+
+        return params if params else None
+    except Exception as e:
+        import traceback
+
+        print(f"Error extracting scaled_dot_product_attention_decode parameters: {e}")
+        traceback.print_exc()
+        return None
+
+
+# Define custom transformer for scaled_dot_product_attention_decode
+def _transform_sdpa_decode_params(
+    configs: List[Dict],
+    parse_dtype=None,
+    parse_layout=None,
+    parse_memory_config=None,
+) -> List[Dict]:
+    """Transform extracted scaled_dot_product_attention_decode parameters to TTNN types"""
+    transformed_configs = []
+
+    for config in configs:
+        try:
+            transformed_config = {}
+
+            # Handle input_shape (dict format for multi-input)
+            if "input_shape" in config and isinstance(config["input_shape"], dict):
+                transformed_config["input_shape"] = config["input_shape"]
+
+            # Transform dtypes
+            if parse_dtype:
+                transformed_config["input_a_dtype"] = parse_dtype(
+                    f"DataType::{config.get('input_a_dtype', 'BFLOAT16')}"
+                )
+                if "input_b_dtype" in config:
+                    transformed_config["input_b_dtype"] = parse_dtype(f"DataType::{config['input_b_dtype']}")
+                if "input_c_dtype" in config:
+                    transformed_config["input_c_dtype"] = parse_dtype(f"DataType::{config['input_c_dtype']}")
+                if "input_d_dtype" in config:
+                    transformed_config["input_d_dtype"] = parse_dtype(f"DataType::{config['input_d_dtype']}")
+            else:
+                transformed_config["input_a_dtype"] = config.get("input_a_dtype", "BFLOAT16")
+                for key in ["input_b_dtype", "input_c_dtype", "input_d_dtype"]:
+                    if key in config:
+                        transformed_config[key] = config[key]
+
+            # Transform layouts
+            if parse_layout:
+                transformed_config["input_a_layout"] = parse_layout(config.get("input_a_layout", "TILE"))
+                for key in ["input_b_layout", "input_c_layout", "input_d_layout"]:
+                    if key in config:
+                        transformed_config[key] = parse_layout(config[key])
+            else:
+                transformed_config["input_a_layout"] = config.get("input_a_layout", "TILE")
+                for key in ["input_b_layout", "input_c_layout", "input_d_layout"]:
+                    if key in config:
+                        transformed_config[key] = config[key]
+
+            # Transform memory configs
+            if parse_memory_config:
+                input_shape_dict = config.get("input_shape", {})
+                input_a_shape = input_shape_dict.get("input_a", []) if isinstance(input_shape_dict, dict) else []
+                transformed_config["input_a_memory_config"] = parse_memory_config(
+                    config.get("input_a_memory_config", {}), input_a_shape
+                )
+                for key in ["input_b_memory_config", "input_c_memory_config", "input_d_memory_config"]:
+                    if key in config:
+                        shape_key = key.replace("_memory_config", "_shape")
+                        shape = (
+                            input_shape_dict.get(shape_key.replace("input_", "input_"), [])
+                            if isinstance(input_shape_dict, dict)
+                            else []
+                        )
+                        transformed_config[key] = parse_memory_config(config[key], shape)
+
+                # Transform output_memory_config
+                if "output_memory_config" in config:
+                    transformed_config["output_memory_config"] = parse_memory_config(
+                        config["output_memory_config"], input_a_shape
+                    )
+            else:
+                transformed_config["input_a_memory_config"] = config.get("input_a_memory_config", {})
+                for key in [
+                    "input_b_memory_config",
+                    "input_c_memory_config",
+                    "input_d_memory_config",
+                    "output_memory_config",
+                ]:
+                    if key in config:
+                        transformed_config[key] = config[key]
+
+            # *** IMPORTANT: Pass through scalar parameters ***
+            for scalar_param in ["scale", "k_chunk_size", "is_causal"]:
+                if scalar_param in config:
+                    transformed_config[scalar_param] = config[scalar_param]
+
+            transformed_configs.append(transformed_config)
+        except Exception as e:
+            print(f"Error transforming scaled_dot_product_attention_decode config: {e}")
+            import traceback
+
+            traceback.print_exc()
+            continue
+
+    return transformed_configs
+
+
+# Store as static methods
+OperationParameterExtractors._extract_scaled_dot_product_attention_decode_parameters = staticmethod(
+    _extract_sdpa_decode_params
+)
+OperationParameterExtractors._transform_scaled_dot_product_attention_decode_parameters = staticmethod(
+    _transform_sdpa_decode_params
+)
+
 # Register attention operation extractors
 OperationParameterExtractors.register_extractor(
     "transformer::chunked_scaled_dot_product_attention", extract_func=None, transform_func=None
 )
 OperationParameterExtractors.register_extractor(
-    "transformer::scaled_dot_product_attention_decode", extract_func=None, transform_func=None
+    "transformer::scaled_dot_product_attention_decode",
+    extract_func=_extract_sdpa_decode_params,
+    transform_func=_transform_sdpa_decode_params,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::transformer::scaled_dot_product_attention_decode",
+    extract_func=_extract_sdpa_decode_params,
+    transform_func=_transform_sdpa_decode_params,
 )
 
 
