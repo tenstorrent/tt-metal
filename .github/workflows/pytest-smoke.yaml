@@ -61,6 +61,7 @@ jobs:
           LSAN_OPTIONS: "suppressions=/work/tt_metal/test/lsan.supp"
           UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
           PYTHONPATH: /work
+          LOGURU_LEVEL: INFO
         run: |
           export LD_PRELOAD="/usr/lib/llvm-20/lib/clang/20/lib/linux/libclang_rt.asan-x86_64.so"
           pytest tests/ttnn/unit_tests/tensor -v --timeout=60 -x -m "not disable_fast_runtime_mode"
