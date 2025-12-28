@@ -214,27 +214,16 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif  // FUSED_SCALE_MASK
 
-        // SUM reduce with reciprocal operation using reduce_helpers library with post-reduce lambda
+        // SUM reduce with reciprocal operation using PRELOADED mode
+        // PRELOADED is correct for sharded - all tiles loaded at once
+        // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         cb_wait_front(cb_exps, block_w);
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::ReduceInputMode::PRELOADED,
-            true,  // init
-            true,  // uninit (called at end of helper)
-            ENABLE_FP32_DEST_ACC>(
-            cb_exps,
-            cb_bcast_scaler,
-            cb_recipsumexps,
-            1,        // Ht
-            block_w,  // Wt
-            1,        // num_batches
-            0,        // row_chunk (unused for REDUCE_ROW)
-            0,        // input_stride (use default)
-            []() {
-                recip_tile_init();
-                recip_tile(0);
-            });
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, block_w, 1, 0, 0, []() {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
 
         // exp(x) / (sum(exp(x)))
         reconfig_data_format(cb_exps, cb_recipsumexps);

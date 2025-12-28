@@ -23,21 +23,17 @@
 
 void calc_numeric_stable(
     uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row using reduce_helpers library
+    // calculate max val per row using PROGRESSIVE_INDEXED mode
+    // PROGRESSIVE_INDEXED: waits progressively, uses indexed access, tiles persist for reuse
     reconfig_data_format(cb_in, cb_bcast_scaler);
-
-    // Wait for all Wt tiles to be available for PRELOADED mode
-    cb_wait_front(cb_in, Wt);
-
-    // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
-    // Note: The library handles waiting for scaler tile internally
-    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        cb_in,
-        cb_bcast_scaler,
-        cb_max,
-        1,   // Ht (1 row)
-        Wt,  // Wt tiles per row
-        1);  // num_batches
+    compute_kernel_lib::
+        reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PROGRESSIVE_INDEXED>(
+            cb_in,
+            cb_bcast_scaler,
+            cb_max,
+            1,   // Ht (1 row)
+            Wt,  // Wt tiles per row
+            1);  // num_batches
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -269,27 +265,14 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif
 
-        // SUM reduce with reciprocal operation using reduce_helpers library with post-reduce lambda
-        cb_wait_front(cb_exps, Wt);
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::ReduceInputMode::PRELOADED,
-            true,  // init
-            true,  // uninit (called at end of helper)
-            ENABLE_FP32_DEST_ACC>(
-            cb_exps,
-            cb_bcast_scaler,
-            cb_recipsumexps,
-            1,   // Ht
-            Wt,  // Wt
-            1,   // num_batches
-            0,   // row_chunk (unused for REDUCE_ROW)
-            0,   // input_stride (use default)
-            []() {
-                recip_tile_init();
-                recip_tile(0);
-            });
+        // SUM reduce with reciprocal operation using PROGRESSIVE_INDEXED mode
+        // PROGRESSIVE_INDEXED: handles progressive waiting internally, auto-detects FP32 mode
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PROGRESSIVE_INDEXED>(
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, Wt, 1, 0, 0, []() {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
 
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 
