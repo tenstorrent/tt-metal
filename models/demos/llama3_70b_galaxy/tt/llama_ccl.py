@@ -560,19 +560,19 @@ class TT_CCL:
 
             buffers_dict = (
                 {
-                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "QKV": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "WO": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    "FF1": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF3": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF2": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
                 }
                 if not self.is_qwen
                 else {
-                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
-                    "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
-                    "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
-                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "QKV": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "WO": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    "FF1": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
+                    "FF3": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
+                    "FF2": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -583,7 +583,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{seqlen}"),
+                    cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{shape[0]}"),
                 )
                 # output buffer is reused from line imlementation
                 tt_output_buffer = ttnn.as_tensor(
@@ -593,7 +593,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_0_{seqlen}"),
+                    cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_0_{shape[1]}"),
                 )
                 persistent_buffers[key] = {"intermediate": tt_intermediate_buffer, "output": tt_output_buffer}
             persistent_buffers_all[seqlen] = persistent_buffers
@@ -945,7 +945,7 @@ class TT_CCL:
         batch_size=1,
     ):
         if self.mode == "prefill":
-            if self.use_ring_rs_prefill and batch_size == 1:
+            if self.use_ring_rs_prefill:
                 return self.ring_reduce_scatter(
                     input_tensor_mesh,
                     memory_config,
@@ -953,6 +953,7 @@ class TT_CCL:
                     dim=dim,
                     num_links=num_links,
                     buffer_key=buffer_key,
+                    batch_size=batch_size,
                 )
             # reshape input to [1, 1, S, x]
             B = input_tensor_mesh.shape[1]
@@ -1010,17 +1011,22 @@ class TT_CCL:
         dim=3,
         num_links=1,
         buffer_key=None,
+        batch_size=1,
     ):
         # reshape input to [1, 1, S, x]
         B = input_tensor_mesh.shape[1]
-        input_tensor_mesh = ttnn.reshape(
-            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
-        )
         seqlen = input_tensor_mesh.shape[-2]
-        persistent_buffers = (
-            self.persistent_buffers[seqlen].get(buffer_key, None) if seqlen in self.persistent_buffers else None
-        )
-        persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
+        persistent_buffers_list = None
+        if batch_size > 1:
+            input_tensor_mesh = ttnn.reshape(input_tensor_mesh, (1, 32, B * seqlen // 32, input_tensor_mesh.shape[-1]))
+            persistent_buffers = (
+                self.persistent_buffers[B * seqlen].get(buffer_key, None)
+                if B * seqlen in self.persistent_buffers
+                else None
+            )
+            persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
+        else:
+            input_tensor_mesh = ttnn.reshape(input_tensor_mesh, (1, 1, B * seqlen, input_tensor_mesh.shape[-1]))
         num_links = 4
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
@@ -1037,7 +1043,7 @@ class TT_CCL:
         )
 
         # reshape input back
-        ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+        ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
