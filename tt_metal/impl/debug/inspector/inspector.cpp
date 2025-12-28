@@ -18,13 +18,7 @@
 namespace tt::tt_metal {
 
 namespace {
-inspector::Data* get_inspector_data() {
-    auto* data = tt::tt_metal::MetalContext::instance().get_inspector_data();
-    if (!data) {
-        throw std::runtime_error("Inspector data is not initialized.");
-    }
-    return data;
-}
+inspector::Data* get_inspector_data() { return tt::tt_metal::MetalContext::instance().get_inspector_data(); }
 }  // namespace
 
 bool Inspector::is_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled(); }
@@ -48,8 +42,12 @@ void Inspector::serialize_rpc() {
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         data->serialize_rpc();
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to serialize RPC: {}", e.what());
@@ -60,8 +58,12 @@ void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.program = program->weak_from_this();
@@ -76,8 +78,12 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         data->logger.log_program_destroyed(program_data);
@@ -95,8 +101,12 @@ void Inspector::program_compile_started(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_started_timestamp = std::chrono::high_resolution_clock::now();
@@ -111,8 +121,12 @@ void Inspector::program_compile_already_exists(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         data->logger.log_program_compile_already_exists(program_data);
@@ -129,8 +143,12 @@ void Inspector::program_kernel_compile_finished(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         auto& kernel_data = program_data.kernels[kernel->get_watcher_kernel_id()];
@@ -151,8 +169,12 @@ void Inspector::program_compile_finished(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_finished_timestamp = std::chrono::high_resolution_clock::now();
@@ -167,8 +189,12 @@ void Inspector::program_set_binary_status(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.binary_status_per_device[device_id] = status;
@@ -183,8 +209,12 @@ void Inspector::mesh_device_created(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
         auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
         mesh_device_data.mesh_device = mesh_device;
@@ -200,8 +230,12 @@ void Inspector::mesh_device_destroyed(const distributed::MeshDevice* mesh_device
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
         auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
         data->logger.log_mesh_device_destroyed(mesh_device_data);
@@ -215,8 +249,12 @@ void Inspector::mesh_device_initialized(const distributed::MeshDevice* mesh_devi
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
         auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
         mesh_device_data.initialized = true;
@@ -230,8 +268,12 @@ void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
         auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
         mesh_workload_data.mesh_workload = mesh_workload;
@@ -246,8 +288,12 @@ void Inspector::mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mes
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
         auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
         data->logger.log_mesh_workload_destroyed(mesh_workload_data);
@@ -264,8 +310,12 @@ void Inspector::mesh_workload_add_program(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
         auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
         data->logger.log_mesh_workload_add_program(mesh_workload_data, device_range, program_id);
@@ -279,8 +329,12 @@ void Inspector::mesh_workload_set_program_binary_status(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
         auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
         mesh_workload_data.binary_status_per_device[mesh_id] = status;
@@ -300,8 +354,12 @@ void Inspector::set_dispatch_core_info(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->dispatch_core_info_mutex);
         data->dispatch_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
     } catch (const std::exception& e) {
@@ -319,8 +377,12 @@ void Inspector::set_dispatch_s_core_info(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->dispatch_s_core_info_mutex);
         data->dispatch_s_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
     } catch (const std::exception& e) {
@@ -338,8 +400,12 @@ void Inspector::set_prefetcher_core_info(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->prefetcher_core_info_mutex);
         data->prefetcher_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
     } catch (const std::exception& e) {
@@ -353,8 +419,12 @@ void Inspector::clear_all_core_info() {
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         std::scoped_lock locks(
             data->dispatch_core_info_mutex, data->dispatch_s_core_info_mutex, data->prefetcher_core_info_mutex);
         data->dispatch_core_info.clear();
@@ -369,7 +439,9 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     if (is_enabled()) {
         try {
             auto* data = get_inspector_data();
-            return data->get_rpc_server();
+            if (data) {
+                return data->get_rpc_server();
+            }
         } catch (const std::exception& e) {
             TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
         }
@@ -382,8 +454,12 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
         data->fw_compile_hash.store(fw_compile_hash, std::memory_order_release);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
