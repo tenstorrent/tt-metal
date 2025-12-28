@@ -81,7 +81,9 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Install mold linker for faster linking
 ARG MOLD_VERSION=2.40.4
+ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
 RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
+    echo "${MOLD_SHA256}  /tmp/mold.tar.gz" | sha256sum -c - && \
     tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
     rm /tmp/mold.tar.gz && \
     mold --version
