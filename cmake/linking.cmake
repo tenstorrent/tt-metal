@@ -76,7 +76,7 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
                 OUTPUT_STRIP_TRAILING_WHITESPACE
                 ERROR_QUIET
             )
-            if(LLD_VERSION_OUTPUT MATCHES "LLD ([0-9]+)")
+            if(LLD_VERSION_OUTPUT MATCHES "LLD ([0-9.]+)")
                 set(LLD_VERSION_CACHED "${CMAKE_MATCH_1}")
                 if(LLD_VERSION_CACHED VERSION_GREATER_EQUAL "17")
                     message(STATUS "Linker not specified. Using LLD linker ${LLD_VERSION_CACHED}: ${LLD_EXECUTABLE}")
