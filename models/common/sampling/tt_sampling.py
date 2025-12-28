@@ -202,7 +202,7 @@ class TTSampling(LightweightModule):
                 tensor,
                 dim=dim,
                 num_links=num_links,
-                memory_config=memory_config,
+                memory_config=tensor.memory_config,
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Linear,
             )
@@ -278,17 +278,17 @@ class TTSampling(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             x_untilized = ttnn.untilize(x, use_multicore=True)
-            bogus_log_probs = ()
-            return (
-                ttnn.argmax(
-                    x_untilized,
-                    dim=-1,
-                    output_tensor=tt_out_tok,
-                    keepdim=False,
-                    use_multicore=True,
-                ),
-                bogus_log_probs,
+            tt_out_tok = ttnn.argmax(
+                x_untilized,
+                dim=-1,
+                output_tensor=tt_out_tok,
+                keepdim=False,
+                use_multicore=True,
             )
+            # Return dummy log-probs tensor with same shape as regular log-probs would be
+            # to satisfy the return type and for later post-processing
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            return tt_out_tok, self.tt_log_probs
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)

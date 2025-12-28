@@ -53,7 +53,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize(
     "generation_length",
-    (3,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (10,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
     "data_parallel",
