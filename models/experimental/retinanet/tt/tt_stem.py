@@ -19,7 +19,7 @@ neck_optimisations = NeckOptimizer(
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
         "memory_config": ttnn.L1_MEMORY_CONFIG,
-        "slice_config": ttnn.Conv2dL1FullSliceConfig,
+        "slice_config": ttnn.Op2dL1FullSliceConfig,
         "dtype": ttnn.bfloat16,
     }
 )

@@ -18,19 +18,19 @@ static uint32_t compute_L1_usage_for_slice_config(
     const Shape& output_shape,
     tt::tt_metal::Layout output_layout,
     OpSliceAttr* op_slice_attr,
-    const Op2DSliceConfig& dram_slice_config) {
+    const Op2dSliceConfig& dram_slice_config) {
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
     auto [batch_size, output_height, output_width, output_channels] = output_shape.to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_shape.to_array_4D();
 
     const uint32_t output_sliced_dim =
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+        dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     uint32_t slice_rounding_value = 1;
 
     if (output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
+        dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_WIDTH) {
         // Slice Write requires that the slice boundaries and shard boundaries are aligned to the tile boundaries.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -58,7 +58,7 @@ static uint32_t compute_L1_usage_for_slice_config(
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
-        if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT) {
+        if (dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
@@ -121,31 +121,31 @@ static uint32_t compute_L1_usage_for_slice_config(
 // very small slice sizes
 // Additionally, for tiled outputs, there is a constraint that each slice's width must be a multiple of TILE_HEIGHT
 // In this case, slicing along height is preferred to avoid this constraint.
-static Op2DSliceConfig::SliceType best_guess_slice_type(
+static Op2dSliceConfig::SliceType best_guess_slice_type(
     uint32_t input_height, uint32_t input_width, Layout output_layout) {
     if (output_layout == Layout::ROW_MAJOR) {
         float threshold_ratio = 3.0;
         if (input_height > input_width * threshold_ratio) {
-            return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+            return Op2dSliceConfig::SliceType::DRAM_HEIGHT;
         }
-        return Op2DSliceConfig::SliceType::DRAM_WIDTH;
+        return Op2dSliceConfig::SliceType::DRAM_WIDTH;
     } else {
         if (input_width < 200) {
-            return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+            return Op2dSliceConfig::SliceType::DRAM_HEIGHT;
         } else {
             if (input_height > input_width) {
-                return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+                return Op2dSliceConfig::SliceType::DRAM_HEIGHT;
             }
-            return Op2DSliceConfig::SliceType::DRAM_WIDTH;
+            return Op2dSliceConfig::SliceType::DRAM_WIDTH;
         }
     }
 }
 
-Op2DSliceConfig determine_slice_config(
+Op2dSliceConfig determine_slice_config(
     OpSliceAttr* op_slice_attr,
     const ttnn::Shape& input_shape,
     const ttnn::Shape& output_shape,
-    const std::optional<Op2DSliceConfig> slice_config_,
+    const std::optional<Op2dSliceConfig> slice_config_,
     const tt::tt_metal::Layout output_layout,
     MeshDevice* device) {
     if (slice_config_.has_value() && slice_config_.value().num_slices > 0) {
@@ -153,14 +153,14 @@ Op2DSliceConfig determine_slice_config(
     }
     bool auto_slice_type = !slice_config_.has_value();
     auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-    Op2DSliceConfig return_slice_config;
+    Op2dSliceConfig return_slice_config;
 
     uint32_t output_height = output_shape[1];
     uint32_t output_width = output_shape[2];
     uint32_t current_num_slices = 1;
     log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
     const uint32_t output_sliced_dim =
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+        return_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     if (auto_slice_type) {
         // Start with width slicing as it is more memory efficient.
@@ -184,7 +184,7 @@ Op2DSliceConfig determine_slice_config(
         current_num_slices++;
     }
     if (output_layout == tt::tt_metal::Layout::TILE &&
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
+        return_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_WIDTH) {
         // The rounding up of the slice size to tile height can result in the slice_config having a larger num_slices
         // than needed. So it is clamped.
         const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
@@ -192,7 +192,7 @@ Op2DSliceConfig determine_slice_config(
     }
     if (auto_slice_type && current_num_slices > ((output_sliced_dim - 1) / 2) &&
         output_layout == tt::tt_metal::Layout::TILE &&
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
+        return_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_WIDTH) {
         // For Tiled output with width slicing, we may not be able to find a suitable number of slices due to the
         // TILE_HEIGHT constraint.
         //  In this case, we switch to height slicing and try again.
@@ -204,7 +204,7 @@ Op2DSliceConfig determine_slice_config(
             op_slice_attr,
             input_shape,
             output_shape,
-            Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
+            Op2dSliceConfig{.slice_type = Op2dSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
             output_layout,
             device);
     }
@@ -221,8 +221,8 @@ void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     std::vector<OpSliceAttr::RefTensor>& output_tensors,
     OpSliceAttr* op_slice_attr,
-    const std::optional<Op2DSliceConfig> dram_slice_config_) {
-    Op2DSliceConfig dram_slice_config;
+    const std::optional<Op2dSliceConfig> dram_slice_config_) {
+    Op2dSliceConfig dram_slice_config;
 
     tt::tt_metal::Layout output_layout = output_tensors[0].get().layout();
     uint32_t num_output_tensors = output_tensors.size();
@@ -248,13 +248,13 @@ void run_sliced_op(
 
     uint32_t slice_rounding_value = 1;
     if (output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
+        dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_WIDTH) {
         // In DRAM Slicing with Tile Layout, the width must be a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
 
     const uint32_t output_sliced_dim =
-        dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+        dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     uint32_t max_num_slices = tt::div_up(output_sliced_dim, slice_rounding_value);
     if (max_num_slices == 1) {
@@ -319,7 +319,7 @@ void run_sliced_op(
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
-        if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT) {
+        if (dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;

@@ -166,8 +166,8 @@ class Conv2dNormActivation:
 
         self.input_mask = input_mask
 
-        self.slice_config = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceHeight,
+        self.slice_config = ttnn.Op2dSliceConfig(
+            slice_type=ttnn.Op2dDRAMSliceHeight,
         )
 
     def __call__(
@@ -360,7 +360,7 @@ def ttnn_retinanet_regression_head(
             )
 
         # Final bbox_reg conv layer with config
-        bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+        bbox_reg_slice_config = ttnn.Op2dSliceConfig(slice_type=ttnn.Op2dDRAMSliceHeight, num_slices=4)
         if final_conv_config is not None:
             bbox_reg_config = ttnn.Conv2dConfig(**final_conv_config)
         else:

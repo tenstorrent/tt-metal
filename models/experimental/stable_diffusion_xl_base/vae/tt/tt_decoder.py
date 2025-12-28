@@ -92,7 +92,7 @@ class TtDecoder(LightweightModule):
             conv_in_bias,
             self.conv_in_config.weights_dtype,
         )
-        self.conv_in_slice_config = ttnn.Conv2dL1FullSliceConfig  # one slice
+        self.conv_in_slice_config = ttnn.Op2dL1FullSliceConfig  # one slice
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")

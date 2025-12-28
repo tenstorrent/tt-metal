@@ -154,7 +154,7 @@ class TtEncoder(LightweightModule):
             memory_config=hidden_states.memory_config(),
             **self.groupnorm_config,
         )
-        if self.conv_out_slice_config != ttnn.Conv2dL1FullSliceConfig:
+        if self.conv_out_slice_config != ttnn.Op2dL1FullSliceConfig:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         hidden_states = ttnn.silu(hidden_states)

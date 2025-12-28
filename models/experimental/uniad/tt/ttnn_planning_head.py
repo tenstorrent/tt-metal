@@ -67,7 +67,7 @@ class TtConv2d:
 
     def __call__(self, input_tensor, inp_h, inp_w):
         if self.slice_type is not None and self.num_slices is not None:
-            slice_config = ttnn.Conv2dSliceConfig(
+            slice_config = ttnn.Op2dSliceConfig(
                 slice_type=self.slice_type,
                 num_slices=self.num_slices,
             )

@@ -137,10 +137,10 @@ class Conv:
         self.deallocate = deallocate
         self.activation = activation
         self.is_sliced = is_sliced
-        self.slice_config = ttnn.Conv2dL1FullSliceConfig
+        self.slice_config = ttnn.Op2dL1FullSliceConfig
         if is_sliced:
-            self.slice_config = ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dDRAMSliceHeight,
+            self.slice_config = ttnn.Op2dSliceConfig(
+                slice_type=ttnn.Op2dDRAMSliceHeight,
                 num_slices=2,
             )
 

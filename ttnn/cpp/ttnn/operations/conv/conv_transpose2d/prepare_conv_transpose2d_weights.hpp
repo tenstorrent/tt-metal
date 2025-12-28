@@ -55,7 +55,7 @@ enum class ConvT2dExecutionPath {
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     const tt::tt_metal::StorageType& storage_type,
     const MemoryConfig& memory_config,
-    const std::optional<const op_slicing::Op2DSliceConfig>& slice_config);
+    const std::optional<const op_slicing::Op2dSliceConfig>& slice_config);
 
 // Helper function to compute all transposed conv2d dimension transformations
 // This consolidates the logic that was previously duplicated across multiple files
@@ -91,7 +91,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const conv2d::Op2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel = true);
 
 ttnn::Tensor prepare_conv_transpose2d_bias(
@@ -113,6 +113,6 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_);
+    const std::optional<const conv2d::Op2dSliceConfig>& dram_slice_config_);
 
 }  // namespace ttnn::operations::conv::conv_transpose2d

@@ -74,7 +74,7 @@ class Conv:
             "groups": self.groups,
             "device": device,
             "conv_config": conv_config,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         }
 
         if not ttnn.is_tensor_storage_on_device(self.weights):

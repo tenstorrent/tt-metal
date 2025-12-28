@@ -172,7 +172,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const conv2d::Op2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel) {
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
@@ -233,7 +233,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             output_dtype,
             conv_config_,
             compute_config_,
-            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
+            op_slicing::Op2dSliceConfig{.slice_type = op_slicing::Op2dSliceConfig::SliceType::L1_FULL});
     } else {
         Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
@@ -299,13 +299,13 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
 
         uint32_t slice_rounding_value = 1;
         if (conv_config.output_layout == tt::tt_metal::Layout::TILE &&
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+            dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_WIDTH) {
             // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
             slice_rounding_value = tt::constants::TILE_HEIGHT;
         }
 
         const uint32_t output_sliced_dim =
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+            dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
         TT_FATAL(
             dram_slice_config.num_slices <= output_sliced_dim,
@@ -316,7 +316,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         const uint32_t min_output_slice_size =
             tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
             slice_rounding_value;
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
+        if (dram_slice_config.slice_type == Op2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_height = min_output_slice_size;
         } else {
             output_width = min_output_slice_size;
@@ -355,7 +355,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             output_dtype,
             conv_config_,
             compute_config_,
-            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
+            op_slicing::Op2dSliceConfig{.slice_type = op_slicing::Op2dSliceConfig::SliceType::L1_FULL});
     }
 }
 
@@ -378,7 +378,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_) {
+    const std::optional<const conv2d::Op2dSliceConfig>& dram_slice_config_) {
     // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
     // full_input dimensions. Calculate these dimensions for bias preparation.
     // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
