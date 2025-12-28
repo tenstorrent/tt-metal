@@ -12,14 +12,6 @@ set(ENABLE_LIBCXX FALSE CACHE INTERNAL "Using clang's libc++")
 find_program(MOLD ld.mold)
 if(MOLD)
     set(CMAKE_LINKER_TYPE MOLD)
-    execute_process(
-        COMMAND
-            ${MOLD} --version
-        OUTPUT_VARIABLE MOLD_VERSION_OUTPUT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    message("Using Mold version: ${MOLD_VERSION_OUTPUT}")
 else()
     find_program(LLD ld.lld-20)
     if(LLD)
