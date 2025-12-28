@@ -965,6 +965,466 @@ class Generator:
             decode_output_full_text_row_masked_out_masks,
         )
 
+    def batch_verify_forward_text(
+        self,
+        draft_tokens: torch.Tensor,
+        start_pos: int,
+        page_table,
+        kv_cache,
+        num_actual_tokens: int,
+        model_id=0,
+    ):
+        """
+        Verify K draft tokens using batched prefill forward pass.
+
+        This runs the transformer layers ONCE in parallel (where the speedup comes from),
+        then extracts logits in 32-token slices to work with LM head sharding constraints.
+
+        Args:
+            draft_tokens: [1, K] K draft tokens to verify
+            start_pos: Current decode position where verification starts
+            page_table: Page table for paged attention
+            kv_cache: KV cache tensors
+            num_actual_tokens: K (actual number of tokens to verify)
+            model_id: Model index for data parallel
+
+        Returns:
+            logits: [K, vocab_size] Logits for all K positions
+        """
+        from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len
+
+        K = num_actual_tokens
+        padded_len = get_padded_prefill_len(K)  # Will be 128 for K <= 128
+
+        logger.info(f"Batch verification: verifying {K} tokens at position {start_pos}, padding to {padded_len}")
+
+        # Pad tokens to minimum prefill length (128)
+        padded_tokens = torch.cat([draft_tokens[:, :K], torch.zeros(1, padded_len - K, dtype=torch.long)], dim=-1)
+
+        # Prepare page table for K tokens starting at start_pos
+        block_size = get_block_size(kv_cache[model_id])
+        start_block = start_pos // block_size
+        end_block = (start_pos + padded_len - 1) // block_size + 1
+        chunk_page_table = page_table[:, start_block:end_block]
+
+        logger.info(f"  Block range: {start_block} to {end_block}, chunk_page_table shape: {chunk_page_table.shape}")
+
+        # Prepare inputs with correct start_pos for rotary embeddings
+        (
+            prefill_input,
+            rot_mats_global,
+            rot_mats_local,
+            page_table_tt,
+            chunk_page_table_tt,
+        ) = self.model[model_id].prepare_inputs_prefill(
+            padded_tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+        )
+
+        # Run through all transformer layers ONCE (this is where parallel processing happens!)
+        logger.info(f"  Running parallel forward through {len(self.model[model_id].layers)} layers")
+        x = prefill_input
+        for i, layer in enumerate(self.model[model_id].layers):
+            x = layer(
+                x,
+                current_pos=None,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                mode="prefill",
+                page_table=page_table_tt,
+                chunk_page_table=chunk_page_table_tt,
+                chunk_start_idx=start_pos,
+                kv_cache=kv_cache[model_id][i] if kv_cache is not None else None,
+                update_kv_cache=False,  # CRITICAL: Don't update KV cache during verification!
+            )
+
+        logger.info(f"  Parallel layer processing complete, extracting logits")
+
+        # Now extract logits in 32-token slices to work with LM head sharding
+        all_logits_list = []
+
+        for slice_start in range(0, padded_len, 32):
+            if slice_start >= K:
+                break
+
+            # Slice the hidden states
+            x_slice = ttnn.slice(x, (0, 0, slice_start, 0), (1, 1, slice_start + 32, x.shape[-1]))
+
+            # Apply norm and LM head to this slice
+            x_slice = self.model[model_id].norm(x_slice, mode="prefill")
+
+            if self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+                x_slice = ttnn.interleaved_to_sharded(
+                    x_slice, self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"]
+                )
+
+            logits_slice = self.model[model_id].lm_head(x_slice)
+            logits_slice = ttnn.to_layout(
+                logits_slice, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+            # Convert to torch with mesh composer for multi-device
+            logits_slice_torch = ttnn.to_torch(
+                logits_slice, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args[model_id].mesh_device, dim=-1)
+            )  # [1, 1, 32, vocab]
+            logits_slice_torch = logits_slice_torch.squeeze(0).squeeze(0)  # [32, vocab]
+
+            # Only keep the tokens we actually need
+            tokens_in_slice = min(32, K - slice_start)
+            all_logits_list.append(logits_slice_torch[:tokens_in_slice, :])
+
+        # Concatenate all slices
+        logits = torch.cat(all_logits_list, dim=0)  # [K, vocab]
+
+        logger.info(f"  Batch verification complete, logits shape: {logits.shape}")
+
+        return logits
+
+    def update_kv_cache_with_tokens(
+        self,
+        tokens: torch.Tensor,
+        start_pos: int,
+        page_table,
+        kv_cache,
+    ):
+        """
+        Add specific tokens to KV cache at specific positions.
+        Used after verification to add accepted tokens + correction token.
+
+        This runs decode_forward for each token to properly update KV cache.
+
+        Args:
+            tokens: [num_tokens] tokens to add to KV cache
+            start_pos: Position to start adding tokens
+            page_table: Page table for paged attention
+            kv_cache: KV cache tensors
+        """
+        current_pos = torch.tensor([start_pos])
+
+        logger.info(f"🔧 Updating KV cache with {len(tokens)} tokens starting at position {start_pos}")
+        logger.debug(f"   Tokens to add: {[t.item() if t.dim() == 0 else t.tolist() for t in tokens]}")
+        logger.debug(f"   These tokens will be placed at positions: {list(range(start_pos, start_pos + len(tokens)))}")
+
+        for i, token in enumerate(tokens):
+            tok = token.view(1, 1) if token.dim() == 0 else token.view(1, -1)
+            actual_pos = start_pos + i
+            logger.debug(f"   Position {actual_pos}: Adding token {tok.item()} via decode_forward_text")
+
+            # Run decode forward (updates KV cache at current_pos)
+            # This computes the token's K/V and stores it in the cache
+            self.decode_forward_text(
+                tok,
+                current_pos,
+                enable_trace=False,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+            current_pos += 1
+
+        logger.info(f"✅ KV cache updated successfully, final position: {current_pos[0].item()}")
+
+    def speculative_decode_step(
+        self,
+        draft_tokens,
+        draft_logits,
+        current_pos,
+        last_token,  # NEW: The token at current_pos (needed for verification input)
+        page_table,
+        target_kv_cache,
+        draft_kv_cache,
+        draft_generator,
+        vocab_size,
+        temperature=1.0,
+        top_p=1.0,
+        model_id=0,
+    ):
+        """
+        Complete speculative decode step with lossless verification.
+
+        This implements the full speculative decoding algorithm:
+        1. Verify draft tokens WITHOUT updating target KV cache
+        2. Use rejection sampling to accept/reject tokens
+        3. Update target KV cache with only accepted tokens + correction
+        4. Sync draft KV cache with target decisions
+
+        Args:
+            draft_tokens: [K] tokens from draft model
+            draft_logits: [K, vocab] logits from draft model
+            current_pos: Current position in sequence
+            page_table: Page table for paged attention
+            target_kv_cache: Target model's KV cache
+            draft_kv_cache: Draft model's KV cache
+            draft_generator: Draft generator instance for KV sync
+            vocab_size: Vocabulary size
+            temperature: Sampling temperature
+            top_p: Top-p sampling parameter
+            model_id: Model index for data parallel
+
+        Returns:
+            output_tokens: [num_accepted + 1] All tokens that were generated
+            new_pos: Updated position after this step
+            num_accepted: Number of draft tokens accepted
+        """
+        from models.tt_transformers.tt.speculative import SpeculativeDecoding
+
+        K = len(draft_tokens)
+
+        logger.info(f"\n{'='*70}")
+        logger.info(f"🎯 SPECULATIVE DECODE STEP")
+        logger.info(f"{'='*70}")
+        logger.info(f"K={K}, current_pos={current_pos}, temperature={temperature}")
+        logger.info(f"Last token (at pos {current_pos}): {last_token.item()}")
+        logger.info(f"Draft tokens: {[t.item() for t in draft_tokens]}")
+
+        # STEP 1: Verify draft tokens WITHOUT updating target KV
+        # Per SPEC-DECODE.md: verification_input = tokens + draft_tokens
+        # This means we include the last accepted token + all draft tokens
+        # The output logits will be [K+1] long, with logits[i] predicting token at position current_pos+i+1
+
+        # Prepare verification input: [last_token, draft_tokens[0], ..., draft_tokens[K-1]]
+        verification_tokens = torch.cat([last_token.view(1), draft_tokens])  # [K+1]
+
+        logger.info(f"   Step 1: Verifying with {K+1} tokens (last_token + {K} draft)")
+        logger.info(f"   Verification input: {[t.item() for t in verification_tokens]}")
+
+        target_logits_full = self.batch_verify_forward_text(
+            verification_tokens.unsqueeze(0),  # [1, K+1]
+            start_pos=current_pos,  # Start from current_pos (position of last_token)
+            page_table=page_table,
+            kv_cache=target_kv_cache,
+            num_actual_tokens=K + 1,
+            model_id=model_id,
+        )  # [K+1, vocab]
+
+        # Extract the K logits for verifying the K draft tokens
+        # logits[0] verifies draft_tokens[0], logits[1] verifies draft_tokens[1], etc.
+        target_logits = target_logits_full[:K]  # [K, vocab]
+        # Save the bonus logit for when all tokens are accepted
+        bonus_logit = target_logits_full[K]  # [vocab] - logit for position current_pos+K+1
+
+        logger.debug(
+            f"   Verification complete, got logits shape: {target_logits.shape}, bonus logit shape: {bonus_logit.shape}"
+        )
+
+        # STEP 2: Rejection sampling
+        logger.info(f"   Step 2: Rejection sampling")
+
+        # DEBUG: Log what target model predicted vs what draft predicted
+        target_argmax = torch.argmax(target_logits, dim=-1)  # [K]
+        draft_argmax = torch.argmax(draft_logits, dim=-1)  # [K]
+        logger.info(f"\n   🔍 DEBUG: Token predictions:")
+        logger.info(f"      Draft tokens (input):  {draft_tokens.tolist()}")
+        logger.info(f"      Draft argmax (if regen): {draft_argmax.tolist()}")
+        logger.info(f"      Target argmax:         {target_argmax.tolist()}")
+        matches = (target_argmax == draft_tokens).sum().item()
+        logger.info(f"      Direct matches: {matches}/{K}")
+
+        speculative_decoder = SpeculativeDecoding(vocab_size, temperature=temperature, top_p=top_p)
+        accepted_mask, num_accepted_batch, correction_logits = speculative_decoder.verify_tokens(
+            draft_logits.unsqueeze(0),  # [1, K, vocab]
+            target_logits.unsqueeze(0),  # [1, K, vocab]
+            draft_tokens.unsqueeze(0),  # [1, K]
+        )
+        num_accepted = num_accepted_batch[0].item()
+
+        logger.info(f"\n📊 VERIFICATION RESULTS:")
+        logger.info(f"   Accepted: {num_accepted}/{K} tokens")
+        if num_accepted < K:
+            logger.info(f"   Rejected at position: {num_accepted}")
+            logger.info(f"   Rejected token: {draft_tokens[num_accepted].item()}")
+        else:
+            logger.info(f"   All tokens accepted!")
+
+        # STEP 3: Determine accepted tokens and correction token
+        accepted_tokens = draft_tokens[:num_accepted]
+
+        is_greedy = temperature == 0.0
+
+        if num_accepted < K:
+            # Sample correction token from adjusted distribution
+            if is_greedy:
+                # For greedy, just use argmax of target logits (correction_logits already contains raw target logits)
+                correction_token = torch.argmax(correction_logits[0]).unsqueeze(0)
+                logger.info(f"\n🔧 CORRECTION TOKEN (greedy argmax):")
+                logger.info(f"   Target model prefers: {correction_token.item()}")
+                logger.info(f"   Draft suggested: {draft_tokens[num_accepted].item()}")
+                logger.info(f"   Using target's choice: {correction_token.item()}")
+            else:
+                correction_probs = torch.softmax(correction_logits[0], dim=-1)
+                correction_token = torch.multinomial(correction_probs, num_samples=1)
+                logger.info(
+                    f"   Step 3: Rejection at position {num_accepted}, sampled correction token: {correction_token.item()}"
+                )
+        else:
+            # All accepted, sample bonus token from the bonus logit (position K+1)
+            if is_greedy:
+                correction_token = torch.argmax(bonus_logit).unsqueeze(0)
+                logger.info(f"\n🎁 BONUS TOKEN (greedy argmax):")
+                logger.info(f"   Generated: {correction_token.item()}")
+            else:
+                bonus_probs = torch.softmax(bonus_logit, dim=-1)
+                correction_token = torch.multinomial(bonus_probs, num_samples=1)
+                logger.info(f"   Step 3: All tokens accepted, sampled bonus token: {correction_token.item()}")
+
+        # STEP 4: Prepare tokens to add
+        tokens_to_add = torch.cat([accepted_tokens, correction_token])
+
+        # Log what we're about to add to KV cache
+        logger.info(f"\n📝 FINAL OUTPUT:")
+        logger.info(f"   Tokens to emit: {[t.item() for t in tokens_to_add]}")
+        logger.info(f"   Position before: {current_pos}")
+        logger.info(f"   Position after: {current_pos + len(tokens_to_add)}")
+
+        # STEP 4: Update TARGET KV cache with accepted + correction
+        # The accepted tokens go at positions [current_pos+1, ..., current_pos+num_accepted+1]
+        logger.info(
+            f"\n   Step 4: Updating target KV cache with {len(tokens_to_add)} tokens at positions [{current_pos + 1}, ..., {current_pos + len(tokens_to_add)}]"
+        )
+        self.update_kv_cache_with_tokens(
+            tokens_to_add,
+            start_pos=current_pos + 1,
+            page_table=page_table,
+            kv_cache=target_kv_cache,
+        )
+
+        # STEP 5: Sync DRAFT KV cache ONLY when there's a rejection
+        #
+        # Case 1: All tokens accepted (num_accepted == K)
+        #   - Draft KV is correct for all accepted tokens
+        #   - Bonus token will be added in next iteration's first generation
+        #   - No sync needed!
+        #
+        # Case 2: Some tokens rejected (num_accepted < K)
+        #   - Draft KV is correct for positions [current_pos+1, ..., current_pos+num_accepted]
+        #   - Draft KV is WRONG for position current_pos+num_accepted+1 (has rejected token's KV)
+        #   - We need to overwrite position current_pos+num_accepted+1 with correction token's KV
+        #
+        # Strategy: Only add tokens to draft KV when a rejection occurred
+
+        if num_accepted < K:
+            logger.info(f"\n   Step 5: Syncing draft KV cache (rejection occurred)")
+            logger.info(
+                f"   Adding {len(tokens_to_add)} tokens to draft KV at positions [{current_pos + 1}, ..., {current_pos + len(tokens_to_add)}]"
+            )
+            draft_generator.update_kv_cache_with_tokens(
+                tokens_to_add,
+                start_pos=current_pos + 1,
+                page_table=page_table,
+                kv_cache=draft_kv_cache,
+            )
+        else:
+            logger.info(f"\n   Step 5: Draft KV sync skipped (all tokens accepted, will be overwritten naturally)")
+
+        # STEP 6: Return results
+        # We've added num_accepted+1 tokens starting at position current_pos+1
+        # The last token is at position current_pos+1+num_accepted
+        # So new_pos (the position of the last token) is current_pos+num_accepted+1
+        new_pos = current_pos + num_accepted + 1
+        output_tokens = tokens_to_add  # All tokens that were generated
+
+        logger.info(f"\n✅ SPECULATIVE STEP COMPLETE")
+        logger.info(f"   New position: {new_pos} (last token at position {new_pos})")
+        logger.info(f"   Tokens generated: {len(output_tokens)}")
+        logger.info(f"   Output: {[t.item() for t in output_tokens]}")
+        logger.info(f"{'='*70}\n")
+
+        return output_tokens, new_pos, num_accepted
+
+    def speculative_decode_forward(
+        self,
+        draft_tokens: torch.Tensor,
+        current_pos: torch.Tensor,
+        num_draft_tokens: int,
+        page_table=None,
+        kv_cache=None,
+        draft_logits: torch.Tensor = None,
+        enable_trace=True,
+        use_batch_verification=True,
+    ):
+        """
+        Speculative decoding verification step.
+
+        Given K draft tokens generated by a draft model, verify them in parallel
+        using the target model. This method handles mid-sequence verification by
+        properly managing the KV cache state.
+
+        Args:
+            draft_tokens: [B, K] Draft tokens to verify (actual tokens, no padding)
+            current_pos: [B] Current position where verification should start
+            num_draft_tokens: Actual number of draft tokens (K)
+            page_table: Page table for paged attention
+            kv_cache: KV cache tensors
+            draft_logits: [B, K, vocab_size] Optional draft model logits for verification
+            enable_trace: Whether to enable TTNN tracing
+            use_batch_verification: If True, use batched prefill for parallel verification (faster)
+
+        Returns:
+            logits: [K, vocab_size] Target model logits for all K verified tokens
+        """
+        B = draft_tokens.shape[0]
+
+        logger.info(
+            f"Speculative decode: Verifying {num_draft_tokens} draft tokens for {B} sequences at position {current_pos[0].item()}"
+        )
+
+        # Extract only the actual draft tokens (not padding)
+        actual_draft_tokens = draft_tokens[:, :num_draft_tokens]  # [B, K]
+
+        if use_batch_verification:
+            # NEW: Use batched prefill verification (parallel processing)
+            logger.info(f"  Using BATCH verification (prefill-based)")
+
+            verification_logits = self.batch_verify_forward_text(
+                draft_tokens=actual_draft_tokens,
+                start_pos=current_pos[0].item(),
+                page_table=page_table,
+                kv_cache=kv_cache,
+                num_actual_tokens=num_draft_tokens,
+                model_id=0,
+            )
+            # verification_logits shape: [K, vocab_size]
+
+            logger.info(f"Batch verification complete, logits shape: {verification_logits.shape}")
+
+            return verification_logits
+
+        else:
+            # FALLBACK: Sequential verification (slower, for debugging)
+            logger.info(f"  Using SEQUENTIAL verification (decode-based)")
+
+            verification_logits_list = []
+            position = current_pos.clone()
+
+            for i in range(num_draft_tokens):
+                # Get token for this position
+                token = actual_draft_tokens[:, i : i + 1]  # [B, 1]
+
+                # Run decode forward for this single token
+                logits, _ = self.decode_forward_text(
+                    token,
+                    position,
+                    enable_trace=enable_trace,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    sampling_params=None,  # No sampling, just get logits
+                )
+
+                # Store logits for this position
+                verification_logits_list.append(logits.squeeze())
+
+                # Update position for next token
+                position = position + 1
+
+            # Stack all logits: [K, vocab_size]
+            all_logits = torch.stack(verification_logits_list, dim=0)
+
+            logger.info(f"Sequential verification complete, logits shape: {all_logits.shape}")
+
+            return all_logits
+
     # Note: This function is called by vLLM
     def decode_forward_llama_vision(
         self,

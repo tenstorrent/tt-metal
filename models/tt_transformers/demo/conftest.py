@@ -73,3 +73,10 @@ def pytest_addoption(parser):
         type=str,
         help="Mode to use for full model demo tests (values can be 'prefill','decode','full')",
     )
+    parser.addoption(
+        "--draft_model",
+        action="store",
+        default=None,
+        type=str,
+        help="Path to draft model for speculative decoding (HuggingFace model name or local path)",
+    )

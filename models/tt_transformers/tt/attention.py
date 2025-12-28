@@ -667,6 +667,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        update_kv_cache=True,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -782,29 +783,32 @@ class Attention(LightweightModule):
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
-        if page_table:
-            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-            block_size = keys_BKSD.shape[2]
-            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
-            page_len = fill_page_table.shape[1] * block_size
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
-        else:
-            ttnn.fill_cache(
-                keys_BKSD,
-                k_fill,
-                user_id % self.batch_size_per_device_group,
-            )
-            ttnn.fill_cache(
-                values_BKSD,
-                v_fill,
-                user_id % self.batch_size_per_device_group,
-            )
+        # Only update KV cache if requested (allows verification without cache pollution)
+        if update_kv_cache:
+            if page_table:
+                # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+                # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+                block_size = keys_BKSD.shape[2]
+                # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+
+                page_len = fill_page_table.shape[1] * block_size
+                k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+                v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+            else:
+                ttnn.fill_cache(
+                    keys_BKSD,
+                    k_fill,
+                    user_id % self.batch_size_per_device_group,
+                )
+                ttnn.fill_cache(
+                    values_BKSD,
+                    v_fill,
+                    user_id % self.batch_size_per_device_group,
+                )
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
@@ -913,6 +917,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        update_kv_cache=True,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -923,6 +928,7 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                update_kv_cache=update_kv_cache,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

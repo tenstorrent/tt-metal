@@ -489,6 +489,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        update_kv_cache=True,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -511,18 +512,25 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                update_kv_cache=update_kv_cache,
             )
 
+        # Original behavior: return hidden states before norm/lm_head when get_last_token == -1
+        # This is used in some code paths that don't need logits
         if mode == "prefill" and get_last_token == -1:
             return x
 
-        # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-        if get_last_token != -1:
+        # For standard prefill, slice to get last token
+        if mode == "prefill" and get_last_token != -1:
+            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+        elif mode == "decode" and get_last_token != -1:
+            # Decode mode with slicing (shouldn't normally happen)
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
         x = self.norm(x, mode=mode)
 
+        # Apply sharding for standard prefill (when we have exactly 32 tokens after slicing)
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
