@@ -1237,17 +1237,22 @@ Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weig
 
 /*
 Width sharded depthwise weight preparation.
-Creates per-shard weights with face-by-face layout.
+Creates weight tensor for width sharded depthwise conv2d.
 
 For width sharded conv, each core processes a different subset of channels.
-This function creates a weight tensor where each shard is independently laid out
-in face-by-face format, and shards are concatenated: [Shard0 | Shard1 | ... | ShardN-1]
+The width of the tensor is stick_size (total channels), and after tilization
+the tiles are split across cores.
 
-Example: 64 channels, 2 cores, 3x3 kernel
-- Each core gets 32 channels
-- Shard 0: channels 0-31, face-by-face layout -> [32, 32, 1, 1]
-- Shard 1: channels 32-63, face-by-face layout -> [32, 32, 1, 1]
-- Output: [64, 32, 1, 1] (shards concatenated along channel dim)
+Example: 64 channels, 2 cores, 3x3 kernel (stick_size=64)
+Pre-tilization layout (32 rows x 64 cols):
+  Row 0-1: [1(16), 9(16), 1(16), 9(16)] - pos 1 in faces 0,2; pos 9 in faces 1,3
+  Row 2-3: [2(16), 0(16), 2(16), 0(16)] - pos 2 in faces 0,2; padding in faces 1,3
+  ...
+  Row 14-15: [8(16), 0(16), 8(16), 0(16)]
+  Row 16-31: all zeros
+
+After tilization, each tile (32 cols) contains:
+  [1(32), 2(32), ..., 9(32), padding]
 */
 template <typename T>
 static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
@@ -1260,112 +1265,112 @@ static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
     uint32_t kernel_w = original_weight_shape[3];
     uint32_t total_kernel_positions = kernel_h * kernel_w;
 
-    // Per-shard dimensions
-    uint32_t channels_per_shard = out_channels / num_channel_shards;
-
     constexpr uint32_t TILE_SIZE = 32;
     constexpr uint32_t FACE_SIZE = 16;
 
-    // Pad per-shard to tile boundaries
-    uint32_t padded_channels_per_shard = ((channels_per_shard + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    // Pad to tile boundaries
+    uint32_t padded_out_channels = ((out_channels + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
     uint32_t padded_kernel_positions = ((total_kernel_positions + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
-    // Total output: all shards concatenated along channel dimension
-    uint32_t total_padded_channels = padded_channels_per_shard * num_channel_shards;
-    ttnn::Shape output_shape{total_padded_channels, padded_kernel_positions, 1, 1};
+    // Output shape: [height=padded_kernel_positions, width=padded_out_channels]
+    // Width is stick_size (channels), tiles split across cores
+    ttnn::Shape output_shape{padded_kernel_positions, padded_out_channels, 1, 1};
 
     log_info(
         tt::LogOp,
-        "Width sharded weight layout: channels={}, shards={}, ch_per_shard={}, padded_ch_per_shard={}, "
-        "kernel_pos={}, padded_kernel_pos={}",
+        "Width sharded weight layout: channels={}, padded_ch={}, kernel_pos={}, padded_kernel_pos={}, cores={}, "
+        "output_shape=[{},{}]",
         out_channels,
-        num_channel_shards,
-        channels_per_shard,
-        padded_channels_per_shard,
+        padded_out_channels,
         total_kernel_positions,
-        padded_kernel_positions);
+        padded_kernel_positions,
+        num_channel_shards,
+        padded_kernel_positions,
+        padded_out_channels);
 
     auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
         auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
         auto output_buffer = std::vector<T>(output_shape.volume(), static_cast<T>(0));
 
-        uint32_t data_rows_per_stick = (channels_per_shard + FACE_SIZE - 1) / FACE_SIZE;
-        uint32_t rows_per_stick_padded = (padded_channels_per_shard + FACE_SIZE - 1) / FACE_SIZE;
-        uint32_t shard_size = padded_channels_per_shard * padded_kernel_positions;
+        uint32_t output_width = padded_out_channels;
 
-        // Process each shard independently with face-by-face filling
-        for (uint32_t shard_idx = 0; shard_idx < num_channel_shards; shard_idx++) {
-            uint32_t channel_start = shard_idx * channels_per_shard;
-            uint32_t shard_offset = shard_idx * shard_size;
-            uint32_t current_absolute_row = 0;
+        // General face-by-face filling algorithm:
+        // - Pre-tilization buffer: [padded_kernel_positions rows] x [padded_out_channels cols]
+        // - Within each tile (32 cols), faces are: F0 (cols 0-15), F1 (cols 16-31)
+        // - Each face has 16 rows (rows 0-15 for F0/F1, rows 16-31 for F2/F3)
+        // - Rows come in pairs (each kernel position uses 2 rows for proper face alignment)
+        // - Face 0/2 gets kernel positions 0 to 7 (row pairs 0-7)
+        // - Face 1/3 gets kernel positions 8 to 15 (row pairs 0-7)
+        // After tilization, memory order is: F0(256), F1(256), F2(256), F3(256) per tile
 
-            for (uint32_t kernel_pos = 0; kernel_pos < total_kernel_positions; kernel_pos++) {
-                uint32_t kh = kernel_pos / kernel_w;
-                uint32_t kw = kernel_pos % kernel_w;
+        constexpr uint32_t POSITIONS_PER_FACE = 8;  // Each face can hold 8 positions (16 rows / 2 rows per pos)
 
-                for (uint32_t stick_row = 0; stick_row < data_rows_per_stick; stick_row++) {
-                    uint32_t absolute_row = current_absolute_row + stick_row;
-                    uint32_t face_idx = absolute_row / FACE_SIZE;
-                    uint32_t row_in_face = absolute_row % FACE_SIZE;
+        for (uint32_t row = 0; row < padded_kernel_positions; row++) {
+            uint32_t row_pair = row / 2;                // Which pair of rows (0-7 for rows 0-15, 8-15 for rows 16-31)
+            uint32_t face_row_group = row / FACE_SIZE;  // 0 for rows 0-15, 1 for rows 16-31
+            uint32_t row_in_face = row_pair % POSITIONS_PER_FACE;  // Position within face (0-7)
 
-                    uint32_t tile_idx = face_idx / 4;
-                    uint32_t face_in_tile = face_idx % 4;
+            for (uint32_t col = 0; col < padded_out_channels; col++) {
+                T value = static_cast<T>(0);
 
-                    // Face layout in 32x32 tile: Face0 (0-15,0-15), Face1 (0-15,16-31),
-                    //                            Face2 (16-31,0-15), Face3 (16-31,16-31)
-                    uint32_t face_row_offset = (face_in_tile / 2) * FACE_SIZE;
-                    uint32_t face_col_offset = (face_in_tile % 2) * FACE_SIZE;
-                    uint32_t target_row = face_row_offset + row_in_face;
+                // Determine which face this column belongs to within its tile
+                uint32_t col_in_tile = col % TILE_SIZE;
+                uint32_t face_in_tile = col_in_tile / FACE_SIZE;  // 0 for cols 0-15, 1 for cols 16-31
 
-                    for (uint32_t col = 0; col < FACE_SIZE; col++) {
-                        uint32_t local_ch = stick_row * FACE_SIZE + col;
-                        if (local_ch >= channels_per_shard) {
-                            break;
-                        }
+                // Calculate kernel position based on face location
+                // - Faces 0,2 (even faces): positions 0-7, 16-23, ...
+                // - Faces 1,3 (odd faces): positions 8-15, 24-31, ...
+                uint32_t base_pos = face_row_group * (2 * POSITIONS_PER_FACE);   // 0 for F0/F1, 16 for F2/F3
+                uint32_t face_offset = (face_in_tile % 2) * POSITIONS_PER_FACE;  // 0 for F0/F2, 8 for F1/F3
+                uint32_t kernel_pos = base_pos + face_offset + row_in_face;
 
-                        uint32_t global_ch = channel_start + local_ch;
-                        if (global_ch >= out_channels) {
-                            break;
-                        }
+                // Get the value if this is a valid kernel position and channel
+                if (kernel_pos < total_kernel_positions && col < out_channels) {
+                    uint32_t kh = kernel_pos / kernel_w;
+                    uint32_t kw = kernel_pos % kernel_w;
 
-                        // Get input value from [ch, 0, kh, kw]
-                        auto input_idx = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{(int)global_ch, 0, (int)kh, (int)kw},
-                            compute_strides(original_weight_shape));
-                        T value = input_buffer[input_idx];
-
-                        // Place in shard's face-by-face layout
-                        uint32_t target_col = tile_idx * TILE_SIZE + face_col_offset + col;
-                        uint32_t output_idx = shard_offset + target_row * padded_channels_per_shard + target_col;
-
-                        if (output_idx < output_buffer.size()) {
-                            output_buffer[output_idx] = value;
-                        }
-                    }
+                    auto input_idx = tt::tt_metal::compute_flat_indices(
+                        ttnn::SmallVector<int>{(int)col, 0, (int)kh, (int)kw}, compute_strides(original_weight_shape));
+                    value = input_buffer[input_idx];
                 }
-                current_absolute_row += rows_per_stick_padded;
+
+                uint32_t output_idx = row * output_width + col;
+                if (output_idx < output_buffer.size()) {
+                    output_buffer[output_idx] = value;
+                }
             }
         }
 
-        // Debug print: dump weight layout for each shard
-        for (uint32_t shard_idx = 0; shard_idx < num_channel_shards; shard_idx++) {
-            uint32_t shard_offset = shard_idx * shard_size;
-            log_info(
-                tt::LogOp,
-                "=== Width Sharded Weight Shard {} ({}x{}) ===",
-                shard_idx,
-                padded_kernel_positions,
-                padded_channels_per_shard);
-            for (uint32_t row = 0; row < padded_kernel_positions && row < 32; row++) {
-                std::string row_str = "";
-                for (uint32_t col = 0; col < padded_channels_per_shard && col < 32; col++) {
-                    uint32_t idx = shard_offset + row * padded_channels_per_shard + col;
-                    if (idx < output_buffer.size()) {
-                        row_str += fmt::format("{:6.2f} ", static_cast<float>(output_buffer[idx]));
+        // Debug print: show the pre-tilization layout
+        log_info(
+            tt::LogOp,
+            "=== WIDTH_SHARDED Pre-Tilization Layout ({}x{}) ===",
+            padded_kernel_positions,
+            padded_out_channels);
+        for (uint32_t row = 0; row < std::min(padded_kernel_positions, 18u); row++) {
+            std::string row_str = fmt::format("Row {:2d}: ", row);
+
+            // Show faces separately
+            for (uint32_t face = 0; face < 4; face++) {
+                row_str += fmt::format("F{}[", face);
+                for (uint32_t i = 0; i < 4; i++) {  // Show first 4 values of each face
+                    uint32_t col = face * FACE_SIZE + i;
+                    if (col < padded_out_channels) {
+                        uint32_t idx = row * output_width + col;
+                        if (idx < output_buffer.size()) {
+                            row_str += fmt::format("{:2.0f}", static_cast<float>(output_buffer[idx]));
+                            if (i < 3) {
+                                row_str += ",";
+                            }
+                        }
                     }
                 }
-                log_info(tt::LogOp, "Row {:2d}: {}", row, row_str);
+                row_str += "...]";
+                if (face < 3) {
+                    row_str += " ";
+                }
             }
+            log_info(tt::LogOp, "{}", row_str);
         }
 
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
@@ -2001,6 +2006,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         params.has_bias);
     // Track whether we performed 2D depthwise layout conversion (channels may be padded)
     bool is_2d_depthwise_layout = false;
+    bool is_2d_depthwise_width_sharded = false;
 
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and params.groups > 1) {
@@ -2019,19 +2025,26 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 original_weights_shape[2],
                 original_weights_window_w);
 
-            // Check if WIDTH_SHARDED mode - needs per-core weight slices
+            // Check if WIDTH_SHARDED mode - use consistent layout
             TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
-            uint32_t num_cores = 1;
             if (params.input_parallel_config.has_value()) {
                 shard_layout = params.input_parallel_config->shard_scheme;
-                num_cores = params.input_parallel_config->grid.num_cores();
             }
 
             if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                uint32_t num_cores = params.input_parallel_config->grid.num_cores();
                 log_info(tt::LogOp, "Using WIDTH_SHARDED depthwise weight prep with {} cores", num_cores);
+                log_info(
+                    tt::LogOp,
+                    "WIDTH_SHARDED depthwise blocks: block_h_ntiles={}, block_w_ntiles={}, enable_activation_reuse={}",
+                    params.weight_block_h_ntiles,
+                    params.weight_block_w_ntiles,
+                    params.enable_activation_reuse);
                 weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
                     weight_tensor_, num_cores, weight_tensor_.dtype());
+                is_2d_depthwise_width_sharded = true;
             } else {
+                log_info(tt::LogOp, "Using HEIGHT_SHARDED 2D depthwise layout");
                 weight_tensor_ =
                     convert_conv_weight_tensor_to_2d_depthwise_layout(weight_tensor_, weight_tensor_.dtype());
             }
@@ -2092,18 +2105,66 @@ static ttnn::Tensor prepare_conv_weights_internal(
     // For 2D depthwise layout, the tensor is already in the correct face-by-face format
     // ready for tilization. Skip the regular padding and layout conversion.
     if (is_2d_depthwise_layout) {
-        // Tensor shape is [padded_channels, padded_kernel_positions, 1, 1]
-        // Just need to reshape and tilize for proper memory layout
-        uint32_t padded_channels = weights_shape[0];  // Already padded to tile size
-        uint32_t padded_kernel_positions = weights_shape[1];
+        uint32_t dim0 = weights_shape[0];
+        uint32_t dim1 = weights_shape[1];
 
-        // Reshape to [1, 1, padded_kernel_positions, padded_channels] for tilization
-        // This matches the expected weight matrix shape for depthwise conv
-        ttnn::Shape reshaped_shape({1, 1, padded_kernel_positions, padded_channels});
+        uint32_t padded_kernel_positions, padded_channels;
+        ttnn::Shape reshaped_shape;
+        if (is_2d_depthwise_width_sharded) {
+            // WIDTH_SHARDED: tensor is [kernel_positions, channels] = [32, 64]
+            // Keep same order: [1, 1, kernel_positions, channels] = [1, 1, 32, 64]
+            padded_kernel_positions = dim0;
+            padded_channels = dim1;
+            reshaped_shape = ttnn::Shape({1, 1, padded_kernel_positions, padded_channels});
+            log_info(
+                tt::LogOp,
+                "WIDTH_SHARDED reshape: [{}, {}] -> [1, 1, {}, {}]",
+                dim0,
+                dim1,
+                padded_kernel_positions,
+                padded_channels);
+        } else {
+            // HEIGHT_SHARDED: tensor is [channels, kernel_positions] = [64, 32]
+            // Swap to: [1, 1, kernel_positions, channels] = [1, 1, 32, 64]
+            padded_channels = dim0;
+            padded_kernel_positions = dim1;
+            reshaped_shape = ttnn::Shape({1, 1, padded_kernel_positions, padded_channels});
+            log_info(
+                tt::LogOp,
+                "HEIGHT_SHARDED reshape: [{}, {}] -> [1, 1, {}, {}]",
+                dim0,
+                dim1,
+                padded_kernel_positions,
+                padded_channels);
+        }
         weight_tensor_ = ttnn::reshape(weight_tensor_, reshaped_shape);
 
         // Tilize the tensor
+        log_info(tt::LogOp, "weight_tensor_ dims before tilize: {}", weight_tensor_.logical_shape());
+
+        // Print raw memory BEFORE tilization - value by value
+        {
+            auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
+            uint32_t total = weight_tensor_.logical_shape().volume();
+            std::string all_vals = "BEFORE_TILIZE: ";
+            for (uint32_t i = 0; i < std::min(total, 1032u); i++) {
+                all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
+            }
+            log_info(tt::LogOp, "{}", all_vals);
+        }
+
         weight_tensor_ = ttnn::to_layout(weight_tensor_, Layout::TILE);
+
+        // Print raw memory AFTER tilization - value by value
+        {
+            auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
+            uint32_t total = weight_tensor_.logical_shape().volume();
+            std::string all_vals = "AFTER_TILIZE: ";
+            for (uint32_t i = 0; i < std::min(total, 2048u); i++) {
+                all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
+            }
+            log_info(tt::LogOp, "{}", all_vals);
+        }
 
         // Set target shapes for consistency with downstream code
         ttnn::Shape target_shape({1, 1, padded_kernel_positions, out_channels});
@@ -2144,8 +2205,22 @@ static ttnn::Tensor prepare_conv_weights_internal(
                     params.full_inner_dim,
                     weight_tensor_.dtype());
             } else if (input_parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-                weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
-                    weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
+                log_info(
+                    tt::LogOp,
+                    "WIDTH_SHARDED weight blocks: block_h_ntiles={}, block_w_ntiles={}, enable_activation_reuse={}",
+                    params.weight_block_h_ntiles,
+                    params.weight_block_w_ntiles,
+                    params.enable_activation_reuse);
+                log_info(
+                    tt::LogOp,
+                    "weight_tensor_ dims before convert_conv_weight_tensor_to_special_padding_tiled_layout: {}",
+                    weight_tensor_.logical_shape());
+                weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
+                    weight_tensor_,
+                    params.weight_block_h_ntiles,
+                    params.weight_block_w_ntiles,
+                    params.enable_activation_reuse,
+                    weight_tensor_.dtype());
             } else {
                 TT_THROW("Unsupported conv weights params : {}", params);
             }

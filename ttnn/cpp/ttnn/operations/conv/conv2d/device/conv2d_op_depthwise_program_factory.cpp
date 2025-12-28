@@ -605,76 +605,143 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     auto all_cores = corerange_to_cores(parallel_config.grid, std::nullopt, true);
     uint32_t num_cores = all_cores.size();
 
-    log_debug(tt::LogOp, "Weight multicast setup: {} total cores", num_cores);
+    // Check sharding mode early for weight distribution
+    const bool is_width_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
+
+    log_debug(tt::LogOp, "Weight distribution setup: {} total cores, width_sharded={}", num_cores, is_width_sharded);
 
     if (num_cores > 0) {
-        // First core is the sender
-        CoreCoord sender_core = all_cores[0];
-        CoreCoord sender_core_physical = device->worker_core_from_logical_core(sender_core);
+        if (is_width_sharded) {
+            // ============================================================
+            // WIDTH_SHARDED: Each core reads its own weight shard from DRAM
+            // No multicast - all cores are "senders" with num_dests=0
+            // ============================================================
 
-        log_debug(
-            tt::LogOp,
-            "Sender core: logical ({}, {}), physical ({}, {})",
-            sender_core.x,
-            sender_core.y,
-            sender_core_physical.x,
-            sender_core_physical.y);
+            // Calculate per-core weight shard size
+            uint32_t channels_per_core = in_c / num_cores;
+            uint32_t padded_ch_per_core = tt::round_up(channels_per_core, tt::constants::TILE_WIDTH);
+            uint32_t padded_kernel_pos = tt::round_up(kernel_h * kernel_w, tt::constants::TILE_WIDTH);
+            uint32_t shard_ntiles =
+                (padded_ch_per_core / tt::constants::TILE_WIDTH) * (padded_kernel_pos / tt::constants::TILE_WIDTH);
+            uint32_t weight_tile_nbytes = tt::tile_size(params.data_format);
+            uint32_t shard_size_bytes = shard_ntiles * weight_tile_nbytes;
 
-        // Calculate multicast destination coordinates (bounding box of all receiver cores)
-        // For simplicity, we use the bounding box of the entire grid
-        auto grid_start = parallel_config.grid.bounding_box().start_coord;
-        auto grid_end = parallel_config.grid.bounding_box().end_coord;
+            log_info(
+                tt::LogOp,
+                "WIDTH_SHARDED weights: ch_per_core={}, padded_ch={}, padded_kpos={}, shard_ntiles={}, "
+                "shard_bytes={}",
+                channels_per_core,
+                padded_ch_per_core,
+                padded_kernel_pos,
+                shard_ntiles,
+                shard_size_bytes);
 
-        CoreCoord top_left_physical = device->worker_core_from_logical_core(grid_start);
-        CoreCoord bottom_right_physical = device->worker_core_from_logical_core(grid_end);
+            // Each core reads its own weight shard - no multicast
+            for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
+                CoreCoord core = all_cores[core_idx];
+                uint32_t weight_offset = core_idx * shard_size_bytes;
 
-        // Number of receivers (all cores except sender)
-        uint32_t num_dests = num_cores - 1;
-        uint32_t num_mcast_cores = num_cores - 1;
+                std::vector<uint32_t> reader_args = {
+                    static_cast<uint32_t>(weight_buffer_addr + weight_offset),  // 0: weight_addr with per-core offset
+                    1,                                                          // 1: is_sender = true (all cores read)
+                    0,
+                    0,
+                    0,
+                    0,                                   // 2-5: unused mcast coords
+                    0,                                   // 6: weights_mcast_num_dests = 0 (skip multicast!)
+                    0,                                   // 7: weights_mcast_num_cores = 0
+                    weights_mcast_sender_semaphore_id,   // 8: sender semaphore (unused but required)
+                    weights_mcast_receiver_semaphore_id  // 9: receiver semaphore (unused but required)
+                };
+                SetRuntimeArgs(program, reader0_kernel, core, reader_args);
 
-        log_debug(
-            tt::LogOp,
-            "Multicast grid: logical ({},{}) to ({},{}), physical ({},{}) to ({},{})",
-            grid_start.x,
-            grid_start.y,
-            grid_end.x,
-            grid_end.y,
-            top_left_physical.x,
-            top_left_physical.y,
-            bottom_right_physical.x,
-            bottom_right_physical.y);
+                log_debug(
+                    tt::LogOp,
+                    "Core {} weight args: addr=0x{:x}, offset={}",
+                    core_idx,
+                    weight_buffer_addr + weight_offset,
+                    weight_offset);
+            }
 
-        // Set up runtime args for sender core
-        std::vector<uint32_t> sender_args = {
-            static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr_dram_base
-            1,                                          // 1: is_sender = true
-            top_left_physical.x,                        // 2: weights_mcast_dest_noc_start_x
-            top_left_physical.y,                        // 3: weights_mcast_dest_noc_start_y
-            bottom_right_physical.x,                    // 4: weights_mcast_dest_noc_end_x
-            bottom_right_physical.y,                    // 5: weights_mcast_dest_noc_end_y
-            num_dests,                                  // 6: weights_mcast_num_dests
-            num_mcast_cores,                            // 7: weights_mcast_num_cores
-            weights_mcast_sender_semaphore_id,          // 8: weights_mcast_sender_semaphore_id
-            weights_mcast_receiver_semaphore_id         // 9: weights_mcast_receiver_semaphore_id
-        };
-        SetRuntimeArgs(program, reader0_kernel, sender_core, sender_args);
+            log_info(tt::LogOp, "WIDTH_SHARDED: {} cores each reading own weight shard", num_cores);
 
-        // Set up runtime args for receiver cores
-        for (uint32_t i = 1; i < num_cores; i++) {
-            CoreCoord receiver_core = all_cores[i];
-            std::vector<uint32_t> receiver_args = {
-                static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr_dram_base (unused but consistent)
-                0,                                          // 1: is_sender = false
-                sender_core_physical.x,                     // 2: weights_mcast_sender_noc_x
-                sender_core_physical.y,                     // 3: weights_mcast_sender_noc_y
-                weights_mcast_sender_semaphore_id,          // 4: weights_mcast_sender_semaphore_id
-                weights_mcast_receiver_semaphore_id         // 5: weights_mcast_receiver_semaphore_id
+        } else {
+            // ============================================================
+            // HEIGHT_SHARDED/BLOCK_SHARDED: Sender multicasts to receivers
+            // ============================================================
+
+            // First core is the sender
+            CoreCoord sender_core = all_cores[0];
+            CoreCoord sender_core_physical = device->worker_core_from_logical_core(sender_core);
+
+            log_debug(
+                tt::LogOp,
+                "Sender core: logical ({}, {}), physical ({}, {})",
+                sender_core.x,
+                sender_core.y,
+                sender_core_physical.x,
+                sender_core_physical.y);
+
+            // Calculate multicast destination coordinates (bounding box of all receiver cores)
+            // For simplicity, we use the bounding box of the entire grid
+            auto grid_start = parallel_config.grid.bounding_box().start_coord;
+            auto grid_end = parallel_config.grid.bounding_box().end_coord;
+
+            CoreCoord top_left_physical = device->worker_core_from_logical_core(grid_start);
+            CoreCoord bottom_right_physical = device->worker_core_from_logical_core(grid_end);
+
+            // Number of receivers (all cores except sender)
+            uint32_t num_dests = num_cores - 1;
+            uint32_t num_mcast_cores = num_cores - 1;
+
+            log_debug(
+                tt::LogOp,
+                "Multicast grid: logical ({},{}) to ({},{}), physical ({},{}) to ({},{})",
+                grid_start.x,
+                grid_start.y,
+                grid_end.x,
+                grid_end.y,
+                top_left_physical.x,
+                top_left_physical.y,
+                bottom_right_physical.x,
+                bottom_right_physical.y);
+
+            // Set up runtime args for sender core
+            std::vector<uint32_t> sender_args = {
+                static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr_dram_base
+                1,                                          // 1: is_sender = true
+                top_left_physical.x,                        // 2: weights_mcast_dest_noc_start_x
+                top_left_physical.y,                        // 3: weights_mcast_dest_noc_start_y
+                bottom_right_physical.x,                    // 4: weights_mcast_dest_noc_end_x
+                bottom_right_physical.y,                    // 5: weights_mcast_dest_noc_end_y
+                num_dests,                                  // 6: weights_mcast_num_dests
+                num_mcast_cores,                            // 7: weights_mcast_num_cores
+                weights_mcast_sender_semaphore_id,          // 8: weights_mcast_sender_semaphore_id
+                weights_mcast_receiver_semaphore_id         // 9: weights_mcast_receiver_semaphore_id
             };
-            SetRuntimeArgs(program, reader0_kernel, receiver_core, receiver_args);
-        }
+            SetRuntimeArgs(program, reader0_kernel, sender_core, sender_args);
 
-        log_debug(
-            tt::LogOp, "Weight multicast: sender at ({}, {}), {} receivers", sender_core.x, sender_core.y, num_dests);
+            // Set up runtime args for receiver cores
+            for (uint32_t i = 1; i < num_cores; i++) {
+                CoreCoord receiver_core = all_cores[i];
+                std::vector<uint32_t> receiver_args = {
+                    static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr_dram_base (unused but consistent)
+                    0,                                          // 1: is_sender = false
+                    sender_core_physical.x,                     // 2: weights_mcast_sender_noc_x
+                    sender_core_physical.y,                     // 3: weights_mcast_sender_noc_y
+                    weights_mcast_sender_semaphore_id,          // 4: weights_mcast_sender_semaphore_id
+                    weights_mcast_receiver_semaphore_id         // 5: weights_mcast_receiver_semaphore_id
+                };
+                SetRuntimeArgs(program, reader0_kernel, receiver_core, receiver_args);
+            }
+
+            log_debug(
+                tt::LogOp,
+                "Weight multicast: sender at ({}, {}), {} receivers",
+                sender_core.x,
+                sender_core.y,
+                num_dests);
+        }
     }
 
     auto reader1_config = tt::tt_metal::DataMovementConfig{
@@ -736,17 +803,13 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t total_out_nhw = ashape[0] * out_h * out_w;
     const uint32_t rectangular_x = is_block_sharded ? parallel_config.grid.ranges()[0].end_coord.x + 1
                                                     : parallel_config.grid.bounding_box().grid_size().x;
-    const bool is_width_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
+    // Note: is_width_sharded already declared at line 608
     log_info(
         tt::LogOp,
         "Depthwise conv2d sharding mode: height={}, block={}, width={}",
         !is_block_sharded && !is_width_sharded,
         is_block_sharded,
         is_width_sharded);
-
-    if (is_width_sharded) {
-        TT_FATAL(false, "WIDTH_SHARDED depthwise conv2d not yet implemented - Step 3 checkpoint");
-    }
 
     for (uint32_t core_i = 0; core_i < num_cores; core_i++) {
         const uint32_t core_x_i = core_i % rectangular_x;
