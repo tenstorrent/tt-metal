@@ -141,6 +141,9 @@ RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v$
     rm /tmp/mold.tar.gz && \
     mold --version
 
+# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
+ENV PATH="/usr/local/bin:$PATH"
+
 # IWYU could be useful to developers
 # Not currently building, and unclear whether this is used; can put it back in if needed
 # RUN mkdir -p /tmp/iwyu \
