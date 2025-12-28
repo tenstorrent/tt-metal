@@ -93,6 +93,83 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
     endif()
 endif()
 
+# Print the linker being used and its version
+if(CMAKE_LINKER_TYPE)
+    message(STATUS "Linker type: ${CMAKE_LINKER_TYPE}")
+    if(CMAKE_LINKER_TYPE STREQUAL "MOLD")
+        find_program(_LINKER_EXE ld.mold)
+        if(_LINKER_EXE)
+            execute_process(
+                COMMAND
+                    ${_LINKER_EXE} --version
+                OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            if(_LINKER_VERSION_OUTPUT MATCHES "mold ([0-9.]+)")
+                message(STATUS "Linker version: ${CMAKE_MATCH_1}")
+            else()
+                message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+            endif()
+        endif()
+    elseif(CMAKE_LINKER_TYPE STREQUAL "LLD")
+        find_program(_LINKER_EXE ld.lld)
+        if(_LINKER_EXE)
+            execute_process(
+                COMMAND
+                    ${_LINKER_EXE} --version
+                OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            if(_LINKER_VERSION_OUTPUT MATCHES "LLD ([0-9.]+)")
+                message(STATUS "Linker version: ${CMAKE_MATCH_1}")
+            else()
+                message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+            endif()
+        endif()
+    elseif(CMAKE_LINKER_TYPE STREQUAL "GNU" OR CMAKE_LINKER_TYPE STREQUAL "BFD")
+        find_program(_LINKER_EXE ld)
+        if(_LINKER_EXE)
+            execute_process(
+                COMMAND
+                    ${_LINKER_EXE} --version
+                OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+            string(REGEX MATCH "[0-9]+\\.[0-9]+[0-9.]*" _LINKER_VERSION "${_LINKER_VERSION_OUTPUT}")
+            if(_LINKER_VERSION)
+                message(STATUS "Linker version: ${_LINKER_VERSION}")
+            else()
+                message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+            endif()
+        endif()
+    endif()
+    unset(_LINKER_EXE CACHE)
+    unset(_LINKER_VERSION_OUTPUT)
+else()
+    message(STATUS "Linker type: default (system ld)")
+    find_program(_LINKER_EXE ld)
+    if(_LINKER_EXE)
+        execute_process(
+            COMMAND
+                ${_LINKER_EXE} --version
+            OUTPUT_VARIABLE _LINKER_VERSION_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        string(REGEX MATCH "[0-9]+\\.[0-9]+[0-9.]*" _LINKER_VERSION "${_LINKER_VERSION_OUTPUT}")
+        if(_LINKER_VERSION)
+            message(STATUS "Linker version: ${_LINKER_VERSION}")
+        else()
+            message(STATUS "Linker version: ${_LINKER_VERSION_OUTPUT}")
+        endif()
+    endif()
+    unset(_LINKER_EXE CACHE)
+    unset(_LINKER_VERSION_OUTPUT)
+endif()
+
 set(TT_LTO_ENABLED OFF)
 
 if(TT_ENABLE_LTO)
