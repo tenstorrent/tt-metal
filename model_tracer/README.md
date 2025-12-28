@@ -46,7 +46,7 @@ These traced configurations provide real-world operation patterns from productio
 |------|---------|
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
 | **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
-| **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file` |
+| **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name>` |
 | **Run single sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite-name model_traced --vector-source file --file-path <vector_file> --result-dest results_export` |
 
 ### Key Files
@@ -157,7 +157,6 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
   --module-name model_traced.pad_model_traced \
-  --dump-file
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \

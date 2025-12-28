@@ -67,10 +67,12 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                     # Detection: Look for pattern like {"argN": "[{" or {"argN": "{{"
                     # Solution: Find the string value and properly escape all internal quotes
 
-                    match = re.match(r'\{"arg\d+"\s*:\s*"(.+)"\}$', fixed_json_str)
+                    # Use non-greedy quantifier to avoid over-matching with nested quotes
+                    match = re.match(r'\{"(arg\d+)"\s*:\s*"(.+?)"\}$', fixed_json_str)
                     if match:
-                        # Extract the problematic value
-                        inner_value = match.group(1)
+                        # Extract the key and problematic value
+                        arg_key = match.group(1)
+                        inner_value = match.group(2)
 
                         # Check if it looks like unescaped JSON (starts with [ or {)
                         if inner_value.startswith("[") or inner_value.startswith("{"):
@@ -92,10 +94,31 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                             # Now try to parse it
                             try:
                                 parsed_inner = json_module.loads(inner_fixed)
-                                # Success! Reconstruct the outer dict with parsed inner value
-                                result = {match.string[2 : match.string.index('":')].strip('"'): parsed_inner}
+
+                                # Success! Now fix any remaining string values in the parsed structure
+                                # (e.g., if tile_shape/face_shape are still strings)
+                                def fix_string_arrays(obj):
+                                    """Fix string values that should be arrays like '{32, 32}' -> [32, 32]"""
+                                    if isinstance(obj, dict):
+                                        for key, value in obj.items():
+                                            if isinstance(value, str):
+                                                # Check if it's a brace-delimited number pair
+                                                match_braces = re.match(r"^\{(\d+),\s*(\d+)\}$", value)
+                                                if match_braces:
+                                                    obj[key] = [int(match_braces.group(1)), int(match_braces.group(2))]
+                                                else:
+                                                    obj[key] = value
+                                            elif isinstance(value, (dict, list)):
+                                                obj[key] = fix_string_arrays(value)
+                                    elif isinstance(obj, list):
+                                        return [fix_string_arrays(item) for item in obj]
+                                    return obj
+
+                                parsed_inner = fix_string_arrays(parsed_inner)
+                                # Reconstruct the outer dict with parsed inner value (using captured key)
+                                result = {arg_key: parsed_inner}
                                 return fix_unparsed_elements_standalone(result, depth + 1, max_depth)
-                            except json_module.JSONDecodeError:
+                            except (json_module.JSONDecodeError, ValueError, TypeError):
                                 # If parsing fails, continue to other fixing strategies
                                 pass
 
@@ -123,13 +146,13 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                                         # Try to parse the fixed inner JSON
                                         parsed_inner = json_module.loads(inner_json)
                                         first_parse[key] = parsed_inner
-                                    except:
+                                    except (json_module.JSONDecodeError, ValueError, TypeError):
                                         # If inner parsing fails, keep as string
                                         pass
 
                             # Recursively fix any nested UnparsedElements
                             return fix_unparsed_elements_standalone(first_parse, depth + 1, max_depth)
-                    except:
+                    except (json_module.JSONDecodeError, ValueError, TypeError):
                         # First parse failed, continue with regex fixes
                         pass
 

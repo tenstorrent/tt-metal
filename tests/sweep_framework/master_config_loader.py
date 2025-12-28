@@ -2213,8 +2213,15 @@ class MasterConfigLoader:
                             # Extract vector of tensors from arg0
                             if "arg0" in arg:
                                 arg0_data = arg["arg0"]
+
+                                # Check if it's a list (which it should be after our parsing fix)
+                                if isinstance(arg0_data, list):
+                                    if len(arg0_data) > 0 and isinstance(arg0_data[0], dict):
+                                        if "tensor_spec" in arg0_data[0]:
+                                            tensor_configs = arg0_data
+
                                 # Check if it's a string (simplified representation)
-                                if (
+                                elif (
                                     isinstance(arg0_data, str)
                                     and arg0_data.startswith("[{")
                                     and "tensor_spec" in arg0_data
