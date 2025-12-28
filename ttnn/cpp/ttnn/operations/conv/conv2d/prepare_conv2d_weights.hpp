@@ -80,6 +80,10 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
 // Converts 2D depthwise convolution weights to layout that preserves output channels
 Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weight_tensor, DataType output_dtype);
 
+// Width sharded depthwise weight preparation - creates per-shard weights
+Tensor convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype);
+
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,

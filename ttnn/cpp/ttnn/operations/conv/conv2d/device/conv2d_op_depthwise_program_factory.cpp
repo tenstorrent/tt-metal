@@ -737,6 +737,16 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t rectangular_x = is_block_sharded ? parallel_config.grid.ranges()[0].end_coord.x + 1
                                                     : parallel_config.grid.bounding_box().grid_size().x;
     const bool is_width_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
+    log_info(
+        tt::LogOp,
+        "Depthwise conv2d sharding mode: height={}, block={}, width={}",
+        !is_block_sharded && !is_width_sharded,
+        is_block_sharded,
+        is_width_sharded);
+
+    if (is_width_sharded) {
+        TT_FATAL(false, "WIDTH_SHARDED depthwise conv2d not yet implemented - Step 3 checkpoint");
+    }
 
     for (uint32_t core_i = 0; core_i < num_cores; core_i++) {
         const uint32_t core_x_i = core_i % rectangular_x;

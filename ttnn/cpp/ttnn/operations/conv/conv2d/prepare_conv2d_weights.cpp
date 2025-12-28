@@ -1235,6 +1235,19 @@ Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weig
         conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
 }
 
+/*
+Width sharded depthwise weight preparation.
+Creates per-shard weights with face-by-face layout.
+*/
+Tensor convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
+    log_info(tt::LogOp, "Width sharded weight prep: num_shards={}", num_channel_shards);
+
+    // For now, just call the existing function (will produce wrong results)
+    // This is a checkpoint to verify the function is being called
+    return convert_conv_weight_tensor_to_2d_depthwise_layout(conv_weight_tensor, output_dtype);
+}
+
 static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::array<uint32_t, 2> stride) {
     auto w_shape = conv_weight_tensor.padded_shape();
     uint32_t out_channels = w_shape[0];
@@ -1850,7 +1863,22 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 original_weights_shape[2],
                 original_weights_window_w);
 
-            weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout(weight_tensor_, weight_tensor_.dtype());
+            // Check if WIDTH_SHARDED mode - needs per-core weight slices
+            TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+            uint32_t num_cores = 1;
+            if (params.input_parallel_config.has_value()) {
+                shard_layout = params.input_parallel_config->shard_scheme;
+                num_cores = params.input_parallel_config->grid.num_cores();
+            }
+
+            if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                log_info(tt::LogOp, "Using WIDTH_SHARDED depthwise weight prep with {} cores", num_cores);
+                weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
+                    weight_tensor_, num_cores, weight_tensor_.dtype());
+            } else {
+                weight_tensor_ =
+                    convert_conv_weight_tensor_to_2d_depthwise_layout(weight_tensor_, weight_tensor_.dtype());
+            }
             is_2d_depthwise_layout = true;
 
         } else {
