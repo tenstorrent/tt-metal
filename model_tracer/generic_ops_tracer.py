@@ -58,7 +58,82 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                     import json as json_module
 
                     fixed_json_str = element_info
-                    # Apply regex fixes for common C++ formatting issues
+
+                    # STEP 1: Fix improperly escaped nested JSON strings
+                    # Pattern: {"arg0": "[{\"key\":...}" should be {"arg0": "[{\\\"key\":...}"}
+                    # This happens when the value is a JSON-stringified array/object
+                    # The problem: after "arg0": ", the quotes in the nested JSON are not escaped
+                    #
+                    # Detection: Look for pattern like {"argN": "[{" or {"argN": "{{"
+                    # Solution: Find the string value and properly escape all internal quotes
+
+                    match = re.match(r'\{"arg\d+"\s*:\s*"(.+)"\}$', fixed_json_str)
+                    if match:
+                        # Extract the problematic value
+                        inner_value = match.group(1)
+
+                        # Check if it looks like unescaped JSON (starts with [ or {)
+                        if inner_value.startswith("[") or inner_value.startswith("{"):
+                            # This is the problematic case - the inner JSON is not properly escaped
+                            # We need to:
+                            # 1. Fix any C++ formatting issues (like "{32, 32}" -> [32, 32])
+                            # 2. Then parse it as JSON
+
+                            # Apply C++ formatting fixes first
+                            inner_fixed = inner_value
+                            # Fix tile_shape and face_shape patterns: "{32, 32}" -> [32, 32]
+                            inner_fixed = re.sub(
+                                r'"tile_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"tile_shape":[\1, \2]', inner_fixed
+                            )
+                            inner_fixed = re.sub(
+                                r'"face_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"face_shape":[\1, \2]', inner_fixed
+                            )
+
+                            # Now try to parse it
+                            try:
+                                parsed_inner = json_module.loads(inner_fixed)
+                                # Success! Reconstruct the outer dict with parsed inner value
+                                result = {match.string[2 : match.string.index('":')].strip('"'): parsed_inner}
+                                return fix_unparsed_elements_standalone(result, depth + 1, max_depth)
+                            except json_module.JSONDecodeError:
+                                # If parsing fails, continue to other fixing strategies
+                                pass
+
+                    # STEP 2: Try normal JSON parsing (in case it's already valid)
+                    try:
+                        first_parse = json_module.loads(fixed_json_str)
+                        if isinstance(first_parse, dict):
+                            # Check if any values are stringified JSON (start with [ or {)
+                            for key, value in first_parse.items():
+                                if isinstance(value, str) and (value.startswith("[") or value.startswith("{")):
+                                    # Try to parse the inner JSON string with fixes
+                                    inner_json = value
+                                    # Apply regex fixes to the inner string
+                                    inner_json = re.sub(r':\s*"\\{(\d+),\s*(\d+)\\}"', r":[\1, \2]", inner_json)
+                                    inner_json = re.sub(r'"(\w+)":(\d+),(\d+)', r'"\1":[\2,\3]', inner_json)
+                                    inner_json = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', inner_json)
+                                    inner_json = re.sub(
+                                        r'"tile_shape":"\\{(\d+),\s*(\d+)\\}"', r'"tile_shape":[\1, \2]', inner_json
+                                    )
+                                    inner_json = re.sub(
+                                        r'"face_shape":"\\{(\d+),\s*(\d+)\\}"', r'"face_shape":[\1, \2]', inner_json
+                                    )
+
+                                    try:
+                                        # Try to parse the fixed inner JSON
+                                        parsed_inner = json_module.loads(inner_json)
+                                        first_parse[key] = parsed_inner
+                                    except:
+                                        # If inner parsing fails, keep as string
+                                        pass
+
+                            # Recursively fix any nested UnparsedElements
+                            return fix_unparsed_elements_standalone(first_parse, depth + 1, max_depth)
+                    except:
+                        # First parse failed, continue with regex fixes
+                        pass
+
+                    # STEP 3: Apply regex fixes for common C++ formatting issues
                     # Fix patterns like "tile_shape":"{32, 32}" -> "tile_shape":[32, 32]
                     fixed_json_str = re.sub(r':\s*"\{(\d+),\s*(\d+)\}"', r":[\1, \2]", fixed_json_str)
                     # Fix patterns like "compute_grid":8,8 -> "compute_grid":[8,8]
