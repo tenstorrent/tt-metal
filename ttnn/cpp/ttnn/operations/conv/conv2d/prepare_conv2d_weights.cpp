@@ -1238,14 +1238,170 @@ Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weig
 /*
 Width sharded depthwise weight preparation.
 Creates per-shard weights with face-by-face layout.
+
+For width sharded conv, each core processes a different subset of channels.
+This function creates a weight tensor where each shard is independently laid out
+in face-by-face format, and shards are concatenated: [Shard0 | Shard1 | ... | ShardN-1]
+
+Example: 64 channels, 2 cores, 3x3 kernel
+- Each core gets 32 channels
+- Shard 0: channels 0-31, face-by-face layout -> [32, 32, 1, 1]
+- Shard 1: channels 32-63, face-by-face layout -> [32, 32, 1, 1]
+- Output: [64, 32, 1, 1] (shards concatenated along channel dim)
 */
+template <typename T>
+static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
+    const Tensor& conv_weight_tensor,
+    const ttnn::Shape& original_weight_shape,
+    uint32_t num_channel_shards,
+    DataType output_dtype) {
+    uint32_t out_channels = original_weight_shape[0];
+    uint32_t kernel_h = original_weight_shape[2];
+    uint32_t kernel_w = original_weight_shape[3];
+    uint32_t total_kernel_positions = kernel_h * kernel_w;
+
+    // Per-shard dimensions
+    uint32_t channels_per_shard = out_channels / num_channel_shards;
+
+    constexpr uint32_t TILE_SIZE = 32;
+    constexpr uint32_t FACE_SIZE = 16;
+
+    // Pad per-shard to tile boundaries
+    uint32_t padded_channels_per_shard = ((channels_per_shard + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    uint32_t padded_kernel_positions = ((total_kernel_positions + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+
+    // Total output: all shards concatenated along channel dimension
+    uint32_t total_padded_channels = padded_channels_per_shard * num_channel_shards;
+    ttnn::Shape output_shape{total_padded_channels, padded_kernel_positions, 1, 1};
+
+    log_info(
+        tt::LogOp,
+        "Width sharded weight layout: channels={}, shards={}, ch_per_shard={}, padded_ch_per_shard={}, "
+        "kernel_pos={}, padded_kernel_pos={}",
+        out_channels,
+        num_channel_shards,
+        channels_per_shard,
+        padded_channels_per_shard,
+        total_kernel_positions,
+        padded_kernel_positions);
+
+    auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
+        auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+        auto output_buffer = std::vector<T>(output_shape.volume(), static_cast<T>(0));
+
+        uint32_t data_rows_per_stick = (channels_per_shard + FACE_SIZE - 1) / FACE_SIZE;
+        uint32_t rows_per_stick_padded = (padded_channels_per_shard + FACE_SIZE - 1) / FACE_SIZE;
+        uint32_t shard_size = padded_channels_per_shard * padded_kernel_positions;
+
+        // Process each shard independently with face-by-face filling
+        for (uint32_t shard_idx = 0; shard_idx < num_channel_shards; shard_idx++) {
+            uint32_t channel_start = shard_idx * channels_per_shard;
+            uint32_t shard_offset = shard_idx * shard_size;
+            uint32_t current_absolute_row = 0;
+
+            for (uint32_t kernel_pos = 0; kernel_pos < total_kernel_positions; kernel_pos++) {
+                uint32_t kh = kernel_pos / kernel_w;
+                uint32_t kw = kernel_pos % kernel_w;
+
+                for (uint32_t stick_row = 0; stick_row < data_rows_per_stick; stick_row++) {
+                    uint32_t absolute_row = current_absolute_row + stick_row;
+                    uint32_t face_idx = absolute_row / FACE_SIZE;
+                    uint32_t row_in_face = absolute_row % FACE_SIZE;
+
+                    uint32_t tile_idx = face_idx / 4;
+                    uint32_t face_in_tile = face_idx % 4;
+
+                    // Face layout in 32x32 tile: Face0 (0-15,0-15), Face1 (0-15,16-31),
+                    //                            Face2 (16-31,0-15), Face3 (16-31,16-31)
+                    uint32_t face_row_offset = (face_in_tile / 2) * FACE_SIZE;
+                    uint32_t face_col_offset = (face_in_tile % 2) * FACE_SIZE;
+                    uint32_t target_row = face_row_offset + row_in_face;
+
+                    for (uint32_t col = 0; col < FACE_SIZE; col++) {
+                        uint32_t local_ch = stick_row * FACE_SIZE + col;
+                        if (local_ch >= channels_per_shard) {
+                            break;
+                        }
+
+                        uint32_t global_ch = channel_start + local_ch;
+                        if (global_ch >= out_channels) {
+                            break;
+                        }
+
+                        // Get input value from [ch, 0, kh, kw]
+                        auto input_idx = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{(int)global_ch, 0, (int)kh, (int)kw},
+                            compute_strides(original_weight_shape));
+                        T value = input_buffer[input_idx];
+
+                        // Place in shard's face-by-face layout
+                        uint32_t target_col = tile_idx * TILE_SIZE + face_col_offset + col;
+                        uint32_t output_idx = shard_offset + target_row * padded_channels_per_shard + target_col;
+
+                        if (output_idx < output_buffer.size()) {
+                            output_buffer[output_idx] = value;
+                        }
+                    }
+                }
+                current_absolute_row += rows_per_stick_padded;
+            }
+        }
+
+        // Debug print: dump weight layout for each shard
+        for (uint32_t shard_idx = 0; shard_idx < num_channel_shards; shard_idx++) {
+            uint32_t shard_offset = shard_idx * shard_size;
+            log_info(
+                tt::LogOp,
+                "=== Width Sharded Weight Shard {} ({}x{}) ===",
+                shard_idx,
+                padded_kernel_positions,
+                padded_channels_per_shard);
+            for (uint32_t row = 0; row < padded_kernel_positions && row < 32; row++) {
+                std::string row_str = "";
+                for (uint32_t col = 0; col < padded_channels_per_shard && col < 32; col++) {
+                    uint32_t idx = shard_offset + row * padded_channels_per_shard + col;
+                    if (idx < output_buffer.size()) {
+                        row_str += fmt::format("{:6.2f} ", static_cast<float>(output_buffer[idx]));
+                    }
+                }
+                log_info(tt::LogOp, "Row {:2d}: {}", row, row_str);
+            }
+        }
+
+        return tt::tt_metal::HostBuffer(std::move(output_buffer));
+    };
+
+    const TensorSpec output_spec(
+        output_shape,
+        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
+}
+
 Tensor convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
     const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
-    log_info(tt::LogOp, "Width sharded weight prep: num_shards={}", num_channel_shards);
+    const auto& original_shape = conv_weight_tensor.logical_shape();
 
-    // For now, just call the existing function (will produce wrong results)
-    // This is a checkpoint to verify the function is being called
-    return convert_conv_weight_tensor_to_2d_depthwise_layout(conv_weight_tensor, output_dtype);
+    log_info(
+        tt::LogOp,
+        "Width sharded weight prep: num_shards={}, weight_shape=[{},{},{},{}]",
+        num_channel_shards,
+        original_shape[0],
+        original_shape[1],
+        original_shape[2],
+        original_shape[3]);
+
+    const static std::
+        unordered_map<DataType, std::function<Tensor(const Tensor&, const ttnn::Shape&, uint32_t, DataType)>>
+            layout_map = {
+                {DataType::BFLOAT16, &conv_2d_depthwise_weight_layout_width_sharded_helper<bfloat16>},
+                {DataType::FLOAT32, &conv_2d_depthwise_weight_layout_width_sharded_helper<float>},
+            };
+
+    output_dtype = ((output_dtype == DataType::BFLOAT8_B) || (output_dtype == DataType::BFLOAT4_B)) ? DataType::FLOAT32
+                                                                                                    : output_dtype;
+
+    return layout_map.at(conv_weight_tensor.dtype())(
+        conv_weight_tensor, original_shape, num_channel_shards, output_dtype);
 }
 
 static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::array<uint32_t, 2> stride) {
