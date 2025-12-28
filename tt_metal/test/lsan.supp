@@ -10,14 +10,6 @@ leak:openmpi
 leak:libmpi
 leak:ompi_
 
-# The RISC-V cross-compiler toolchain (sfpi) is invoked at runtime to build
-# firmware. When LD_PRELOAD injects ASan into these subprocesses, LeakSanitizer
-# reports benign "leaks" from the compiler itself (compilers often skip freeing
-# memory at exit since the OS reclaims it). Suppress these false positives.
-leak:cc1plus
-leak:cc1
-leak:sfpi
-
 # Python and pybind11 don't free all memory at exit since the OS reclaims it.
 # These are not real leaks - just normal interpreter/binding behavior.
 leak:PyObject_Malloc
