@@ -79,6 +79,16 @@ RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
+# Install mold linker for faster linking
+ARG MOLD_VERSION=2.40.4
+RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
+    tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
+    rm /tmp/mold.tar.gz && \
+    mold --version
+
+# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
+ENV PATH="/usr/local/bin:$PATH"
+
 #############################################################
 
 FROM ci-build AS ci-test
@@ -133,16 +143,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Install mold linker for faster linking
-ARG MOLD_VERSION=2.40.4
-RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
-    tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
-    rm /tmp/mold.tar.gz && \
-    mold --version
-
-# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PATH="/usr/local/bin:$PATH"
 
 # IWYU could be useful to developers
 # Not currently building, and unclear whether this is used; can put it back in if needed
