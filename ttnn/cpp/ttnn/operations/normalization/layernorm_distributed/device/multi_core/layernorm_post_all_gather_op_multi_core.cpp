@@ -103,9 +103,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
-
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -178,72 +175,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     out0_cb: (x - mean(x)) * 1/sqrt(var + epsilon) * gamma + beta # RMSNorm doesn't include beta
 
     */
-    uint32_t cb_length = Wt;
-
-    const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if ((!(use_2d_core_grid.has_value() && *use_2d_core_grid)) &&
-        (cb_length * in_single_tile_size > available_L1 * 0.95)) {
-        cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
-    }
-    const uint32_t in0_tiles = cb_length;
-    const uint32_t in1_tiles = stats_tiles_cols;
-    const uint32_t in2_tiles = cb_length;
-    const uint32_t in3_tiles = cb_length;
-    const uint32_t in4_tiles = 1;  // epsilon
-    const uint32_t in5_tiles = 1;  // reduce scalar
-
-    const uint32_t intermed0_tiles = tile_cols_per_device;
-    const uint32_t intermed1_tiles = 1;
-    const uint32_t intermed2_tiles = 1;
-    const uint32_t intermed3_tiles = 1;
-    const uint32_t intermed4_tiles = 1;
-    const uint32_t intermed5_tiles = cb_length;
-    const uint32_t intermed6_tiles = cb_length;
-    const uint32_t intermed7_tiles = cb_length;
-    const uint32_t out0_tiles = cb_length;
-
-    TT_FATAL(
-        W <= TILE_WIDTH * in0_tiles,
-        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
-        W,
-        TILE_WIDTH,
-        in0_tiles);
-    TT_FATAL(
-        in0_tiles % block_size == 0,
-        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in0_tiles,
-        block_size);
-    TT_FATAL(
-        in2_tiles % block_size == 0,
-        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in2_tiles,
-        block_size);
-    TT_FATAL(
-        in3_tiles % block_size == 0,
-        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in3_tiles,
-        block_size);
-    TT_FATAL(
-        out0_tiles % block_size == 0,
-        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        out0_tiles,
-        block_size);
-    TT_FATAL(
-        intermed5_tiles % block_size == 0,
-        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed5_tiles,
-        block_size);
-    TT_FATAL(
-        intermed6_tiles % block_size == 0,
-        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed6_tiles,
-        block_size);
-    TT_FATAL(
-        intermed7_tiles % block_size == 0,
-        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed7_tiles,
-        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_cores_y = grid_size.y;
@@ -307,6 +238,32 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
+    uint32_t block_size = fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                                           : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
+    uint32_t cb_length = tiles_per_core_y;
+
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    if ((!(use_2d_core_grid.has_value() && *use_2d_core_grid)) &&
+        (cb_length * in_single_tile_size > available_L1 * 0.95)) {
+        cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
+    }
+    const uint32_t in0_tiles = cb_length;
+    const uint32_t in1_tiles = stats_tiles_cols;
+    const uint32_t in2_tiles = cb_length;
+    const uint32_t in3_tiles = cb_length;
+    const uint32_t in4_tiles = 1;  // epsilon
+    const uint32_t in5_tiles = 1;  // reduce scalar
+
+    const uint32_t intermed0_tiles = tile_cols_per_device;
+    const uint32_t intermed1_tiles = 1;
+    const uint32_t intermed2_tiles = 1;
+    const uint32_t intermed3_tiles = 1;
+    const uint32_t intermed4_tiles = 1;
+    const uint32_t intermed5_tiles = cb_length;
+    const uint32_t intermed6_tiles = cb_length;
+    const uint32_t intermed7_tiles = cb_length;
+    const uint32_t out0_tiles = cb_length;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     ////////////////////////////////////////////////////////////////////////////
@@ -367,7 +324,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
