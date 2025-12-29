@@ -219,24 +219,6 @@ StochasticRoundingResult run_stochastic_rounding(
     };
 }
 
-/// @brief Test stochastic rounding correctness (validity only).
-/// @param cq - Mesh command queue
-/// @param test_config - Test configuration
-/// @return true if all values round correctly to valid BF16 values
-bool run_stochastic_rounding_test(distributed::MeshCommandQueue& cq, const StochasticRoundingConfig& test_config) {
-    auto result = run_stochastic_rounding(cq, test_config);
-    bool pass = (result.count_rounded_down + result.count_rounded_up == result.total);
-    if (!pass) {
-        log_error(
-            tt::LogTest,
-            "Stochastic rounding failed: rounded_up({}) + rounded_down({}) != total({})",
-            result.count_rounded_up,
-            result.count_rounded_down,
-            result.total);
-    }
-    return pass;
-}
-
 }  // namespace unit_tests::compute::stochastic_rounding
 
 using namespace unit_tests::compute::stochastic_rounding;
@@ -254,7 +236,8 @@ TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingCorrectness)
         test_config.seed,
         test_config.base_value);
 
-    EXPECT_TRUE(run_stochastic_rounding_test(devices_.at(0)->mesh_command_queue(), test_config));
+    auto result = run_stochastic_rounding(devices_.at(0)->mesh_command_queue(), test_config);
+    EXPECT_EQ(result.count_rounded_down + result.count_rounded_up, result.total);
 }
 
 INSTANTIATE_TEST_SUITE_P(
