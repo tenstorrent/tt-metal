@@ -9,7 +9,6 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 
 #include "generic_op_device_operation.hpp"
-// #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::generic {
 using namespace tt::tt_metal;
@@ -23,20 +22,7 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, mesh_shared_variables_t> mesh_shared_variables;
 
-    distributed::MeshDevice* mesh_device = tensor_args.io_tensors.front().device();
-    auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-
-    // std::vector<GlobalSemaphore> global_semaphores;
-    // global_semaphores.reserve(operation_attributes.global_semaphores.size());
-    // for (const auto& sem_desc : operation_attributes.global_semaphores) {
-    //     global_semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(
-    //         mesh_device, sem_desc.cores, sem_desc.initial_value, sem_desc.buffer_type));
-    // }
-    // if (!global_semaphores.empty()) {
-    //     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {subdevice_id};
-    //     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevice_ids);
-    // }
+    // distributed::MeshDevice* mesh_device = tensor_args.io_tensors.front().device();
 
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
         auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
@@ -48,24 +34,8 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
 
 GenericOpDeviceOperation::GenericMeshProgram::cached_program_t GenericOpDeviceOperation::GenericMeshProgram::create_at(
     const tt::tt_metal::ProgramDescriptor& program_descriptor,
-    // const std::vector<tt::tt_metal::GlobalSemaphore>& global_semaphores,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/) {
-    // Make a copy and resolve GlobalSemaphore refs in-place
-    // ProgramDescriptor resolved_descriptor = program_descriptor;
-    // for (auto& kernel : resolved_descriptor.kernels) {
-    //     for (auto& row : kernel.runtime_args) {
-    //         for (auto& core_args : row) {
-    //             if (core_args.needs_resolution()) {
-    //                 core_args.resolve(global_semaphores);
-    //             }
-    //         }
-    //     }
-    //     if (kernel.common_runtime_args.needs_resolution()) {
-    //         kernel.common_runtime_args.resolve(global_semaphores);
-    //     }
-    // }
-
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     Program program{program_descriptor};
     shared_variables_t shared_vars;
 
