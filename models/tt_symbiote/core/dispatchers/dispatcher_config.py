@@ -94,6 +94,14 @@ def _auto_register_dispatchers():
     except ImportError:
         pass
 
+    # Debug dispatcher with verbose logging
+    try:
+        from models.tt_symbiote.core.dispatchers import cpu_dispatcher
+
+        register_dispatcher("cpu", cpu_dispatcher)
+    except ImportError:
+        pass
+
     # Add more auto-registrations here as new dispatchers are created
     # try:
     #     from models.tt_symbiote.core.dispatchers import optimized_dispatcher
