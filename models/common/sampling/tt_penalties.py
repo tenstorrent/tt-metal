@@ -88,8 +88,19 @@ class TTPenalties(LightweightModule):
         num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
         self.num_devices = num_devices
         self.needs_padding = False
-        if self.vocab_size == args.vocab_size:
-            # need to add at least one tile padding for the histogram to handle padded tokens
+
+        # ARCEE FIX: Ensure vocab_size is tile-aligned PER DEVICE for arcee models
+        # Even if padded_vocab_size is set, it might not be tile-aligned per device after sharding
+        is_arcee = "AFM" in args.model_name or "arcee" in args.model_name.lower()
+        if is_arcee:
+            tile_width = 32
+            per_device_size = self.vocab_size // num_devices
+            if per_device_size % tile_width != 0:
+                padding = tile_width - (per_device_size % tile_width)
+                self.vocab_size += padding * num_devices
+                self.needs_padding = True
+        elif self.vocab_size == args.vocab_size:
+            # Original logic for non-arcee models
             tile_width = 32
             padding = tile_width - ((self.vocab_size // num_devices) % tile_width)
             self.vocab_size += padding * num_devices
@@ -116,10 +127,13 @@ class TTPenalties(LightweightModule):
         self.inverse_repetition_penalties = self._alloc_bf16_buffer()
 
         self.slice_start = ttnn.from_torch(torch.tensor([0], dtype=torch.int32), device=self.mesh_device)
-        end_tensor = torch.tensor(
+        end_tensor_2d = torch.tensor(
             [[31] * num_devices, [(n + 1) * (self.vocab_size // num_devices) - 1 for n in range(num_devices)]],
             dtype=torch.int32,
-        )[0, :]
+        )
+        # ARCEE FIX: Arcee needs row 1 (vocab end indices), other models use row 0
+        is_arcee = "AFM" in args.model_name or "arcee" in args.model_name.lower()
+        end_tensor = end_tensor_2d[1, :] if is_arcee else end_tensor_2d[0, :]
         self.slice_end = ttnn.from_torch(
             end_tensor,
             device=self.mesh_device,

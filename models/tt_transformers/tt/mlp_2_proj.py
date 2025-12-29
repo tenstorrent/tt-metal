@@ -11,7 +11,12 @@ from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
-class MLP(LightweightModule):
+class MLP2Proj(LightweightModule):
+    """
+    2-Projection MLP for Arcee AFM models.
+    Uses only up (w3) and down (w2) projections, without gate projection (w1).
+    """
+
     def __init__(
         self,
         mesh_device,
@@ -79,9 +84,8 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2
         )
 
-        self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
+        # AFM 2-projection MLP: only up (w3) and down (w2) projections
+        self.w1 = None
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
@@ -92,10 +96,10 @@ class MLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
-        w1 -> gate_proj
+        2-projection MLP forward pass:
         w2 -> down_proj
         w3 -> up_proj
-        HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        HF reference: self.down_proj(self.act_fn(self.up_proj(x)))
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
@@ -109,34 +113,23 @@ class MLP(LightweightModule):
 
         if mode == "decode":  # Sharded config
             if TG:  # TODO: Fix this when TG supports DRAM sharded matmuls
-                pc_1 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
-                pc_2 = self.model_config["FF2_TG_PROGCFG"] if self.dim >= 4096 else None
                 pc_3 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
+                pc_2 = self.model_config["FF2_TG_PROGCFG"] if self.dim >= 4096 else None
             else:
-                pc_1 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
-                pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
+                pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
         else:  # Update the program configs based for prefill
             if seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
                 # Reshape input to to fit on device and parallelize computation
                 x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
-            pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
-            pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
             pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+            pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=memory_config,
-        )
 
+        # Only w3 (up projection) for 2-projection MLP
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -148,6 +141,7 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
+        # Apply activation function
         if self.activation_type == "relu2" or str(self.activation_type).lower() == "relu2":
             relu_out = ttnn.relu(w3_out)
             act_out = ttnn.mul(
@@ -158,29 +152,10 @@ class MLP(LightweightModule):
             act_out = ttnn.unary(w3_out, self.activation_type)
 
         if TG:
-            # if mode == "decode" and self.dim!=8192:
-            #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
-            #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == "prefill":
-                input_mem_cfg = w1_out.memory_config()
+                input_mem_cfg = w3_out.memory_config()
 
                 cluster_axis = 1
-                w1_out = ttnn.experimental.reduce_scatter_minimal_async(
-                    w1_out,
-                    persistent_output_buffers=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=self.args.num_reduce_scatter_links,
-                    cluster_axis=cluster_axis,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
-
                 w3_out = ttnn.experimental.reduce_scatter_minimal_async(
                     w3_out,
                     persistent_output_buffers=None,
@@ -197,16 +172,6 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
-                w1_out = tt_all_reduce(
-                    w1_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
-                )
                 w3_out = tt_all_reduce(
                     w3_out,
                     self.mesh_device,
@@ -218,20 +183,14 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
+        # For 2-projection MLP, w2_in is just the activated w3_out
+        w2_in = act_out
 
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
         ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
             cluster_axis = 1
@@ -266,8 +225,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
-        # if mode == "decode" and not TG:
-        #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
@@ -298,5 +256,4 @@ class MLP(LightweightModule):
                 self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] if TG else self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
 
-        # ttnn.deallocate(w2_out)
         return w2_out_reduced

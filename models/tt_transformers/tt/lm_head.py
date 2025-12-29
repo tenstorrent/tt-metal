@@ -33,14 +33,16 @@ class LMHead(LightweightModule):
         self.num_devices = args.num_devices
 
         # Pad vocab_size to be divisible by 32
-        padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
+        # ARCEE FIX: Use args.padded_vocab_size if set (for consistency with tt_penalties)
+        if self.padded_vocab_size is not None:
+            padded_vocab_size = self.padded_vocab_size
+        else:
+            padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
 
         size_per_device = padded_vocab_size // self.num_devices
 
         self.model_config = args.get_model_config()
 
-        if args.is_galaxy:
-            size_per_device = self.padded_vocab_size // self.num_devices
         num_splits = math.ceil(size_per_device / max_columns_per_device)
 
         split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)

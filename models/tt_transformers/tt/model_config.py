@@ -1580,6 +1580,14 @@ class ModelArgs:
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+
+        # ARCEE FIX: Set padded_vocab_size to match lm_head padding for consistency with tt_penalties
+        # Both lm_head and tt_penalties need to use the same padded_vocab_size
+        if "AFM" in self.model_name or "arcee" in self.model_name.lower():
+            import math
+
+            self.padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
+
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -1875,6 +1883,7 @@ class ModelArgs:
 
         text_module_map = {
             "MLP": "feed_forward",
+            "MLP2Proj": "feed_forward",  # Arcee AFM 2-projection MLP
             "Attention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
