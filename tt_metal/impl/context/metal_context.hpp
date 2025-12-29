@@ -132,7 +132,7 @@ public:
     bool is_coord_in_range(CoreCoord coord, CoreType core_type);
 
     // Hang detection
-    void on_timeout_detected();
+    void on_dispatch_timeout_detected();
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -195,8 +195,8 @@ private:
     std::mutex control_plane_mutex_;
 
     // Mutex to protect timeout detection for thread-safe access
-    std::mutex timeout_detection_mutex_;
-    bool timeout_detection_processed_ = false;
+    std::mutex dispatch_timeout_detection_mutex_;
+    bool dispatch_timeout_detection_processed_ = false;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;

@@ -203,7 +203,7 @@ void MetalContext::initialize(
     Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
 
     // Reset timeout detection state
-    timeout_detection_processed_ = false;
+    dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
@@ -1720,12 +1720,12 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
 }
 
-void MetalContext::on_timeout_detected() {
-    std::lock_guard<std::mutex> lock(timeout_detection_mutex_);
+void MetalContext::on_dispatch_timeout_detected() {
+    std::lock_guard<std::mutex> lock(dispatch_timeout_detection_mutex_);
 
-    if (!timeout_detection_processed_) {
-        timeout_detection_processed_ = true;
-        log_info(tt::LogMetal, "Timeout detected");
+    if (!dispatch_timeout_detection_processed_) {
+        dispatch_timeout_detection_processed_ = true;
+        log_error(tt::LogMetal, "Timeout detected");
         // Serialize Inspector RPC data if enabled
         if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
             log_info(tt::LogMetal, "Serializing Inspector RPC data");
