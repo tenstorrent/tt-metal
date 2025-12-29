@@ -18,7 +18,7 @@ void bind_example_operation(nb::module_& mod) {
         ttnn::composite_example,
         R"doc(composite_example(input_tensor: ttnn.Tensor) -> ttnn.Tensor)doc",
 
-        // Add pybind overloads for the C++ APIs that should be exposed to python
+        // Add nanobind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::composite_example)& self, const ttnn::Tensor& input_tensor) -> ttnn::Tensor {

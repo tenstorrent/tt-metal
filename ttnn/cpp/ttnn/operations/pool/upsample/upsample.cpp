@@ -4,52 +4,76 @@
 
 #include "upsample.hpp"
 #include <algorithm>
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 namespace ttnn::operations::upsample {
-using namespace tt;
-using namespace tt::tt_metal;
 
-static MemoryConfig compute_bilinear_autoshard_memory_config(const ttnn::Tensor& input_tensor) {
-    /*
-    Calculates the sharding spec required for bilinear transform
-    Currently, the operation only supports height sharded input tensors
-    with row major shard orientation
-    */
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto batch_size = input_shape[0];
-    const auto input_h = input_shape[1];
-    const auto input_w = input_shape[2];
-    const auto num_channels = input_shape[3];
-    const auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    const auto memory_layout = TensorMemoryLayout::HEIGHT_SHARDED;
-    const auto buffer_type = BufferType::L1;
+static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_halo_preprocessing(
+    const ttnn::Tensor& input_tensor, int scale_h, int scale_w) {
+    // Create sliding window config for bilinear upsample (fixed 2x2 kernel, 1x1 stride, 1x1x1x1 padding)
+    const tt::tt_metal::Shape& input_shape = input_tensor.logical_shape();
+    const uint32_t batch_size = input_tensor.padded_shape()[0];
+    const uint32_t input_height = input_tensor.padded_shape()[1];
+    const uint32_t input_width = input_tensor.padded_shape()[2];
+    const uint32_t channels = input_shape[3];
+    const uint32_t num_cores_nhw = input_tensor.shard_spec().value().num_cores();
+    const uint32_t num_cores_c = 1;
+
+    sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig{
+        .batch_size = batch_size,
+        .channels = channels,  // IMPORTANT: Add channels for program factory to access
+        .input_hw = {input_height, input_width},
+        .window_hw = {2, 2},        // kernel size
+        .stride_hw = {1, 1},        // stride
+        .padding = {{1, 1, 1, 1}},  // padding (all sides)
+        .dilation_hw = {1, 1},      // dilation
+        .scale_h = scale_h,         // upsampling scale factor height
+        .scale_w = scale_w,         // upsampling scale factor width
+        .num_cores_nhw = num_cores_nhw,
+        .num_cores_c = num_cores_c,
+        .core_range_set = input_tensor.memory_config().shard_spec().value().grid,
+        .snap_to_tile = false,
+        .is_bilinear = true};
+
+    // Reshape input tensor to {1, 1, N*H*W, C}
+    const tt::tt_metal::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    ttnn::Tensor input_tensor_reshaped = ttnn::reshape(input_tensor, new_shape);
+
+    tt::tt_metal::Tensor haloed_tensor = ttnn::halo(
+        input_tensor_reshaped,
+        sliding_window_config,
+        0,      // pad_val
+        false,  // remote_read
+        false,  // transpose_mcast
+        input_tensor_reshaped.memory_config(),
+        false);  // is_out_tiled
+
+    return {haloed_tensor, sliding_window_config};
+}
+
+static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const ttnn::Tensor& input_tensor) {
+    const tt::tt_metal::Shape& input_shape = input_tensor.logical_shape();
+    const tt::tt_metal::CoreCoord compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+
+    const uint32_t total_input_sticks = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
-    const uint32_t max_num_shards = batch_size * input_h * input_w;
-    uint32_t num_shards = std::min(max_num_cores, max_num_shards);
-    while (num_shards > 0) {
-        /*
-        Operation currently requires that each core takes an equal number of input sticks,
-        and that the number of sticks per core is divisible by width, ie every core takes
-        whole rows as input. The below condition ensures that.
-        Maximizing the number of shards under said condition.
-        */
-        if (batch_size * input_h % num_shards == 0) {
-            break;
-        }
-        num_shards--;
-    }
-    const uint32_t num_cores = num_shards;
-    const CoreRangeSet core_range_set = num_cores_to_corerangeset(num_cores, compute_grid_size, true);
-    const uint32_t shard_height = batch_size * input_h * input_w / num_cores;
-    const uint32_t shard_width = num_channels;
-    const auto shard_orientation = ShardOrientation::ROW_MAJOR;
-    const auto shard_spec = ShardSpec(core_range_set, {shard_height, shard_width}, shard_orientation);
-    return MemoryConfig(memory_layout, buffer_type, shard_spec);
+    const uint32_t num_shards = std::min(max_num_cores, total_input_sticks);
+    const uint32_t shard_height = tt::round_up(total_input_sticks, num_shards) / num_shards;
+
+    const tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec(
+        tt::tt_metal::num_cores_to_corerangeset(num_shards, compute_grid_size, true),
+        {shard_height, input_shape[3]},
+        tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    return tt::tt_metal::MemoryConfig(
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
 }
 
 ttnn::Tensor ExecuteUpSample::invoke(
@@ -58,7 +82,7 @@ ttnn::Tensor ExecuteUpSample::invoke(
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
+    tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
     int scale_h = 1;
     int scale_w = 1;
@@ -81,24 +105,38 @@ ttnn::Tensor ExecuteUpSample::invoke(
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
         ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
 
-    if (!input_tensor.is_sharded() && mode == "bilinear") {
-        // Bilinear mode with non sharded input is not supported. Performing autosharding
+    // For bilinear mode, call halo preprocessing step before the upsample operation (like pool2d)
+    if (mode == "bilinear") {
+        // Autoshard if needed
+        ttnn::Tensor input_for_halo = input_tensor;
+        tt::tt_metal::MemoryConfig output_mem_config_to_use = mem_config;
 
-        auto input_tensor_sharded = input_tensor;
-        MemoryConfig sharded_memory_config = compute_bilinear_autoshard_memory_config(input_tensor_sharded);
-        input_tensor_sharded = to_memory_config(input_tensor_sharded, sharded_memory_config);
+        if (!input_tensor.is_sharded()) {
+            // Bilinear mode with non sharded input is not supported. Performing autosharding
+            tt::tt_metal::MemoryConfig sharded_memory_config = compute_bilinear_autoshard_memory_config(input_for_halo);
+            input_for_halo = to_memory_config(input_for_halo, sharded_memory_config);
+            output_mem_config_to_use = sharded_memory_config;
+        }
 
-        // Output sharding should be the same as input
-        // Output shard shape gets rescaled in op
-        auto output_tensor =
-            ttnn::prim::upsample(input_tensor_sharded, scale_h, scale_w, mode, sharded_memory_config, config);
+        // Apply halo preprocessing
+        std::pair<tt::tt_metal::Tensor, sliding_window::SlidingWindowConfig> halo_result =
+            apply_bilinear_halo_preprocessing(input_for_halo, scale_h, scale_w);
+        tt::tt_metal::Tensor haloed_tensor = halo_result.first;
+        sliding_window::SlidingWindowConfig sliding_window_config = halo_result.second;
+
+        // Pass the HALOED tensor to upsample for bilinear mode
+        ttnn::Tensor output_tensor = ttnn::prim::upsample(
+            haloed_tensor, scale_h, scale_w, mode, output_mem_config_to_use, config, sliding_window_config);
+
+        // Convert to final memory config if needed
         if (output_mem_config.has_value() && output_tensor.memory_config() != output_mem_config) {
             output_tensor = to_memory_config(output_tensor, output_mem_config.value());
         }
         return output_tensor;
     }
 
-    auto output_tensor = ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
+    // For nearest mode (or any other non-bilinear mode), pass the ORIGINAL input tensor
+    ttnn::Tensor output_tensor = ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
     return output_tensor;
 }
 }  // namespace ttnn::operations::upsample

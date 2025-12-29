@@ -41,7 +41,7 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
             output_shape[i]);
     }
 
-    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_pybind.hpp
+    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",

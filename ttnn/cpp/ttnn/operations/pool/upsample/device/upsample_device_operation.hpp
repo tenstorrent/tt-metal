@@ -11,6 +11,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
@@ -46,5 +47,6 @@ ttnn::Tensor upsample(
     int scale_factor_w,
     const std::string& mode,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config = std::nullopt);
 }  // namespace ttnn::prim

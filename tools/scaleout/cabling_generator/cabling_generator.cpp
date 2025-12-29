@@ -545,13 +545,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         //  all the default connections are enumerated
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
-        if (host1_node_type.size() >= suffix.size() &&
-            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host1_node_type.size() >= suffix.size() && host1_node_type.ends_with(suffix)) {
             host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
         }
         std::string host2_node_type = host2.node_type;
-        if (host2_node_type.size() >= suffix.size() &&
-            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host2_node_type.size() >= suffix.size() && host2_node_type.ends_with(suffix)) {
             host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
         }
 
