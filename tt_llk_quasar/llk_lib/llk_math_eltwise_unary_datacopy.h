@@ -144,10 +144,9 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const uint num_rows_per_matri
  * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
  * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  */
-template <uint32_t num_rows_per_tile>
-inline void _llk_math_eltwise_unary_datacopy_(const uint32_t tile_idx)
+inline void _llk_math_eltwise_unary_datacopy_(const uint32_t num_rows_per_tile, const uint32_t tile_idx)
 {
-    _set_dst_write_addr_by_rows_<num_rows_per_tile>(tile_idx);
+    _set_dst_write_addr_by_rows_(num_rows_per_tile, tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

@@ -164,8 +164,7 @@ inline void _set_dst_write_addr_(const uint32_t tile_index)
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
-template <uint32_t num_rows_per_tile>
-inline void _set_dst_write_addr_by_rows_(const uint32_t tile_index)
+inline void _set_dst_write_addr_by_rows_(const uint32_t num_rows_per_tile, const uint32_t tile_index)
 {
     const uint tile_shape_idx =
         (num_rows_per_tile == 64)

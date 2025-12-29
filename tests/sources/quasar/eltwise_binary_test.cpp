@@ -88,8 +88,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     // Configure math hardware with proper Quasar API
-    constexpr DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en, src_format, src_format>();
+    DataFormat src_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
     // Initialize eltwise binary operation with proper TileShape
     TileShape tile_shape = {.num_faces = params->num_faces, .face_r_dim = params->TEST_FACE_R_DIM, .face_c_dim = params->TEST_FACE_C_DIM, .narrow_tile = false};
