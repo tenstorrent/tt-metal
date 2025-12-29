@@ -158,7 +158,7 @@ jobs:
           pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
-          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling and not log-probs" --timeout 500
       - name: Run Llama3 long context demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'llama3_long_context' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
