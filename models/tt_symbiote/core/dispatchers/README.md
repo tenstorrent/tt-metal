@@ -4,7 +4,7 @@ This directory contains different dispatcher implementations for handling PyTorc
 
 ## Overview
 
-The dispatcher system allows you to switch between different TTNN operation implementations at runtime, similar to how `run_config.py` handles different execution modes.
+The dispatcher system allows you to switch between different TTNN operation implementations at runtime.
 
 ## Usage
 
@@ -203,68 +203,3 @@ core/
 │   ├── default_dispatcher.py # Standard implementation
 │   └── README.md             # This file
 ```
-
-## Best Practices
-
-1. **Keep dispatchers focused**: Each dispatcher should have a clear purpose (e.g., performance, debugging, compatibility)
-2. **Reuse helpers**: Import common helper functions from `default_dispatcher` to avoid duplication
-3. **Document differences**: Clearly document how your dispatcher differs from the default
-4. **Test thoroughly**: Add tests for custom dispatchers in the tests directory
-5. **Handle errors gracefully**: Provide clear error messages when operations aren't supported
-
-## Examples
-
-### Performance-Optimized Dispatcher
-
-```python
-# optimized_dispatcher.py
-from models.tt_symbiote.core.dispatchers.default_dispatcher import (
-    _prepare_binary_inputs,
-    _ensure_tile_layout,
-    _cleanup_tensors,
-)
-
-def dispatch_to_ttnn(func_name: str, args, kwargs):
-    # Use cached compute configs, fused operations, etc.
-    pass
-```
-
-### Debug Dispatcher
-
-```python
-# debug_dispatcher.py
-import logging
-
-logger = logging.getLogger(__name__)
-
-def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
-    logger.debug(f"Checking dispatch for {func_name}")
-    # Delegate to default with logging
-    from models.tt_symbiote.core.dispatchers.default_dispatcher import can_dispatch_to_ttnn as default_check
-    result = default_check(func_name, args, kwargs)
-    logger.debug(f"Dispatch result for {func_name}: {result}")
-    return result
-```
-
-## Troubleshooting
-
-### Dispatcher not found
-```
-ValueError: Unknown dispatcher 'my_dispatcher'
-```
-- Ensure your dispatcher is registered in `dispatcher_config.py`
-- Check for import errors in your dispatcher module
-
-### Import errors
-```
-ImportError: cannot import name 'my_dispatcher'
-```
-- Verify the file exists in `core/dispatchers/`
-- Check for syntax errors in your dispatcher
-- Ensure all required functions are implemented
-
-## See Also
-
-- `run_config.py` - Runtime configuration for execution modes
-- `tensor.py` - TorchTTNNTensor wrapper implementation
-- `module.py` - TTNNModule base class
