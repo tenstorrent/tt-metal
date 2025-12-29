@@ -2,6 +2,8 @@
 
 import functools
 
+import torch
+
 from models.tt_symbiote.core.run_config import get_tensor_run_implementation
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
@@ -125,7 +127,18 @@ class TTNNModule:
         return self._unique_name
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(module_name={self.module_name})"
+        # recursive representation
+        # similar to pytorch nn.Module __repr__
+        child_lines = []
+        for key, value in self.__dict__.items():
+            if isinstance(value, (torch.nn.Module, TTNNModule)) and key != "_fallback_torch_layer":
+                mod_str = repr(value).replace("\n", "\n  ")
+                child_lines.append(f"({key}): {mod_str}")
+        main_str = f"{self.__class__.__name__}(module_name={self.module_name}"
+        if child_lines:
+            main_str += "\n  " + "\n  ".join(child_lines) + "\n"
+        main_str += ")"
+        return main_str
 
     @property
     def torch_layer(self):
