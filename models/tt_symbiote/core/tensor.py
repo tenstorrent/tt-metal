@@ -1,8 +1,10 @@
 """TorchTTNNTensor: A PyTorch tensor subclass with TTNN backend support."""
 
+from typing import Optional
+
 import torch
 
-from models.tt_symbiote.core.run_config import get_tensor_run_implementation
+from models.tt_symbiote.core.run_config import DistributedTensorConfig, get_tensor_run_implementation
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 
@@ -84,3 +86,17 @@ class TorchTTNNTensor(torch.Tensor):
 
     def tolist(self):
         return self.to_torch.tolist()
+
+    def numpy(self):
+        return self.to_torch.numpy()
+
+    def clone(self):
+        return TorchTTNNTensor(
+            self.ttnn_tensor.clone() if self.ttnn_tensor is not None else self.elem.clone(), dtype=self.dtype
+        )
+
+    @property
+    def ttnn_distributed_config(self) -> Optional[DistributedTensorConfig]:
+        if "distributed_config" in self.__dict__:
+            return self.__dict__["distributed_config"]
+        return None
