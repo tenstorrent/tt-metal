@@ -232,7 +232,7 @@ int32_t AllocatorImpl::get_bank_offset(BufferType buffer_type, uint32_t bank_id)
 
 const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_dram_channel(uint32_t dram_channel) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (dram_channel_to_bank_ids_.find(dram_channel) == dram_channel_to_bank_ids_.end()) {
+    if (!dram_channel_to_bank_ids_.contains(dram_channel)) {
         TT_THROW("No DRAM bank exists for DRAM channel {}", dram_channel);
     }
     return dram_channel_to_bank_ids_.at(dram_channel);
@@ -241,8 +241,7 @@ const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_dram_channel(uint3
 const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (logical_core_to_bank_ids_.at(buffer_type).find(logical_core) ==
-        logical_core_to_bank_ids_.at(buffer_type).end()) {
+    if (!logical_core_to_bank_ids_.at(buffer_type).contains(logical_core)) {
         TT_THROW("No {} bank exists for core {}", enchantum::to_string(buffer_type), logical_core.str());
     }
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);

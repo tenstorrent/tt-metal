@@ -1026,7 +1026,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_EdgeDevice_DynamicSizing) {
 
     // Only record connections for existing routers
     for (const auto& target : z_targets) {
-        if (existing_set.count(target.target_direction.value())) {
+        if (existing_set.contains(target.target_direction.value())) {
             FabricNodeId mesh_node(MeshId{0}, 0);  // Simplified for test
 
             record_test_connection(

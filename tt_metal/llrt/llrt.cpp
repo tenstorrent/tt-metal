@@ -120,10 +120,8 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
-        is_active_eth_core =
-            active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
-        is_inactive_eth_core =
-            inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != inactive_eth_cores.end();
+        is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
+        is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
         // we should not be operating on any reserved cores here.
         TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
     }
@@ -238,7 +236,7 @@ namespace internal_ {
 bool is_active_eth_core(tt::ChipId chip_id, const CoreCoord& core) {
     auto active_eth_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
-    return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
+    return active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, core));
 }
 
 namespace {

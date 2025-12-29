@@ -418,7 +418,7 @@ MuxConnectionInfo FabricTensixDatamoverMuxConfig::get_mux_connection_info(
 std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     // In legacy MUX mode, we don't have MUX_TO_MUX_CHANNEL, so return empty vector (size 0)
-    if (channel_configs_.find(tt::tt_fabric::ChannelTypes::MUX_TO_MUX_CHANNEL) == channel_configs_.end()) {
+    if (!channel_configs_.contains(tt::tt_fabric::ChannelTypes::MUX_TO_MUX_CHANNEL)) {
         // Legacy MUX mode - no downstream mux connections
         return std::vector<MuxConnectionInfo>();
     }

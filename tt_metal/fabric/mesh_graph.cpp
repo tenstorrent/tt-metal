@@ -629,7 +629,7 @@ const RequestedIntermeshPorts& MeshGraph::get_requested_intermesh_ports() const 
 bool MeshGraph::should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const {
     auto it = mesh_pairs_assign_z_direction_.find(*src_mesh_id);
     if (it != mesh_pairs_assign_z_direction_.end()) {
-        return it->second.find(*dst_mesh_id) != it->second.end();
+        return it->second.contains(*dst_mesh_id);
     }
     return false;
 }

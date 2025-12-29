@@ -187,7 +187,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
 }
 
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
-    if (program_binary_status_.find(mesh_id) != program_binary_status_.end()) {
+    if (program_binary_status_.contains(mesh_id)) {
         return program_binary_status_.at(mesh_id);
     }
     return ProgramBinaryStatus::NotSent;

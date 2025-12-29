@@ -108,7 +108,7 @@ protected:
                     TT_ASSERT(target.target_direction.has_value());
                     auto target_dir = target.target_direction.value();
 
-                    if (targets.count(target_dir) == 0) {
+                    if (!targets.contains(target_dir)) {
                         continue;  // Target doesn't exist (edge device)
                     }
 

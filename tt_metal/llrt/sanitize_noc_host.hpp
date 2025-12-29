@@ -31,9 +31,7 @@ static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoo
     return false;
 }
 
-static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) {
-    return coords.find(core) != coords.end();
-}
+static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) { return coords.contains(core); }
 
 static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     std::stringstream ss;

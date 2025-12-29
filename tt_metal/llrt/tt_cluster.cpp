@@ -506,7 +506,7 @@ std::set<ChipId> Cluster::user_exposed_chip_ids() const {
 }
 
 const metal_SocDescriptor& Cluster::get_soc_desc(ChipId chip) const {
-    if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
+    if (!this->sdesc_per_chip_.contains(chip)) {
         TT_THROW(
             "Cannot access soc descriptor for {} before device driver is initialized! Call "
             "initialize_device_driver({}) first",
@@ -556,7 +556,7 @@ void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
 #if defined(TRACY_ENABLE)
     for (auto chip_id : this->driver_->get_target_device_ids()) {
         auto board_type = this->get_board_type(chip_id);
-        if (this->virtual_routing_to_profiler_flat_id_.find(board_type) != this->virtual_routing_to_profiler_flat_id_.end()) {
+        if (this->virtual_routing_to_profiler_flat_id_.contains(board_type)) {
             continue;
         }
         this->virtual_routing_to_profiler_flat_id_.insert({board_type, {}});
@@ -572,12 +572,11 @@ void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
 }
 
 bool Cluster::is_worker_core(const CoreCoord& core, ChipId chip_id) const {
-    return this->virtual_worker_cores_.at(chip_id).find(core) != this->virtual_worker_cores_.at(chip_id).end();
+    return this->virtual_worker_cores_.at(chip_id).contains(core);
 }
 
 bool Cluster::is_ethernet_core(const CoreCoord& core, ChipId chip_id) const {
-    return this->virtual_eth_cores_.find(chip_id) != this->virtual_eth_cores_.end() and
-           this->virtual_eth_cores_.at(chip_id).find(core) != this->virtual_eth_cores_.at(chip_id).end();
+    return this->virtual_eth_cores_.contains(chip_id) and this->virtual_eth_cores_.at(chip_id).contains(core);
 }
 
 const std::unordered_set<CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {
@@ -961,12 +960,12 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
     ChipId chip_id) const {
     std::unordered_map<ChipId, std::vector<CoreCoord>> connected_chips;
     const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
-    if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
+    if (!all_eth_connections.contains(chip_id)) {
         return {};
     }
     for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
         const auto &other_chip_id = std::get<0>(connected_chip_chan);
-        if (connected_chips.find(other_chip_id) == connected_chips.end()) {
+        if (!connected_chips.contains(other_chip_id)) {
             std::vector<CoreCoord> active_ethernet_cores;
 
             for (const auto &channel_pair :
@@ -986,20 +985,18 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
     for (const auto& chip_id : this->driver_->get_target_device_ids()) {
-        if (this->ethernet_sockets_.find(chip_id) == this->ethernet_sockets_.end()) {
+        if (!this->ethernet_sockets_.contains(chip_id)) {
             this->ethernet_sockets_.insert({chip_id, {}});
         }
         for (const auto &[connected_chip_id, eth_cores] :
              this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
-            if (this->ethernet_sockets_.at(chip_id).find(connected_chip_id) ==
-                this->ethernet_sockets_.at(chip_id).end()) {
+            if (!this->ethernet_sockets_.at(chip_id).contains(connected_chip_id)) {
                 this->ethernet_sockets_.at(chip_id).insert({connected_chip_id, {}});
             }
-            if (this->ethernet_sockets_.find(connected_chip_id) == this->ethernet_sockets_.end()) {
+            if (!this->ethernet_sockets_.contains(connected_chip_id)) {
                 this->ethernet_sockets_.insert({connected_chip_id, {}});
             }
-            if (this->ethernet_sockets_.at(connected_chip_id).find(chip_id) ==
-                this->ethernet_sockets_.at(connected_chip_id).end()) {
+            if (!this->ethernet_sockets_.at(connected_chip_id).contains(chip_id)) {
                 this->ethernet_sockets_.at(connected_chip_id).insert({chip_id, {}});
             } else {
                 continue;
@@ -1021,7 +1018,7 @@ void Cluster::disable_ethernet_cores_with_retrain() {
     std::vector<uint32_t> read_vec;
     const auto& chips = this->driver_->get_target_device_ids();
     for (const auto& chip_id : chips) {
-        if (this->frequent_retrain_cores_.find(chip_id) == this->frequent_retrain_cores_.end()) {
+        if (!this->frequent_retrain_cores_.contains(chip_id)) {
             this->frequent_retrain_cores_.insert({chip_id, {}});
         }
         const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
@@ -1052,7 +1049,7 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 void Cluster::initialize_ethernet_cores_router_mode() {
     for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
-            if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
+            if (!this->device_eth_routing_info_.contains(chip_id)) {
                 this->device_eth_routing_info_.insert({chip_id, {}});
             }
         }
@@ -1064,7 +1061,7 @@ void Cluster::initialize_ethernet_cores_router_mode() {
                 auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
                 // Chip ID is guaranteed to be present in device_eth_routing_info_, since it was populated above
                 auto& routing_info = this->device_eth_routing_info_[chip_id];
-                if (routing_info.find(eth_core) == routing_info.end()) {
+                if (!routing_info.contains(eth_core)) {
                     routing_info.insert({eth_core, EthRouterMode::IDLE});
                 }
             }
@@ -1120,7 +1117,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
     for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         const auto& connected_chips_and_cores = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
         for (const auto& [connected_chip_id, cores] : connected_chips_and_cores) {
-            if (pairs_done.count(std::make_pair(chip_id, connected_chip_id))) {
+            if (pairs_done.contains(std::make_pair(chip_id, connected_chip_id))) {
                 // the cores for this pair of chips are already allocated, skip
                 continue;
             }

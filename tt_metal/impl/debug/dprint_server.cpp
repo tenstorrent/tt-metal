@@ -647,7 +647,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
             tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (umd::CoreDescriptor logical_core : all_cores) {
-                if (dispatch_cores.find(logical_core) == dispatch_cores.end()) {
+                if (!dispatch_cores.contains(logical_core)) {
                     if (logical_core.type == core_type) {
                         print_cores_sanitized.push_back(logical_core);
                     }
@@ -677,7 +677,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
-                if (valid_logical_core && all_cores.count({logical_core, core_type}) > 0) {
+                if (valid_logical_core && all_cores.contains({logical_core, core_type})) {
                     print_cores_sanitized.push_back({logical_core, core_type});
                     log_info(
                         tt::LogMetal,
@@ -713,7 +713,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
         }
-        if (dispatch_cores.count(logical_core)) {
+        if (dispatch_cores.contains(logical_core)) {
             device_reads_dispatch_cores_[device_id] = true;
         }
     }
