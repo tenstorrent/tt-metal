@@ -94,7 +94,7 @@ def run(
     )(weight_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze(dim=0)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor)
     # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weight_tensor)
 
     input_tensor = ttnn.from_torch(
@@ -116,6 +116,6 @@ def run(
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=output_dtype, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    output_tensor = ttnn.to_torch(output_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

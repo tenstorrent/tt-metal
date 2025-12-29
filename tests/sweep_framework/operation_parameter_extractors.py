@@ -2556,6 +2556,118 @@ OperationParameterExtractors.register_extractor(
 )
 
 
+# Add multiply_ extractor method (scalar multiply - in-place operation)
+def _extract_multiply__parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for multiply_ operation (scalar multiply)
+
+    multiply_ is an in-place operation that multiplies a tensor by a scalar.
+    Args: tensor (arg0), scalar (arg1)
+    """
+    try:
+        params = {}
+        tensor_config = None
+        scalar_value = None
+
+        # Extract tensor and scalar
+        for arg in config:
+            if isinstance(arg, dict):
+                for key, val in arg.items():
+                    if key == "arg0":
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(val)
+                    elif key == "arg1":
+                        # Extract scalar value
+                        if isinstance(val, (int, float)):
+                            scalar_value = float(val)
+                        elif isinstance(val, str):
+                            try:
+                                scalar_value = float(val)
+                            except ValueError:
+                                scalar_value = 1.0
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["scalar_value"] = scalar_value if scalar_value is not None else 1.0
+            params["output_memory_config"] = tensor_config.memory_config
+
+            return params
+        return None
+    except Exception as e:
+        return None
+
+
+def _transform_multiply__parameters(
+    configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+) -> List[Dict]:
+    """Transform multiply_ traced configs to run function format"""
+    transformed_configs = []
+
+    for config in configs:
+        try:
+            if not isinstance(config, dict):
+                continue
+
+            input_shape = config.get("input_shape")
+            if not input_shape:
+                continue
+
+            # Parse dtype and layout
+            input_a_dtype_str = config.get("input_a_dtype", "DataType::BFLOAT16")
+            input_a_layout_str = config.get("input_a_layout", "Layout::TILE")
+
+            # Parse memory config
+            input_a_mem_config = config.get("input_a_memory_config", {})
+            output_mem_config = config.get("output_memory_config", input_a_mem_config)
+
+            # Get scalar value
+            scalar_value = config.get("scalar_value", 1.0)
+
+            transformed_config = {
+                "input_shape": input_shape,
+                "input_a_dtype": input_a_dtype_str,
+                "input_a_layout": input_a_layout_str,
+                "input_a_memory_config": input_a_mem_config,
+                "output_memory_config": output_mem_config,
+                "scalar_value": scalar_value,
+            }
+
+            # Apply parsers if provided
+            if parse_dtype:
+                transformed_config["input_a_dtype"] = parse_dtype(input_a_dtype_str)
+            if parse_layout:
+                transformed_config["input_a_layout"] = parse_layout(input_a_layout_str)
+            if parse_memory_config:
+                transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, input_shape)
+                transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, input_shape)
+
+            transformed_configs.append(transformed_config)
+
+        except Exception as e:
+            print(f"Error transforming multiply_ config: {e}")
+            continue
+
+    return transformed_configs
+
+
+# Add methods to class
+OperationParameterExtractors._extract_multiply__parameters = staticmethod(_extract_multiply__parameters)
+OperationParameterExtractors._transform_multiply__parameters = staticmethod(_transform_multiply__parameters)
+
+# Register multiply_ extractor
+OperationParameterExtractors.register_extractor(
+    "multiply_",
+    extract_func=OperationParameterExtractors._extract_multiply__parameters,
+    transform_func=OperationParameterExtractors._transform_multiply__parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::multiply_",
+    extract_func=OperationParameterExtractors._extract_multiply__parameters,
+    transform_func=OperationParameterExtractors._transform_multiply__parameters,
+)
+
+
 # Example: How users can easily add their own operation extractors
 def example_custom_operation_setup():
     """

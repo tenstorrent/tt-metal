@@ -27,12 +27,10 @@ parameters = {
     "model_traced_sample": {
         "input_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
-        "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "scalar_value": [0.5],
         "storage_type": ["StorageType::DEVICE"],
     },
 }
@@ -45,12 +43,10 @@ if model_traced_params:
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
     input_a_memory_config,
-    input_b_memory_config,
     output_memory_config,
+    scalar_value,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -58,28 +54,18 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple) and model_traced suite (dict)
-    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
-        # This is model_traced suite - dict with 'self' and 'other' keys
-        shape_a = input_shape["self"]
-        shape_b = input_shape["other"]
+    # Handle shape
+    if isinstance(input_shape, (tuple, list)):
+        shape_a = tuple(input_shape)
     else:
-        # This is sample suite - use same shape for both inputs
-        if isinstance(input_shape, (tuple, list)):
-            shape_a = tuple(input_shape)
-            shape_b = tuple(input_shape)
-        else:
-            shape_a = input_shape
-            shape_b = input_shape
+        shape_a = input_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(shape_b)
 
-    torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+    # Multiply by scalar
+    torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -97,22 +83,9 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
-    # Build from_torch arguments for input_b
-    from_torch_kwargs = {
-        "dtype": input_b_dtype,
-        "layout": input_b_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_b_memory_config
-
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
-
     start_time = start_measuring_time()
-    # multiply_ is in-place operation
-    ttnn.multiply_(input_tensor_a, input_tensor_b)
+    # multiply_ is in-place scalar multiplication
+    ttnn.multiply_(input_tensor_a, scalar_value)
     output_tensor = ttnn.to_torch(input_tensor_a)  # Result is in input_tensor_a
     e2e_perf = stop_measuring_time(start_time)
 

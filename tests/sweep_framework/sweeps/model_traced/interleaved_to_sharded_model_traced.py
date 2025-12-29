@@ -98,6 +98,22 @@ def run(
     if output_memory_config is None:
         raise ValueError("output_memory_config is None - required parameter missing from traced config")
 
+    # Validate that output_memory_config is sharded (required by interleaved_to_sharded operation)
+    is_output_sharded = False
+    if hasattr(output_memory_config, "is_sharded"):
+        is_output_sharded = output_memory_config.is_sharded()
+    elif hasattr(output_memory_config, "memory_layout"):
+        is_output_sharded = output_memory_config.memory_layout in [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ]
+
+    if not is_output_sharded:
+        import pytest
+
+        pytest.skip("Output memory config must be sharded for interleaved_to_sharded operation")
+
     start_time = start_measuring_time()
     output_tensor = ttnn.interleaved_to_sharded(input_tensor_a, output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)

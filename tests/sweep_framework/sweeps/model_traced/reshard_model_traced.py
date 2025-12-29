@@ -62,6 +62,18 @@ def run(
         torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
     )
 
+    # Check if output_memory_config has non-tile-aligned shard shape (would cause TT_FATAL)
+    if hasattr(output_memory_config, "shard_spec") and output_memory_config.shard_spec is not None:
+        shard_spec = output_memory_config.shard_spec
+        if hasattr(shard_spec, "shape"):
+            shard_height, shard_width = shard_spec.shape
+            if shard_height % 32 != 0 or shard_width % 32 != 0:
+                import pytest
+
+                pytest.skip(
+                    f"Output shard shape ({shard_height}, {shard_width}) is not tile-aligned (must be multiples of 32)"
+                )
+
     # Op call
     start_time = start_measuring_time()
     output_tensor = ttnn.reshard(input_tensor, output_memory_config)

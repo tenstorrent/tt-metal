@@ -545,8 +545,8 @@ class MasterConfigLoader:
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif self._matches_operation(operation_name, "create_qkv_heads"):
-                print(f"🔧 Detected create_qkv_heads operation - using unary operation extractor")
-                return self._get_unary_suite_parameters(
+                print(f"🔧 Detected create_qkv_heads operation - extracting num_heads and num_kv_heads")
+                return self._get_create_qkv_heads_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif self._matches_operation(operation_name, "paged_scaled_dot_product_attention_decode"):
@@ -927,6 +927,8 @@ class MasterConfigLoader:
                 # where specific parameters
                 scalar_if_true_list = [] if self._matches_operation(operation_name, "where") else None
                 scalar_if_false_list = [] if self._matches_operation(operation_name, "where") else None
+                # multiply_ specific parameters (scalar multiply)
+                scalar_value_list = [] if self._matches_operation(operation_name, "multiply_") else None
 
                 invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
@@ -1051,6 +1053,10 @@ class MasterConfigLoader:
                             scalar_if_true_list.append(cfg["scalar_if_true"])
                         if "scalar_if_false" in cfg:
                             scalar_if_false_list.append(cfg["scalar_if_false"])
+                    # Extract multiply_ parameters (scalar value)
+                    if self._matches_operation(operation_name, "multiply_"):
+                        if "scalar_value" in cfg:
+                            scalar_value_list.append(cfg["scalar_value"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1183,6 +1189,11 @@ class MasterConfigLoader:
                     if scalar_if_false_list:
                         param_names.append("scalar_if_false")
                         param_lists.append(scalar_if_false_list)
+                # Add multiply_ parameters
+                if self._matches_operation(operation_name, "multiply_"):
+                    if scalar_value_list:
+                        param_names.append("scalar_value")
+                        param_lists.append(scalar_value_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
@@ -2587,6 +2598,153 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting nlp_create_qkv_heads_decode parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_create_qkv_heads_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for create_qkv_heads operation which requires num_heads and num_kv_heads parameters
+
+        Argument mapping for ttnn::experimental::create_qkv_heads:
+        - arg0: input tensor
+        - arg1: num_heads
+        - arg2: num_kv_heads
+        - arg3: transpose_k_heads
+        - arg4: output memory config
+        """
+        try:
+            paired_configs = []
+            failed_configs = 0
+
+            for config_idx, (config, source, machine_info) in enumerate(configs):
+                try:
+                    # Extract input tensor (arg0)
+                    tensor_config = None
+                    num_heads = None
+                    num_kv_heads = None
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            if "arg0" in arg:
+                                tensor_config = self.extract_tensor_config(arg["arg0"])
+                            if "arg1" in arg:
+                                # arg1 is num_heads
+                                num_heads_val = arg["arg1"]
+                                if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
+                                    try:
+                                        num_heads = (
+                                            int(num_heads_val.strip('"'))
+                                            if isinstance(num_heads_val, str)
+                                            else num_heads_val
+                                        )
+                                    except:
+                                        pass
+                            if "arg2" in arg:
+                                # arg2 is num_kv_heads
+                                num_kv_heads_val = arg["arg2"]
+                                if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
+                                    try:
+                                        num_kv_heads = (
+                                            int(num_kv_heads_val.strip('"'))
+                                            if isinstance(num_kv_heads_val, str)
+                                            else num_kv_heads_val
+                                        )
+                                    except:
+                                        pass
+
+                    if tensor_config and num_heads is not None and num_kv_heads is not None:
+                        paired_config = {
+                            "input_shape": tensor_config.shape,
+                            "input_a_dtype": tensor_config.dtype,
+                            "input_a_layout": tensor_config.layout,
+                            "input_a_memory_config": tensor_config.memory_config,
+                            "output_memory_config": tensor_config.memory_config,  # Default to input's memory config
+                            "num_heads": num_heads,
+                            "num_kv_heads": num_kv_heads,
+                            "traced_source": source or "unknown",
+                            "traced_machine_info": machine_info or {},
+                        }
+                        paired_configs.append(paired_config)
+                    else:
+                        failed_configs += 1
+
+                except Exception as e:
+                    failed_configs += 1
+                    continue
+
+            if failed_configs > 0:
+                print(f"⚠️  Failed to parse {failed_configs}/{len(configs)} configs for {operation_name}")
+
+            print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+
+            # Build parameter lists
+            input_shape_list = []
+            input_a_dtype_list = []
+            input_a_layout_list = []
+            input_a_memory_config_list = []
+            output_memory_config_list = []
+            num_heads_list = []
+            num_kv_heads_list = []
+            traced_source_list = []
+            traced_machine_info_list = []
+
+            for cfg in paired_configs:
+                input_shape_list.append(cfg["input_shape"])
+                input_a_dtype_list.append(cfg["input_a_dtype"])
+                input_a_layout_list.append(cfg["input_a_layout"])
+                input_a_memory_config_list.append(cfg["input_a_memory_config"])
+                output_memory_config_list.append(cfg["output_memory_config"])
+                num_heads_list.append(cfg["num_heads"])
+                num_kv_heads_list.append(cfg["num_kv_heads"])
+                traced_source_list.append(cfg["traced_source"])
+                traced_machine_info_list.append(cfg["traced_machine_info"])
+
+            if all_cases:
+                # For all_cases, Cartesian product (but for model_traced, it's typically 1:1)
+                param_key = "all_test_cases"
+            else:
+                # For exact configs, zip the parameters
+                param_key = "exact_test_cases"
+
+            if paired_configs:
+                # Create comma-separated parameter key and zip all parameters together
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "output_memory_config",
+                    "num_heads",
+                    "num_kv_heads",
+                    "traced_source",
+                    "traced_machine_info",
+                ]
+                param_lists = [
+                    input_shape_list,
+                    input_a_dtype_list,
+                    input_a_layout_list,
+                    input_a_memory_config_list,
+                    output_memory_config_list,
+                    num_heads_list,
+                    num_kv_heads_list,
+                    traced_source_list,
+                    traced_machine_info_list,
+                ]
+
+                # Create tuples of exact configurations (prevents Cartesian product)
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+
+                print(f"   📊 Will generate {len(paired_configs)} test vectors (unique inputs)")
+
+                return {param_key: exact_configs}
+
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting create_qkv_heads parameters: {e}")
             import traceback
 
             traceback.print_exc()

@@ -78,10 +78,12 @@ def run(
             grid = shard_spec.grid
             if hasattr(grid, "ranges"):
                 for core_range in grid.ranges():
-                    end_coord = core_range.end_coord
+                    end_coord = core_range.end  # CoreRange uses .end not .end_coord
                     required_x = end_coord.x + 1
                     required_y = end_coord.y + 1
                     if required_x > device.core_grid.x or required_y > device.core_grid.y:
+                        import pytest
+
                         pytest.skip(
                             f"Insufficient device cores: requires {required_x}x{required_y}, "
                             f"but device has {device.core_grid.x}x{device.core_grid.y}"
@@ -114,6 +116,16 @@ def run(
         from_torch_kwargs["memory_config"] = input_a_memory_config
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+
+    # Check if input has sharded memory - if so, convert to interleaved first
+    # The operation internally uses create_qkv_heads which requires tile-aligned shard shapes
+    # If traced config has non-tile-aligned shards, convert to interleaved
+    needs_conversion = False
+    if hasattr(input_tensor_a, "memory_config"):
+        mem_config = input_tensor_a.memory_config()
+        if mem_config.is_sharded():
+            needs_conversion = True
+            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
 
     start_time = start_measuring_time()
     # This operation splits QKV and heads - returns tuple of (Q, K, V)

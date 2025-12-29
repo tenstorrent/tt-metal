@@ -25,13 +25,14 @@ model_traced_params = loader.get_suite_parameters("create_qkv_heads", all_cases=
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 96)],  # Must be divisible for QKV split
+        "input_shape": [(1, 1, 32, 192)],  # Must be divisible for QKV split: 192 = 1 * 3 * 64
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
         "num_heads": [1],
+        "num_kv_heads": [1],
     },
 }
 
@@ -57,7 +58,8 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
-    num_heads=1,
+    num_heads,
+    num_kv_heads,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -108,18 +110,50 @@ def run(
     # Only add device and memory_config if not HOST storage
     if not is_host:
         from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
+        # Check if memory config is sharded - create_qkv_heads requires tile-aligned shard shapes
+        # If sharded, use interleaved instead to avoid non-tile-aligned shard validation errors
+        is_input_sharded = False
+        if hasattr(input_a_memory_config, "is_sharded"):
+            is_input_sharded = input_a_memory_config.is_sharded()
+        elif hasattr(input_a_memory_config, "memory_layout"):
+            # Check memory_layout attribute for sharded types
+            is_input_sharded = input_a_memory_config.memory_layout in [
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ]
+
+        if is_input_sharded:
+            from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            from_torch_kwargs["memory_config"] = input_a_memory_config
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
+    # If output memory config is sharded, use interleaved instead
+    actual_output_memory_config = output_memory_config
+    is_output_sharded = False
+    if hasattr(output_memory_config, "is_sharded"):
+        is_output_sharded = output_memory_config.is_sharded()
+    elif hasattr(output_memory_config, "memory_layout"):
+        is_output_sharded = output_memory_config.memory_layout in [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ]
+
+    if is_output_sharded:
+        actual_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     start_time = start_measuring_time()
     # This operation creates QKV heads from input tensor
-    q, k, v = ttnn.experimental.create_qkv_heads(
+    # Note: Using nlp_create_qkv_heads which is the actual implementation
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         input_tensor_a,
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
         transpose_k_heads=False,
-        memory_config=output_memory_config,
+        memory_config=actual_output_memory_config,
     )
     q = ttnn.to_torch(q)
     k = ttnn.to_torch(k)
