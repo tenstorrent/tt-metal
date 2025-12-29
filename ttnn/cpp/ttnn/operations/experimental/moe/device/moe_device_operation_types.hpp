@@ -8,13 +8,14 @@
 
 namespace ttnn::operations::experimental::moe {
 
-struct operation_attributes_t {
-    // Add any non-tensor operation attributes here
-};
+struct operation_attributes_t {};
 
 struct tensor_args_t {
     const Tensor& input_tensor;
-    const Tensor& weight_tensor;
+    const Tensor& w0_tensor;
+    const Tensor& w1_tensor;
+    const Tensor& w2_tensor;
+    const Tensor& output_tensor;
 };
 
 using tensor_return_value_t = Tensor;
