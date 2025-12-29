@@ -1088,7 +1088,7 @@ def detect_pytest_tests(test_path):
         return False
 
 
-def run_test_with_tracing(test_path, output_dir, keep_traces=False, extra_args=None):
+def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None):
     """
     Run test with operations tracing enabled.
     Automatically detects if it's a pytest test or standalone Python script.
@@ -1097,6 +1097,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, extra_args=N
         test_path: Path to test (e.g., /path/to/test.py or /path/to/test.py::test_function)
         output_dir: Directory to save trace outputs
         keep_traces: If True, keep individual trace files after adding to master JSON
+        debug_mode: If True, show live test output in terminal (no capture)
         extra_args: Additional arguments to pass to pytest or standalone script
 
     Returns:
@@ -1105,6 +1106,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, extra_args=N
     extra_args = extra_args or []
 
     print(f"🚀 Running test with operations tracing...")
+    if debug_mode:
+        print(f"🐛 Debug mode enabled - showing live test output...")
     plugin_file = create_tracing_plugin(output_dir)
 
     # Use the same python executable that's running this script
@@ -1118,12 +1121,22 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, extra_args=N
         print(f"✅ Detected pytest test cases, running with pytest...")
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
-        result = subprocess.run(
-            [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
-            cwd=BASE_DIR,
-            capture_output=False,
-            text=True,
-        )
+
+        # In debug mode, don't capture output at all - let it stream directly to terminal
+        # Otherwise, we suppress output for cleaner tracer messages
+        if debug_mode:
+            result = subprocess.run(
+                [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
+                cwd=BASE_DIR,
+                text=True,
+            )
+        else:
+            result = subprocess.run(
+                [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+            )
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         # For standalone scripts, we need to inject tracing differently
@@ -1229,12 +1242,20 @@ finally:
             f.write(wrapper_script)
 
         try:
-            result = subprocess.run(
-                [python_cmd, wrapper_file],
-                cwd=BASE_DIR,
-                capture_output=False,
-                text=True,
-            )
+            # In debug mode, don't capture output - let it stream directly to terminal
+            if debug_mode:
+                result = subprocess.run(
+                    [python_cmd, wrapper_file],
+                    cwd=BASE_DIR,
+                    text=True,
+                )
+            else:
+                result = subprocess.run(
+                    [python_cmd, wrapper_file],
+                    cwd=BASE_DIR,
+                    capture_output=True,
+                    text=True,
+                )
         finally:
             # Clean up wrapper script
             try:
@@ -1328,18 +1349,45 @@ Examples (Pytest tests):
     # Run with pytest markers and verbose output
     python model_tracer/generic_ops_tracer.py test.py -m "slow" -v
 
-    # Mix tracer args with pytest args
+    # Debug mode - show live test output in terminal
+    python model_tracer/generic_ops_tracer.py test.py -d
+    python model_tracer/generic_ops_tracer.py test.py --debug -k "test_name"
+
+    # Mix tracer args with pytest args (automatic mode)
     python model_tracer/generic_ops_tracer.py test.py --store -k "test_name"
+
+    # Explicit separator '--' (left=tracer, right=pytest)
+    python model_tracer/generic_ops_tracer.py test.py -d --store -- -v -k "test"
+    python model_tracer/generic_ops_tracer.py test.py --output-dir ./traces -- -v -s -x
 
 Examples (Standalone Python scripts):
     # Run script with custom arguments
     python model_tracer/generic_ops_tracer.py model.py --model-name resnet50 --batch 32
 
-    # With tracer args
-    python model_tracer/generic_ops_tracer.py model.py --store --output-dir ./my_traces
+    # With tracer args and debug mode
+    python model_tracer/generic_ops_tracer.py model.py --store --debug --output-dir ./my_traces
+
+    # Explicit separator for standalone scripts
+    python model_tracer/generic_ops_tracer.py model.py -d -- --model-name resnet50 --batch 32
 
 Note: The tracer automatically detects pytest vs standalone scripts.
       Unknown arguments are automatically passed to pytest or the script.
+      Use -d/--debug to see live test logs in the terminal.
+
+Argument Handling (Two Modes):
+
+      Mode 1 - Automatic (Default):
+      - Tracer-specific flags: -o/--output-dir, --store, -d/--debug
+      - These are consumed by the tracer and NOT passed to pytest/script
+      - All other flags (like -v, -k, -m) are passed through to pytest/script
+      - If a flag name conflicts, the tracer takes precedence (consumed first)
+
+      Mode 2 - Explicit Separator (use '--'):
+      - Everything BEFORE '--' goes to tracer
+      - Everything AFTER '--' goes to pytest/script
+      - Example: python tracer.py test.py -d --store -- -v -k "test"
+                 Tracer gets: test.py, -d, --store
+                 Pytest gets: -v, -k "test"
         """,
     )
     parser.add_argument(
@@ -1357,20 +1405,55 @@ Note: The tracer automatically detects pytest vs standalone scripts.
         action="store_true",
         help="Keep individual trace files after adding to master JSON (default: delete them)",
     )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Show live test output in terminal (debug mode - shows all logs in real-time)",
+    )
 
-    args, extra_args = parser.parse_known_args()
+    # Handle explicit separator '--' for explicit argument separation
+    # If '--' is present, split arguments: left side for tracer, right side for pytest/script
+    import sys
 
-    print("🚀 TTNN Operations Tracer")
-    print("=" * 50)
-    print(f"📁 {os.path.basename(args.test_path)}")
-    if args.store:
-        print(f"💾 Keeping individual trace files")
-    if extra_args:
-        print(f"📎 Extra arguments: {' '.join(extra_args)}")
-    print("=" * 50)
+    if "--" in sys.argv:
+        separator_index = sys.argv.index("--")
+        tracer_argv = sys.argv[1:separator_index]  # Everything before '--'
+        extra_args = sys.argv[separator_index + 1 :]  # Everything after '--'
+
+        # Parse only tracer arguments
+        args = parser.parse_args(tracer_argv)
+
+        print("🚀 TTNN Operations Tracer")
+        print("=" * 50)
+        print(f"📁 {os.path.basename(args.test_path)}")
+        print(f"🔀 Explicit separator '--' detected")
+        print(f"   Left side (tracer): {' '.join(tracer_argv)}")
+        print(f"   Right side (pytest/script): {' '.join(extra_args)}")
+        if args.store:
+            print(f"💾 Keeping individual trace files")
+        if args.debug:
+            print(f"🐛 Debug mode enabled - showing live test output")
+        print("=" * 50)
+    else:
+        # Default behavior: automatic detection with parse_known_args
+        args, extra_args = parser.parse_known_args()
+
+        print("🚀 TTNN Operations Tracer")
+        print("=" * 50)
+        print(f"📁 {os.path.basename(args.test_path)}")
+        if args.store:
+            print(f"💾 Keeping individual trace files")
+        if args.debug:
+            print(f"🐛 Debug mode enabled - showing live test output")
+        if extra_args:
+            print(f"📎 Extra arguments passed to pytest/script: {' '.join(extra_args)}")
+            print(f"ℹ️  Note: Tracer flags (-d, --store, -o) are consumed by tracer")
+            print(f"ℹ️  Note: Unknown flags are automatically passed to pytest/script")
+        print("=" * 50)
 
     try:
-        result = run_test_with_tracing(args.test_path, args.output_dir, args.store, extra_args)
+        result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
 
         print("\\n" + "=" * 50)
         print("📋 RESULTS")
