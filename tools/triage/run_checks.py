@@ -20,6 +20,9 @@ Description:
 
     This enables other scripts to easily run comprehensive checks across all devices and their
     block locations and RISC cores without needing to depend on multiple separate scripts.
+
+Owner:
+    adjordjevic-TT
 """
 
 from collections.abc import Callable

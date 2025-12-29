@@ -34,6 +34,8 @@
 
 namespace tt::tt_metal {
 
+void on_dispatch_timeout_detected();
+
 namespace {
 
 bool wrap_ge(uint32_t a, uint32_t b) {
@@ -261,7 +263,7 @@ void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
     }
 }
 
-bool SystemMemoryManager::get_bypass_mode() { return this->bypass_enable; }
+bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; }
 
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 
@@ -454,7 +456,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
-            on_timeout_detected();
+            on_dispatch_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -504,10 +506,10 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     };
 
     // Handler for the timeout
-    auto on_timeout = [&exit_condition, this]() {
+    auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
 
-        this->on_timeout_detected();
+        on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
@@ -579,7 +581,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
-void SystemMemoryManager::on_timeout_detected() const {
+void on_dispatch_timeout_detected() {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // Serialize Inspector RPC data if enabled

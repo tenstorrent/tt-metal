@@ -64,13 +64,13 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             tt::tt_metal::PageConfig(Layout::TILE),
             MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
 
-    if (input_tensor.nd_shard_spec().has_value()) {
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            const auto& nd_shard_spec = *input_tensor.nd_shard_spec();
+    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
             return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
         }
 
-        auto nd_shard_spec = *input_tensor.nd_shard_spec();
+        auto nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
         if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W ||
             operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
             nd_shard_spec.shard_shape[-1] = 1;
