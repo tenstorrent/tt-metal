@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 inline __attribute__((always_inline)) void pop_from_cb_and_write(
     experimental::CircularBuffer& cb,

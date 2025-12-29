@@ -159,6 +159,9 @@ endif()
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(impl)
+
 target_link_libraries(
     impl
     PUBLIC

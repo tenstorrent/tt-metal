@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include <array>
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // WRITER RUNTIME ARGS

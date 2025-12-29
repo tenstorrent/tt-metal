@@ -5,7 +5,13 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <random>
+#include <string>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -47,11 +53,6 @@ public:
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
-
-    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
-    // If not set, the tensor can either be on host or allocated on a single device.
-    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -99,10 +100,10 @@ public:
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
     // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
-    // of the Python object that owns the underlying data. For example, in pybind11:
+    // of the Python object that owns the underlying data. For example, in nanobind:
     //
-    // py::object py_tensor = ...;
-    // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
+    // nb::object py_tensor = ...;
+    // MemoryPin py_data_pin(std::make_shared<nb::object>(py_tensor));
     // Tensor tensor = Tensor::from_borrowed_data(buffer, shape, py_data_pin);
     //
     // This API can also be used to create file-backed Tensors by means of `mmap`:
@@ -274,6 +275,11 @@ public:
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;
 
+    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
+    // If not set, the tensor can either be on host or allocated on a single device.
+    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
+    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
+
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
@@ -282,7 +288,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
-    DataType dtype,
+    DataType data_type,
     Layout layout,
     IDevice* device,
     const MemoryConfig& memory_config = MemoryConfig{},

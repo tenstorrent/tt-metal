@@ -298,7 +298,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     )
 
     # output tensor
-    output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG, is_l1_aligned=True)
+    output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -857,3 +857,25 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
 
     # Verify that the higher-accuracy config is closer to torch
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
+
+
+@pytest.mark.parametrize(
+    "input_shape, num_groups, msg_pattern",
+    [
+        ((2, 1, 16, 32), 8, "must be a multiple of the tile size"),
+    ],
+)
+def test_group_norm_negative_tests(
+    input_shape,
+    num_groups,
+    msg_pattern,
+    device,
+):
+    input_tensor = ttnn.empty(input_shape, device=device)
+    with pytest.raises(RuntimeError, match=msg_pattern):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            inplace=False,
+        )

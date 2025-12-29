@@ -120,7 +120,7 @@ public:
 
 private:
     uint32_t id_;
-    uint32_t size_B_;
+    uint32_t size_B_{0};
     uint32_t completion_queue_reader_core_ = 0;
     std::optional<uint32_t> tid_;
     std::shared_ptr<TraceDescriptor> trace_ctx_;

@@ -1,0 +1,1424 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+# Run this with the following command:
+# tt-run --rank-binding tests/tt_metal/distributed/config/wh_galaxy_2x4_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_acyclic.yaml
+#
+Tests:
+  - name: "SimpleUnicastMesh"
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [0, 1]
+      - device: [1, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [1, 1]
+      - device: [2, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [2, 1]
+      - device: [3, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [3, 1]
+
+  - name: "TestNocSendTypesMesh"
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [0, 1]
+      - device: [1, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [1, 1]
+      - device: [2, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [2, 1]
+      - device: [3, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 2048
+            num_packets: 50000
+            destination:
+              device: [3, 1]
+
+  - name: TestPacketSizesMesh
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [1024, 2048, 4096]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 50000
+            destination:
+              device: [0, 1]
+      - device: [1, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 50000
+            destination:
+              device: [1, 1]
+      - device: [2, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 50000
+            destination:
+              device: [2, 1]
+      - device: [3, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 50000
+            destination:
+              device: [3, 1]
+
+  - name: "InterMeshTestI"
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      size: 2048
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 5]
+
+  - name: "InterMeshTest"
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      size: 2048
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+
+  - name: "InterMeshFourCorners"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [3, 0]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [2, 0]
+      - device: [2, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [3, 0]
+      - device: [3, 0]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [0, 0]
+
+  - name: InterMeshStressTest01
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [0, 4]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 5]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 6]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 7]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [1, 4]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 5]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 6]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 7]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+
+  - name: InterMeshStressTest23
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [2, 4]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 5]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 6]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 7]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [3, 4]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 5]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 6]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 7]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+
+  - name: InterMeshStressTest03
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [0, 3]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [3, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [3, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [3, 2]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [3, 3]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+
+  - name: InterMeshStressTest12
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [1, 1]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [1, 2]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [1, 3]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [2, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [2, 1]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [2, 2]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [2, 3]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+
+  # Full all-to-all between Mesh 0 and Mesh 1 (all devices)
+  - name: InterMeshFullAllToAll01
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 3]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 4]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 5]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 6]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [0, 7]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 3]
+          - destination:
+              device: [1, 4]
+          - destination:
+              device: [1, 5]
+          - destination:
+              device: [1, 6]
+          - destination:
+              device: [1, 7]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 2]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 3]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 4]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 5]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 6]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+      - device: [1, 7]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [0, 2]
+          - destination:
+              device: [0, 3]
+          - destination:
+              device: [0, 4]
+          - destination:
+              device: [0, 5]
+          - destination:
+              device: [0, 6]
+          - destination:
+              device: [0, 7]
+
+  # Full all-to-all between Mesh 1 and Mesh 3 (all devices)
+  - name: InterMeshFullAllToAll23
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [2, 0]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 1]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 2]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 3]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 4]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 5]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 6]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [2, 7]
+        patterns:
+          - destination:
+              device: [3, 0]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [3, 2]
+          - destination:
+              device: [3, 3]
+          - destination:
+              device: [3, 4]
+          - destination:
+              device: [3, 5]
+          - destination:
+              device: [3, 6]
+          - destination:
+              device: [3, 7]
+      - device: [3, 0]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 1]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 2]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 3]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 4]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 5]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 6]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]
+      - device: [3, 7]
+        patterns:
+          - destination:
+              device: [2, 0]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [2, 2]
+          - destination:
+              device: [2, 3]
+          - destination:
+              device: [2, 4]
+          - destination:
+              device: [2, 5]
+          - destination:
+              device: [2, 6]
+          - destination:
+              device: [2, 7]

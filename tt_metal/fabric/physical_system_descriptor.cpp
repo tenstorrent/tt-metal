@@ -61,11 +61,14 @@ TrayID get_tray_id_for_chip(
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
-    return TrayID{tray_id};
+    return TrayID{static_cast<unsigned int>(tray_id)};
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
+    tt::umd::Cluster& cluster,
+    ChipId chip_id,
+    bool using_mock_cluster_desc,
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>>& pcie_devices_per_tray) {
     auto* cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
@@ -74,6 +77,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
+        auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
+        pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
@@ -89,7 +94,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
                 const auto& devices_on_tunnel = tunnels[tunnel];
                 auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
                 if (device_it != devices_on_tunnel.end()) {
-                    asic_location = ASICLocation{device_it - devices_on_tunnel.begin()};
+                    asic_location = ASICLocation{static_cast<unsigned int>(device_it - devices_on_tunnel.begin())};
                     break;
                 }
             }
@@ -164,13 +169,13 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
                 distributed_context_->recv(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
-                    Rank{rank},
+                    Rank{static_cast<int>(rank)},
                     Tag{0});
                 std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
                 distributed_context_->recv(
                     tt::stl::as_writable_bytes(
                         tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
-                    Rank{rank},
+                    Rank{static_cast<int>(rank)},
                     Tag{0});
 
                 hostnames.push_back(std::string(serialized_peer_hostname.begin(), serialized_peer_hostname.end()));
@@ -183,7 +188,7 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
                 distributed_context_->send(
                     tt::stl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
-                    Rank{rank},
+                    Rank{static_cast<int>(rank)},
                     Tag{0});
             }
         }
@@ -265,8 +270,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
             "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live "
             "discovery");
         tt::umd::Cluster& cluster = *cluster_;
-        auto [tray_id, asic_location] =
-            get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
+        auto [tray_id, asic_location] = get_asic_position(
+            cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon, pcie_devices_per_tray_);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -429,12 +434,12 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
         for (auto rank : receiver_ranks) {
             distributed_context_->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
 
             distributed_context_->send(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
         }
     } else {
@@ -443,13 +448,13 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
             distributed_context_->recv(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
             distributed_context_->recv(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
-                Rank{rank},
+                Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
             this->validate_eth_fw_versions(
@@ -598,7 +603,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     }
 }
 
-void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {
+void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) const {
     emit_physical_system_descriptor_to_text_proto(*this, file_path);
 }
 
@@ -812,7 +817,7 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
             }
         }
     }
-    TT_FATAL(false, "No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
+    TT_THROW("No connected ASIC and channel found for asic ID {} and channel ID {}", asic_id, chan_id);
     return {AsicID{0}, 0};
 }
 
@@ -909,6 +914,15 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {
     TT_FATAL(host_to_rank_.find(host_name) != host_to_rank_.end(), "Rank for host {} not found", host_name);
     return host_to_rank_.at(host_name);
+}
+
+std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const {
+    for (const auto& [host, host_rank] : host_to_rank_) {
+        if (host_rank == rank) {
+            return host;
+        }
+    }
+    TT_THROW("Hostname for rank {} not found", rank);
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {

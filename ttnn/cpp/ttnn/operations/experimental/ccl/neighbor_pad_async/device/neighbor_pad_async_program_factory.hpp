@@ -13,6 +13,10 @@ namespace ttnn::operations::experimental::ccl::neighbor_pad {
 struct NeighborPadAsyncSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    // Additional local-copy workers (do not send over fabric)
+    std::vector<tt::tt_metal::KernelHandle> local_reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> local_writer_kernel_ids;
+    std::vector<tt::tt_metal::CoreCoord> local_copy_core_coords;  // logical coords used for local copy
     uint32_t num_links = 0;
     uint32_t num_directions = 0;  // Always 2 (left/right padding)
 };

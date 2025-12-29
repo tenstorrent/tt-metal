@@ -255,10 +255,11 @@ fi
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
-    # Create and link the build directory
-    mkdir -p $build_dir
-    ln -nsf $build_dir build
 fi
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
 
 install_prefix_default=$build_dir
 cmake_install_prefix=${install_prefix:="${install_prefix_default}"}

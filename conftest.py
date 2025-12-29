@@ -309,9 +309,142 @@ def device_params(request):
     return params
 
 
+@pytest.fixture(scope="module")
+def _device_module_impl(request):
+    """
+    Internal module-scoped device fixture.
+
+    Do not request this fixture directly in test function signatures. Instead, use the
+    `device` fixture with @pytest.mark.use_module_device marker. When the marker is
+    present, the `device` fixture automatically delegates to this fixture via
+    request.getfixturevalue(), providing a module-scoped device while keeping test
+    signatures unchanged.
+
+    This optimization is intended for test modules where all tests share the same
+    device configuration. The device is created once per module and reused across
+    all tests, reducing setup/teardown overhead.
+
+    Usage in test files:
+        # Module scope, no special params:
+        pytestmark = pytest.mark.use_module_device
+
+        # Module scope WITH a single device configuration:
+        pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
+
+        def test_something(device):  # Just use 'device' as normal
+            ...
+
+    IMPORTANT: Do NOT use this marker in test files that use parametrized device_params:
+        @pytest.mark.parametrize("device_params", [...], indirect=True)
+
+    Tests with multiple device configurations via parametrized device_params require
+    a fresh device for each parameter set and should continue using the default
+    function-scoped `device` fixture.
+
+    STATE SHARING CONSIDERATIONS:
+
+    Since the device is shared across all tests in a module, tests can affect each
+    other through accumulated device state:
+
+    - Program cache: Cached programs from earlier tests may be reused by later tests.
+      If tests require different program configurations (e.g., broadcast vs non-broadcast),
+      this can cause incorrect results. Call device.disable_and_clear_program_cache()
+      at the start of tests that are sensitive to cache state.
+
+    - Memory allocations: Tensors allocated on device persist until explicitly
+      deallocated or garbage collected. For highly parameterized tests, this can
+      exhaust device resources (TLBs, L1 memory). Tests should avoid holding
+      references to device tensors beyond what's needed.
+
+    - Device configuration: Any device configuration changes persist across tests.
+
+    WHEN TO USE MODULE SCOPE:
+
+    Module-scoped devices work best for:
+    - Tests that are stateless or don't depend on program cache state
+    - Tests that properly clean up device state when needed
+    - Test modules with many parameterized test cases (biggest time savings)
+
+    Avoid module scope for:
+    - Tests that assert on program cache entry counts
+    - Tests that require specific device initialization state
+    - Tests that use mesh_device or other multi-device fixtures
+
+    FAILURE HANDLING:
+
+    If a test fails or crashes, subsequent tests in the module will still run with
+    the same device. The device generally remains usable, but may have stale state.
+    For test isolation after failures, prefer function-scoped devices.
+    """
+    import ttnn
+
+    device_id = request.config.getoption("device_id")
+
+    # Get device_params from marker - supports both patterns:
+    #   @pytest.mark.use_module_device({"param": value})  # positional
+    #   @pytest.mark.use_module_device(device_params={"param": value})  # keyword
+    marker = request.node.get_closest_marker("use_module_device")
+    if marker and marker.args:
+        device_params = marker.args[0]
+    elif marker and marker.kwargs:
+        # Validate kwargs - only 'device_params' is allowed
+        unexpected_kwargs = set(marker.kwargs.keys()) - {"device_params"}
+        if unexpected_kwargs:
+            raise ValueError(
+                f"@pytest.mark.use_module_device received unexpected keyword argument(s): "
+                f"{unexpected_kwargs}. Only 'device_params' is supported. "
+                f"Usage: @pytest.mark.use_module_device({{'l1_small_size': 16384}}) or "
+                f"@pytest.mark.use_module_device(device_params={{'l1_small_size': 16384}})"
+            )
+        device_params = marker.kwargs.get("device_params", {})
+    else:
+        device_params = {}
+
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
+    # Preserve original default device to restore on teardown
+    original_default_device = ttnn.GetDefaultDevice()
+
+    updated_device_params = get_updated_device_params(device_params)
+    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
+    ttnn.SetDefaultDevice(device)
+
+    yield device
+
+    # Restore the original default device BEFORE closing the test-specific one
+    ttnn.SetDefaultDevice(original_default_device)
+    ttnn.close_device(device)
+
+
 @pytest.fixture(scope="function")
 def device(request, device_params):
+    """
+    Primary device fixture - delegates to module-scoped or function-scoped implementation.
+
+    The device_params parameter is required even for the module-scoped path to detect
+    conflicting usage with @pytest.mark.parametrize("device_params", ...).
+    """
     import ttnn
+
+    # Check if file/test wants module-scoped device
+    if request.node.get_closest_marker("use_module_device"):
+        # device_params will be non-empty if test uses parametrized device_params,
+        # which conflicts with module-scoped device (can't vary device config per test)
+        if device_params:
+            raise ValueError(
+                "Cannot use @pytest.mark.use_module_device with "
+                "@pytest.mark.parametrize('device_params', ...). "
+                "Module-scoped devices are created once per module and cannot "
+                "vary per test. Either remove the marker to use function-scoped "
+                "device, or split tests with different device_params into separate files."
+            )
+        yield request.getfixturevalue("_device_module_impl")
+        return
 
     device_id = request.config.getoption("device_id")
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
@@ -322,12 +455,16 @@ def device(request, device_params):
     if is_tg_cluster() and not device_id:
         device_id = first_available_tg_device()
 
+    original_default_device = ttnn.GetDefaultDevice()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
     yield device
 
+    # Restore the original default device BEFORE closing the test-specific one
+    ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
 
 
@@ -344,7 +481,7 @@ def reset_fabric(fabric_config):
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
-def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
+def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None, fabric_manager=None):
     import ttnn
 
     # If fabric_config is not None, set it to fabric_config
@@ -359,7 +496,12 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
         if fabric_tensix_config is None:
             fabric_tensix_config = get_default_fabric_tensix_config()
 
-        ttnn.set_fabric_config(fabric_config, reliability_mode, None, fabric_tensix_config)  # num_planes
+        if fabric_manager is None:
+            fabric_manager = ttnn.FabricManagerMode.DEFAULT
+
+        ttnn.set_fabric_config(
+            fabric_config, reliability_mode, None, fabric_tensix_config, ttnn.FabricUDMMode.DISABLED, fabric_manager
+        )
 
 
 def get_default_fabric_tensix_config():
@@ -417,7 +559,8 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+    fabric_manager = updated_device_params.pop("fabric_manager", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -638,8 +781,14 @@ def reset_default_device(request):
         yield
         return
     device = ttnn.GetDefaultDevice()
+
     yield
-    ttnn.SetDefaultDevice(device)
+
+    if device is not None:
+        ttnn.SetDefaultDevice(device)
+    elif "device" in request.fixturenames:
+        # if the test used a device, but there was no default device, we need to clear the default device
+        ttnn.SetDefaultDevice(None)
 
 
 def get_devices(request):
@@ -934,8 +1083,14 @@ def pytest_runtest_teardown(item, nextitem):
         report = item.stash[phase_report_key]
         test_failed = report.get("call", None) and report["call"].failed
         if test_failed:
-            logger.info(f"In custom teardown, open device ids: {set(item.pci_ids)}")
-            reset_tensix(set(item.pci_ids))
+            # pci_ids may be on the test item (function-scoped device) or on the
+            # parent module node (module-scoped device via use_module_device marker)
+            pci_ids = getattr(item, "pci_ids", None)
+            if pci_ids is None and item.parent is not None:
+                pci_ids = getattr(item.parent, "pci_ids", None)
+            if pci_ids is not None:
+                logger.info(f"In custom teardown, open device ids: {set(pci_ids)}")
+                reset_tensix(set(pci_ids))
 
 
 # Session-scoped watchdog IPC keys

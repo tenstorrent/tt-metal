@@ -37,6 +37,8 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
 
 namespace tt::tt_fabric {
 
+constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+
 /**
  * @brief Determines the maximum number of local Ethernet connections per direction between ASICs in the system.
  *
@@ -59,6 +61,44 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         default: TT_THROW("Invalid routing direction: {}", routing_direction);
     }
 }
+
+using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
+using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
+
+const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
+    tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
+        {tt::tt_fabric::FabricType::MESH,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
+         }},
+        {tt::tt_fabric::FabricType::TORUS_X,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}}},
+        {tt::tt_fabric::FabricType::TORUS_Y,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}}},
+        {tt::tt_fabric::FabricType::TORUS_XY,
+         ClusterToDescriptorMap{
+             {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
@@ -233,6 +273,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back(
                 {src_chip_id, dst_chip_id, connection_data.count});
 
+            // Track mesh pairs that should use Z direction
+            if (connection_data.assign_z_direction) {
+                mesh_pairs_assign_z_direction_[*src_mesh_id].insert(*dst_mesh_id);
+                mesh_pairs_assign_z_direction_[*dst_mesh_id].insert(*src_mesh_id);
+            }
+
             // Track switch-to-mesh connections
             if (src_mesh_instance.kind == NodeKind::Switch && dst_mesh_instance.kind == NodeKind::Mesh) {
                 switch_to_connected_meshes_[src_mesh_id].push_back(dst_mesh_id);
@@ -245,6 +291,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             MeshId dst_mesh_id(dst_instance.local_id);
 
             requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] = connection_data.count;
+
+            // Track mesh pairs that should use Z direction
+            if (connection_data.assign_z_direction) {
+                mesh_pairs_assign_z_direction_[*src_mesh_id].insert(*dst_mesh_id);
+                mesh_pairs_assign_z_direction_[*dst_mesh_id].insert(*src_mesh_id);
+            }
 
             // Track switch-to-mesh connections
             if (src_instance.kind == NodeKind::Switch && dst_instance.kind == NodeKind::Mesh) {
@@ -574,6 +626,14 @@ const RequestedIntermeshConnections& MeshGraph::get_requested_intermesh_connecti
 
 const RequestedIntermeshPorts& MeshGraph::get_requested_intermesh_ports() const { return requested_intermesh_ports_; }
 
+bool MeshGraph::should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const {
+    auto it = mesh_pairs_assign_z_direction_.find(*src_mesh_id);
+    if (it != mesh_pairs_assign_z_direction_.end()) {
+        return it->second.find(*dst_mesh_id) != it->second.end();
+    }
+    return false;
+}
+
 const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& MeshGraph::get_mesh_edge_ports_to_chip_id() const {
     return mesh_edge_ports_to_chip_id_;
 }
@@ -698,13 +758,28 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
     return std::nullopt;
 }
 
-std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+std::vector<MeshId> MeshGraph::get_all_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
     mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         mesh_ids.push_back(mesh_id);
     }
     return mesh_ids;
+}
+
+std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
+    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
+        if (!this->is_switch_mesh(mesh_id)) {
+            mesh_ids.push_back(mesh_id);
+        }
+    }
+    return mesh_ids;
+}
+
+bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {
+    return std::find(switch_ids_.begin(), switch_ids_.end(), mesh_id) != switch_ids_.end();
 }
 
 MeshContainer<ChipId> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
@@ -920,6 +995,39 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(
     }
 
     return mesh_graph;
+}
+
+std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+    const tt::tt_metal::ClusterType cluster_type,
+    const std::string& root_dir,
+    const tt::tt_fabric::FabricType fabric_type) {
+    const auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
+    auto fabric_it = fabric_to_cluster_map.find(fabric_type);
+    if (fabric_it != fabric_to_cluster_map.end()) {
+        const auto& cluster_to_descriptor_map = fabric_it->second;
+        auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
+        if (cluster_it != cluster_to_descriptor_map.end()) {
+            return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
+        }
+    }
+
+    // Fallback: if a torus fabric type was requested but not found, try MESH fabric type.
+    if (fabric_type != FabricType::MESH) {
+        auto mesh_fabric_it = fabric_to_cluster_map.find(FabricType::MESH);
+        const auto& cluster_to_descriptor_map = mesh_fabric_it->second;
+        auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
+        if (cluster_it != cluster_to_descriptor_map.end()) {
+            log_warning(
+                tt::LogFabric,
+                "Mesh Graph Descriptor for fabric type {} and cluster type {} not found. Picking mesh graph descriptor "
+                "for MESH fabric type.",
+                enchantum::to_string(fabric_type),
+                enchantum::to_string(cluster_type));
+            return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
+        }
+    }
+
+    TT_THROW("Cannot find mesh graph descriptor for fabric type {} and cluster type {}", fabric_type, cluster_type);
 }
 
 }  // namespace tt::tt_fabric

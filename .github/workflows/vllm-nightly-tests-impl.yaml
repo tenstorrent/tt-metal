@@ -45,7 +45,7 @@ jobs:
             {
               "name": "[WH-T3K] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -73,7 +73,7 @@ jobs:
             {
               "name": "[BH-DB] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "BH-DeskBox",
               "arch": "arch-blackhole",
@@ -159,7 +159,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -190,7 +190,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 5,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -361,8 +361,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          auto-triage: false # We need to disable auto hang detection because it causes vLLM to raise an error if certain processing takes too long instead of letting it finish
-          slow-dispatch-timeout: 15 # If we ever decide to enable auto-triage, we need to increase default timeout
+          slow-dispatch-timeout: 15 # Increased above default to account for vLLM's longer-running dispatch operations and avoid false-positive hang detection when auto-triage is enabled.
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
@@ -593,7 +592,7 @@ jobs:
           cat output/vllm_result.json
 
       - name: Show structured output report
-        if: ${{ matrix.test-group.structured-output }}
+        if: ${{ always() && matrix.test-group.structured-output }}
         continue-on-error: true
         run: |
           cat output/vllm_result_structured.json

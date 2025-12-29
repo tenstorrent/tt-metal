@@ -19,13 +19,13 @@ target_sources(
         wormhole/wh_hal_active_eth.cpp
         wormhole/wh_hal_idle_eth.cpp
 )
+target_include_directories(wh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_include_directories(
     wh_hal
-    BEFORE
+    SYSTEM
     PRIVATE
-        ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/wormhole
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines
 )
 target_link_libraries(
     wh_hal
@@ -48,13 +48,8 @@ target_sources(
         blackhole/bh_hal_active_eth.cpp
         blackhole/bh_hal_idle_eth.cpp
 )
-target_include_directories(
-    bh_hal
-    BEFORE
-    PRIVATE
-        ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/blackhole
-)
+target_include_directories(bh_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
+target_include_directories(bh_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-1xx/blackhole)
 target_link_libraries(
     bh_hal
     PRIVATE

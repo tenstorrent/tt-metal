@@ -66,17 +66,19 @@ def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
     generate_positive_numbers=False,
+    dtype=torch.bfloat16,
 ):
     if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
         torch_tensor = torch.abs(torch_tensor)
         return torch_tensor
     else:
-        if tensor_shape in torch_tensor_map.keys():
-            torch_tensor = torch_tensor_map[tensor_shape]
+        cache_key = (tensor_shape, dtype)
+        if cache_key in torch_tensor_map.keys():
+            torch_tensor = torch_tensor_map[cache_key]
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-            torch_tensor_map[tensor_shape] = torch_tensor
+            torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
+            torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
 
@@ -304,6 +306,7 @@ def run_conv(
     )
 
     if run_twice:
+        del tt_output_tensor_on_device
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
             weight_tensor=d_w,
@@ -346,6 +349,11 @@ def run_conv(
                 pcc = 0.97
         elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
             pcc = 0.996
+        elif activation is not None and activation.op_type == ttnn.UnaryOpType.SIGMOID:
+            # Scale down PCC for sigmoid.
+            # The sigmoid function relies on the exp approximation, which can introduce small discrepancies in output values.
+            # This necessitates a slightly lower PCC threshold, similar to the adjustment for tanh.
+            pcc = 0.995
         else:
             pcc = 0.997
 
@@ -759,10 +767,10 @@ def test_conv_activation(
     "input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, throttle",
     # fmt: off
     (
-        (10,    64,  4096,   512,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi,   0),
-        (64,    64,  2048,   256,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),       0,  ttnn.MathFidelity.LoFi,   0),
-        (64,    64,  1024,   128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
-        (64,    64,   512,    64,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (10,    64,  4096,   512,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),   32 * 8,  ttnn.MathFidelity.LoFi,   0),
+        (64,    64,  2048,   256,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),    0,      ttnn.MathFidelity.LoFi,   0),
+        (64,    64,  1024,   128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),    0,      ttnn.MathFidelity.LoFi,   0),
+        (64,    64,   512,    64,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),    0,      ttnn.MathFidelity.LoFi,   0),
         ( 4,    32,  1024,  1024,   ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.LoFi,   0),
         (32,    48,  1020,  1020,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (2, 2),  32 * 2,  ttnn.MathFidelity.LoFi,   0),
         (48,    56,  1016,  1016,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (4, 4),  32 * 3,  ttnn.MathFidelity.LoFi,   0),
@@ -771,7 +779,7 @@ def test_conv_activation(
         (128,  128,  1024,  1024,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   3),
         (128,  3,   1024,  1024,    ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
         (16,   512,  128,    128,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
-        (256,  128,  1024,  1024,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi,   3),
+        (256,  128,  1024,  1024,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi,   3),
         (256,  256,  1024,  1024,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi,   3),
         (256,  256,  512,   512,    ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
         (512,  512,  256,   256,    ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
@@ -5085,3 +5093,125 @@ def test_conv_block_sharding(
         force_split_reader=force_split_reader,
         enable_act_double_buffer=act_double_buffer,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
+    """
+    Test that FP32 accumulation is automatically enabled when both input and weights are FP32.
+
+    Runs conv2d three times with FP32 inputs and FP32 weights:
+    1. Without compute_config (relies on auto-default)
+    2. With explicit fp32_dest_acc_en=True
+    3. With explicit fp32_dest_acc_en=False
+
+    Verifies that auto-default matches explicit True (not False), proving FP32 accum is auto-enabled.
+    """
+    batch_size = 1
+    out_channels = 64
+    input_channels = 64
+    input_height = 8
+    input_width = 8
+    kernel_size = 3
+    stride = 1
+    padding = 1
+
+    # Generate random FP32 inputs
+    torch.manual_seed(0)
+    torch_input_nchw = randomize_torch_tensor(torch_tensor_map, (batch_size, input_channels, input_height, input_width),dtype=torch.float32)
+    torch_weight = randomize_torch_tensor(torch_tensor_map, (out_channels, input_channels, kernel_size, kernel_size),dtype=torch.float32)
+    torch_bias = randomize_torch_tensor(torch_tensor_map, (1, 1, 1, out_channels),dtype=torch.float32)
+
+    # Convert input to NHWC for ttnn
+    torch_input_nhwc = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+
+    # Convert to ttnn tensors - all FP32
+    tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.float32, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.float32)
+    tt_bias = ttnn.from_torch(torch_bias, dtype=ttnn.float32)
+
+    # Run 1: WITHOUT explicit compute_config (auto-default behavior)
+    # Default from get_conv_default_compute_kernel_config() is:
+    # math_fidelity=HiFi4, math_approx_mode=true, fp32_dest_acc_en=true (for FP32xFP32), packer_l1_acc=false
+    tt_output_auto = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        # No compute_config - uses get_conv_default_compute_kernel_config()
+    )
+
+    # Run 2: WITH explicit fp32_dest_acc_en=True (matching expected default)
+    # Must match all default params: MathFidelity::HiFi4, math_approx_mode=true, packer_l1_acc=false
+    compute_config_true = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    tt_output_explicit_true = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config_true,
+    )
+
+    # Run 3: WITH explicit fp32_dest_acc_en=False (to verify difference)
+    # Keep all other params same as default, only change fp32_dest_acc_en
+    compute_config_false = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_output_explicit_false = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        in_channels=input_channels,
+        out_channels=out_channels,
+        device=device,
+        kernel_size=(kernel_size, kernel_size),
+        stride=(stride, stride),
+        padding=(padding, padding),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        compute_config=compute_config_false,
+    )
+
+    # Convert outputs to torch
+    tt_output_auto_torch = ttnn.to_torch(tt_output_auto)
+    tt_output_explicit_true_torch = ttnn.to_torch(tt_output_explicit_true)
+    tt_output_explicit_false_torch = ttnn.to_torch(tt_output_explicit_false)
+
+    # Auto-default should match explicit True (FP32 accum enabled)
+    assert torch.equal(tt_output_auto_torch, tt_output_explicit_true_torch), \
+        "Auto-default output does not match explicit fp32_dest_acc_en=True. " \
+        "FP32 accumulation was NOT automatically enabled for FP32 x FP32!"
+
+    # Auto-default should NOT match explicit False (verify they're different)
+    assert not torch.equal(tt_output_auto_torch, tt_output_explicit_false_torch), \
+        "Auto-default output matches explicit fp32_dest_acc_en=False. " \
+        "This suggests FP32 accumulation was NOT enabled (unexpected)."

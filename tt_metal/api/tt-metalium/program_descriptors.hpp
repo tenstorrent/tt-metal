@@ -67,6 +67,7 @@ struct CBDescriptor {
 };
 
 struct SemaphoreDescriptor {
+    uint32_t id{};
     CoreType core_type = CoreType::WORKER;
     CoreRangeSet core_ranges;
     uint32_t initial_value = 0;
@@ -102,7 +103,7 @@ struct KernelDescriptor {
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = std::vector<std::pair<std::string, std::string>>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
-    using RuntimeArgs = std::vector<std::vector<CoreRuntimeArgs>>;
+    using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = std::vector<uint32_t>;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
@@ -120,7 +121,8 @@ struct KernelDescriptor {
     NamedCompileTimeArgs named_compile_time_args;
     Defines defines;
 
-    // triple-nested vectors, where runtime_args[i][j] is a vector of rt args for core(i, j)
+    // vector of pairs, where runtime_args[i].first is the core coord and runtime_args[i].second is the vector of
+    // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
 
@@ -138,8 +140,6 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<ttsl::hash::hash_t> custom_program_hash;
-
-    uint32_t add_semaphore(CoreRangeSet core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
 };
 
 }  // namespace tt::tt_metal
