@@ -1,13 +1,15 @@
 """Module replacement utilities for converting PyTorch modules to TTNN."""
 
-from typing import Optional, Set
+from typing import Dict, Optional, Set
 
 from torch import nn
+
+from models.tt_symbiote.core.module import TTNNModule
 
 
 def initialize_module(
     old_module, old_class_to_new_class_dict, module_names, model_config, exclude_replacement: Optional[Set[str]] = None
-):
+) -> Optional[TTNNModule]:
     """Initialize a new TTNN module from a PyTorch module."""
     if old_module.__class__ in old_class_to_new_class_dict:
         if old_module in module_names and module_names[old_module] in exclude_replacement:
@@ -21,13 +23,20 @@ def initialize_module(
 
 
 def register_module_replacement_dict_with_module_names(
-    model, old_class_to_new_class_dict, model_config, module_names, exclude_replacement: Optional[Set[str]] = None
+    model,
+    old_class_to_new_class_dict,
+    model_config,
+    module_names,
+    exclude_replacement: Optional[Set[str]] = None,
+    result=None,
 ):
     """Recursively replace PyTorch modules with TTNN equivalents."""
     from models.tt_symbiote.core.module import TTNNModule
 
     if exclude_replacement is None:
         exclude_replacement = set()
+    if result is None:
+        result = {}
     assert isinstance(exclude_replacement, set), "exclude_replacement must be a set"
     assert all(isinstance(k, str) for k in exclude_replacement), "All keys in exclude_replacement must be strings"
     if isinstance(model, nn.Module):
@@ -40,9 +49,10 @@ def register_module_replacement_dict_with_module_names(
                 )
                 if new_module is not None:
                     model._modules[name] = new_module
+                    result[new_module.module_name] = new_module
             else:
                 register_module_replacement_dict_with_module_names(
-                    module, old_class_to_new_class_dict, model_config, module_names, exclude_replacement
+                    module, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                 )
         for attr_name in dir(model):
             if attr_name.startswith("_"):
@@ -59,9 +69,10 @@ def register_module_replacement_dict_with_module_names(
                         )
                         if new_module is not None:
                             value[k] = new_module
+                            result[new_module.module_name] = new_module
                     else:
                         register_module_replacement_dict_with_module_names(
-                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement
+                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
             if isinstance(value, (list, tuple)):
                 for idx, v in enumerate(value):
@@ -71,9 +82,10 @@ def register_module_replacement_dict_with_module_names(
                         )
                         if new_module is not None:
                             value[idx] = new_module
+                            result[new_module.module_name] = new_module
                     else:
                         register_module_replacement_dict_with_module_names(
-                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement
+                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
     elif isinstance(model, TTNNModule):
         for attr_name in dir(model):
@@ -91,9 +103,10 @@ def register_module_replacement_dict_with_module_names(
                         )
                         if new_module is not None:
                             value[k] = new_module
+                            result[new_module.module_name] = new_module
                     else:
                         register_module_replacement_dict_with_module_names(
-                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement
+                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
             if isinstance(value, (list, tuple)):
                 for idx, v in enumerate(value):
@@ -103,17 +116,20 @@ def register_module_replacement_dict_with_module_names(
                         )
                         if new_module is not None:
                             value[idx] = new_module
+                            result[new_module.module_name] = new_module
                     else:
                         register_module_replacement_dict_with_module_names(
-                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement
+                            v, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
                         )
 
 
 def register_module_replacement_dict(
     model, old_class_to_new_class_dict, model_config=None, exclude_replacement: Optional[Set[str]] = None
-):
+) -> Dict[str, TTNNModule]:
     """Register module replacements in the model."""
     module_names = {module: name for name, module in model.named_modules()}
+    result = {}
     register_module_replacement_dict_with_module_names(
-        model, old_class_to_new_class_dict, model_config, module_names, exclude_replacement
+        model, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
     )
+    return result
