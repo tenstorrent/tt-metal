@@ -163,11 +163,11 @@ FORCE_INLINE void recordRoutingFields2D(
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {
     // determine routing fields type at compile time
     KernelProfilerNocEventMetadata::FabricPacketType routing_fields_type;
-    if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyMeshRoutingFields>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH;
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY;
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::RoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::REGULAR;
     }
 
@@ -245,13 +245,13 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
     }
 
     // following profiler event just stores the routing fields
-    if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyMeshRoutingFields>) {
 #if defined(FABRIC_2D)
         recordRoutingFields2D(fabric_header_ptr->routing_fields, fabric_header_ptr->route_buffer);
 #endif
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         recordRoutingFields1D(fabric_header_ptr->routing_fields.value);
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::RoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         recordRoutingFields1D(fabric_header_ptr->routing_fields.value);
     }
 }
