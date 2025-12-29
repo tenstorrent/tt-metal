@@ -10,6 +10,7 @@ import ttnn
 import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import update_for_unsigned_single
 
 pytestmark = pytest.mark.use_module_device
 
@@ -30,8 +31,10 @@ def test_copy(shape, layout, dtype, device):
 
     ttnn.copy(input, input_b)
     assert input_b.shape == input.shape
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 1)
-    assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
+    assert_with_pcc(
+        update_for_unsigned_single(ttnn.to_torch(input)), update_for_unsigned_single(ttnn.to_torch(input_b)), 1
+    )
+    assert_equal(update_for_unsigned_single(ttnn.to_torch(input)), update_for_unsigned_single(ttnn.to_torch(input_b)))
 
 
 # Test for block sharding
@@ -85,8 +88,8 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
     ttnn.copy(input_tensor, output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 1)
-    assert_equal(input_tensor, outout_tensor)
+    assert_with_pcc(update_for_unsigned_single(input_tensor), update_for_unsigned_single(outout_tensor), 1)
+    assert_equal(update_for_unsigned_single(input_tensor), update_for_unsigned_single(outout_tensor))
 
 
 # Test for width sharding

@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+from tests.ttnn.utils_for_testing import update_for_unsigned_single
 
 pytestmark = pytest.mark.use_module_device
 
@@ -512,6 +513,7 @@ def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = update_for_unsigned_single(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 

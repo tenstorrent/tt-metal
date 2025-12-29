@@ -110,8 +110,13 @@ def assert_allclose(
     """
     if isinstance(expected_result, ttnn.Tensor):
         expected_result = ttnn.to_torch(expected_result)
+        # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
+        # so ttnn tensor must have a post-conversion correction to avoid this error.
+        expected_result = update_for_unsigned_single(expected_result)
+
     if isinstance(actual_result, ttnn.Tensor):
         actual_result = ttnn.to_torch(actual_result)
+        actual_result = update_for_unsigned_single(actual_result)
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -400,7 +405,11 @@ def maybe_trace(op_func, enable_trace, device):
     return output
 
 
-def update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip):
+def update_for_unsigned_roundrip(py_tensor, py_tensor_after_round_trip):
+    """
+    Use when the test converts the torch data to the TTNN data and back. This function
+    updates the possibly unsigned result of the `to_torch` to match the original input.
+    """
     if py_tensor.dtype == torch.int16:
         # TTNN does not have int16 type, so roundtrip with default parameters will
         # convert types as `int16 -> uint16 -> int32`
@@ -418,3 +427,23 @@ def update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip):
 
     else:
         return py_tensor_after_round_trip
+
+
+def update_for_unsigned_single(py_tensor):
+    """ "
+    Use on the result of the `to_torch` function to convert the tensor to the signed type.
+    """
+    if py_tensor.dtype == torch.uint16:
+        return py_tensor.to(torch.int16)
+
+    elif py_tensor.dtype == torch.uint32:
+        return py_tensor.to(torch.int32)
+
+    elif py_tensor.dtype == np.uint16:
+        return py_tensor.astype(np.int16)
+
+    elif py_tensor.dtype == np.uint32:
+        return py_tensor.astype(np.int32)
+
+    else:
+        return py_tensor
