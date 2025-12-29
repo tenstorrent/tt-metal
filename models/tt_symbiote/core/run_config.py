@@ -82,10 +82,10 @@ def copy_to_ttnn(func):
         res = e
         if isinstance(e, TorchTTNNTensor) and e.elem is not None and e.ttnn_tensor is not None:
             res = TorchTTNNTensor(ttnn.from_torch(e.elem.clone()))
-            res.ttnn_tensor = ttnn.to_device(res.to_ttnn, e.ttnn_tensor.device())
-            res.ttnn_tensor = ttnn.to_layout(
-                res.ttnn_tensor, e.ttnn_tensor.layout, memory_config=e.ttnn_tensor.memory_config()
-            )
+            res.ttnn_tensor = ttnn.to_layout(res.to_ttnn, e.ttnn_tensor.layout)
+            # TODO: copy memory config without erroring out.
+            if e.ttnn_tensor.is_allocated() and e.ttnn_tensor.device() is not None:
+                res.ttnn_tensor = ttnn.to_device(res.to_ttnn, e.ttnn_tensor.device())
         return res
 
     return _remove_ttnn_tensor
