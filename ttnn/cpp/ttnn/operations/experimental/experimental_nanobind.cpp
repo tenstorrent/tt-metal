@@ -51,6 +51,7 @@
 #include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/moe/moe_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -120,6 +121,8 @@ void py_module(nb::module_& mod) {
     operations::experimental::ternary::detail::bind_where(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
+
+    moe::detail::bind_moe(mod);
 }
 
 }  // namespace ttnn::operations::experimental
