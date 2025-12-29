@@ -423,3 +423,17 @@ main() {
 }
 
 main "$@"
+
+run_allam_func() {
+  fail=0
+
+  # ALLaM-7B functional test on N300
+  allam7b=humain-ai/ALLaM-7B-Instruct-preview
+  allam_cache=$TT_CACHE_HOME/$allam7b
+  MESH_DEVICE=N300 HF_MODEL=$allam7b TT_CACHE_PATH=$allam_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
+  echo "LOG_METAL: ALLaM-7B functional tests completed"
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}

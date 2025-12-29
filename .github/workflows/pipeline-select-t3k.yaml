@@ -67,6 +67,7 @@ on:
           - flux1-dev
           - motif
           - mistral
+          - allam
           - mixtral
           - whisper
           - qwen3

@@ -240,6 +240,29 @@ run_t3000_mistral_tests() {
 
 }
 
+run_t3000_allam_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_allam_tests"
+
+  # ALLaM-7B T3K demo test
+  hf_model="humain-ai/ALLaM-7B-Instruct-preview"
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1" ; fail+=$?
+  echo "LOG_METAL: ALLaM-7B T3K test completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_allam_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+
 run_t3000_mixtral_tests() {
   # Record the start time
   fail=0
@@ -428,6 +451,9 @@ run_t3000_tests() {
 
   # Run mistral tests
   run_t3000_mistral_tests
+
+  # Run ALLaM tests
+  run_t3000_allam_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests

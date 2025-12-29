@@ -133,6 +133,14 @@ jobs:
               "owner_id": "U0896VBAKFC" # Pratikkumar Prajapati
             },
             {
+              "name": "t3k_allam_tests",
+              "model": "allam",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_allam_tests",
+              "timeout": 90,
+              "owner_id": "U087HGJ455E" # Sudhanshu Singhal
+            },
+            {
               "name": "t3k_mixtral_tests",
               "model": "mixtral",
               "arch": "wormhole_b0",
