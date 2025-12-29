@@ -9,8 +9,8 @@ on:
       runner-label:
         required: true
         type: string
-      post_commit:
-        description: "If true, run in post-commit mode (exclude @skip_post_commit). If false, run full profiler regression."
+      post_commit_only:
+        description: "If true, run post-commit-only (exclude @pytest.mark.skip_post_commit). If false, run full profiler regression."
         required: false
         type: boolean
         default: true
@@ -54,8 +54,8 @@ on:
           - N150
           - N300
           - BH
-      post_commit:
-        description: "Run in post-commit mode (exclude @skip_post_commit)"
+      post_commit_only:
+        description: "Run post-commit-only (exclude @pytest.mark.skip_post_commit)"
         required: false
         type: boolean
         default: true
@@ -130,7 +130,7 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          if [[ "${{ inputs.post_commit }}" == "true" ]]; then
+          if [[ "${{ inputs.post_commit_only }}" == "true" ]]; then
             ./tests/scripts/run_profiler_regressions.sh --post-commit
           else
             ./tests/scripts/run_profiler_regressions.sh --full

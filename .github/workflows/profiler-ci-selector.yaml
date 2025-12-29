@@ -10,7 +10,7 @@ on:
   push:
     branches:
       - mo/34706_profiler_ci
-  workflow_dispatch:
+  workflow_call:
     inputs:
       run_t3k_profiler:
         description: "T3K profiler"
@@ -39,48 +39,14 @@ on:
         default: false
       enable-watcher:
         description: "Enable watcher (profiler regressions only)"
-        required: false
-        type: boolean
         default: false
+        type: boolean
       enable-lightweight-kernel-asserts:
         description: "Enable lightweight kernel asserts (profiler regressions only)"
-        required: false
-        type: boolean
         default: false
+        type: boolean
       enable-llk-asserts:
         description: "Enable LLK asserts (profiler regressions only)"
-        required: false
-        type: boolean
-        default: false
-  workflow_call:
-    inputs:
-      run_t3k_profiler:
-        required: false
-        type: boolean
-        default: false
-      run_galaxy_profiler:
-        required: false
-        type: boolean
-        default: false
-      run_blackhole_profiler:
-        required: false
-        type: boolean
-        default: false
-      run_n300_profiler:
-        required: false
-        type: boolean
-        default: false
-      run_n150_profiler:
-        required: false
-        type: boolean
-        default: false
-      enable-watcher:
-        default: false
-        type: boolean
-      enable-lightweight-kernel-asserts:
-        default: false
-        type: boolean
-      enable-llk-asserts:
         default: false
         type: boolean
 
@@ -89,11 +55,13 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' ||
-        github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true ||
-        github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true ||
-        github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true ||
-        github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true ||
-        github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true
+        (github.event_name == 'workflow_call' && (
+          inputs.run_t3k_profiler ||
+          inputs.run_galaxy_profiler ||
+          inputs.run_blackhole_profiler ||
+          inputs.run_n300_profiler ||
+          inputs.run_n150_profiler
+        ))
       }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -108,7 +76,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' ||
-        (github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true)
+        (github.event_name == 'workflow_call' && inputs.run_t3k_profiler)
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -124,7 +92,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' ||
-        (github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true)
+        (github.event_name == 'workflow_call' && inputs.run_galaxy_profiler)
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -140,7 +108,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'push' ||
-        (github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true)
+        (github.event_name == 'workflow_call' && inputs.run_blackhole_profiler)
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -149,19 +117,19 @@ jobs:
       arch: blackhole
       runner-label: P150b
       # Full profiler regression (non post-commit)
-      post_commit: false
+      post_commit_only: false
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ github.event.inputs['enable-watcher'] == 'true' || github.event.inputs['enable-watcher'] == true }}
-      enable-lightweight-kernel-asserts: ${{ github.event.inputs['enable-lightweight-kernel-asserts'] == 'true' || github.event.inputs['enable-lightweight-kernel-asserts'] == true }}
-      enable-llk-asserts: ${{ github.event.inputs['enable-llk-asserts'] == 'true' || github.event.inputs['enable-llk-asserts'] == true }}
+      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || false }}
+      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || false }}
+      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || false }}
 
   n300-profiler:
     if: >-
       ${{
         github.event_name == 'push' ||
-        (github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true)
+        (github.event_name == 'workflow_call' && inputs.run_n300_profiler)
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -170,19 +138,19 @@ jobs:
       arch: wormhole_b0
       runner-label: N300
       # Full profiler regression (non post-commit)
-      post_commit: false
+      post_commit_only: false
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ github.event.inputs['enable-watcher'] == 'true' || github.event.inputs['enable-watcher'] == true }}
-      enable-lightweight-kernel-asserts: ${{ github.event.inputs['enable-lightweight-kernel-asserts'] == 'true' || github.event.inputs['enable-lightweight-kernel-asserts'] == true }}
-      enable-llk-asserts: ${{ github.event.inputs['enable-llk-asserts'] == 'true' || github.event.inputs['enable-llk-asserts'] == true }}
+      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || false }}
+      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || false }}
+      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || false }}
 
   n150-profiler:
     if: >-
       ${{
         github.event_name == 'push' ||
-        (github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true)
+        (github.event_name == 'workflow_call' && inputs.run_n150_profiler)
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -191,10 +159,10 @@ jobs:
       arch: wormhole_b0
       runner-label: N150
       # Full profiler regression (non post-commit)
-      post_commit: false
+      post_commit_only: false
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ github.event.inputs['enable-watcher'] == 'true' || github.event.inputs['enable-watcher'] == true }}
-      enable-lightweight-kernel-asserts: ${{ github.event.inputs['enable-lightweight-kernel-asserts'] == 'true' || github.event.inputs['enable-lightweight-kernel-asserts'] == true }}
-      enable-llk-asserts: ${{ github.event.inputs['enable-llk-asserts'] == 'true' || github.event.inputs['enable-llk-asserts'] == true }}
+      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || false }}
+      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || false }}
+      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || false }}
