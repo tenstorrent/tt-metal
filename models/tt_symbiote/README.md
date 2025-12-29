@@ -193,7 +193,11 @@ core/
 ├── dispatcher.py        # TTNN operation dispatch handlers
 ├── torch_dispatcher.py  # PyTorch operation dispatch handlers
 ├── run_config.py        # Runtime configuration and mode management
-└── utils.py             # Utility functions for dtype conversion
+├── utils.py             # Utility functions for dtype conversion
+└── dispatchers/         # Dispatcher implementations
+    ├── default_dispatcher.py  # Default operation dispatcher
+    ├── debug_dispatcher.py    # Debug operation dispatcher
+    └── dispatcher_config.py   # Dispatcher configuration
 
 modules/                 # TTNN implementations
 ├── linear.py            # TTNNLinear, TTNNLinearLLama, TTNNLinearLLamaBFloat16
