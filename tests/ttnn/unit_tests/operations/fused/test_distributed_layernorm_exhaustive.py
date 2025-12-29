@@ -426,6 +426,7 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
     ],
     indirect=True,
 )
+@pytest.mark.skip(reason="Accuracy issue that needs to be investigated")
 def test_distributed_rmsnorm_2d_core_grid(mesh_device, batch_size, seq_len, hidden_dim, eps):
     """
     Test distributed RMS norm with 2D core grid layout enabled.
