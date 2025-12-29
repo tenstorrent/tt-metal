@@ -231,7 +231,7 @@ inline bool DeleteLinesStartingWith(const std::string& file_name, const std::str
     std::string content;
     std::string line;
     while (getline(log_file, line)) {
-        if (line.rfind(prefix, 0) == 0) {
+        if (line.starts_with(prefix)) {
             // Skip lines that begin with prefix
             continue;
         }
