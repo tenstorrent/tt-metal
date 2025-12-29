@@ -14,7 +14,7 @@ namespace ttnn::operations::normalization {
 struct LayerNormPostAllGatherOperationAttributes {
     LayerNormDistributedType norm_type;
     float eps;
-    MemoryConfig memory_config;
+    tt::tt_metal::MemoryConfig memory_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::DataType> dtype;
     std::optional<bool> use_2d_core_grid;
