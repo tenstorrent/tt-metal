@@ -44,6 +44,10 @@ ALWI void binary_left_shift_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t 
     MATH((llk_math_eltwise_binary_sfpu_left_shift<APPROX, InstrModLoadStore::INT32>(idst0, idst1, odst)));
 }
 
+ALWI void binary_left_shift_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_left_shift<APPROX, InstrModLoadStore::LO16>(idst0, idst1, odst)));
+}
+
 // clang-format off
 /**
  * Performs an elementwise shift operation to the right on the input at idst0, by input at idst1: y = x0 >> x1
@@ -75,6 +79,10 @@ ALWI void binary_right_shift_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_
 
 ALWI void binary_right_shift_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_right_shift<APPROX, InstrModLoadStore::INT32>(idst0, idst1, odst)));
+}
+
+ALWI void binary_right_shift_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_right_shift<APPROX, InstrModLoadStore::LO16>(idst0, idst1, odst)));
 }
 
 // clang-format off
