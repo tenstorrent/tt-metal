@@ -28,6 +28,7 @@ class ModelOptimisations:
 
     def __init__(
         self,
+        device,
         conv_act_dtype=ttnn.bfloat8_b,
         conv_w_dtype=ttnn.bfloat8_b,
     ):
@@ -38,6 +39,7 @@ class ModelOptimisations:
             conv_act_dtype: Default data type for convolution activations
             conv_w_dtype: Default data type for convolution weights
         """
+        self.device = device
         self.conv_output_dtype = conv_act_dtype
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
@@ -62,6 +64,10 @@ class ModelOptimisations:
 
         # Default overrides applied to all MaxPool2d layers
         self.default_maxpool_overrides = {}
+
+        # Default overrides applied to all Matmul layers
+        self.default_matmul_overrides = {}
+        self._setup_matmul_configs()
 
         self.layer_overrides = {}
 
@@ -145,6 +151,10 @@ class ModelOptimisations:
         """Get the default output dtype for convolutions."""
         return self.conv_output_dtype
 
+    def get_matmul_config(self, config_name: str):
+        """Get a specific matmul configuration by name"""
+        return self.default_matmul_overrides.get(config_name, None)
+
     # =========================================================================
     # HELPER METHODS FOR BULK REGISTRATION
     # =========================================================================
@@ -172,6 +182,57 @@ class ModelOptimisations:
         self.setup_aspp()
         self.setup_decoder()
         self.setup_heads()
+
+    def _setup_matmul_configs(self):
+        """Setup matmul configurations based on device capabilities"""
+        compute_grid = self.device.compute_with_storage_grid_size()
+
+        # Final upsample matmul configs (used by both semantic and instance heads)
+        if compute_grid.x == 5 and compute_grid.y == 4:
+            self.default_matmul_overrides.update(
+                {
+                    "final_upsample_mm_config1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(5, 4),
+                        in0_block_w=2,
+                        out_subblock_h=4,
+                        out_subblock_w=2,
+                        out_block_h=4,
+                        out_block_w=2,
+                        per_core_M=4,
+                        per_core_N=2,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                        untilize_out=False,
+                    ),
+                    "final_upsample_mm_config2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(5, 4),
+                        in0_block_w=2,
+                        out_subblock_h=4,
+                        out_subblock_w=2,
+                        out_block_h=16,
+                        out_block_w=2,
+                        per_core_M=16,
+                        per_core_N=2,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                        untilize_out=False,
+                    ),
+                }
+            )
+        else:
+            # Auto-config for other grid sizes
+            self.default_matmul_overrides.update(
+                {
+                    "final_upsample_mm_config1": None,
+                    "final_upsample_mm_config2": None,
+                }
+            )
 
     # -------------------------------------------------------------------------
     # RESNET BACKBONE CONFIGURATION
