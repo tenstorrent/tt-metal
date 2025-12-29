@@ -136,6 +136,11 @@ target_link_libraries(
 add_executable(unit_tests_ttnn_ccl_ops)
 target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
 
+# unit_tests_transaction_id_tracker
+add_executable(unit_tests_ttnn_transaction_id_tracker)
+target_sources(unit_tests_ttnn_transaction_id_tracker PRIVATE ccl/test_transaction_id_tracker.cpp)
+setup_ttnn_test_target(unit_tests_ttnn_transaction_id_tracker)
+
 # unit_tests_ttnn_ccl_multi_tensor
 
 add_executable(unit_tests_ttnn_ccl_multi_tensor)
