@@ -11,7 +11,7 @@ from typing import Any, Dict
 _DISPATCHER_REGISTRY: Dict[str, Any] = {}
 
 # Current active dispatcher (default to "default")
-_current_dispatcher = "default"
+_current_dispatcher = None
 
 
 def register_dispatcher(name: str, dispatcher_module: Any) -> None:
@@ -53,7 +53,7 @@ def get_active_dispatcher() -> Any:
         Dispatcher module with can_dispatch_to_ttnn and dispatch_to_ttnn functions
     """
     # Check environment variable first (similar to run_config)
-    env_dispatcher = os.environ.get("TT_SYMBIOTE_DISPATCHER")
+    env_dispatcher = os.environ.get("TT_SYMBIOTE_DISPATCHER", "default")
     if env_dispatcher is not None and env_dispatcher in _DISPATCHER_REGISTRY:
         return _DISPATCHER_REGISTRY[env_dispatcher]
 
