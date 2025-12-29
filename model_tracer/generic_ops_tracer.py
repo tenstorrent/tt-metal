@@ -229,42 +229,49 @@ def get_machine_info():
     Gracefully handles command not found or other errors.
     """
     try:
-        # Run the bash command to extract machine info with card count
-        cmd = """
-        tt-smi -ls \\
-        | sed 's/│/|/g' \\
-        | awk -F'|' '
-        /Boards that can be reset:/ {in_table=1; next}
-        in_table && $0 ~ /^\\|/ {
-            gsub(/^[ \\t]+|[ \\t]+$/, "", $3)
-            gsub(/^[ \\t]+|[ \\t]+$/, "", $4)
-            sub(/[[:space:]]+L$/, "", $4)
-            if ($3 != "") machines[$3" "$4]++
-        }
-        END {
-            for (m in machines) print m, machines[m], (machines[m] > 1 ? "cards" : "card")
-        }'
-        """
+        # Run tt-smi -ls and parse the output
+        result = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=10)
 
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)  # 10 second timeout
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
 
-        if result.returncode == 0 and result.stdout.strip():
-            # Parse the output: "Wormhole n300 1 card" or "Blackhole tt-galaxy-bh 32 cards"
-            lines = result.stdout.strip().split("\n")
-            if lines:
-                # Take the first line (should be the primary board)
-                parts = lines[0].strip().split()
+        # Parse the table output
+        # Look for lines in the "Boards that can be reset" table
+        # Example line: "│ 0      │ Wormhole │ n300              L │"
+        in_table = False
+        machines = {}  # {(board_type, device_series): count}
+
+        for line in result.stdout.split("\n"):
+            if "Boards that can be reset" in line:
+                in_table = True
+                continue
+
+            if not in_table:
+                continue
+
+            # Check if this is a table row (starts with │)
+            if line.strip().startswith("│"):
+                # Split by │ and clean up
+                parts = [p.strip() for p in line.split("│") if p.strip()]
+
+                # We expect: [index, board_type, device_series]
                 if len(parts) >= 3:
-                    board_type = parts[0]  # e.g., "Wormhole" or "Blackhole"
-                    device_series = parts[1]  # e.g., "n300", "n150", "tt-galaxy-bh"
-                    card_count = int(parts[2])  # e.g., 1, 2, 32
-                    return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+                    board_type = parts[1]
+                    device_series = parts[2].rstrip("L").strip()  # Remove trailing 'L' and whitespace
 
-        # If we get here, command didn't produce expected output
+                    # Skip header row or empty entries
+                    if board_type and device_series and board_type != "Board Type":
+                        key = (board_type, device_series)
+                        machines[key] = machines.get(key, 0) + 1
+
+        # Return the first (most common) machine configuration
+        if machines:
+            (board_type, device_series), card_count = max(machines.items(), key=lambda x: x[1])
+            return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+
         return None
 
     except subprocess.TimeoutExpired:
-        # Command took too long
         return None
     except FileNotFoundError:
         # tt-smi command not found
