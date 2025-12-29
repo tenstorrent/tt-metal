@@ -340,20 +340,15 @@ void kernel_main() {
                 pages_read_in_row = 0;
             }
 
-            if (direction == 1) {
-                if constexpr (num_targets_backward_direction) {
-                    if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                            fabric_direction_connection,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet));
-                    } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+            auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
+            // Will have more cases once scatter-write supports more than 2 distinct addresses
+            switch (tiles_to_put_in_current_packet) {
+                case 2: {
+                    uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= input_tensor_Wt) {
+                        row_offset += output_tensor_Wt;
+                        pages_read_in_row = 0;
                     }
 
                     auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
@@ -361,7 +356,7 @@ void kernel_main() {
                     if (direction == 1) {
                         if constexpr (num_targets_backward_direction) {
                             fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                                mux_connection_handle,
+                                fabric_direction_connection,
                                 pkt_scatter_hdr,
                                 l1_read_addr,
                                 NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
@@ -369,20 +364,17 @@ void kernel_main() {
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
                         uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
 
-            } else {
-                if constexpr (num_targets_forward_direction) {
-                    if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                            fabric_direction_connection,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet));
+                        noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, page_size);
+                        noc_async_write(l1_read_addr + page_size, local_noc0_dest_noc_addr_tile_two, page_size);
+                        noc_async_write_barrier();
                     } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+                        if constexpr (num_targets_forward_direction) {
+                            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                fabric_direction_connection,
+                                pkt_scatter_hdr,
+                                l1_read_addr,
+                                NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
+                        }
                     }
                     tiles_read += 2;
                     break;
@@ -392,7 +384,7 @@ void kernel_main() {
                     if (direction == 1) {
                         if constexpr (num_targets_backward_direction) {
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                mux_connection_handle,
+                                fabric_direction_connection,
                                 pkt_unicast_hdr,
                                 l1_read_addr,
                                 NocUnicastCommandHeader{noc_address0});
@@ -403,7 +395,7 @@ void kernel_main() {
                     } else {
                         if constexpr (num_targets_forward_direction) {
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                mux_connection_handle,
+                                fabric_direction_connection,
                                 pkt_unicast_hdr,
                                 l1_read_addr,
                                 NocUnicastCommandHeader{noc_address0});
@@ -557,7 +549,7 @@ void kernel_main() {
                         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             output_addrgen, tile_two_id, 0);
                         fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                            mux_connection_handle,
+                            fabric_direction_connection,
                             pkt_scatter_hdr,
                             l1_read_addr,
                             NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
@@ -567,7 +559,7 @@ void kernel_main() {
                     case 1:
                     default: {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            mux_connection_handle,
+                            fabric_direction_connection,
                             pkt_unicast_hdr,
                             l1_read_addr,
                             NocUnicastCommandHeader{noc_address0});
@@ -575,22 +567,6 @@ void kernel_main() {
                         break;
                     }
                 }
-
-                if (tiles_to_put_in_current_packet > 1) {
-                    fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                        fabric_direction_connection,
-                        pkt_scatter_hdr,
-                        l1_read_addr,
-                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet));
-                } else {
-                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        fabric_direction_connection,
-                        pkt_unicast_hdr,
-                        l1_read_addr,
-                        NocUnicastCommandHeader{noc_addrs[0]});
-                }
-
-                tiles_read += tiles_to_put_in_current_packet;
 
                 noc_async_writes_flushed();
 
