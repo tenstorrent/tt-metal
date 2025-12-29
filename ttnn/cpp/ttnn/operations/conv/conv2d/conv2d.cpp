@@ -91,7 +91,10 @@ Result conv2d_L1(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor_.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -149,6 +152,9 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, bias_tensor.has_value());
+
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
@@ -160,7 +166,8 @@ Result conv2d_L1(
         output_height,
         output_width,
         kernel_size,
-        compute_grid_size);
+        compute_grid_size,
+        conv_is_1d_depthwise);
 
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -175,6 +182,7 @@ Result conv2d_L1(
         output_parallel_config,
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
+        input_height,
         input_width,
         mm_conv && auto_shard,
         out_channels,
@@ -461,7 +469,10 @@ Result conv2d_DRAM(
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
     TT_FATAL(
         !conv_config.override_output_sharding_config,
         "Conv2D DRAM slicing doesn't support override_output_sharding_config.");

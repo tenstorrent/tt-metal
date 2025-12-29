@@ -93,11 +93,18 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # nlp_create_qkv_heads reshapes input [B, 1, S, hidden_dim] to Q heads [B, num_q_heads, S, head_dim]
-    # Input shape: [1, 1, 256, 1536] -> Output Q: [1, 16, 256, 64]
-    # So seq_len is the third dimension (256), not the second
-    expected_output_shape = (batch_size, num_q_heads, seq_len, head_dim)
-    torch_output_tensor = torch.zeros(expected_output_shape, dtype=torch_input_tensor_a.dtype)
+    # Compute proper torch reference (from test_nlp_create_qkv_heads.py)
+    # Split input into Q, K, V components
+    (ref_q, _, _) = torch.split(
+        torch_input_tensor_a, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
+    )
+
+    # Reshape and transpose to get proper head dimensions
+    # [B, 1, S, heads*head_dim] -> [B, S, heads, head_dim] -> [B, heads, S, head_dim]
+    ref_q = torch.reshape(ref_q, [batch_size, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+
+    # Use Q heads as reference for PCC check (operation returns tuple of Q, K, V)
+    torch_output_tensor = ref_q
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
