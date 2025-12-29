@@ -139,8 +139,8 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     constexpr uint32_t threshold_row_block = 32;
-    if (num_tiles_per_row > threshold_row_block) {
-        if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
             uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
                                         (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
             auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
