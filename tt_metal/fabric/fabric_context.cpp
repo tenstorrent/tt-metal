@@ -349,7 +349,8 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() co
     std::map<std::string, std::string> defines;
 
     // Add routing mode define
-    defines["ROUTING_MODE"] = std::to_string(static_cast<uint32_t>(this->topology_));
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    defines["ROUTING_MODE"] = std::to_string(control_plane.get_routing_mode());
 
     // Add UDM mode define
     bool udm_enabled =

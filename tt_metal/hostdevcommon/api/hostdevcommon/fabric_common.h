@@ -293,7 +293,7 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
     };
 
     // 1. Prefix: Forward to start
-    for (uint32_t hop = 0; hop < start_hop - 1; hop++) {
+    for (int hop = 0; hop < static_cast<int>(start_hop) - 1; hop++) {
         set_hop_field(hop, LowLatencyFields::FORWARD_ONLY);
     }
 
