@@ -34,6 +34,8 @@
 
 namespace tt::tt_metal {
 
+void on_dispatch_timeout_detected();
+
 namespace {
 
 bool wrap_ge(uint32_t a, uint32_t b) {
@@ -454,7 +456,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = []() {
-            MetalContext::instance().on_timeout_detected();
+            MetalContext::instance().on_dispatch_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -507,7 +509,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
 
-        MetalContext::instance().on_timeout_detected();
+        MetalContext::instance().on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
