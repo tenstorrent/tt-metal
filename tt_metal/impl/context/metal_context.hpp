@@ -102,13 +102,15 @@ public:
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
-        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED);
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
+        tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
 
-    distributed::multihost::DistributedContext& global_distributed_context();
+    const distributed::multihost::DistributedContext& global_distributed_context();
+    const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
@@ -117,6 +119,9 @@ public:
 
     // Fabric UDM mode configuration
     tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
+
+    // Fabric manager mode configuration
+    tt_fabric::FabricManagerMode get_fabric_manager() const;
 
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
@@ -213,6 +218,7 @@ private:
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread
@@ -227,6 +233,7 @@ private:
     uint8_t num_fabric_active_routing_planes_ = 0;
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
+    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 };
 
 }  // namespace tt::tt_metal

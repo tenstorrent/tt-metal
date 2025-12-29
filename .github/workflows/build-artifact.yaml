@@ -63,11 +63,6 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
-      nanobind:
-        required: false
-        type: boolean
-        default: false
-        description: "Build with nanobind bindings"
       build-umd-tests:
         required: false
         type: boolean
@@ -88,11 +83,6 @@ on:
         type: string
         default: ""
         description: "Workflow run ID to download artifacts from (skips build)"
-      build-evaluation-image:
-        required: false
-        type: boolean
-        default: false
-        description: "Build evaluation Docker image with build artifacts and wheel installed"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -109,9 +99,6 @@ on:
       basic-ttnn-runtime-docker-image:
         description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
         value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
-      evaluation-docker-image:
-        description: "Docker tag for the evaluation Docker image"
-        value: ${{ jobs.build-evaluation-image.outputs.evaluation-docker-image }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
@@ -165,11 +152,6 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
-      nanobind:
-        required: false
-        type: boolean
-        default: false
-        description: "Build with nanobind bindings"
       build-umd-tests:
         required: false
         type: boolean
@@ -331,9 +313,6 @@ jobs:
           if [ "${{ inputs.profile }}" = "true" ]; then
             build_command="$build_command --enable-time-trace --disable-unity-builds"
           fi
-          if [ "${{ inputs.nanobind }}" = "true" ]; then
-            build_command="$build_command --bindings nanobind"
-          fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_command="$build_command --build-umd-tests"
           fi
@@ -418,21 +397,3 @@ jobs:
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
-
-  build-evaluation-image:
-    name: "📦 Build Evaluation Docker Image"
-    if: |
-      inputs.build-evaluation-image &&
-      (
-        (inputs.use-artifacts-from-run == '' && !cancelled()) ||
-        (inputs.use-artifacts-from-run != '' && needs.download-artifacts.result == 'success')
-      )
-    needs: [build-docker-image, build-artifact, build-wheel, download-artifacts]
-    uses: ./.github/workflows/build-evaluation-image.yaml
-    secrets: inherit
-    with:
-      base-image-name: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.dev-tag }}
-      evaluation-image-name: harbor.ci.tenstorrent.net/evaluation/${{ github.repository }}/tt-metalium/${{ inputs.distro }}-${{ inputs.version }}-evaluation-${{ inputs.architecture }}:${{ github.sha }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build_artifact_name }}
-      wheel-artifact-name: ${{ needs.build-wheel.outputs.wheel_artifact_name }}
-      run-id: ${{ inputs.use-artifacts-from-run != '' && inputs.use-artifacts-from-run || github.run_id }}

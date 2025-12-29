@@ -123,10 +123,14 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
+    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
+        "typecast_tile_init<{0}u, {1}u>",
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     tt::tt_metal::CreateKernel(
         program,
@@ -146,7 +150,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         unary_reader_kernel_id,
         all_cores,
         {
-            (uint32_t)(num_tile_per_core),
+            static_cast<uint32_t>(num_tile_per_core),
         });
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};

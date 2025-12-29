@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/decorators.hpp"
+#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_block_program_factory.hpp"
+#include "tilize_single_core_program_factory.hpp"
+#include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_device_operation_types.hpp"
+
+namespace ttnn::operations::data_movement {
+
+struct TilizeDeviceOperation {
+    using operation_attributes_t = data_movement::tilize::operation_attributes_t;
+    using tensor_args_t = data_movement::tilize::tensor_args_t;
+    using spec_return_value_t = data_movement::tilize::spec_return_value_t;
+    using tensor_return_value_t = data_movement::tilize::tensor_return_value_t;
+    using program_factory_t = std::variant<
+        program::TilizeMultiCoreInterleavedProgramFactory,
+        program::TilizeMultiCoreBlockProgramFactory,
+        program::TilizeSingleCoreProgramFactory,
+        program::TilizeMultiCoreShardedProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensors,
+        const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
+        const std::optional<tt::tt_metal::DataType>& output_dtype,
+        bool use_multicore,
+        bool enough_space_width,
+        bool enough_space_height,
+        bool use_low_perf,
+        const std::optional<CoreRangeSet>& sub_core_grids);
+};
+
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+constexpr auto tilize =
+    ttnn::register_operation<"ttnn::prim::tilize", ttnn::operations::data_movement::TilizeDeviceOperation>();
+}  // namespace ttnn::prim

@@ -51,12 +51,12 @@ INSTANTIATE_TEST_SUITE_P(
 using BigMeshDualRankTest2x4 = MeshDevice2x4Fixture;
 
 TEST(BigMeshDualRankTest, DistributedContext) {
-    auto& dctx = MetalContext::instance().global_distributed_context();
+    const auto& dctx = MetalContext::instance().global_distributed_context();
     EXPECT_EQ(dctx.size(), multihost::Size(2));
 }
 
 TEST(BigMeshDualRankTest, LocalRankBinding) {
-    auto& global_context = MetalContext::instance().global_distributed_context();
+    const auto& global_context = MetalContext::instance().global_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
     tt_fabric::MeshHostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();

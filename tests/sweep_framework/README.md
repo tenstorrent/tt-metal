@@ -338,7 +338,7 @@ Traceback (most recent call last):
 ModuleNotFoundError: No module named 'beautifultable'
 ```
 
-- TTNN class pybinds need to use the `tt_pybind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `py::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these pybinds.
+- TTNN class nanobinds need to use the `tt_nanobind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `nb::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these nanobinds.
 
 - Code within the `invalidate_vector` function or any code / generators used within `parameters` must NOT include any device code. These functions are intended to be run on CPU only, without access to a device. If you wish to filter tests by device architecture, see the [Device Fixture](#device-fixture) section.
 

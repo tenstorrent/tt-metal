@@ -4,20 +4,20 @@
 
 // clang-format off
 #include "ckernel.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "risc_common.h"
 #include <tensix.h>
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
-#include "debug/fw_debug.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/debug/fw_debug.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 #if !defined(UCK_CHLKC_MATH)
-#include "circular_buffer.h"
-#include "circular_buffer_init.h"
+#include "internal/circular_buffer_interface.h"
+#include "internal/circular_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on

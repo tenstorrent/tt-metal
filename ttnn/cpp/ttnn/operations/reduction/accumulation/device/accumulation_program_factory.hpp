@@ -63,7 +63,7 @@ struct AccumulationProgramFactory {
         const DataType& dtype,
         const AccumulationCB& accumulation_cb,
         const CoreRangeSet& core_range_set,
-        const uint32_t& tiles_num);
+        const uint32_t& num_tiles);
 
     static KernelHandle create_kernel(
         Program& program,

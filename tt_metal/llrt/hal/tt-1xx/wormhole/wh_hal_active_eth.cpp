@@ -5,8 +5,8 @@
 #define HAL_BUILD tt::tt_metal::wormhole::active_eth
 #define COMPILE_FOR_ERISC
 
-#include "dev_msgs.h"
-#include "fabric_telemetry_msgs.h"
+#include "hostdev/dev_msgs.h"
+#include "hostdev/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"

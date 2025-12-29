@@ -30,6 +30,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
+#include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
@@ -432,14 +433,15 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
     TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
 
+    // May block waiting for other processes to release the device.
+    this->driver_->start_device(device_params);
+
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
             ll_api::configure_static_tlbs(
                 this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
         }
     }
-
-    this->driver_->start_device(device_params);
 }
 
 Cluster::~Cluster() {
@@ -882,15 +884,15 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
 
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    umd::semver_t sw(umd::semver_t::from_eth_fw_tag(sw_version)), fw_first_eth_core(umd::semver_t::from_eth_fw_tag(fw_versions.at(0)));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
-        sw.str(),
-        fw_first_eth_core.str(),
+        sw.to_string(),
+        fw_first_eth_core.to_string(),
         device_id);
     for (std::uint32_t &fw_version : fw_versions) {
-        umd::tt_version fw(fw_version);
+        umd::semver_t fw(umd::semver_t::from_eth_fw_tag(fw_version));
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
@@ -1401,6 +1403,14 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) con
         }
     }
     return is_external_cable;
+}
+
+uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
+    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+        return this->hal_.get_dma_alignment();
+    } else {
+        return 1;
+    }
 }
 
 }  // namespace tt

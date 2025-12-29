@@ -27,13 +27,13 @@ struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::program

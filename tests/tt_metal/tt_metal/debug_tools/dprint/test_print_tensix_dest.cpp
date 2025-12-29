@@ -86,7 +86,7 @@ protected:
     // Hook method to be implemented by derived classes
     virtual void print_datum(std::stringstream& ss, uint32_t datum) = 0;
 
-    void print_new_line(std::stringstream& ss, uint32_t i) {
+    void print_new_line(std::stringstream& ss, uint32_t i) const {
         if (i > 0) {
             ss << std::endl;
         }
@@ -416,10 +416,9 @@ static bool reader_datacopy_writer(
     // Check the print log against golden output.
     if (config.data_format == tt::DataFormat::Float32 && arch == ARCH::WORMHOLE_B0) {
         // Skip all device-side warning lines added before each tile print
-        DeleteLinesStartingWith(
-            DPrintMeshFixture::dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
     }
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
     // Compare input and output data
     return input_data == output_data;
