@@ -219,7 +219,7 @@ class TestConfig:
             )
 
         TestConfig.OPTIONS_LINK = "-nodefaultlibs -fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
-        TestConfig.INITIAL_OPTIONS_COMPILE = f"-fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Wunused-parameter -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -nostdlib -fno-builtin -Wmaybe-uninitialized -DTENSIX_FIRMWARE -DENV_LLK_INFRA {TestConfig.ARCH_DEFINE}"
+        TestConfig.INITIAL_OPTIONS_COMPILE = f"-g -fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Wunused-parameter -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -nostdlib -fno-builtin -Wmaybe-uninitialized -DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE}"
         TestConfig.INCLUDES = f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib -I../{TestConfig.ARCH_LLK_ROOT}/common/inc -I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu -Isfpi/compiler/lib/gcc/riscv-tt-elf/*/include -I{TestConfig.HEADER_DIR} -Ifirmware/riscv/common -Isfpi/include -Ihelpers/include"
 
     @staticmethod
@@ -381,7 +381,7 @@ class TestConfig:
         )
         OPTIONS_COMPILE = f"{TestConfig.INCLUDES} {TestConfig.INITIAL_OPTIONS_COMPILE} "
 
-        if self.boot_mode == BootMode.TRISC:
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
             OPTIONS_COMPILE += "-DLLK_BOOT_MODE_TRISC "
         else:
             OPTIONS_COMPILE += "-DLLK_BOOT_MODE_BRISC "
@@ -834,7 +834,9 @@ class TestConfig:
                     )
                 set_tensix_soft_reset(0, [RiscCore.BRISC], location)
             case BootMode.TRISC:
-                set_tensix_soft_reset(0, [RiscCore.TRISC0], location)
+                set_tensix_soft_reset(
+                    0, [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2], location
+                )
             case BootMode.EXALENS:
                 exalens_device_setup(TestConfig.CHIP_ARCH, location)
                 set_tensix_soft_reset(
