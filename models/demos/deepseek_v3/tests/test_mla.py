@@ -411,8 +411,8 @@ def run_test_forward_pass_mla2d(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, USERS_PER_ROW),
-        # Powers of 2 from 128 to 128K for prefill
         ("prefill", 128, 1),
+        ("prefill", 2048, 1),
     ],
 )
 @pytest.mark.parametrize(

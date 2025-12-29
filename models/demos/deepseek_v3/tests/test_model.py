@@ -291,7 +291,6 @@ def run_test_forward_pass_dpmodel(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, 32),
-        # Powers of 2 from 128 to 128K for prefill
         ("prefill", 128, 1),
         # ("prefill", 2048),  # Test chunking # TODO: Uncomment once MLA prefill works
     ],

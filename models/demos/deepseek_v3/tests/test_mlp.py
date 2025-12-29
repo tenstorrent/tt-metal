@@ -123,8 +123,7 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     "mode,seq_len",
     [
         ("decode", 32),
-        # Powers of 2 from 128 to 128K for prefill
-        ("prefill", 128),
+        ("prefill", 512),
         ("prefill", 2048),  # Test chunking
     ],
 )

@@ -20,8 +20,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "mode,seq_len",
     [
         ("decode", 128),
-        # Powers of 2 from 128 to 128K for prefill
-        ("prefill", 128),
+        ("prefill", 2048),
     ],
 )
 @pytest.mark.parametrize(

@@ -47,8 +47,7 @@ def reference_model(hf_config):
     "mode,seq_len",
     [
         ("decode", 128),
-        # Powers of 2 from 128 to 128K for prefill
-        ("prefill", 128),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(
