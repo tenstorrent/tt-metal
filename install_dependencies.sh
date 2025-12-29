@@ -222,6 +222,7 @@ init_packages() {
                 "gcc-c++"
                 "make"
                 "clang"
+                "clang-tools-extra" # for linker-wrapper
                 "cmake"
                 "ninja-build"
                 "pkgconf-pkg-config"

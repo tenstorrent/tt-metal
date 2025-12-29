@@ -147,6 +147,7 @@ elseif(COMPILER_SUPPORTS_GZ AND LINKER_SUPPORTS_COMPRESS_ZLIB)
     add_link_options(-Wl,--compress-debug-sections=zlib)
 else()
     message(STATUS "Compressed debug sections not supported, skipping")
+    message(STATUS "Do you have the clang-tools package installed?")
 endif()
 
 #===============================================================================

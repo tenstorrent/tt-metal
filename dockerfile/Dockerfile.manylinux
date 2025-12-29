@@ -1,5 +1,7 @@
 FROM quay.io/pypa/manylinux_2_34_x86_64
 
+# manylinux_2_34_x86_64 is AlmaLinux 9.7
+
 # Hack for CIv2
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
