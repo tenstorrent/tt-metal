@@ -298,6 +298,7 @@ class NormalRun:
             self.elem.cpu(),
             dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
             mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
+            layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
         )
         return self.ttnn_tensor
 
