@@ -33,15 +33,10 @@ class MLP(LightweightModule):
         self.model_config = model_config
         self.layer_num = layer_num
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
+        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
-
-        def torch_weight(name):
-            key = f"{state_dict_prefix}.{name}.weight"
-            if key not in state_dict:
-                raise KeyError(f"Weight key '{key}' not found in state_dict")
-            return torch.transpose(state_dict[key], -2, -1)
 
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -147,15 +142,6 @@ class MLP(LightweightModule):
             memory_config=memory_config,
         )
         ttnn.deallocate(x)
-
-        if self.activation_type == "relu2" or str(self.activation_type).lower() == "relu2":
-            relu_out = ttnn.relu(w3_out)
-            act_out = ttnn.mul(
-                relu_out, relu_out, dtype=activation_dtype or ttnn.bfloat8_b, memory_config=w3_out.memory_config()
-            )
-            ttnn.deallocate(relu_out)
-        else:
-            act_out = ttnn.unary(w3_out, self.activation_type)
 
         if TG:
             # if mode == "decode" and self.dim!=8192:
