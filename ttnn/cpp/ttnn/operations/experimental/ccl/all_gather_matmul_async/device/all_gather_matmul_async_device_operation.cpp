@@ -195,7 +195,7 @@ AllGatherMatmulAsyncDeviceOperation::invoke(
             num_buffers_per_channel,
             /*reverse_order=*/false,
             /*sub_core_grid=*/std::nullopt,
-            /*mesh_device=*/nullptr);
+            /*optional_mesh_device=*/nullptr);
 
     // Create the all gather output tensor used as input (activation) to the matmul
     ttnn::Tensor all_gather_out_tensor = all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
