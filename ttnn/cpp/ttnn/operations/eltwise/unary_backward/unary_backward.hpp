@@ -18,7 +18,7 @@ struct ExecuteUnaryBackwardNeg {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -26,17 +26,17 @@ struct ExecuteUnaryBackwardThreshold {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float min,
-        float max,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float threshold,
+        float value,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRpow {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float scalar,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float exponent,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardDivNoNan {
@@ -44,396 +44,396 @@ struct ExecuteUnaryBackwardDivNoNan {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float scalar,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardPolygamma {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        int scalar,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        int n,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLog {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRound {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardFloor {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLogit {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRelu {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardAcosh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardCos {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardHardsigmoid {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLgamma {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardMultigammaln {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSoftplus {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        float parameter_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float beta,
+        float threshold,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardHardtanh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        float parameter_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float min,
+        float max,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardHardshrink {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float lambd,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSoftshrink {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float lambd,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLeakyRelu {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float negative_slope,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardElu {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float alpha,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardCelu {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float alpha,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLogiteps {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float eps,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardTan {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSquare {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSelu {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRelu6 {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardI0 {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardFillZero {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLogSigmoid {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardTrunc {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardFrac {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRad2deg {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardAtan {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardAcos {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardErfc {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardErfinv {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardDigamma {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardExpm1 {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardExp2 {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSign {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLog2 {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardCosh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSoftsign {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardCeil {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSigmoid {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLog1p {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardLog10 {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSinh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSin {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardAsinh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardAsin {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardAtanh {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardTanhshrink {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardHardswish {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardDeg2rad {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardErf {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRsqrt {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -443,14 +443,14 @@ struct ExecuteUnaryBackwardClamp {
         const Tensor& input_tensor_arg,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardClip {
@@ -459,39 +459,39 @@ struct ExecuteUnaryBackwardClip {
         const Tensor& input_tensor_arg,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRdiv {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter_a,
-        const std::optional<std::string>& parameter_b = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        float scalar,
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRepeat {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const ttnn::Shape& parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const ttnn::Shape& shape,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardPow {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        float exponent,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -499,7 +499,7 @@ struct ExecuteUnaryBackwardExp {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -507,7 +507,7 @@ struct ExecuteUnaryBackwardTanh {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -515,7 +515,7 @@ struct ExecuteUnaryBackwardSqrt {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -523,7 +523,7 @@ struct ExecuteUnaryBackwardSilu {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -531,7 +531,7 @@ struct ExecuteUnaryBackwardFill {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
@@ -540,37 +540,37 @@ struct ExecuteUnaryBackwardProd {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         std::optional<int64_t> dim = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRecip {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor& grad_tensor_arg,
         const ComplexTensor& input_tensor_a_arg,
-        const MemoryConfig& memory_config);
+        const MemoryConfig& output_mem_config);
 };
 
 struct ExecuteUnaryBackwardAbs {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
-        const Tensor& grad_tensor_arg, const ComplexTensor& input_tensor_a_arg, const MemoryConfig& memory_config);
+        const Tensor& grad_tensor_arg, const ComplexTensor& input_tensor_a_arg, const MemoryConfig& output_mem_config);
 };
 
 struct ExecuteUnaryBackwardGelu {
     static std::vector<std::optional<ttnn::Tensor>> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const std::string& parameter_a,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::string& approximate,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };
 

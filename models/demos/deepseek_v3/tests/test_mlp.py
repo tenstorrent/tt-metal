@@ -33,7 +33,8 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
         MLPClass=MLP,
         hf_config=hf_config,
         state_dict=reference_model.state_dict(),
-        tmp_path=tmp_path,
+        tmp_path=tmp_path
+        / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
         mesh_device=mesh_device,
         reference_w1=reference_state_dict["gate_proj.weight"],
     )
@@ -50,7 +51,8 @@ def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, 
         MLPClass=MLPClass,
         hf_config=hf_config,
         state_dict=state_dict,
-        tmp_path=tmp_path,
+        tmp_path=tmp_path
+        / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
         mesh_device=mesh_device,
         reference_w1=dequantize(
             state_dict["gate_proj.weight"],
@@ -80,6 +82,9 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     # assert Path(weight_config["w1"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w2"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w3"]["input_tensor_b"]).exists()
+
+    # Make the path absolute - this is required since load_weight expects an absolute path
+    weight_config["w1"]["input_tensor_b"].path = tmp_path / weight_config["w1"]["input_tensor_b"].path
 
     # Load and verify a weight
     w1_ttnn = load_weight(weight_config["w1"]["input_tensor_b"], device=mesh_device)

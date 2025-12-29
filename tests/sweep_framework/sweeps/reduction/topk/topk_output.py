@@ -8,7 +8,7 @@ import pytest
 import torch
 import random
 import ttnn
-from tests.sweep_framework.framework.permutations import *
+from tests.sweep_framework.framework.permutations import permutations
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_similarity

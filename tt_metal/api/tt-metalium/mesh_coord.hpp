@@ -114,7 +114,7 @@ bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 
-std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
+std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -217,7 +217,7 @@ public:
     explicit MeshCoordinateRangeSet(const MeshCoordinateRange&);
 
     // Merges the given range into the set.
-    void merge(const MeshCoordinateRange& range);
+    void merge(const MeshCoordinateRange& to_merge);
 
     // Returns the number of ranges in the set.
     size_t size() const { return ranges_.size(); }

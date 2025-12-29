@@ -165,6 +165,18 @@ If we search for `report_path` in `ttnn/cpp/ttnn-nanobind`, we find the binding 
 The error message identifies the types `std::optional` and `std::filesystem::__cxx11::path`, so we know
 that the typecaster headers required are `#include <nanobind/stl/optional.h>` and `#include <nanobind/stl/filesystem.h>`.
 
+#### CI pytest fails because parameterization does not exist
+
+Nanobind Enums, when used in a pytest, will have the actual enum value show in the test parameterization instead of
+a generic name and index.
+
+```git
+-          pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-dtype0-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
++          pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
+
+-          pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-math_op0-8x4_grid-8-buffer_type0-input_dtype0-4-2-per_chip_output_shape0-layout0]" --timeout=300;
++          pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]" --timeout=300;
+```
 
 ---
 

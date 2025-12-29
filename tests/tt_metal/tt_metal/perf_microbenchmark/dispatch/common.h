@@ -81,7 +81,7 @@ private:
         const one_core_data_t& one_core_data,
         uint32_t start_index,
         uint32_t result_addr);
-    bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
+    bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data);
 
     void prepopulate_dram(distributed::MeshDevice::IDevice* device, uint32_t size_words);
 
@@ -117,14 +117,14 @@ public:
     bool validate(distributed::MeshDevice::IDevice* device);
     void overflow_check(distributed::MeshDevice::IDevice* device);
 
-    int size() { return amt_written; }
+    int size() const { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
 
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
 
     tt::CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
     uint32_t size_at(CoreCoord core, int bank_id);
-    uint32_t at(CoreCoord core, int bank_id, uint32_t addr);
+    uint32_t at(CoreCoord core, int bank_id, uint32_t offset);
     CoreCoord get_host_core() { return this->host_core; }
     bool core_and_bank_present(CoreCoord core, uint32_t bank);
 };
