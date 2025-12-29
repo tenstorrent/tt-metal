@@ -36,10 +36,8 @@ struct MeshRuntimeArgsDescriptor {
 
     // Per-coordinate runtime args: maps mesh coordinate → per-core runtime args
     // If a coordinate is not present, uses the base ProgramDescriptor's runtime_args
-    using CoordinateRuntimeArgs = std::unordered_map<
-        distributed::MeshCoordinate,
-        KernelDescriptor::RuntimeArgs  // [core_x][core_y] -> args
-        >;
+    // RuntimeArgs is a vector of pairs: (CoreCoord, CoreRuntimeArgs)
+    using CoordinateRuntimeArgs = std::unordered_map<distributed::MeshCoordinate, KernelDescriptor::RuntimeArgs>;
     CoordinateRuntimeArgs coordinate_args;
 };
 
@@ -49,7 +47,7 @@ struct MeshProgramDescriptor {
 
     // GlobalSemaphores to allocate at mesh level
     // Referenced via GlobalSemRef{index} in RuntimeArgsBuilder
-    ttsl::SmallVector<GlobalSemaphoreDescriptor, 3> global_semaphores;
+    // ttsl::SmallVector<GlobalSemaphoreDescriptor, 3> global_semaphores;
 
     //------------------------------------------------------------------
     // Topology/Configuration
@@ -58,10 +56,9 @@ struct MeshProgramDescriptor {
 
     // Custom reflection attributes
     static constexpr auto attribute_names =
-        std::forward_as_tuple("num_mesh_programs", "num_runtime_args", "num_global_semaphores", "sub_device_id");
+        std::forward_as_tuple("num_mesh_programs", "num_runtime_args", "sub_device_id");
     auto attribute_values() const {
-        return std::forward_as_tuple(
-            mesh_programs.size(), mesh_runtime_args.size(), global_semaphores.size(), sub_device_id);
+        return std::forward_as_tuple(mesh_programs.size(), mesh_runtime_args.size(), sub_device_id);
     }
 };
 

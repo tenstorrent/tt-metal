@@ -99,52 +99,52 @@ inline constexpr bool is_global_sem_ref_v = is_global_sem_ref<std::decay_t<T>>::
 //   - Stores ref positions in a small vector (typically 0-3 refs per kernel)
 //   - resolve() only touches ref positions - O(num_refs) not O(num_args)
 //==============================================================================
-struct CoreRuntimeArgs {
-    std::vector<uint32_t> args;
-    ttsl::SmallVector<uint8_t, 4> ref_positions;  // Indices where GlobalSemRef was used
+// struct CoreRuntimeArgs {
+//     std::vector<uint32_t> args;
+//     ttsl::SmallVector<uint8_t, 4> ref_positions;  // Indices where GlobalSemRef was used
 
-    CoreRuntimeArgs() = default;
+//     CoreRuntimeArgs() = default;
 
-    // Variadic constructor - detects GlobalSemRef positions at compile-time
-    template <typename... ArgTypes>
-    explicit CoreRuntimeArgs(ArgTypes... values) : args{static_cast<uint32_t>(values)...} {
-        capture_ref_positions<ArgTypes...>(std::make_index_sequence<sizeof...(ArgTypes)>{});
-    }
+//     // Variadic constructor - detects GlobalSemRef positions at compile-time
+//     template <typename... ArgTypes>
+//     explicit CoreRuntimeArgs(ArgTypes... values) : args{static_cast<uint32_t>(values)...} {
+//         capture_ref_positions<ArgTypes...>(std::make_index_sequence<sizeof...(ArgTypes)>{});
+//     }
 
-    // Resolve GlobalSemRef positions to actual addresses
-    template <typename SemaphoreContainer>
-    void resolve(const SemaphoreContainer& semaphores) {
-        for (auto pos : ref_positions) {
-            args[pos] = semaphores[args[pos]].address();
-        }
-    }
+//     // Resolve GlobalSemRef positions to actual addresses
+//     template <typename SemaphoreContainer>
+//     void resolve(const SemaphoreContainer& semaphores) {
+//         for (auto pos : ref_positions) {
+//             args[pos] = semaphores[args[pos]].address();
+//         }
+//     }
 
-    // Check if resolution is needed
-    bool needs_resolution() const { return !ref_positions.empty(); }
+//     // Check if resolution is needed
+//     bool needs_resolution() const { return !ref_positions.empty(); }
 
-    // Access underlying args
-    std::vector<uint32_t>& get() { return args; }
-    const std::vector<uint32_t>& get() const { return args; }
+//     // Access underlying args
+//     std::vector<uint32_t>& get() { return args; }
+//     const std::vector<uint32_t>& get() const { return args; }
 
-    // Vector-like interface for compatibility with Program constructor
-    auto begin() { return args.begin(); }
-    auto end() { return args.end(); }
-    auto begin() const { return args.begin(); }
-    auto end() const { return args.end(); }
-    size_t size() const { return args.size(); }
-    bool empty() const { return args.empty(); }
-    uint32_t& operator[](size_t i) { return args[i]; }
-    uint32_t operator[](size_t i) const { return args[i]; }
-    uint32_t* data() { return args.data(); }
-    const uint32_t* data() const { return args.data(); }
+//     // Vector-like interface for compatibility with Program constructor
+//     auto begin() { return args.begin(); }
+//     auto end() { return args.end(); }
+//     auto begin() const { return args.begin(); }
+//     auto end() const { return args.end(); }
+//     size_t size() const { return args.size(); }
+//     bool empty() const { return args.empty(); }
+//     uint32_t& operator[](size_t i) { return args[i]; }
+//     uint32_t operator[](size_t i) const { return args[i]; }
+//     uint32_t* data() { return args.data(); }
+//     const uint32_t* data() const { return args.data(); }
 
-private:
-    template <typename... ArgTypes, size_t... Is>
-    void capture_ref_positions(std::index_sequence<Is...>) {
-        // Fold expression: for each type, if it's GlobalSemRef, record its position
-        ((is_global_sem_ref_v<ArgTypes> ? (ref_positions.push_back(static_cast<uint8_t>(Is)), 0) : 0), ...);
-    }
-};
+// private:
+//     template <typename... ArgTypes, size_t... Is>
+//     void capture_ref_positions(std::index_sequence<Is...>) {
+//         // Fold expression: for each type, if it's GlobalSemRef, record its position
+//         ((is_global_sem_ref_v<ArgTypes> ? (ref_positions.push_back(static_cast<uint8_t>(Is)), 0) : 0), ...);
+//     }
+// };
 
 struct ReaderConfigDescriptor {};
 struct WriterConfigDescriptor {};
@@ -176,7 +176,8 @@ struct KernelDescriptor {
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = std::vector<std::pair<std::string, std::string>>;
     // Runtime args: CoreRuntimeArgs auto-detects GlobalSemRef positions
-    using RuntimeArgs = std::vector<std::vector<CoreRuntimeArgs>>;
+    using CoreRuntimeArgs = std::vector<uint32_t>;
+    using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
@@ -194,13 +195,8 @@ struct KernelDescriptor {
     NamedCompileTimeArgs named_compile_time_args;
     Defines defines;
 
-<<<<<<< HEAD
     // vector of pairs, where runtime_args[i].first is the core coord and runtime_args[i].second is the vector of
     // runtime args for that core
-=======
-    // runtime_args[i][j] = CoreRuntimeArgs for core(i, j)
-    // Use GlobalSemRef{index} for semaphore addresses - infra resolves automatically
->>>>>>> ae806b43487 (wip templated kernel arg to resolve globalsemaphore address)
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
 

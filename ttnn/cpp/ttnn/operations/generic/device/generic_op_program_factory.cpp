@@ -9,7 +9,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 
 #include "generic_op_device_operation.hpp"
-#include "ttnn/global_semaphore.hpp"
+// #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::generic {
 using namespace tt::tt_metal;
@@ -27,47 +27,46 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
 
-    std::vector<GlobalSemaphore> global_semaphores;
-    global_semaphores.reserve(operation_attributes.global_semaphores.size());
-    for (const auto& sem_desc : operation_attributes.global_semaphores) {
-        global_semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(
-            mesh_device, sem_desc.cores, sem_desc.initial_value, sem_desc.buffer_type));
-    }
-    if (!global_semaphores.empty()) {
-        ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {subdevice_id};
-        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevice_ids);
-    }
+    // std::vector<GlobalSemaphore> global_semaphores;
+    // global_semaphores.reserve(operation_attributes.global_semaphores.size());
+    // for (const auto& sem_desc : operation_attributes.global_semaphores) {
+    //     global_semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(
+    //         mesh_device, sem_desc.cores, sem_desc.initial_value, sem_desc.buffer_type));
+    // }
+    // if (!global_semaphores.empty()) {
+    //     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {subdevice_id};
+    //     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevice_ids);
+    // }
 
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
-        auto cached_program = create_at(program_descriptor, global_semaphores, tensor_args, tensor_return_value);
+        auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
         mesh_workload.add_program(mesh_coord_range, std::move(cached_program.program));
-        mesh_shared_variables[mesh_coord_range] =
-            mesh_shared_variables_t{std::move(cached_program.shared_variables), global_semaphores};
+        mesh_shared_variables[mesh_coord_range] = mesh_shared_variables_t{std::move(cached_program.shared_variables)};
     }
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(mesh_shared_variables)};
 }
 
 GenericOpDeviceOperation::GenericMeshProgram::cached_program_t GenericOpDeviceOperation::GenericMeshProgram::create_at(
     const tt::tt_metal::ProgramDescriptor& program_descriptor,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& global_semaphores,
+    // const std::vector<tt::tt_metal::GlobalSemaphore>& global_semaphores,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/) {
     // Make a copy and resolve GlobalSemaphore refs in-place
-    ProgramDescriptor resolved_descriptor = program_descriptor;
-    for (auto& kernel : resolved_descriptor.kernels) {
-        for (auto& row : kernel.runtime_args) {
-            for (auto& core_args : row) {
-                if (core_args.needs_resolution()) {
-                    core_args.resolve(global_semaphores);
-                }
-            }
-        }
-        if (kernel.common_runtime_args.needs_resolution()) {
-            kernel.common_runtime_args.resolve(global_semaphores);
-        }
-    }
+    // ProgramDescriptor resolved_descriptor = program_descriptor;
+    // for (auto& kernel : resolved_descriptor.kernels) {
+    //     for (auto& row : kernel.runtime_args) {
+    //         for (auto& core_args : row) {
+    //             if (core_args.needs_resolution()) {
+    //                 core_args.resolve(global_semaphores);
+    //             }
+    //         }
+    //     }
+    //     if (kernel.common_runtime_args.needs_resolution()) {
+    //         kernel.common_runtime_args.resolve(global_semaphores);
+    //     }
+    // }
 
-    Program program{resolved_descriptor};
+    Program program{program_descriptor};
     shared_variables_t shared_vars;
 
     auto cbs = program.circular_buffers();
@@ -93,29 +92,28 @@ void override_program_runtime_arguments(
     for (size_t kernel_handle = 0; kernel_handle < shared_vars.num_kernel_handles; ++kernel_handle) {
         const auto& kernel_desc = program_descriptor.kernels[kernel_handle];
 
-        for (size_t i = 0; i < kernel_desc.runtime_args.size(); i++) {
-            for (size_t j = 0; j < kernel_desc.runtime_args[i].size(); j++) {
-                const auto& core_rt_args = kernel_desc.runtime_args[i][j];
-                if (!core_rt_args.empty()) {
-                    auto& cached_runtime_args = GetRuntimeArgs(program, kernel_handle, CoreCoord(i, j));
-                    TT_FATAL(
-                        cached_runtime_args.size() == core_rt_args.size(),
-                        "Runtime args size mismatch: cached {} vs new {}",
-                        cached_runtime_args.size(),
-                        core_rt_args.size());
-                    std::copy(core_rt_args.begin(), core_rt_args.end(), cached_runtime_args.data());
-                }
+        for (const auto& [core_coord, runtime_arg] : kernel_desc.runtime_args) {
+            if (!runtime_arg.empty()) {
+                auto& cached_runtime_args = GetRuntimeArgs(program, kernel_handle, core_coord);
+                TT_FATAL(
+                    cached_runtime_args.size() == runtime_arg.size(),
+                    "Runtime args size mismatch: cached {} vs new {}",
+                    cached_runtime_args.size(),
+                    runtime_arg.size());
+                std::copy(runtime_arg.begin(), runtime_arg.end(), cached_runtime_args.data());
             }
         }
-        const auto& common_args = kernel_desc.common_runtime_args;
-        if (!common_args.empty()) {
+        if (!kernel_desc.common_runtime_args.empty()) {
             auto& cached_common_runtime_args = GetCommonRuntimeArgs(program, kernel_handle);
             TT_FATAL(
-                cached_common_runtime_args.size() == common_args.size(),
+                cached_common_runtime_args.size() == kernel_desc.common_runtime_args.size(),
                 "Common runtime args size mismatch: cached {} vs new {}",
                 cached_common_runtime_args.size(),
-                common_args.size());
-            std::copy(common_args.begin(), common_args.end(), cached_common_runtime_args.data());
+                kernel_desc.common_runtime_args.size());
+            std::copy(
+                kernel_desc.common_runtime_args.begin(),
+                kernel_desc.common_runtime_args.end(),
+                cached_common_runtime_args.data());
         }
     }
 

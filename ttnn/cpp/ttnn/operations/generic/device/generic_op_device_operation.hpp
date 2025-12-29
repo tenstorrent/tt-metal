@@ -36,7 +36,7 @@ struct GenericOpDeviceOperation {
 
         struct mesh_shared_variables_t {
             shared_variables_t program_shared_variables;
-            std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
+            // std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -50,7 +50,7 @@ struct GenericOpDeviceOperation {
 
         static cached_program_t create_at(
             const tt::tt_metal::ProgramDescriptor& program_descriptor,
-            const std::vector<tt::tt_metal::GlobalSemaphore>& global_semaphores,
+            // const std::vector<tt::tt_metal::GlobalSemaphore>& global_semaphores,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
