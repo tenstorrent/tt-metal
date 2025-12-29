@@ -114,7 +114,6 @@ Checks: >
   -performance-no-int-to-ptr,
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
-  -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-container-contains,
   -readability-convert-member-functions-to-static,
