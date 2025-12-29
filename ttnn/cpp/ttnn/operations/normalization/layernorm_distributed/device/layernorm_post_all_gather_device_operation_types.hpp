@@ -16,7 +16,7 @@ struct LayerNormPostAllGatherOperationAttributes {
     float eps;
     MemoryConfig memory_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    std::optional<DataType> dtype;
+    std::optional<tt::tt_metal::DataType> dtype;
     std::optional<bool> use_2d_core_grid;
     LayerNormProgramConfig program_config;
 };
