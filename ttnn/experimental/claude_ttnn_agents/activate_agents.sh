@@ -43,13 +43,17 @@ cp "$SCRIPT_DIR/subagent_breakdown.md" "$REPO_ROOT/.claude/"
 echo "Installing CLAUDE.md..."
 if [ -f "$REPO_ROOT/CLAUDE.md" ]; then
     echo "CLAUDE.md already exists in $REPO_ROOT"
+    # Always create backup before asking
+    cp "$REPO_ROOT/CLAUDE.md" "$REPO_ROOT/CLAUDE.md.old"
+    echo "Created backup: $REPO_ROOT/CLAUDE.md.old"
+
     read -p "Do you want to overwrite it? (y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         cp "$SCRIPT_DIR/CLAUDE.md" "$REPO_ROOT/"
-        echo "CLAUDE.md overwritten"
+        echo "CLAUDE.md overwritten (backup saved as CLAUDE.md.old)"
     else
-        echo "Skipping CLAUDE.md installation"
+        echo "Skipping CLAUDE.md installation (backup remains at CLAUDE.md.old)"
     fi
 else
     cp "$SCRIPT_DIR/CLAUDE.md" "$REPO_ROOT/"

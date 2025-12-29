@@ -83,11 +83,35 @@ For kernel-level debugging (hangs, CB issues, device errors), use the `ttnn-risc
 source python_env/bin/activate
 ```
 
-### Device Reset
-If device hangs or misbehaves:
+### Device Management and Test Execution
+
+**CRITICAL**: Always follow these steps when running Python tests to avoid false debugging conclusions from stale device state or hung processes.
+
+#### 1. Kill Leftover Pytest Processes
+Before running any test, kill any hung pytest processes from previous runs:
 ```bash
-tt-smi -r # Reset device
+# Find and kill any leftover pytest processes
+pkill -9 -f pytest || true
 ```
+The device may be occupied by a hung pytest process, leading to false conclusions.
+
+#### 2. Reset the Device
+Reset the device before running any Python test:
+```bash
+tt-smi -r  # Reset all devices allocated to you
+```
+
+**IMPORTANT**: Use `tt-smi -r` WITHOUT device ID arguments. The device may be in a hung state from previous runs.
+
+**NEVER use `tt-smi -r 0`** or any other device ID. The `-r` flag without arguments resets all devices allocated to you. Using `tt-smi -r 0` will fail with "Error accessing board at PCI index 0" in multi-user environments.
+
+#### 3. Run Tests with Timeout
+Run all Python tests with a timeout to detect hangs:
+```bash
+timeout 10 pytest <test_file>  # 10 second timeout (adjust as needed)
+```
+
+Unless explicitly instructed otherwise, use a 10-second timeout as the default.
 
 ## Debugging Guide
 

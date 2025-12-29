@@ -44,36 +44,26 @@ Before any implementation thinking:
 - List all parameters and their valid ranges
 
 ### Step 3: Identify Structural Similarities
-Map which aspects of the reference operation apply:
-- [ ] Same work unit granularity?
-- [ ] Same data flow pattern (1-to-1, reduction, broadcast, etc.)?
-- [ ] Same number of input/output tensors?
-- [ ] Same memory layout requirements?
-- [ ] Same core distribution strategy applicable?
+Compare these aspects with reference:
+- Work unit granularity
+- Data flow pattern
+- Tensor format requirements
+- CB configuration
+- Core distribution strategy
+
+For each, determine: Same as reference? Different? Why?
 
 ### Step 4: Identify Key Differences
-Document every divergence:
+Document divergences:
 - **Compute differences**: What mathematical operations differ?
-- **Data flow differences**: Does data need to flow differently?
-- **CB differences**: Are additional CBs needed? Different sizes?
-- **Index calculation differences**: Different tensor traversal order?
+- **Data flow differences**: Different pattern or kernel roles?
+- **CB differences**: Additional CBs? Different sizes or lifetimes?
 - **Core distribution differences**: Different parallelization strategy?
 
 ### Step 5: Classify Arguments as Compile-Time vs Runtime
-
-**CRITICAL**: This decision affects program caching and recompilation.
-
-**Compile-time** (affects kernel structure): Kernel configs, CB sizing, tensor shapes/dimensions, core distribution, data type sizes, layout constants
-
-**Runtime** (execution data): Buffer addresses, work quantities, **user-specified parameters** (angles, seeds, thresholds, fills), index offsets
-
-**Key Rule**: User-facing API parameters that vary per call → **MUST be runtime**
-
-Examples:
-- ✅ Runtime: `angle`, `fill`, `seed` (user varies these)
-- ✅ Compile-time: `num_tiles_c`, `element_size` (derived from tensor properties, affects CB sizing)
-
-**Watch out**: Precomputed values (e.g., cos/sin from angle) are still user-variable → also runtime, OR accept cache miss per unique value
+Key rule:
+- **User-facing API parameters that vary per call → MUST be runtime**
+- Precomputed values from user parameters → also runtime (or accept cache miss)
 
 ### Step 6: Make Design Decisions
 For each difference, decide:
@@ -122,20 +112,12 @@ output[i,j,k,...] = f(input[...], params...)
 | ... | ... | ... | ... | ... | ... |
 
 ### Input Tensor Requirements
-| Property | Requirement | Error Message Hint |
-|----------|-------------|-------------------|
-| Rank | Must be 4D | "must be 4D" |
-| Layout | TILE_LAYOUT | "must be in TILE layout" |
-| Dtype | bfloat16 or float32 | "unsupported dtype" |
-| Device | Must be on device | "must be on device" |
+Use **Input/Output Requirements Table** from `.claude/references/table-templates.md`.
+
+[Table with columns: Property, Requirement, Error Message Hint]
 
 ### Output Tensor Specification
-| Property | Value/Calculation |
-|----------|-------------------|
-| Shape | {formula based on input shape and params} |
-| Dtype | Same as input |
-| Layout | TILE_LAYOUT |
-| Memory | INTERLEAVED (default) |
+[Specify: Shape formula, Dtype, Layout, Memory layout]
 
 ## Comparison with Reference Operation
 
@@ -143,12 +125,8 @@ output[i,j,k,...] = f(input[...], params...)
 {List aspects that are identical to reference}
 
 ### Key Differences
-| Aspect | Reference | This Operation | Implementation Impact |
-|--------|-----------|----------------|----------------------|
-| Work unit | ... | ... | ... |
-| Data flow | ... | ... | ... |
-| CB count | ... | ... | ... |
-| ... | ... | ... | ... |
+[Use table with columns: Aspect, Reference, This Operation, Implementation Impact]
+[Aspects to compare: Work unit, Data flow, CB count, Tensor format, Core distribution, Arguments]
 
 ## Design Decisions
 
@@ -163,7 +141,7 @@ output[i,j,k,...] = f(input[...], params...)
 ## Work Distribution
 
 ### Work Unit Definition
-{What constitutes one unit of work}
+{What constitutes one unit of work: tile, block, row, etc.}
 
 ### Parallelization Strategy
 - **Grid**: {expected grid size or "dynamic based on work"}
@@ -173,96 +151,43 @@ output[i,j,k,...] = f(input[...], params...)
 ## Data Flow
 
 ### High-Level Flow
-{Describe how data moves through the operation. Note: kernel names (reader/writer) refer to RISC-V core assignment, not necessarily their function.}
-
-Example patterns:
-```
-# Simple unary (typical)
-Input → RISCV_0 (reader/NOC0) → CB_in → Compute → CB_out → RISCV_1 (writer/NOC1) → Output
-
-# Split reader pattern (both cores read)
-Input_A → RISCV_0 (reader/NOC0) → CB_a ─┐
-                                         ├→ Compute → CB_out → RISCV_1 → Output
-Input_B → RISCV_1 (writer*/NOC1) → CB_b ─┘
-(* "writer" kernel is actually reading Input_B here)
-
-# Writer reads auxiliary data
-Input → RISCV_0 (reader) → CB_in → Compute → CB_out ─┐
-                                                      ├→ RISCV_1 (writer) → Output
-Mask → ─────────────────────────────────────── CB_mask┘
-(writer reads mask while writing output)
-```
+{Describe how data moves through the operation}
 
 ### Kernel Data Movement
-Describe what each kernel actually does (not just its name):
+Use **Kernel Specification Table** from `.claude/references/table-templates.md`.
 
-| Kernel | Core | NOC | Actual Function |
-|--------|------|-----|-----------------|
-| "reader" | RISCV_0 (BRISC) | NOC0 | {what it reads/writes} |
-| "writer" | RISCV_1 (NCRISC) | NOC1 | {what it reads/writes} |
-
-Note: Despite naming conventions:
-- "Writer" kernels (RISCV_1) frequently READ data (masks, indices, other inputs)
-- "Split reader" pattern has RISCV_1 ("writer") reading input data
-- Both NOCs can read/write; naming reflects typical usage, not restriction
+[Table with columns: Kernel, Core, NOC, Actual Function]
 
 ### Circular Buffer Requirements
-| CB ID | Name | Purpose | Producer | Consumer | Sizing Strategy |
-|-------|------|---------|----------|----------|-----------------|
-| c_in0 | cb_input | Input tiles | RISCV_0 (reader) | Compute | 2 tiles double-buffered |
-| c_out0 | cb_output | Output tiles | Compute | RISCV_1 (writer) | 2 tiles double-buffered |
-| ... | ... | ... | ... | ... | ... |
+Use **Circular Buffer Table** from `.claude/references/table-templates.md`.
+
+[Table with columns: CB ID, Name, Purpose, Producer, Consumer, Sizing Strategy, Lifetime]
 
 ## Memory Access Patterns
 
 ### RISCV_0 ("reader" / BRISC) Access
 {What this kernel reads from DRAM/L1, in what order}
-{Uses NOC0 by default}
 
 ### RISCV_1 ("writer" / NCRISC) Access
 {What this kernel reads AND writes, in what order}
-{Uses NOC1 by default}
-{Note if it reads auxiliary data like masks, indices, etc.}
 
 ### Compute Access
 {CB read/write patterns}
 
 ## Compile-Time Arguments
+Use **Compile-Time Arguments Table** from `.claude/references/table-templates.md`.
 
-**Rule**: User-facing API parameters that vary per call → runtime. Compile-time only for: CB sizing, tensor shape derivatives, kernel configs.
-
-### Reader Kernel: `{name}.cpp`
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-
-### Compute Kernel: `{name}.cpp`
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-
-### Writer Kernel: `{name}.cpp`
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
+[One table per kernel with columns: Index, Name, Type, Description]
 
 ## Runtime Arguments
+Key rule: user-facing parameters → runtime.
+Use **Runtime Arguments Table** from `.claude/references/table-templates.md`.
 
-### Reader Kernel
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-
-### Compute Kernel
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-
-### Writer Kernel
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
+[One table per kernel with columns: Index, Name, Type, Description]
 
 ## Edge Cases
-| Condition | Expected Behavior |
-|-----------|-------------------|
-| Single tile input | Should work |
-| Large input (>1000 tiles) | Should distribute across cores |
-| ... | ... |
+[Use table with columns: Condition, Expected Behavior]
+[Document: single tile, large input, boundary conditions, etc.]
 
 ## Agent Handoff
 

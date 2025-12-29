@@ -219,12 +219,15 @@ Before proposing:
 tt-smi -r
 ```
 
-**NEVER use `tt-smi -r 0` or any other device ID.** The `-r` flag without arguments resets all devices allocated to you. Using `tt-smi -r 0` will fail with "Error accessing board at PCI index 0" in multi-user environments.
-
 ### Mandatory Steps
 
-1. You MUST reset the device using `tt-smi -r` (NOT `tt-smi -r 0`) before running any python test. The device may be in a hung state from the previous call which may lead you into FALSE conclusions.
-2. Run all python tests with a timeout of 10s unless EXPLICITLY instructed otherwise
+**CRITICAL**: Before running any tests, follow the device management protocol in `ttnn/experimental/claude_ttnn_agents/CLAUDE.md` under "Device Management and Test Execution":
+
+1. Kill leftover pytest processes: `pkill -9 -f pytest || true`
+2. Reset device: `tt-smi -r` (NOT `tt-smi -r 0`)
+3. Run tests with timeout: `timeout 10 pytest <test_file>`
+
+These steps prevent false debugging conclusions from stale device state or hung processes.
 
 ### Step 1: Observe (if needed)
 

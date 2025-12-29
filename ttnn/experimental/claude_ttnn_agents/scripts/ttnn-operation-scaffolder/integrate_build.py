@@ -13,8 +13,8 @@ import re
 from pathlib import Path
 
 
-def add_to_pybind_cmake(repo_root: Path, category: str, operation_name: str) -> bool:
-    """Add pybind source to ttnn/CMakeLists.txt"""
+def add_to_nanobind_cmake(repo_root: Path, category: str, operation_name: str) -> bool:
+    """Add nanobind source to ttnn/CMakeLists.txt"""
     cmake_path = repo_root / "ttnn" / "CMakeLists.txt"
 
     if not cmake_path.exists():
@@ -25,11 +25,11 @@ def add_to_pybind_cmake(repo_root: Path, category: str, operation_name: str) -> 
         content = f.read()
 
     # Entry to add
-    pybind_entry = f"    ${{CMAKE_CURRENT_SOURCE_DIR}}/cpp/ttnn/operations/{category}/{operation_name}/{operation_name}_${{PY_BINDING}}.cpp"
+    nanobind_entry = f"    ${{CMAKE_CURRENT_SOURCE_DIR}}/cpp/ttnn/operations/{category}/{operation_name}/{operation_name}_nanobind.cpp"
 
     # Check if already added
-    if pybind_entry.strip() in content:
-        print(f"Pybind entry already exists in {cmake_path}")
+    if nanobind_entry.strip() in content:
+        print(f"Nanobind entry already exists in {cmake_path}")
         return True
 
     # Find TTNN_SRC_PYBIND section
@@ -45,13 +45,13 @@ def add_to_pybind_cmake(repo_root: Path, category: str, operation_name: str) -> 
     after = match.group(3)
 
     # Insert new entry before the closing parenthesis
-    new_content = content[: match.start()] + before + "\n" + pybind_entry + after + content[match.end() :]
+    new_content = content[: match.start()] + before + "\n" + nanobind_entry + after + content[match.end() :]
 
     # Write back
     with open(cmake_path, "w") as f:
         f.write(new_content)
 
-    print(f"Added pybind entry to {cmake_path}")
+    print(f"Added nanobind entry to {cmake_path}")
     return True
 
 
@@ -151,9 +151,9 @@ def add_to_category_cmake(repo_root: Path, category: str, operation_name: str) -
     return False
 
 
-def add_to_pybind_init(repo_root: Path, category: str, operation_name: str) -> bool:
-    """Add include and registration call to ttnn/cpp/ttnn-pybind/__init__.cpp"""
-    init_path = repo_root / "ttnn" / "cpp" / "ttnn-pybind" / "__init__.cpp"
+def add_to_nanobind_init(repo_root: Path, category: str, operation_name: str) -> bool:
+    """Add include and registration call to ttnn/cpp/ttnn-nanobind/__init__.cpp"""
+    init_path = repo_root / "ttnn" / "cpp" / "ttnn-nanobind" / "__init__.cpp"
 
     if not init_path.exists():
         print(f"Error: __init__.cpp not found at {init_path}", file=sys.stderr)
@@ -163,10 +163,10 @@ def add_to_pybind_init(repo_root: Path, category: str, operation_name: str) -> b
         content = f.read()
 
     # Include line
-    include_line = f'#include "ttnn/operations/{category}/{operation_name}/{operation_name}_pybind.hpp"'
+    include_line = f'#include "ttnn/operations/{category}/{operation_name}/{operation_name}_nanobind.hpp"'
 
     # Registration call
-    registration_call = f"    {operation_name}::py_bind_{operation_name}(m_{category});"
+    registration_call = f"    {operation_name}::bind_{operation_name}_operation(m_{category});"
 
     # Check if already added
     if include_line in content and registration_call.strip() in content:
@@ -178,7 +178,7 @@ def add_to_pybind_init(repo_root: Path, category: str, operation_name: str) -> b
     # Add include if not present
     if include_line not in content:
         # Find the last include for this category
-        category_include_pattern = rf'#include "ttnn/operations/{category}/[^"]+_pybind\.hpp"'
+        category_include_pattern = rf'#include "ttnn/operations/{category}/[^"]+_nanobind\.hpp"'
         matches = list(re.finditer(category_include_pattern, content))
 
         if matches:
@@ -202,12 +202,11 @@ def add_to_pybind_init(repo_root: Path, category: str, operation_name: str) -> b
             # Find the next empty line or closing brace after this module
             insert_pos = match.end()
 
-            # Look for existing py_bind calls for this module
+            # Look for existing bind_*_operation calls for this module
             next_section = content[insert_pos : insert_pos + 2000]
-            py_bind_pattern = rf"{operation_name[0]}[a-z_]*::py_bind_[a-z_]+\(m_{category}\);"
 
-            # Find where to insert (after last py_bind call for this module)
-            category_calls = list(re.finditer(rf"[a-z_]+::py_bind_[a-z_]+\(m_{category}\);", next_section))
+            # Find where to insert (after last bind call for this module)
+            category_calls = list(re.finditer(rf"[a-z_]+::bind_[a-z_]+_operation\(m_{category}\);", next_section))
 
             if category_calls:
                 last_call = category_calls[-1]
@@ -216,7 +215,9 @@ def add_to_pybind_init(repo_root: Path, category: str, operation_name: str) -> b
                 print(f"Added registration call to {init_path}")
                 modified = True
             else:
-                print(f"Warning: Could not find existing py_bind calls for module m_{category}", file=sys.stderr)
+                print(
+                    f"Warning: Could not find existing bind_*_operation calls for module m_{category}", file=sys.stderr
+                )
                 print(f"You may need to manually add: {registration_call}")
         else:
             print(f"Warning: Could not find module m_{category} initialization", file=sys.stderr)
@@ -263,8 +264,8 @@ def integrate_build(config_path: str, repo_root: str = None) -> bool:
 
     print(f"Integrating {operation_name} into build system...")
 
-    # 1. Update ttnn/CMakeLists.txt (pybind)
-    success = add_to_pybind_cmake(repo_root, category, operation_name)
+    # 1. Update ttnn/CMakeLists.txt (nanobind)
+    success = add_to_nanobind_cmake(repo_root, category, operation_name)
     if not success:
         return False
 
@@ -273,8 +274,8 @@ def integrate_build(config_path: str, repo_root: str = None) -> bool:
     if not success:
         return False
 
-    # 3. Update ttnn/cpp/ttnn-pybind/__init__.cpp
-    success = add_to_pybind_init(repo_root, category, operation_name)
+    # 3. Update ttnn/cpp/ttnn-nanobind/__init__.cpp
+    success = add_to_nanobind_init(repo_root, category, operation_name)
     if not success:
         return False
 

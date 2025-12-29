@@ -28,75 +28,41 @@ You are an elite TT-Metal operation analyst specializing in deep architectural a
    - Document every external source you consult and why you needed it
 
 3. **Work Unit Analysis**:
-   - Determine the granularity of work (per-tile, per-block, per-row, etc.)
-   - Identify how work is quantified and divided
-   - Understand what constitutes "one unit of computation"
+   - Determine granularity (tile/block/row), quantification, and what constitutes one unit
 
 4. **Data Flow Mapping**:
-   - Trace data from input through reader kernels
-   - Map circular buffer usage and producer-consumer relationships
-   - Follow data through compute transformations
-   - Track output through writer kernels to final destination
-   - Identify any intermediate transformations or staging
+   - Trace data path from input through reader/compute/writer
+   - Note reader/writer naming caveats (name reflects core assignment, not function)
+   - Identify if split reader pattern is used
 
-5. **Tensor Format and Layout Analysis** (Critical - Document Explicitly):
-   - **Logical Dimension Order**: Identify the expected tensor dimension convention (e.g., `[N, H, W, C]` for NHWC, `[N, C, H, W]` for NCHW, `[batch, seq, hidden]` for sequence data)
-   - **Tensor Layout**: Determine if input/output tensors use `ROW_MAJOR_LAYOUT` or `TILE_LAYOUT`
-     - If tiled: note tile dimensions (typically 32×32) and any padding requirements
-     - If row-major: note page size and alignment constraints
-   - **Memory Layout**: Identify if tensors are `INTERLEAVED` or `SHARDED`
-     - If interleaved: note buffer type (DRAM vs L1) and round-robin distribution
-     - If sharded: document the sharding strategy (HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED)
-   - **Shard Specification** (if sharded):
-     - Shard shape (dimensions of data on each core)
-     - Core grid (which cores hold shards)
-     - Shard orientation (ROW_MAJOR vs COL_MAJOR core assignment order)
-   - **Data Type**: Note the expected data types (e.g., BFLOAT16, FLOAT32, UINT32)
-   - **Layout Transformations**: Document any conversions between formats (e.g., tilize, untilize, reshard)
+5. **Tensor Format and Layout Analysis**:
+   - Document: dimension convention, tensor layout, memory layout, buffer type, data type
+   - If sharded: include shard shape, core grid, orientation
 
 6. **Circular Buffer Deep Dive**:
-   - List all circular buffers by CB_ID
-   - Document the purpose of each CB (scratchpad, communication, data staging)
-   - Analyze sizing logic and capacity calculations
-   - Identify producer-consumer pairs for each CB
-   - Note any special CB configurations or optimizations
+   - Document: CB_ID, purpose, capacity, block size, buffering type, producer, consumer, lifetime
 
 7. **Index Calculation Analysis**:
    - Identify tensor accessor usage and index mapping functions
    - Document how logical tensor coordinates map to physical memory
-   - Analyze any tiling, padding, or layout transformations
-   - Note sharding strategies if applicable
 
 8. **Memory Access Pattern Study**:
-   - Determine read order (sequential, strided, tiled)
-   - Identify write patterns and destinations
-   - Note any coalescing or batching strategies
-   - Document DRAM vs L1 access patterns
+   - Document read/write patterns (sequential, strided, tiled) and DRAM vs L1 access
 
 9. **Core Distribution Strategy**:
-   - Analyze how work is split across cores (using split_work_to_cores or custom logic)
-   - Identify core grid dimensions and topology
-   - Document load balancing approach
-   - Note any special handling for edge cases or remainder work
+   - Document grid topology, work splitting, load balancing, remainder handling
 
 10. **Argument Classification**:
-    - Separate compile-time arguments (fixed at kernel compilation)
-    - Identify runtime arguments (dynamic, passed via SetRuntimeArgs)
-    - Document what can be changed without recompilation
+    - Separate compile-time args (affect kernel structure) from runtime args (dynamic)
+    - Key rule: user-facing parameters that vary per call → runtime
 
 11. **Kernel Duty Specification**:
-    - For each kernel, document:
-      - Primary responsibility
-      - Input sources and output destinations
-      - Compute operations performed
-      - Synchronization mechanisms used
-      - Special optimizations or techniques employed
+    - Document responsibilities, I/O, synchronization for each kernel
 
 12. **Pipeline Pattern Classification** (Basic - Not Deep Analysis):
-    - For each CB, compare capacity vs block size used by kernels
-    - Classify as: **Single-buffered** (capacity = block_size), **Double-buffered** (capacity = 2× block_size), or **Multi-buffered**
-    - Note the classification without detailed timeline/blocking analysis
-    - Do NOT perform detailed execution simulation or blocking point analysis - that's out of scope
+    - For each CB, compare capacity vs block size
+    - Classify as: Single-buffered, Double-buffered, or Multi-buffered
+    - Do NOT perform detailed execution simulation - that's out of scope
 
 **Research Guidelines**:
 - When you encounter unfamiliar functions, APIs, or patterns, IMMEDIATELY consult DeepWiki
@@ -122,82 +88,55 @@ Create a markdown file named `{operation_name}_analysis.md` in the same director
 [What constitutes one unit of work for this operation]
 
 ## Tensor Format and Layout
+Use **Tensor Format Table** from `.claude/references/table-templates.md`.
 
 ### Input Tensor(s)
-| Attribute | Value |
-|-----------|-------|
-| **Logical Shape** | e.g., `[N, H, W, C]` or `[batch, seq_len, hidden_dim]` |
-| **Dimension Convention** | e.g., NHWC, NCHW, or custom |
-| **Tensor Layout** | `ROW_MAJOR_LAYOUT` or `TILE_LAYOUT` (tile size if applicable) |
-| **Memory Layout** | `INTERLEAVED` or `SHARDED` (strategy: HEIGHT/WIDTH/BLOCK) |
-| **Buffer Type** | DRAM or L1 |
-| **Data Type** | e.g., BFLOAT16, FLOAT32, UINT32 |
-
-[If sharded, include shard specification:]
-- **Shard Shape**: [height, width] per core
-- **Core Grid**: [grid dimensions and core range]
-- **Shard Orientation**: ROW_MAJOR or COL_MAJOR
-
-[Repeat table for each input tensor]
+[Use Tensor Format Table - one row per input tensor]
+[If sharded, add: Shard Shape, Core Grid, Shard Orientation]
 
 ### Output Tensor(s)
-[Same table structure as input tensors]
+[Use Tensor Format Table - one row per output tensor]
 
 ### Layout Transformations
-[Document any tilize/untilize, reshard, or format conversions that occur during the operation]
+[Document any tilize/untilize, reshard, or format conversions]
 
 ## Data Flow Pattern
 [Step-by-step flow from input to output, including all intermediate stages]
 
 ## Circular Buffer Configuration
-### CB_{id}: {purpose}
-- **Size**: [capacity in tiles and bytes]
-- **Producer**: [which kernel writes to it]
-- **Consumer**: [which kernel reads from it]
-- **Block Size**: [tiles per push/pop operation]
-- **Buffering**: [Single/Double/Multi-buffered based on capacity vs block size]
-- **Usage Pattern**: [Reader→Compute | Compute→Writer | Compute scratchpad | Accumulator (retained across blocks)]
-
-[Repeat for each CB]
+Use **Circular Buffer Table** from `.claude/references/table-templates.md`.
 
 ## Pipeline Pattern Summary
-| CB | Capacity | Block Size | Buffering | Overlap Possible? |
-|----|----------|------------|-----------|-------------------|
-| CB_0 | N tiles | M tiles | Single/Double | Yes/No |
+[Derive from CB Table: Buffering column indicates overlap potential]
 
 ## Index Calculations
 [How tensor indices are mapped to memory, including any transformations]
 
 ## Memory Access Patterns
 ### Read Pattern
-[Describe read ordering and access pattern]
+[Describe read ordering: sequential, strided, tiled, etc.]
 
 ### Write Pattern
 [Describe write ordering and access pattern]
 
 ## Core Distribution Strategy
-[How work is divided across cores, including grid topology and load balancing]
+Use **Core Distribution Table** from `.claude/references/table-templates.md`.
 
 ## Arguments
+Use **Compile-Time/Runtime Arguments Tables** from `.claude/references/table-templates.md`.
+
 ### Compile-Time Arguments
-[List and describe fixed parameters]
+[Table with columns: Index, Name, Type, Description]
 
 ### Runtime Arguments
-[List and describe dynamic parameters]
+[Table with columns: Index, Name, Type, Description]
 
 ## Kernel Implementations
-### Reader Kernel: {name}
-- **File**: {path}
-- **Responsibilities**: [what it does]
-- **Input**: [source]
-- **Output**: [destination CBs]
-- **Key Logic**: [important implementation details]
+Use **Kernel Specification Table** from `.claude/references/table-templates.md`.
 
-### Compute Kernel: {name}
-[Same structure as above]
-
-### Writer Kernel: {name}
-[Same structure as above]
+For each kernel, also document:
+- **File**: {path to kernel source}
+- **Key Logic**: [important implementation details not captured in table]
 
 ## Implementation Notes
 [Any special optimizations, edge cases, or noteworthy implementation details]
