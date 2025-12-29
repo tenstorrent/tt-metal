@@ -157,12 +157,28 @@ run_falcon3_func() {
 
   fail=0
 
-  # Falcon3 1B and 7B accuracy/perf sanity via simple_text_demo (functional lane)
+  # Falcon3 1B only for functional tests (7B needs N300)
+  falcon3_1b_instruct=tiiuae/Falcon3-1B-Instruct
+  # Automatically detect device: N150 or N300
+  HF_MODEL=$falcon3_1b_instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
+  echo "LOG_METAL: Falcon3-1B functional tests completed"
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_falcon3_n300_func() {
+
+  fail=0
+
+  # Falcon3 1B and 7B accuracy/perf sanity via simple_text_demo (functional lane) on N300
   falcon3_1b_instruct=tiiuae/Falcon3-1B-Instruct
   falcon3_7b_instruct=tiiuae/Falcon3-7B-Instruct
   # Run Falcon3 1B and 7B accuracy/perf sanity via simple_text_demo (functional lane)
   for repo in "$falcon3_1b_instruct" "$falcon3_7b_instruct"; do
-    TT_GH_CI_INFRA=1 HF_MODEL=$repo MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
+    HF_MODEL=$repo MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
     echo "LOG_METAL: Falcon3 functional tests for $repo completed"
   done
 
@@ -181,12 +197,12 @@ run_falcon3_perf() {
 
   # N150 perf executed on N300 perf pipeline machines (mirroring llama3 perf section approach for N150)
   for repo in "$falcon3_1b_instruct"; do
-    TT_GH_CI_INFRA=1 MESH_DEVICE=N150 HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    MESH_DEVICE=N150 HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Falcon3 tests for $repo completed on N150"
   done
   # Run all Falcon3 tests for 1B and 7B variants
   for repo in "$falcon3_1b_instruct" "$falcon3_7b_instruct"; do
-    TT_GH_CI_INFRA=1 HF_MODEL=$repo MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    HF_MODEL=$repo MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
     echo "LOG_METAL: Falcon3 tests for $repo completed"
   done
 

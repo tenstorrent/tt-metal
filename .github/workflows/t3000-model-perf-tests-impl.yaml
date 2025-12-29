@@ -41,24 +41,6 @@ jobs:
                 "owner_id": "U05RWH3QUPM" # Salar Hosseini
             },
             {
-                "name": "t3k LLM falcon3_1b model perf tests",
-                "model-name": "falcon3_1b",
-                "model-type": "LLM",
-                "arch": "wormhole_b0",
-                "cmd": "run_t3000_falcon3_1b_tests",
-                "timeout": 75,
-                "owner_id": "U05RWH3QUPM" # Salar Hosseini
-            },
-            {
-                "name": "t3k LLM falcon3_7b model perf tests",
-                "model-name": "falcon3_7b",
-                "model-type": "LLM",
-                "arch": "wormhole_b0",
-                "cmd": "run_t3000_falcon3_7b_tests",
-                "timeout": 75,
-                "owner_id": "U05RWH3QUPM" # Salar Hosseini
-            },
-            {
                 "name": "t3k LLM falcon40b model perf tests",
                 "model-name": "falcon40b",
                 "model-type": "LLM",

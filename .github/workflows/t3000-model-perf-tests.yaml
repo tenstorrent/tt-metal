@@ -11,8 +11,6 @@ on:
         options:
           - all
           - falcon7b
-          - falcon3_1b
-          - falcon3_7b
           - falcon40b
           - resnet50
           - sentence_bert

@@ -228,34 +228,6 @@ run_t3000_falcon7b_tests(){
   fi
 }
 
-run_t3000_falcon3_tests(){
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_falcon3_tests"
-
-  # Falcon3 1B and 7B models on T3K
-  falcon3_1b_base=tiiuae/Falcon3-1B-Base
-  falcon3_1b_instruct=tiiuae/Falcon3-1B-Instruct
-  falcon3_7b_base=tiiuae/Falcon3-7B-Base
-  falcon3_7b_instruct=tiiuae/Falcon3-7B-Instruct
-
-  for model in "$falcon3_1b_base" "$falcon3_1b_instruct" "$falcon3_7b_base" "$falcon3_7b_instruct"; do
-    tt_cache_path=$TT_CACHE_HOME/$model
-    HF_MODEL=$model TT_CACHE_PATH=$tt_cache_path pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
-    echo "LOG_METAL: Falcon3 T3K test completed for $model"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_falcon3_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_mistral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral_demo_tests"
@@ -453,9 +425,6 @@ run_t3000_tests() {
 
   # Run falcon7b tests
   run_t3000_falcon7b_tests
-
-  # Run falcon3 tests
-  run_t3000_falcon3_tests
 
   # Run mistral tests
   run_t3000_mistral_tests

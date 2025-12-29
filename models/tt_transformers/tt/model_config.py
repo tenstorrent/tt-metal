@@ -572,8 +572,8 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Falcon3-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
+                "Falcon3-7B": {"N150": None, "N300": 64, "T3K": None, "TG": None, "P150x4": None},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
