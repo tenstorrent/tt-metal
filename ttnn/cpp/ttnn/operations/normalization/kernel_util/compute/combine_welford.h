@@ -129,7 +129,6 @@ inline void combine_welford_partials(
         acc_n += n_b;
         cb_pop_front(cb_partials, 2);
     }
-    // cb_pop_front(cb_partials, 14);
 
     // Convert final M2 to var
     binop_with_scalar_tile_init();
