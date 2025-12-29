@@ -10,31 +10,38 @@ class TtCLIPTextEmbeddings:
         self.config = config
         self.device = device
 
-        self.token_embedding_weight = ttnn.to_device(
-            ttnn.from_torch(parameters.token_embedding.weight, dtype=ttnn.bfloat16), device
+        self.token_embedding_weight = ttnn.from_torch(
+            parameters.token_embedding.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        self.position_embedding_weight = ttnn.to_device(
-            ttnn.from_torch(parameters.position_embedding.weight, dtype=ttnn.bfloat16), device
+        self.position_embedding_weight = ttnn.from_torch(
+            parameters.position_embedding.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        position_ids = torch.arange(config.max_position_emebeddings)
-        self.position_ids = ttnn.to_device(ttnn.from_troch(position_ids, dtype=ttnn.bfloat16), device)
-
-    def __call__(self, input_ids: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, input_ids: ttnn.Tensor, position_ids: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """
         Args:
             input_ids: Token IDs, (batch_size, sequence_length)
-
+            position_ids: Position IDs, (batch_size, sequence_length)
         Returns:
             embeddings: (batch_size, sequence_length, hidden_size)
         """
 
+        seq_len = input_ids.shape[1]
+
+        if position_ids is None:
+            position_ids = ttnn.from_torch(
+                torch.arange(seq_len).unsqueeze(0).expand(input_ids.shape[0], -1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+
         token_embeddings = ttnn.embedding(input_ids, self.token_embedding_weight, layout=ttnn.TILE_LAYOUT)
 
-        position_embeddings = ttnn.embedding(self.position_ids, self.position_embedding_weight, layout=ttnn.TILE_LAYOUT)
+        position_embeddings = ttnn.embedding(position_ids, self.position_embedding_weight, layout=ttnn.TILE_LAYOUT)
 
-        embeddings = ttnn.add(token_embeddings, positions_embeddings)
+        embeddings = ttnn.add(token_embeddings, position_embeddings)
 
         return embeddings
 
@@ -160,29 +167,41 @@ class TtCLIPAttention:
         return output
 
 
-class TtEncoderLayer:
-    def __init__(self, config, paramters, device):
+class TtCLIPEncoderLayer:
+    def __init__(self, config, parameters, device):
         self.config = config
         self.device = device
 
         self.self_attn = TtCLIPAttention(config, parameters.self_attn, device)
 
-        self.layer_norm1_weight = ttnn.to_device(
-            ttnn.from_torch(parameters.layer_norm1.weight, dtype=ttnn.bfloat16), device
+        self.layer_norm1_weight = ttnn.from_torch(
+            parameters.layer_norm1.weight.reshape(1, self.config.hidden_size // 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
         )
 
-        self.layer_norm1_bias = ttnn.to_device(
-            ttnn.from_torch(parameters.layer_norm1.bias, dtype=ttnn.bfloat16), device
+        self.layer_norm1_bias = ttnn.from_torch(
+            parameters.layer_norm1.bias.reshape(1, self.config.hidden_size // 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
         )
 
         self.mlp = TtCLIPMLP(config, parameters.mlp, device)
 
-        self.layer_norm2_weight = ttnn.to_device(
-            ttnn.from_torch(parameters.layer_norm2.weight, dtype=ttnn.bfloat16), device
+        self.layer_norm2_weight = ttnn.from_torch(
+            parameters.layer_norm2.weight.reshape(1, self.config.hidden_size // 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
         )
 
-        self.layer_norm2_bias = ttnn.to_device(
-            ttnn.from_torch(parameters.layer_norm2.bias, dtype=ttnn.bfloat16), device
+        self.layer_norm2_bias = ttnn.from_torch(
+            parameters.layer_norm2.bias.reshape(1, self.config.hidden_size // 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
         )
 
     def __call__(self, hidden_states: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
@@ -220,27 +239,32 @@ class TtEncoderLayer:
 
 
 class TtCLIPTextModel:
-    def __init__(self, reference_model, device):
+    def __init__(self, config, parameters, device):
         self.device = device
 
-        self.config = reference_model.config.text_config
+        self.config = config
 
-        self.embeddings = TtCLIPTextEmbeddings(self.config, reference_model.embeddings, device)
+        self.embeddings = TtCLIPTextEmbeddings(self.config, parameters.embeddings, device)
 
         self.encoder_layers = []
         for lix in range(self.config.num_hidden_layers):
-            layer = TtCLIPEncoderLayer(self.config, reference_model.encoder.layers[lix], device)
+            layer = TtCLIPEncoderLayer(self.config, parameters.encoder.layers[lix], device)
             self.encoder_layers.append(layer)
 
-        self.final_layer_norm_weight = ttnn.to_device(
-            ttnn.from_torch(reference_model.final_layer_norm.weight, dtype=ttnn.bfloat16), device
+        self.final_layer_norm_weight = ttnn.from_torch(
+            parameters.final_layer_norm.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        self.final_layer_norm_bias = ttnn.to_device(
-            ttnn.from_torch(reference_model.final_layer_norm.bias, dtype=ttnn.bfloat16), deice
+        self.final_layer_norm_bias = ttnn.from_torch(
+            parameters.final_layer_norm.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-    def __call__(self, input_ids: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        input_ids: ttnn.Tensor,
+        position_ids: Optional[ttnn.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         hidden_states = self.embeddings(input_ids)
 
         for layer in self.encoder_layers:
