@@ -84,9 +84,15 @@ uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t>& u32_vec, u
         BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp8 ||
         BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
         BfpFormat == tt::DataFormat::Bfp8_b);
-    constexpr int nums_in_dword = (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b)   ? 16
-                                  : (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) ? 8
-                                                                                                               : 4;
+    constexpr int nums_in_dword = []() constexpr {
+        if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
+            return 16;
+        } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
+            return 8;
+        } else {
+            return 4;
+        }
+    }();
 
     uint32_t tmp_o = 0;
     uint32_t mask = (1 << (32 / nums_in_dword)) - 1;
@@ -231,10 +237,15 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
         BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
         BfpFormat == tt::DataFormat::Bfp8_b);
 
-    constexpr uint32_t MANTISSA_BFP_WIDTH =
-        (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b)   ? 1
-        : (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) ? 3
-                                                                                     : 7;
+    constexpr uint32_t MANTISSA_BFP_WIDTH = []() constexpr {
+        if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
+            return 1;
+        } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
+            return 3;
+        } else {
+            return 7;
+        }
+    }();
     constexpr uint32_t MANTISSA_BFP_SHIFT = 24 - MANTISSA_BFP_WIDTH;
     constexpr uint32_t MANTISSA_BFP_MAX_VAL = (1 << MANTISSA_BFP_WIDTH) - 1;
 
@@ -362,9 +373,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     std::vector<uint32_t> data;
 
     int num_exponents_in_dword = 4;
-    int num_mantissas_in_dword = (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b)   ? 16
-                                 : (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) ? 8
-                                                                                                              : 4;
+    int num_mantissas_in_dword;
+    if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
+        num_mantissas_in_dword = 16;
+    } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
+        num_mantissas_in_dword = 8;
+    } else {
+        num_mantissas_in_dword = 4;
+    }
     int fp32_element_index = 0;
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
         std::vector<uint32_t> packed_data;

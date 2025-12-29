@@ -1369,11 +1369,13 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
-    core_info.core_magic_number() =
-        programmable_core_type == HalProgrammableCoreType::TENSIX
-            ? dev_msgs::CoreMagicNumber::WORKER
-            : (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? dev_msgs::CoreMagicNumber::ACTIVE_ETH
-                                                                             : dev_msgs::CoreMagicNumber::IDLE_ETH);
+    if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::WORKER;
+    } else if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::ACTIVE_ETH;
+    } else {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::IDLE_ETH;
+    }
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0);
     // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
     // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
@@ -1496,11 +1498,14 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
         // Harvested rows/cols in the virtual space are placed at the end of the worker grid,
         if (hal_->is_coordinate_virtualization_enabled() and idx < harvested_axis_coord.size()) {
             // On BH virtual coordinates are not contiguous
-            uint32_t end_virtual_grid = hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW
-                                            ? hal_->get_virtual_worker_start_y() + logical_grid_size.y
-                                        : (cluster_->arch() == ARCH::BLACKHOLE)
-                                            ? max_along_axis - 1
-                                            : hal_->get_virtual_worker_start_x() + logical_grid_size.x;
+            uint32_t end_virtual_grid;
+            if (hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
+                end_virtual_grid = hal_->get_virtual_worker_start_y() + logical_grid_size.y;
+            } else if (cluster_->arch() == ARCH::BLACKHOLE) {
+                end_virtual_grid = max_along_axis - 1;
+            } else {
+                end_virtual_grid = hal_->get_virtual_worker_start_x() + logical_grid_size.x;
+            }
 
             // BH translated tensix cores are same as noc0 physical
             core_info.virtual_harvested_coords()[idx] = end_virtual_grid + harvested_axis_coord.size() - (idx + 1);

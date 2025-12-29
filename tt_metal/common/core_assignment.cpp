@@ -189,9 +189,14 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
         "Only Wormhole and Blackhole are supported to get optimal worker placement for interfacing with DRAM");
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
-        uint32_t dram_core_y = (arch == ARCH::BLACKHOLE)                ? std::max((uint32_t)dram_core.y, (uint32_t)2)
-                               : (dram_core.y == 0 || dram_core.y == 6) ? dram_core.y + 1
-                                                                        : dram_core.y;
+        uint32_t dram_core_y;
+        if (arch == ARCH::BLACKHOLE) {
+            dram_core_y = std::max((uint32_t)dram_core.y, (uint32_t)2);
+        } else if (dram_core.y == 0 || dram_core.y == 6) {
+            dram_core_y = dram_core.y + 1;
+        } else {
+            dram_core_y = dram_core.y;
+        }
         dram_interface_workers.push_back(CoreCoord(dram_core.x + 1, dram_core_y));
     }
 

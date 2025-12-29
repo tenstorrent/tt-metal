@@ -214,13 +214,13 @@ public:
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
                 if (params.processor_id < 2) {
-                    return fmt::format(
-                        "{}/{}_{}aerisc.ld",
-                        path,
-                        fork,
-                        params.processor_id    ? "subordinate_"
-                        : enable_2_erisc_mode_ ? "main_"
-                                               : "");
+                    const char* prefix = "";
+                    if (params.processor_id) {
+                        prefix = "subordinate_";
+                    } else if (enable_2_erisc_mode_) {
+                        prefix = "main_";
+                    }
+                    return fmt::format("{}/{}_{}aerisc.ld", path, fork, prefix);
                 }
                 break;
             case HalProgrammableCoreType::IDLE_ETH:
