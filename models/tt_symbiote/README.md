@@ -66,6 +66,71 @@ result = model(torch.randn(1, 3, 224, 224))
 
 ```
 
+## Selective Module Replacement
+
+You can selectively exclude specific modules from replacement using the `exclude_replacement` parameter:
+
+```python
+# Replace all Bottleneck modules except layer1.0
+register_module_replacement_dict(
+    model,
+    nn_to_ttnn,
+    model_config={"program_config_ffn": {}},
+    exclude_replacement=set(["layer1.0"])
+)
+```
+
+**How it works:**
+
+1. **Initial replacement** - First, run without exclusions to see the module names:
+```python
+register_module_replacement_dict(model, nn_to_ttnn, exclude_replacement=set([]))
+```
+
+2. **Identify module names** - Check the model structure. TTNN modules show their `module_name`:
+```python
+# layer1.0 is now a TTNNBottleneck with module_name=layer1.0
+(0): TTNNBottleneck(module_name=layer1.0
+  (conv1): TTNNConv2dBNActivationNHWC(...)
+  (conv2): TTNNConv2dBNActivationNHWC(...)
+  ...
+)
+(1): TTNNBottleneck(module_name=layer1.1
+  (conv1): TTNNConv2dBNActivationNHWC(...)
+  ...
+)
+```
+
+3. **Re-run with exclusions** - Use the module names to exclude specific modules:
+```python
+# Exclude layer1.0 from replacement - it stays as PyTorch Bottleneck
+register_module_replacement_dict(
+    model,
+    nn_to_ttnn,
+    exclude_replacement=set(["layer1.0"])
+)
+```
+
+**Result:**
+```python
+# layer1.0 remains as original PyTorch Bottleneck
+(0): Bottleneck(
+  (conv1): Conv2d(64, 64, kernel_size=(1, 1), ...)
+  (bn1): BatchNorm2d(64, ...)
+  ...
+)
+# layer1.1 is replaced with TTNN
+(1): TTNNBottleneck(module_name=layer1.1
+  (conv1): TTNNConv2dBNActivationNHWC(...)
+  ...
+)
+```
+
+This is useful for:
+- **Debugging** - Isolate problematic modules
+- **Performance tuning** - Compare PyTorch vs TTNN for specific layers
+- **Mixed execution** - Run certain layers on CPU/PyTorch while others use TTNN
+
 ## Creating a New TTNN Module
 
 All TTNN modules inherit from `TTNNModule` and implement:
