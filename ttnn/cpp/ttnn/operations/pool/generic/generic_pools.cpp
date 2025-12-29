@@ -6,6 +6,7 @@
 
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/hal.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
 #include <cstdint>
@@ -59,7 +60,9 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
     bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
     sliding_window::ParallelConfig parallel_config;
 
-    uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8U;
+    uint32_t smallest_RM_elem_size = 2;  // Size of BFloat16
+    uint32_t input_channels_alignment =
+        is_in_tiled ? tt::constants::TILE_WIDTH : (tt::tt_metal::hal::get_l1_alignment() / smallest_RM_elem_size);
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (applied_shard_scheme.has_value()) {
         TT_FATAL(
@@ -75,7 +78,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             output_shape[1],
             output_shape[2],
             channels,
-            input_channels_alignment,  // L1 NOC Alignment in elements.
+            input_channels_alignment,
             core_grid,
             ShardOrientation::ROW_MAJOR,
             false,
