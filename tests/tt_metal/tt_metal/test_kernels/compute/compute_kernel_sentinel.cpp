@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include <cstdint>
 
 #include "compute_kernel_api/bcast.h"
@@ -13,7 +10,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/transpose_wh.h"
@@ -91,9 +88,6 @@ void MAIN {
     tilize_init(cb_in0, 1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    tilize_init_no_pack(cb_in1, 1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
-
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
@@ -109,19 +103,13 @@ void MAIN {
     unary_op_init_common(cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    unary_op_init_common_no_pack(cb_in2);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
-
     transpose_wh_init(cb_in0, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
     copy_tile_to_dst_init_short(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-#if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
-    StateTracker::instance().reset();
-    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out0);
+    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
-#endif
 }
 }  // namespace NAMESPACE

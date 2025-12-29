@@ -5,7 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
-#include "compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -29,8 +29,11 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void copy_tile_to_dst_init_short(
-    uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
-    PACK(state_configure(cbid));
+    uint32_t cbid,
+    uint32_t transpose = 0,
+    uint32_t transpose_within_16x16_face = false,
+    uint32_t call_line = __builtin_LINE()) {
+    state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
@@ -39,7 +42,9 @@ ALWI void copy_tile_to_dst_init_short(
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
-ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
+ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    copy_tile_to_dst_init_short(cbid, 0, false, call_line);
+}
 
 // clang-format off
 /**

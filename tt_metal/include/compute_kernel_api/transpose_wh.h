@@ -5,7 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
-#include "compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
@@ -27,9 +27,8 @@ namespace ckernel {
  * | icb            | The identifier of the circular buffer (CB) containing input | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
-    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
-    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb)));
+ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
@@ -59,8 +58,8 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose_wh to be executed
  * correctly.
  */
-ALWI void transpose_wh_init_short(uint32_t icb) {
-    PACK(state_configure(icb));
+ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;

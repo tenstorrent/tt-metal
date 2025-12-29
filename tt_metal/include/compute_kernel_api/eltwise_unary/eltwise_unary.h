@@ -5,7 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
-#include "compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -15,9 +15,8 @@
 
 namespace ckernel {
 
-ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
-    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
-    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb)));
+ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -32,6 +31,8 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 }
 
-ALWI void init_sfpu(uint32_t icb, uint32_t ocb) { unary_op_init_common(icb, ocb); }
+ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    unary_op_init_common(icb, ocb, call_line);
+}
 
 }  // namespace ckernel

@@ -26,9 +26,9 @@ using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 
-namespace unit_tests::compute::state_tracker {
+namespace unit_tests::compute::compute_kernel_sentinel {
 
-struct StateTrackerTestConfig {
+struct ComputeKernelSentinelTestConfig {
     size_t num_tiles = 0;
     // Whether or not we want the result to be stored in DST in FP32 and/or
     // accumulated with previous DST value is controlled with this flag:
@@ -39,8 +39,8 @@ struct StateTrackerTestConfig {
 
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_state_tracker(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const StateTrackerTestConfig& test_config) {
+bool single_core_compute_kernel_sentinel(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ComputeKernelSentinelTestConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////
@@ -99,13 +99,17 @@ bool single_core_state_tracker(
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
 
-    defines["TT_METAL_STATE_TRACKER_TESTING_ENABLED"] = "1";  // Define to enable state tracker testing interface
+    defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED"] =
+        "1";  // Define to enable compute kernel sentinel testing interface
     defines["FORCE_WATCHER_OFF"] = "1";
-    defines["TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"] = "1";
+    defines["LIGHTWEIGHT_KERNEL_ASSERTS"] = "1";
+    defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_ENABLED"] = "1";
+    defines["REDUCE_OP"] = "PoolType::SUM";
+    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     auto compute_kernel = tt_metal::CreateKernel(
         program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/state_tracker.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/compute_kernel_sentinel.cpp",
         core,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
@@ -122,20 +126,21 @@ bool single_core_state_tracker(
     // assert info and callstack.
     return true;
 }
-}  // namespace unit_tests::compute::state_tracker
+}  // namespace unit_tests::compute::compute_kernel_sentinel
 
 ////////////////////////////////////////////////////////////////////////////
 //                             Test Description
 // ------------------------------------------------------------------------
-// These tests aim to cover usage of state tracker API.
+// These tests aim to cover usage of compute kernel sentinel API.
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(MeshDeviceFixture, TensixComputeStateTracker) {
-    unit_tests::compute::state_tracker::StateTrackerTestConfig test_config = {
+TEST_F(MeshDeviceFixture, TensixComputeKernelSentinel) {
+    unit_tests::compute::compute_kernel_sentinel::ComputeKernelSentinelTestConfig test_config = {
         .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        EXPECT_TRUE(unit_tests::compute::state_tracker::single_core_state_tracker(devices_.at(id), test_config));
+    for (const auto& device : devices_) {
+        EXPECT_TRUE(
+            unit_tests::compute::compute_kernel_sentinel::single_core_compute_kernel_sentinel(device, test_config));
     }
 }
 
