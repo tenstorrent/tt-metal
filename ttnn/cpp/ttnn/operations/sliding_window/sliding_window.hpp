@@ -47,6 +47,10 @@ struct SlidingWindowConfig {
     uint32_pair_t output_pad_hw = {0, 0};
     uint32_pair_t dilation_hw = {1, 1};
 
+    // bilinear scaling parameters
+    uint32_t scale_h = 1;
+    uint32_t scale_w = 1;
+
     // parallel configuration
     uint32_t num_cores_nhw = 1;                                             // num cores along collapsed height nhw
     uint32_t num_cores_c = 1;                                               // num cores along width c
@@ -112,6 +116,11 @@ struct PixelMetadata {
 std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
+
+std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowConfig& config);
+
+std::pair<uint32_t, uint32_t> find_minmax_trace_indices(
+    const std::vector<uint32_t>& op_trace_metadata, uint32_t start_idx, uint32_t end_idx);
 
 std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config);
 
