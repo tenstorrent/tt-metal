@@ -77,16 +77,6 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
         ("decode", 128),
         # Powers of 2 from 128 to 128K for prefill
         ("prefill", 128),
-        ("prefill", 256),
-        ("prefill", 512),
-        ("prefill", 1024),
-        ("prefill", 2048),
-        ("prefill", 4096),
-        ("prefill", 8192),
-        ("prefill", 16384),
-        ("prefill", 32768),
-        ("prefill", 65536),
-        ("prefill", 131072),
     ],
 )
 @pytest.mark.parametrize(

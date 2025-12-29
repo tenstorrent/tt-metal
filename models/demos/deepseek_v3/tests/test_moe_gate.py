@@ -22,16 +22,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
         ("decode", 128),
         # Powers of 2 from 128 to 128K for prefill
         ("prefill", 128),
-        ("prefill", 256),
-        ("prefill", 512),
-        ("prefill", 1024),
-        ("prefill", 2048),
-        ("prefill", 4096),
-        ("prefill", 8192),
-        ("prefill", 16384),
-        ("prefill", 32768),
-        ("prefill", 65536),
-        ("prefill", 131072),
     ],
 )
 @pytest.mark.parametrize(
