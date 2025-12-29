@@ -8,11 +8,16 @@
 #include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn_test_fixtures.hpp"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -21,6 +26,11 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/point_to_point/point_to_point.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/distributed/api.hpp"
+#include <ttnn/distributed/distributed_tensor.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -1000,6 +1010,331 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappi
     };
 
     EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+}
+
+// Sends data from device (0,0) to device (0,1) within the same mesh
+TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
+    auto mesh_device = get_mesh_device();
+    auto mesh_shape = mesh_device->shape();
+    const size_t num_devices = mesh_shape[0] * mesh_shape[1];  // 2x4 = 8
+
+    auto sender_coord = tt::tt_metal::distributed::MeshCoordinate(0, 0);
+    auto receiver_coord = tt::tt_metal::distributed::MeshCoordinate(0, 1);
+
+    // Per-device shard shape, full shape spans all devices along dim 1
+    auto shard_shape = ttnn::Shape({1, 1, 32, 64});
+    auto full_shape = ttnn::Shape({1, static_cast<uint32_t>(num_devices), 32, 64});
+    auto dtype = tt::tt_metal::DataType::BFLOAT16;
+    auto layout = tt::tt_metal::Layout::TILE;
+    auto memory_config =
+        tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
+
+    // Create a full tensor with random data, then shard across devices
+    // Each device will get a different slice of the data
+    Tensor input_full = ttnn::random::random(full_shape, dtype).to_layout(layout);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device, 1);
+    Tensor input_sharded = ttnn::distributed::distribute_tensor(input_full, *mapper);
+    Tensor input_tensor = input_sharded.to_device(mesh_device.get(), memory_config);
+    tt::tt_metal::distributed::Synchronize(mesh_device.get(), std::nullopt, {});
+
+    // Get sender's data for verification - this is device 0's unique shard
+    auto input_shards = ttnn::distributed::get_device_tensors(input_tensor);
+    auto sender_data = input_shards[0].cpu().to_vector<bfloat16>();
+    auto receiver_initial_data = input_shards[1].cpu().to_vector<bfloat16>();
+
+    // Verify sender and receiver started with DIFFERENT data
+    ASSERT_NE(sender_data, receiver_initial_data) << "Sender and receiver must start with different data";
+
+    std::cout << "Sender data first 3 values: " << (float)sender_data[0] << ", " << (float)sender_data[1] << ", "
+              << (float)sender_data[2] << std::endl;
+    std::cout << "Receiver initial data first 3: " << (float)receiver_initial_data[0] << ", "
+              << (float)receiver_initial_data[1] << ", " << (float)receiver_initial_data[2] << std::endl;
+
+    // Now replicate the point_to_point operation using generic_op
+    // Create output tensor (same spec as input, allocated on mesh)
+    Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(input_tensor.tensor_spec(), mesh_device.get());
+
+    const uint32_t input_num_pages = ttnn::operations::data_movement::get_num_pages(input_tensor);
+    const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
+    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
+
+    // Figure out packets (simplified - single packet for small tensors)
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t max_packet_size_bytes = std::bit_floor(fabric_max_packet_size_bytes);
+    const uint32_t num_pages_per_packet =
+        std::min(max_packet_size_bytes / aligned_input_page_size_bytes, input_num_pages);
+    const uint32_t packet_size_bytes = aligned_input_page_size_bytes * num_pages_per_packet;
+    const uint32_t num_page_segments = 1;  // pages fit in single packet
+
+    // Create intermediate tensor using the same logic as point_to_point operation
+    TensorSpec intermediate_spec = ttnn::operations::point_to_point::p2p_compute_intermediate_tensor_spec(
+        input_tensor, receiver_coord, sender_coord, ttnn::ccl::Topology::Linear);
+    Tensor intermediate_tensor = tt::tt_metal::allocate_tensor_on_device(intermediate_spec, mesh_device.get());
+
+    // Use single core for simplicity
+    CoreCoord sender_core = {0, 0};
+    CoreCoord receiver_core = {0, 0};
+    CoreRangeSet sender_core_set(std::set<CoreRange>{CoreRange(sender_core)});
+    CoreRangeSet receiver_core_set(std::set<CoreRange>{CoreRange(receiver_core)});
+
+    // Determine routing direction (sender -> receiver along dim 1)
+    const int dim = 1;  // transmit along column
+    const int hops = receiver_coord[dim] - sender_coord[dim];
+    const bool is_forward = (hops > 0);
+    const uint32_t num_hops = std::abs(hops);
+
+    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+
+    auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
+    tt::tt_metal::distributed::Synchronize(mesh_device.get(), std::nullopt, {});
+
+    // =========================================================================
+    // Build MeshProgramDescriptor
+    // =========================================================================
+    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
+
+    // ----- SENDER PROGRAM -----
+    {
+        constexpr auto sender_cb_id = tt::CBIndex::c_0;
+        constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
+        constexpr auto packet_cb_id = tt::CBIndex::c_2;
+        constexpr auto cb_num_pages = 2;
+
+        CBFormatDescriptor sender_cb_format = {
+            .buffer_index = sender_cb_id,
+            .data_format = input_dataformat,
+            .page_size = aligned_input_page_size_bytes,
+        };
+        CBDescriptor sender_cb_desc = {
+            .total_size = cb_num_pages * aligned_input_page_size_bytes,
+            .core_ranges = sender_core_set,
+            .format_descriptors = {sender_cb_format},
+        };
+
+        CBFormatDescriptor packet_header_cb_format = {
+            .buffer_index = packet_header_cb_id,
+            .data_format = tt::DataFormat::RawUInt32,
+            .page_size = packet_header_size_bytes,
+        };
+        CBDescriptor packet_header_cb_desc = {
+            .total_size = 2 * 2 * packet_header_size_bytes,  // 2 headers * 2 buffering
+            .core_ranges = sender_core_set,
+            .format_descriptors = {packet_header_cb_format},
+        };
+
+        CBFormatDescriptor packet_cb_format = {
+            .buffer_index = packet_cb_id,
+            .data_format = input_dataformat,
+            .page_size = packet_size_bytes,
+        };
+        CBDescriptor packet_cb_desc = {
+            .total_size = packet_size_bytes,
+            .core_ranges = sender_core_set,
+            .format_descriptors = {packet_cb_format},
+        };
+
+        std::vector<uint32_t> reader_ct_args;
+        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct_args);
+
+        std::vector<uint32_t> reader_rt_args = {
+            input_tensor.buffer()->address(),
+            input_num_pages,
+            0,  // page_idx_start
+            input_page_size_bytes,
+        };
+
+        std::vector<uint32_t> writer_ct_args = {
+            (uint32_t)sender_cb_id,
+            (uint32_t)packet_header_cb_id,
+            (uint32_t)packet_cb_id,
+            l1_alignment,
+        };
+        tt::tt_metal::TensorAccessorArgs(*intermediate_tensor.buffer()).append_to(writer_ct_args);
+
+        std::vector<uint32_t> writer_rt_args = {
+            intermediate_tensor.buffer()->address(),
+            0,                // page_idx_start
+            input_num_pages,  // page_idx_end
+            num_hops,
+            input_page_size_bytes,
+            packet_size_bytes,
+            num_pages_per_packet,
+            num_page_segments,
+            semaphore.address(),
+            (uint32_t)is_forward,
+        };
+
+        KernelDescriptor reader_kernel = {
+            .kernel_source =
+                "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/"
+                "reader_unary_interleaved_start_id_gen.cpp",
+            .core_ranges = sender_core_set,
+            .compile_time_args = reader_ct_args,
+            .runtime_args = {{sender_core, reader_rt_args}},
+            .config = tt::tt_metal::ReaderConfigDescriptor{},
+        };
+
+        KernelDescriptor writer_kernel = {
+            .kernel_source = "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_send.cpp",
+            .core_ranges = sender_core_set,
+            .compile_time_args = writer_ct_args,
+            .runtime_args = {{sender_core, writer_rt_args}},
+            .config = tt::tt_metal::WriterConfigDescriptor{},
+        };
+
+        ProgramDescriptor sender_program = {
+            .kernels = {reader_kernel, writer_kernel},
+            .cbs = {sender_cb_desc, packet_header_cb_desc, packet_cb_desc},
+        };
+
+        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(sender_coord), sender_program);
+
+        mesh_program_descriptor.fabric_connections.push_back(tt::tt_metal::experimental::FabricConnectionDescriptor{
+            .src_coord = sender_coord,
+            .dst_coord = receiver_coord,
+            .kernel_index = 1,  // writer kernel
+            .worker_core = sender_core,
+            .link_idx = 0,
+            .core_type = tt::CoreType::WORKER,
+        });
+    }
+
+    // ----- RECEIVER PROGRAM -----
+    {
+        constexpr auto packet_header_cb_id = tt::CBIndex::c_0;
+        constexpr auto packet_cb_id = tt::CBIndex::c_1;
+        constexpr auto receiver_cb_id = tt::CBIndex::c_2;
+
+        CBFormatDescriptor packet_header_cb_format = {
+            .buffer_index = packet_header_cb_id,
+            .data_format = tt::DataFormat::RawUInt32,
+            .page_size = packet_header_size_bytes,
+        };
+        CBDescriptor packet_header_cb_desc = {
+            .total_size = 2 * 2 * packet_header_size_bytes,
+            .core_ranges = receiver_core_set,
+            .format_descriptors = {packet_header_cb_format},
+        };
+
+        CBFormatDescriptor packet_cb_format = {
+            .buffer_index = packet_cb_id,
+            .data_format = input_dataformat,
+            .page_size = packet_size_bytes,
+        };
+        CBDescriptor packet_cb_desc = {
+            .total_size = packet_size_bytes,
+            .core_ranges = receiver_core_set,
+            .format_descriptors = {packet_cb_format},
+        };
+
+        const uint32_t receiver_cb_num_pages = 3 * num_pages_per_packet;
+        CBFormatDescriptor receiver_cb_format = {
+            .buffer_index = receiver_cb_id,
+            .data_format = input_dataformat,
+            .page_size = input_page_size_bytes,
+        };
+        CBDescriptor receiver_cb_desc = {
+            .total_size = receiver_cb_num_pages * input_page_size_bytes,
+            .core_ranges = receiver_core_set,
+            .format_descriptors = {receiver_cb_format},
+        };
+
+        std::vector<uint32_t> reader_ct_args = {
+            (uint32_t)packet_header_cb_id,
+            (uint32_t)packet_cb_id,
+            (uint32_t)receiver_cb_id,
+            l1_alignment,
+        };
+        tt::tt_metal::TensorAccessorArgs(*intermediate_tensor.buffer()).append_to(reader_ct_args);
+
+        // Reader runtime args (fabric args will be appended by generic_op)
+        const bool sender_is_forward = is_forward;  // Direction from receiver back to sender
+        std::vector<uint32_t> reader_rt_args = {
+            0,                // page_idx_start
+            input_num_pages,  // page_idx_end
+            num_pages_per_packet,
+            intermediate_tensor.buffer()->address(),  // intermediate tensor address
+            packet_size_bytes,
+            input_page_size_bytes,
+            num_page_segments,
+            semaphore.address(),
+            num_hops,
+            (uint32_t)sender_is_forward,
+        };
+
+        std::vector<uint32_t> writer_ct_args = {(uint32_t)receiver_cb_id};
+        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
+
+        std::vector<uint32_t> writer_rt_args = {
+            output_tensor.buffer()->address(),
+            input_num_pages,
+            0,  // page_idx_start
+            input_page_size_bytes,
+        };
+
+        KernelDescriptor reader_kernel = {
+            .kernel_source = "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
+            .core_ranges = receiver_core_set,
+            .compile_time_args = reader_ct_args,
+            .runtime_args = {{receiver_core, reader_rt_args}},
+            .config = tt::tt_metal::ReaderConfigDescriptor{},
+        };
+
+        KernelDescriptor writer_kernel = {
+            .kernel_source =
+                "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/"
+                "writer_unary_interleaved_start_id_gen.cpp",
+            .core_ranges = receiver_core_set,
+            .compile_time_args = writer_ct_args,
+            .runtime_args = {{receiver_core, writer_rt_args}},
+            .config = tt::tt_metal::WriterConfigDescriptor{},
+        };
+
+        ProgramDescriptor receiver_program = {
+            .kernels = {reader_kernel, writer_kernel},
+            .cbs = {packet_header_cb_desc, packet_cb_desc, receiver_cb_desc},
+        };
+
+        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(receiver_coord), receiver_program);
+
+        mesh_program_descriptor.fabric_connections.push_back(tt::tt_metal::experimental::FabricConnectionDescriptor{
+            .src_coord = receiver_coord,
+            .dst_coord = sender_coord,
+            .kernel_index = 0,  // reader kernel
+            .worker_core = receiver_core,
+            .link_idx = 0,
+            .core_type = tt::CoreType::WORKER,
+        });
+    }
+
+    ttnn::generic_op(std::vector<Tensor>{input_tensor, intermediate_tensor, output_tensor}, mesh_program_descriptor);
+    tt::tt_metal::distributed::Synchronize(mesh_device.get(), std::nullopt, {});
+
+    // Verify output at receiver matches the original host input data
+    // The generic_op should have transferred the sender's data to the receiver
+    auto output_data = ttnn::distributed::get_device_tensors(output_tensor);
+
+    // Find receiver index in output tensor
+    const auto& output_storage = std::get<tt::tt_metal::DeviceStorage>(output_tensor.storage());
+    size_t output_receiver_idx = 0;
+    for (size_t i = 0; i < output_storage.coords.size(); ++i) {
+        if (output_storage.coords[i] == receiver_coord) {
+            output_receiver_idx = i;
+            break;
+        }
+    }
+
+    auto output_vec = output_data[output_receiver_idx].cpu().to_vector<bfloat16>();
+
+    std::cout << "Output at receiver first 3: " << (float)output_vec[0] << ", " << (float)output_vec[1] << ", "
+              << (float)output_vec[2] << std::endl;
+
+    EXPECT_EQ(output_vec, sender_data) << "Receiver should have sender's data after transfer";
+    EXPECT_NE(output_vec, receiver_initial_data) << "Receiver's output should differ from its initial data";
 }
 
 }  // namespace ttnn::operations::generic::test
