@@ -4,9 +4,9 @@
 
 #include "build_env_manager.hpp"
 
-#include <limits.h>
+#include <climits>
 #include <enchantum/enchantum.hpp>
-#include <math.h>
+#include <cmath>
 #include <tracy/Tracy.hpp>
 #include <bitset>
 #include <cstddef>
