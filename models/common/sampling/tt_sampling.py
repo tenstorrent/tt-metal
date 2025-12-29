@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
 
 import torch
+from loguru import logger
 
 import ttnn
-
-logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
 from models.common.utils import LogProbsCalculator
 
@@ -44,6 +42,21 @@ class TTSampling(LightweightModule):
         Uses persistent buffers when CCL supports line_all_gather (llama3_70b_galaxy),
         otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
+
+    def _is_default_val(self, values, default):
+        if values is None:
+            return True
+        if isinstance(values, (int, float)):
+            return values == default
+        return all(value == default for value in values)
+
+    def _is_force_argmax_sampling(self, k, p, temp):
+        return (
+            self._allow_force_argmax_sampling
+            and self._is_default_val(k, 1)
+            and self._is_default_val(p, 1.0)
+            and self._is_default_val(temp, 1.0)
+        )
 
     def __init__(
         self,
@@ -82,6 +95,16 @@ class TTSampling(LightweightModule):
         else:
             self.sampling_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
+        # Force argmax sampling
+        if hasattr(args, "model_config") and "SAMPLING_AG_CONFIG" in args.model_config:
+            self._allow_force_argmax_sampling = args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"]
+            self.num_argmax_gather_links = args.model_config["SAMPLING_AG_CONFIG"]["num_links"]
+            self.ag_topology = args.model_config["SAMPLING_AG_CONFIG"]["topology"]
+        else:
+            self._allow_force_argmax_sampling = False
+            self.num_argmax_gather_links = self.num_gather_links
+            self.ag_topology = ttnn.Topology.Linear
+
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
         # When p=0, the sampling operation will select the token with highest probability (argmax)
@@ -91,6 +114,8 @@ class TTSampling(LightweightModule):
             p = torch.zeros(self.max_batch_size)
         if temp is None:
             temp = torch.ones(self.max_batch_size)
+
+        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
 
         # Create sampling parameter tensors on device
         self.k_tensor = ttnn.from_torch(
@@ -184,29 +209,32 @@ class TTSampling(LightweightModule):
             return tt_logits
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
-        """Update sampling parameters (k, p, temperature) dynamically."""
-        self.k_tensor_new = ttnn.from_torch(
-            torch.tensor(k),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.p_tensor_new = ttnn.from_torch(
-            torch.tensor(p),
-            device=None,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.temp_tensor_new = ttnn.from_torch(
-            torch.tensor(temp),
-            device=None,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+        # Force argmax sampling
+        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        if not self._force_argmax_sampling:
+            """Update sampling parameters (k, p, temperature) dynamically."""
+            self.k_tensor_new = ttnn.from_torch(
+                torch.tensor(k),
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.p_tensor_new = ttnn.from_torch(
+                torch.tensor(p),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.temp_tensor_new = ttnn.from_torch(
+                torch.tensor(temp),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
 
-        ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
-        ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
-        ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+            ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
+            ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
+            ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
         self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
 
@@ -229,6 +257,39 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
+        if self._force_argmax_sampling:
+            logger.info("Forcing argmax sampling")
+            # Gather the output across all devices and untilize the tensor (for argmax)
+            num_devices = self.mesh_device.get_num_devices()
+            if num_devices > 1:
+                cluster_axis = 1
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                    num_links=self.num_argmax_gather_links,
+                    memory_config=x.memory_config(),
+                    cluster_axis=cluster_axis,
+                    topology=self.ag_topology,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    chunks_per_sync=10,
+                    num_workers_per_link=1,
+                    num_buffers_per_channel=2,
+                )
+            x_untilized = ttnn.untilize(x, use_multicore=True)
+            tt_out_tok = ttnn.argmax(
+                x_untilized,
+                dim=-1,
+                output_tensor=tt_out_tok,
+                keepdim=False,
+                use_multicore=True,
+            )
+            # Return dummy log-probs tensor with same shape as regular log-probs would be
+            # to satisfy the return type and for later post-processing
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            return tt_out_tok, self.tt_log_probs
+
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 

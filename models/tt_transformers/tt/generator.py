@@ -616,6 +616,7 @@ class Generator:
                     else:
                         raise
                 chunked_fields[field] = self._chunk_sampling_param(val)
+
             prompt_chunks = (
                 torch.chunk(prompt_tokens, self.data_parallel, 0)
                 if prompt_tokens is not None
@@ -649,6 +650,7 @@ class Generator:
             "kv_cache": kv_cache,
             "sampling_on_device": sampling_on_device,
         }
+
         if enable_trace:
             tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
         else:
