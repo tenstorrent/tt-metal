@@ -20,5 +20,8 @@ perf_data/
 # Ignore generated build.h
 tests/helpers/include/build.h
 
+# Ignore generated fused_test.cpp
+**/fused_test.cpp
+
 # Ignore generated compile_flags.txt
 compile_flags.txt

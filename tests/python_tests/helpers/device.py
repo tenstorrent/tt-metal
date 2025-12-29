@@ -6,7 +6,9 @@ import os
 import time
 from enum import Enum, IntEnum
 from pathlib import Path
+from typing import List
 
+import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.hardware_controller import HardwareController
 from ttexalens.context import Context
@@ -23,11 +25,28 @@ from ttexalens.tt_exalens_lib import (
     parse_elf,
     read_from_device,
     read_word_from_device,
+    write_to_device,
     write_words_to_device,
 )
 
-from .llk_params import Mailbox
+from .fused_operation import FusedOperation
+from .llk_params import DataFormat, Mailbox, format_dict
+from .pack import (
+    pack_bfp8_b,
+    pack_bfp16,
+    pack_fp16,
+    pack_fp32,
+    pack_int8,
+    pack_int32,
+    pack_uint8,
+    pack_uint16,
+    pack_uint32,
+)
 from .target_config import TestTargetConfig
+from .tilize_untilize import untilize_block
+from .unpack import (
+    unpack_res_tiles,
+)
 
 # Constant - indicates the TRISC kernel run status
 KERNEL_COMPLETE = 1  # Kernel completed its run
@@ -280,3 +299,117 @@ def _send_arc_message(message_type: str, device_id: int):
         args=[0, 0],
         timeout=datetime.timedelta(seconds=10),
     )
+
+
+def write_pipeline_operands_to_l1(
+    pipeline: List[FusedOperation],
+    location: str = "0,0",
+):
+    TILE_ELEMENTS = 1024
+    current_address = 0x1A000
+
+    def calculate_size(data_format: DataFormat, tile_count: int) -> int:
+        return data_format.num_bytes_per_tile(TILE_ELEMENTS) * tile_count
+
+    def write_operand_data(operand, location):
+        packers = {
+            DataFormat.Float16: pack_fp16,
+            DataFormat.Float16_b: pack_bfp16,
+            DataFormat.Float32: pack_fp32,
+            DataFormat.Bfp8_b: pack_bfp8_b,
+            DataFormat.Int32: pack_int32,
+            DataFormat.UInt32: pack_uint32,
+            DataFormat.UInt16: pack_uint16,
+            DataFormat.Int8: pack_int8,
+            DataFormat.UInt8: pack_uint8,
+        }
+
+        pack_function = packers.get(operand.data_format)
+        if not pack_function:
+            raise ValueError(f"Unsupported data format: {operand.data_format.name}")
+
+        tile_size = calculate_size(operand.data_format, 1)
+        buffer = operand.data.flatten()
+
+        for i in range(operand.tile_count):
+            start_idx = TILE_ELEMENTS * i
+            tile_data = buffer[start_idx : start_idx + TILE_ELEMENTS]
+
+            if pack_function == pack_bfp8_b:
+                packed_data = pack_function(tile_data, num_faces=4)
+            else:
+                packed_data = pack_function(tile_data)
+
+            addr = operand.l1_address + i * tile_size
+            write_to_device(location, addr, packed_data)
+
+    for operation in pipeline:
+        src_a = operation.src_a
+        src_b = operation.src_b
+        output = operation.output
+        if src_a.is_input() and src_a.l1_address is None:
+            src_a.l1_address = current_address
+            current_address += calculate_size(src_a.data_format, src_a.tile_count)
+            write_operand_data(src_a, location)
+
+        if src_b.is_input() and src_b.l1_address is None:
+            src_b.l1_address = current_address
+            current_address += calculate_size(src_b.data_format, src_b.tile_count)
+            write_operand_data(src_b, location)
+
+        if output.l1_address is None:
+            output_tile_count = output.tile_count
+            output.l1_address = current_address
+            current_address += calculate_size(output.data_format, output_tile_count)
+
+
+def collect_pipeline_results(
+    pipeline: List[FusedOperation],
+    location: str = "0,0",
+):
+    TILE_ELEMENTS = 1024
+
+    for operation in pipeline:
+        output_operand = operation.output
+        output_name = output_operand.name
+
+        if output_operand.l1_address is None:
+            raise ValueError(
+                f"Output operand '{output_name}' does not have an L1 address. "
+            )
+
+        output_dimensions = output_operand.dimensions
+        output_format = output_operand.data_format
+        input_format = operation.src_a.data_format
+        tile_cnt = output_operand.tile_count
+
+        read_bytes_cnt = (
+            output_operand.data_format.num_bytes_per_tile(TILE_ELEMENTS) * tile_cnt
+        )
+        read_data = read_from_device(
+            location, output_operand.l1_address, num_bytes=read_bytes_cnt
+        )
+
+        res_from_L1 = unpack_res_tiles(
+            read_data,
+            output_format,
+            tile_count=tile_cnt,
+            sfpu=False,
+            num_faces=operation.num_faces,
+            face_r_dim=operation.face_r_dim,
+        )
+
+        torch_format = format_dict[output_format]
+        tilized_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+        if output_format != DataFormat.Bfp8_b and output_dimensions is not None:
+            raw_tensor = untilize_block(
+                tilized_tensor,
+                stimuli_format=output_format,
+                dimensions=output_dimensions,
+            )
+        else:
+            raw_tensor = tilized_tensor
+
+        output_operand._data = tilized_tensor
+        output_operand._raw_data = raw_tensor
