@@ -3,12 +3,14 @@ import torch
 
 import ttnn
 from models.demos.patchtsmixer.reference.pytorch_patchtsmixer import (
+    FeatureMixerBlock,
     PatchTSMixerGatedAttention,
     PatchTSMixerMLP,
     PatchTSMixerNormLayer,
     PatchTSMixerPositionalEncoding,
 )
 from models.demos.patchtsmixer.tt.model_processing import (
+    preprocess_feature_mixer_block,
     preprocess_gated_attention,
     preprocess_layernorm,
     preprocess_linear,
@@ -16,6 +18,7 @@ from models.demos.patchtsmixer.tt.model_processing import (
     preprocess_positional_encoding,
 )
 from models.demos.patchtsmixer.tt.patchtsmixer import (
+    TtFeatureMixerBlock,
     TtPatchTSMixerBatchNorm,
     TtPatchTSMixerGatedAttention,
     TtPatchTSMixerLayerNorm,
@@ -214,6 +217,75 @@ def test_patchtsmixer_mlp(device, reset_seeds):
 
     tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_out = tt_mlp(tt_x)
+    tt_out_torch = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(torch_out, tt_out_torch, 0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("use_gated_attn", [False, True])
+def test_patchtsmixer_feature_mixer_block(device, reset_seeds, use_gated_attn):
+    torch.manual_seed(42)
+
+    D = 32
+    expansion = 2
+    norm_type = "LayerNorm"
+
+    torch_block = FeatureMixerBlock(
+        d_model=D,
+        expansion=expansion,
+        dropout=0.0,
+        use_gated_attn=use_gated_attn,
+        eps=1e-5,
+    ).eval()
+
+    base = "mixer_block.layers.0.feature_mixer"
+
+    # --- Build fake nested state_dict (keys look like full model) ---
+    sd = torch_block.state_dict()
+    state_dict = {
+        # Norm layer
+        f"{base}.norm.norm.weight": sd["norm.norm.weight"],
+        f"{base}.norm.norm.bias": sd["norm.norm.bias"],
+        # MLP
+        f"{base}.mlp.fc1.weight": sd["mlp.fc1.weight"],
+        f"{base}.mlp.fc1.bias": sd["mlp.fc1.bias"],
+        f"{base}.mlp.fc2.weight": sd["mlp.fc2.weight"],
+        f"{base}.mlp.fc2.bias": sd["mlp.fc2.bias"],
+    }
+
+    if use_gated_attn:
+        state_dict[f"{base}.gate.attn_layer.weight"] = sd["gate.attn_layer.weight"]
+        state_dict[f"{base}.gate.attn_layer.bias"] = sd["gate.attn_layer.bias"]
+
+    # -- preprocess into TTNN parameters dict ---
+    parameters = {}
+    preprocess_feature_mixer_block(parameters, state_dict, base, device, norm_type=norm_type)
+
+    if use_gated_attn:
+        gw, gb = preprocess_gated_attention(state_dict, f"{base}.gate", device=device)
+        parameters[f"{base}.gate.attn_layer.weight"] = gw
+        parameters[f"{base}.gate.attn_layer.bias"] = gb
+
+    # -- TT block --
+    tt_block = TtFeatureMixerBlock(
+        device=device,
+        base_address=base,
+        parameters=parameters,
+        d_model=D,
+        norm_type=norm_type,
+        use_gated_attn=use_gated_attn,
+        eps=1e-5,
+    )
+
+    #  --- Compare outputs ---
+    B, C, N_p = 1, 2, 32
+    x = torch.randn(B, C, N_p, D)
+
+    torch_out = torch_block(x)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_block(tt_x)
     tt_out_torch = ttnn.to_torch(tt_out)
 
     assert_with_pcc(torch_out, tt_out_torch, 0.99)
