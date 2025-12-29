@@ -8,6 +8,7 @@ import logging
 
 # Configure logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
@@ -23,17 +24,9 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
     """
     from models.tt_symbiote.core.dispatchers.default_dispatcher import can_dispatch_to_ttnn as default_can_dispatch
 
-    logger.debug(f"Checking dispatch for operation: {func_name}")
-
-    if args:
-        logger.debug(f"  Args types: {[type(arg).__name__ for arg in args]}")
-    if kwargs:
-        logger.debug(f"  Kwargs: {list(kwargs.keys())}")
-
     result = default_can_dispatch(func_name, args, kwargs)
-
-    logger.debug(f"  Dispatch decision for {func_name}: {result}")
-
+    if not result:
+        logger.debug(f"  Cannot dispatch {func_name} to TTNN")
     return result
 
 
@@ -50,13 +43,12 @@ def dispatch_to_ttnn(func_name: str, args, kwargs):
     """
     from models.tt_symbiote.core.dispatchers.default_dispatcher import dispatch_to_ttnn as default_dispatch
 
-    logger.debug(f"Dispatching operation: {func_name}")
-
     try:
         result = default_dispatch(func_name, args, kwargs)
-        logger.debug(f"  Successfully dispatched {func_name}")
+        debug_message = f"  Successfully dispatched {func_name}"
         if hasattr(result, "shape"):
-            logger.debug(f"  Result shape: {result.shape}")
+            debug_message += f" with result shape {result.shape}"
+        logger.debug(debug_message)
         return result
     except Exception as e:
         logger.error(f"  Failed to dispatch {func_name}: {e}")
