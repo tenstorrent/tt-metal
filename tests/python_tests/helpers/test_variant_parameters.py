@@ -425,9 +425,9 @@ class CRK_TILE_DIMM(RuntimeParameter):
 
 @dataclass
 class NUM_FACES(RuntimeParameter):
-    num_faces: int = 0  # Number of active faces for result matrix
-    num_faces_A: int = 0  # Number of active faces for matrix A
-    num_faces_B: int = 0  # Number of active faces for matrix B
+    num_faces: int = 4  # Number of active faces for result matrix
+    num_faces_A: int = 4  # Number of active faces for matrix A
+    num_faces_B: int = 4  # Number of active faces for matrix B
 
     def covert_to_cpp(self) -> str:
         lines: list[str] = [

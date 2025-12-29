@@ -116,6 +116,11 @@ jobs:
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-run.xml .
 
+          pip install junitparser
+          junitparser merge pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml \
+                   pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-run.xml \
+                   pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml
+
       # Step 4: Zip performance data if perf tests were run
       - name: Zip performance data
         if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles('perf_data/**') != ''
@@ -140,23 +145,14 @@ jobs:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
 
-      - name: Upload JUnit report for compiling elfs
+      - name: Upload JUnit report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: >-
             ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
-                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-compile
-          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-compile.xml
-
-      - name: Upload JUnit report for running elfs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: >-
-            ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
-                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-run
-          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}-run.xml
+                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.xml
 
       # Step 7: Publish the test results
       - name: Publish Test Results
