@@ -493,8 +493,6 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
-        # Multiplier applied to logits after LM head; HF Falcon models use this
-        self.lm_head_multiplier = 1.0
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -1991,11 +1989,6 @@ class ModelArgs:
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
-                try:
-                    if hasattr(model, "model") and hasattr(model.model, "lm_head_multiplier"):
-                        self.lm_head_multiplier = float(model.model.lm_head_multiplier)
-                except (AttributeError, ValueError, TypeError) as e:
-                    logger.warning(f"Could not set lm_head_multiplier from HF model: {e}")
                 self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)

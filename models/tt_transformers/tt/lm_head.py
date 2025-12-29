@@ -183,9 +183,4 @@ class LMHead(LightweightModule):
             use_composite=True,
         )
 
-        # Apply optional logits multiplier to match HF if present
-        lm_mult = getattr(self.args, "lm_head_multiplier", 1.0)
-        if lm_mult != 1.0:
-            output = ttnn.multiply(output, lm_mult, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         return output
