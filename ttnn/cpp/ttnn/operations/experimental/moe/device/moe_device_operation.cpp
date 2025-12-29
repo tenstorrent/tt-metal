@@ -17,9 +17,7 @@ void MoEDeviceOperation::validate_on_program_cache_hit(
 }
 
 void MoEDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // Add validation logic here
-}
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {}
 
 MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
@@ -37,8 +35,19 @@ MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tens
 }
 
 std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tensor_args_t> MoEDeviceOperation::invoke(
-    const Tensor& input_tensor, const Tensor& weight_tensor) {
-    return {operation_attributes_t{}, tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor}};
+    const Tensor& input_tensor,
+    const Tensor& w0_tensor,
+    const Tensor& w1_tensor,
+    const Tensor& w2_tensor,
+    const Tensor& output_tensor) {
+    return {
+        operation_attributes_t{},
+        tensor_args_t{
+            .input_tensor = input_tensor,
+            .w0_tensor = w0_tensor,
+            .w1_tensor = w1_tensor,
+            .w2_tensor = w2_tensor,
+            .output_tensor = output_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::moe
