@@ -558,21 +558,32 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
+            # Batched entries to be removed once https://github.com/tenstorrent/tt-metal/issues/35087 gets resolved
             buffers_dict = (
                 {
-                    "QKV": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    "WO": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
-                    "FF1": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
-                    "FF3": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
-                    "FF2": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF3_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF2_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
                 }
                 if not self.is_qwen
                 else {
-                    "QKV": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
-                    "WO": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
-                    "FF1": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
-                    "FF3": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
-                    "FF2": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    "FF1_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
+                    "FF3_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
+                    "FF2_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -583,7 +594,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{shape[0]}"),
+                    cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{seqlen}"),
                 )
                 # output buffer is reused from line imlementation
                 tt_output_buffer = ttnn.as_tensor(
@@ -593,7 +604,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_0_{shape[1]}"),
+                    cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_0_{seqlen}"),
                 )
                 persistent_buffers[key] = {"intermediate": tt_intermediate_buffer, "output": tt_output_buffer}
             persistent_buffers_all[seqlen] = persistent_buffers
@@ -1018,15 +1029,17 @@ class TT_CCL:
         seqlen = input_tensor_mesh.shape[-2]
         persistent_buffers_list = None
         if batch_size > 1:
+            # Temporary workaround to fix pcc issue with reduce scatter
+            # To be removed once https://github.com/tenstorrent/tt-metal/issues/35087 gets resolved
             input_tensor_mesh = ttnn.reshape(input_tensor_mesh, (1, 32, B * seqlen // 32, input_tensor_mesh.shape[-1]))
-            persistent_buffers = (
-                self.persistent_buffers[B * seqlen].get(buffer_key, None)
-                if B * seqlen in self.persistent_buffers
-                else None
-            )
-            persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
+            buffer_key += "_batched"
         else:
             input_tensor_mesh = ttnn.reshape(input_tensor_mesh, (1, 1, B * seqlen, input_tensor_mesh.shape[-1]))
+
+        persistent_buffers = (
+            self.persistent_buffers[B * seqlen].get(buffer_key, None) if B * seqlen in self.persistent_buffers else None
+        )
+        persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
