@@ -155,6 +155,7 @@ def test_panoptic_deeplab_pipeline_e2e(
         )
 
         model_configs = ModelOptimisations(
+            device=device,
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )
