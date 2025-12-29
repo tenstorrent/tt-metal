@@ -18,12 +18,15 @@ from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
+    ConcatConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
+    PermuteConfig,
     ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
     SavedWeight,
+    SliceConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
@@ -285,7 +288,7 @@ class MLA1D(AbstractModule):
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
             dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
         wkv_a_r_config = {
@@ -364,42 +367,48 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
         num_heads_local = even_int_div(num_heads, mesh_shape[1])
+        hidden_size_per_device = even_int_div(hf_config.hidden_size, mesh_shape[1])
 
-        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        input_memory_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW, hidden_size_per_device),
+            core_grid=ttnn.CoreGrid(y=7, x=4),
+            strategy=ttnn.ShardStrategy.WIDTH,
+        )
+        # input_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=None,
         )
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=None,
         )
 
         wkv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=None,
         )
 
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=None,
         )
 
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             program_config=None,
         )
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=None,
         )
 
@@ -415,11 +424,22 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        q_rope_reshard_config = ReshardConfig(
+        # q_rope_reshard_config = ReshardConfig(
+        #     memory_config=q_rope_mem_cfg,
+        # )
+        q_rope_permute_config = PermuteConfig(
+            dims=(1, 0, 2, 3),
+        )
+        q_rope_slice_config = SliceConfig(
             memory_config=q_rope_mem_cfg,
         )
-        q_rope_out_reshard_config = ReshardConfig(
+        # q_concat_mem_config = ttnn.create_sharded_memory_config(shape=(USERS_PER_ROW, 16, 576),core_grid=ttnn.CoreGrid(y=8, x=2),strategy=ttnn.ShardStrategy.HEIGHT)
+        q_concat_config = ConcatConfig(
+            dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        q_rope_out_reshard_config = ReshardConfig(  # TODO: do we need this?
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Resharding for kv_rope
@@ -435,11 +455,24 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        kv_rope_reshard_config = ReshardConfig(
+        # kv_rope_reshard_config = ReshardConfig(
+        #     memory_config=kv_rope_mem_cfg,
+        # )
+        kv_rope_permute_config = PermuteConfig(
+            dims=(0, 2, 1, 3),
             memory_config=kv_rope_mem_cfg,
         )
         kv_rope_out_reshard_config = ReshardConfig(
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # KV concat
+        kv_concat_mem_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW, 576), core_grid=ttnn.CoreGrid(y=6, x=3), strategy=ttnn.ShardStrategy.WIDTH
+        )
+        kv_concat_config = ConcatConfig(
+            dim=-1,
+            memory_config=kv_concat_mem_config,
         )
 
         # Resharding for kvpe
@@ -529,26 +562,33 @@ class MLA1D(AbstractModule):
         # Set up CCLs
 
         # Q
+        wq_a_rs_out_mem_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW, 192), core_grid=ttnn.CoreGrid(y=1, x=6), strategy=ttnn.ShardStrategy.WIDTH
+        )
         wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wq_a_rs_out_mem_config,
             topology=ttnn.Topology.Linear,
+        )
+        wq_a_ag_out_mem_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW, 1536), core_grid=ttnn.CoreGrid(y=1, x=6), strategy=ttnn.ShardStrategy.WIDTH
         )
         wq_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=3,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wq_a_ag_out_mem_config,
             topology=ttnn.Topology.Linear,
         )
 
         # Q all-to-all
+        # wq_a2a_out_mem_config = ttnn.create_sharded_memory_config(shape=(USERS_PER_ROW//mesh_shape[1],128, 576),core_grid=ttnn.CoreGrid(y=8, x=2),strategy=ttnn.ShardStrategy.HEIGHT)
         wq_a2a_config = AllToAllAsyncGenericConfig(
             cluster_axis=1,
             in_dim=2,
             out_dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
 
@@ -557,7 +597,7 @@ class MLA1D(AbstractModule):
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
         wkv_a_r_config = {
@@ -569,30 +609,49 @@ class MLA1D(AbstractModule):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             ),
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
         }
         wkv_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
 
         # FlashMLA all-to-all
+        flash_mla_a2a_out_mem_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW // mesh_shape[1], 128, 512),
+            core_grid=ttnn.CoreGrid(y=8, x=2),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+        )
         flash_mla_a2a_config = AllToAllAsyncGenericConfig(
             cluster_axis=1,
             in_dim=1,
             out_dim=2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=flash_mla_a2a_out_mem_config,
             topology=ttnn.Topology.Linear,
         )
 
         # WO
+        wo_ag_out_mem_config = ttnn.create_sharded_memory_config(
+            shape=(128, USERS_PER_ROW, 128), core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.HEIGHT
+        )
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wo_ag_out_mem_config,
             topology=ttnn.Topology.Linear,
+        )
+
+        kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, USERS_PER_ROW, 512), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
+        )
+        kv_nope_slice_config = SliceConfig(
+            memory_config=kv_nope_slice_mem_config,
+        )
+        kv_rope_slice_config = SliceConfig(
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         return {
@@ -609,10 +668,15 @@ class MLA1D(AbstractModule):
             "wkv_b1": wkv_b1_config,
             "wkv_b2": wkv_b2_config,
             "wo": wo_config,
-            "q_rope_reshard": q_rope_reshard_config,
+            "q_rope_permute": q_rope_permute_config,
+            "q_rope_slice": q_rope_slice_config,
+            # "q_rope_reshard": q_rope_reshard_config,
             "q_rope_out_reshard": q_rope_out_reshard_config,
-            "kv_rope_reshard": kv_rope_reshard_config,
+            "q_concat": q_concat_config,
+            # "kv_rope_reshard": kv_rope_reshard_config,
+            "kv_rope_permute": kv_rope_permute_config,
             "kv_rope_out_reshard": kv_rope_out_reshard_config,
+            "kv_concat": kv_concat_config,
             "kvpe_reshard": kvpe_reshard_config,
             "flash_mla_reshard": flash_mla_reshard_config,
             "flash_mla": flash_mla_config,
@@ -628,6 +692,8 @@ class MLA1D(AbstractModule):
             "flash_mla_a2a_decode": flash_mla_a2a_config,
             "wo_ag_decode": wo_ag_config,
             "mesh_device": mesh_device,
+            "kv_nope_slice": kv_nope_slice_config,
+            "kv_rope_slice": kv_rope_slice_config,
         }
 
     @classmethod
@@ -785,30 +851,63 @@ class MLA1D(AbstractModule):
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
 
+        import socket
+
+        hostname = socket.gethostname()
+        print(f"Hostname: {hostname}")
+
+        if hostname == "g14glx03":
+            print("g14glx03, waiting for debugger on port 5678...")
+            import debugpy
+
+            debugpy.listen(("0.0.0.0", 5678))
+            debugpy.wait_for_client()  # Blocks until you attach
+            debugpy.breakpoint()
+        elif hostname == "g14glx04":
+            print("g14glx04, do nothing")
+
         # wq_a and wq_b
+        # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+        # 1,1,32,1536 width sharded 4x6 [32,64]  # TODO: why is this not width sharded 8x6 [32,32] ??
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
+        # 1,1,32,1536, width sharded 8x6 [32,32]  # TODO: 6x1, 32,256
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
+        # 1,1,32,1536, width sharded 8x6 [32,32]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+
+        # 1,1,32,3072, L1 interleaved
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
+        # 1,32,16,128 L1 interleaved
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
+        # 1,32,16,192 L1 interleaved
+        tt_q_rope = ttnn.slice(
+            tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
+        )
+        # 1,32,16,64 height sharded 8x4 [32,64]
 
         # wkv_b1
+        # 1,32,16,192 L1 interleaved
         tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        # 1,16,32,192 L1 interleaved
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
+        # 1,16,32,512 L1 interleaved
         tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
+        # 1,132,16,512 L1 interleaved
 
         # Q RoPE
+        # 1,32,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.permute(
-            tt_q_rope, (1, 0, 2, 3)
+            tt_q_rope, **cfg["q_rope_permute"]
         )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
-        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_reshard"])
+        # 32,1,16,64 height sharded 8x4 [32,64]
+        # tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_reshard"])
+        # 32,1,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
@@ -816,34 +915,54 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
+        # 32,1,16,64 width sharded 8x4 [32,64]
+        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])  # TODO: do we need this?
+        # 32,1,16,64 L1 interleaved
 
         # Q ready for FlashMLA
-        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
+        # 1,32,16,576 L1 interleaved
 
-        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
+        tt_q = ttnn.experimental.all_to_all_async_generic(
+            tt_q, **cfg["wq_a2a_decode"]
+        )  # TODO: ceate issue for all_to_all_async_generic requiring DRAM interleaved inputs # TODO: ceate issue for all_to_all_async_generic segfaulting if we pass in a sharded memory config
+        # 1,4,128,576, height sharded 8x8 [32,576]
 
         # KVPE Stuff
+        # 1,1,32,896, width sharded 7x4 [32,32]
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
+        # 1,1,32,576 width sharded 6x3 [32,576]
 
         # AG + Reduce b/c sub-tile RS not supported
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
         )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
+        # 1,8,32,576 width sharded 6x3 [356,576]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_decode"]
         )  # [1, 1, bsz, kv_lora_rank + qk_rope_head_dim]
+        # 1,1,32,576 L1 interleaved
 
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank])
-        tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim])
+        # TODO: do we want to have this height sharded instead?
+        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank], **cfg["kv_nope_slice"])
+        # 1,1,32,512 8x2 [32,32]
+        tt_kv_rope = ttnn.slice(
+            tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim], **cfg["kv_rope_slice"]
+        )
+        # 1,1,32,64 L1 interleaved # TODO: weight shard?
         ttnn.deallocate(tt_kv)
 
         # KV Norm
+        # 1,1,32,512 8x2 [32,32]
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
+        # 1,1,32,512 8x2 [32,32]
 
         # KV RoPE
-        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz, 1, qk_rope_head_dim]
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
+        # 1,1,32,64 1x2 [32,32]
+        tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, bsz, 1, qk_rope_head_dim]
+        # 1,1,32,64 4x8 [32,64]
+        # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
+        # 1,1,32,64 4x8 [32,64]
         # TODO: Use DP tensors
         # Currently, not using DP tensors because sub-tile RS is not supported
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
@@ -853,21 +972,30 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
-        tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz, qk_rope_head_dim]
+        # 1,1,32,64 4x8 [32,64]
+        # tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
+        tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_out_reshard"])  # [1, 1, bsz, qk_rope_head_dim]
+        # 1,1,32,64 L1 interleaved
 
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
+        # 1,1,32,576 width sharded 6x3 [32,32]
 
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
-        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+        # TODO: Can we use all_to_all_async_generic instead?
+        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # TODO: do we need this?
+        # 1,32,32,576 width sharded 6x3 [1024,32]
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
+        # 1,32,32,576 width sharded 6x3 [1024,32]
         tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
+            tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["kvpe_reshard"])
         )
+        # 1,4,32,576 height sharded 1x4 [32,576]
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
+        # 1,4,1,576 height sharded 1x4 [32,576]
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
+        # 1,4,32,576 height sharded 1x4 [32,576]
 
-        tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
+        # tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
@@ -882,7 +1010,8 @@ class MLA1D(AbstractModule):
 
         # logger.info(f"mla1d forward_decode after paged_update_cache tt_q shape: {tt_q.shape}")
         # FlashMLA
-        tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
+        # 1,4,128,576, height sharded 8x8 [32,576]
+        # tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
@@ -891,22 +1020,32 @@ class MLA1D(AbstractModule):
             **cfg["flash_mla"],
         )  #  [1, bsz_local, num_heads, kv_lora_rank]
         ttnn.deallocate(tt_q)
-        attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
+        # attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
+        # 1,4,128,512, height sharded 8x8 [32,512]
 
         attn_out = ttnn.experimental.all_to_all_async_generic(attn_out, **cfg["flash_mla_a2a_decode"])
+        # 1,32,16,512, height sharded 8x2 [32,512]
         # logger.info(f"mla1d forward_decode after all_to_all_async_generic attn_out shape: {attn_out.shape}")
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
+        # 1,16,32,512, height sharded 8x2 [32,512]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
+        # 1,32,16,128, height sharded 8x2 [32,128]
 
         # wo
         v_out = ttnn.experimental.all_gather_async(
             v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
         )  # [1, num_heads, bsz, v_head_dim]
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
+        # 1,32,128,128, height sharded 1x4 [4096,32]
+        v_out = ttnn.permute(
+            v_out, (0, 2, 1, 3)
+        )  # [1, bsz, num_heads, v_head_dim] # TODO: move one up, does that work?
+        # 1,128,32,128, height sharded 1x4 [4096,32]
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
+        # 1,1,32,16384, height sharded 1x4 [32,4096]
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+        # 1,1,32,896, width sharded 7x4 [32,32]
 
         # logger.info(f"mla1d forward_decode return out shape: {out.shape}")
 

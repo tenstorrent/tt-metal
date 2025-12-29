@@ -73,10 +73,11 @@ class EmbeddingDP(Embedding1D):
         """Config for the Embedding module."""
         cfg = super()._embedding_config(hf_config, mesh_device, memory_config, output_dtype)
         assert "reduce_scatter" not in cfg
+
         cfg["reduce_scatter"] = ReduceScatterAsyncMinimalConfig(
             cluster_axis=0,
             dim=2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
 
