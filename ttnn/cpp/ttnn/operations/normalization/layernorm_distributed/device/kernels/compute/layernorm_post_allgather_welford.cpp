@@ -25,8 +25,6 @@
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "chain_llk.hpp"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -142,12 +140,14 @@ void MAIN {
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
         add_tiles_init(cb_stats_reduced, cb_eps);
-        ACQ();
+        tile_regs_acquire();
+        tile_regs_wait();
         add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
         rsqrt_tile_init<true>();
         rsqrt_tile<true>(0);
         pack_tile(0, cb_recip_sqrt_var);
-        REL();
+        tile_regs_commit();
+        tile_regs_release();
         cb_push_back(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma && do_beta) {
