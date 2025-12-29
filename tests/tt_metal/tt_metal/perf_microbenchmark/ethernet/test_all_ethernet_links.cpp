@@ -169,6 +169,7 @@ public:
     std::set<SenderReceiverPair> unique_links;
 
 private:
+    // NOLINTBEGIN(readability-make-member-function-const)
     std::pair<std::optional<CoreCoord>, std::shared_ptr<tt_metal::distributed::MeshBuffer>>
     assign_tensix_and_allocate_buffer(const TestParams& params, const tt_cxy_pair& logical_eth_core) {
         if (params.benchmark_type != BenchmarkType::EthEthTensixUniDir and
@@ -225,6 +226,7 @@ private:
 
         return std::make_pair(logical_tensix, std::move(buffer));
     }
+    // NOLINTEND(readability-make-member-function-const)
 
     void initialize_sender_receiver_pairs(const TestParams& params) {
         // chip id -> active eth ch on chip -> (connected chip, remote active eth ch)

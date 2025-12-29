@@ -101,12 +101,6 @@ public:
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
 
-    // Copy constructor
-    MeshGraphDescriptor(const MeshGraphDescriptor& other);
-
-    // Copy assignment operator
-    MeshGraphDescriptor& operator=(const MeshGraphDescriptor& other);
-
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
@@ -184,7 +178,7 @@ public:
 
 private:
     // Descriptor fast lookup
-    std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
+    std::shared_ptr<const proto::MeshGraphDescriptor> proto_;
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
     std::unordered_map<std::string, const proto::GraphDescriptor*> graph_desc_by_name_;
     std::unordered_map<std::string, const proto::SwitchDescriptor*> switch_desc_by_name_;
@@ -268,9 +262,6 @@ private:
 
     void add_to_fast_lookups(const InstanceData& instance);
     void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);
-
-    // Helper function to update descriptor pointers after copying
-    void update_descriptor_pointers();
 };
 
 }  // namespace tt::tt_fabric

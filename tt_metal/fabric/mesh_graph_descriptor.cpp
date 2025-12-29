@@ -156,58 +156,13 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     const auto errors = static_validate(temp_proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
-    proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
+    proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
     populate();
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
-
-MeshGraphDescriptor::MeshGraphDescriptor(const MeshGraphDescriptor& other) :
-    proto_(std::make_unique<proto::MeshGraphDescriptor>(*other.proto_)),
-    instances_(other.instances_),
-    connections_(other.connections_),
-    instances_by_name_(other.instances_by_name_),
-    instances_by_type_(other.instances_by_type_),
-    device_instances_(other.device_instances_),
-    mesh_instances_(other.mesh_instances_),
-    graph_instances_(other.graph_instances_),
-    switch_instances_(other.switch_instances_),
-    top_level_id_(other.top_level_id_),
-    connections_by_instance_id_(other.connections_by_instance_id_),
-    connections_by_type_(other.connections_by_type_),
-    connections_by_source_device_id_(other.connections_by_source_device_id_),
-    pinnings_(other.pinnings_) {
-    // Update descriptor maps and pointers to point to the new proto_ object
-    update_descriptor_pointers();
-}
-
-MeshGraphDescriptor& MeshGraphDescriptor::operator=(const MeshGraphDescriptor& other) {
-    if (this != &other) {
-        // Deep copy the protobuf object
-        proto_ = std::make_unique<proto::MeshGraphDescriptor>(*other.proto_);
-
-        // Copy all member data structures
-        top_level_id_ = other.top_level_id_;
-        instances_ = other.instances_;
-        connections_ = other.connections_;
-        instances_by_name_ = other.instances_by_name_;
-        instances_by_type_ = other.instances_by_type_;
-        device_instances_ = other.device_instances_;
-        mesh_instances_ = other.mesh_instances_;
-        graph_instances_ = other.graph_instances_;
-        switch_instances_ = other.switch_instances_;
-        connections_by_instance_id_ = other.connections_by_instance_id_;
-        connections_by_type_ = other.connections_by_type_;
-        connections_by_source_device_id_ = other.connections_by_source_device_id_;
-        pinnings_ = other.pinnings_;
-
-        // Update descriptor maps and pointers to point to the new proto_ object
-        update_descriptor_pointers();
-    }
-    return *this;
-}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
@@ -833,34 +788,6 @@ void MeshGraphDescriptor::populate_descriptors() {
     for (int i = 0; i < proto_->switch_descriptors_size(); ++i) {
         const auto& switch_desc = proto_->switch_descriptors(i);
         switch_desc_by_name_.emplace(switch_desc.name(), &switch_desc);
-    }
-}
-
-void MeshGraphDescriptor::update_descriptor_pointers() {
-    // First, repopulate the descriptor maps to point to the new proto_ object
-    populate_descriptors();
-
-    // Then, update all descriptor pointers in instances_ to point to the new proto_ object
-    for (auto& [id, instance] : instances_) {
-        if (instance.kind == NodeKind::Mesh) {
-            const auto* old_mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-            const auto it = mesh_desc_by_name_.find(old_mesh_desc->name());
-            TT_FATAL(it != mesh_desc_by_name_.end(), "Mesh descriptor {} not found after copy", old_mesh_desc->name());
-            instance.desc = it->second;
-        } else if (instance.kind == NodeKind::Graph) {
-            const auto* old_graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
-            const auto it = graph_desc_by_name_.find(old_graph_desc->name());
-            TT_FATAL(
-                it != graph_desc_by_name_.end(), "Graph descriptor {} not found after copy", old_graph_desc->name());
-            instance.desc = it->second;
-        } else if (instance.kind == NodeKind::Switch) {
-            const auto* old_switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
-            const auto it = switch_desc_by_name_.find(old_switch_desc->name());
-            TT_FATAL(
-                it != switch_desc_by_name_.end(), "Switch descriptor {} not found after copy", old_switch_desc->name());
-            instance.desc = it->second;
-        }
-        // Device instances don't have descriptors, so no update needed
     }
 }
 
