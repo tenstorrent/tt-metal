@@ -177,6 +177,18 @@ def create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign
     return torch_output
 
 
+def compose_transforms(*transforms):
+    """Compose multiple transformation functions into a single pass."""
+
+    def _composed(e):
+        result = e
+        for transform in transforms:
+            result = transform(result)
+        return result
+
+    return _composed
+
+
 class NormalRun:
     verbose = False
 
@@ -248,6 +260,7 @@ class NormalRun:
 
         def _to_torch(self):
             is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
+            is_mesh_device = is_mesh_device and self.ttnn_tensor.device().get_num_devices() != 1
             if is_mesh_device:
                 result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
             else:
@@ -292,12 +305,9 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
-        func_args = tree_map(wrap_to_torch_ttnn_tensor, args)
-        func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, kwds)
-        func_args = tree_map(to_ttnn_wrap, func_args)
-        func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
-        func_args = tree_map(set_device_wrap(self.device), func_args)
-        func_kwargs = tree_map(set_device_wrap(self.device), func_kwargs)
+        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        func_kwargs = tree_map(transform, kwds)
         self.preprocess_weights()
         self.move_weights_to_device()
         result = self.forward(*func_args, **func_kwargs)
@@ -326,12 +336,9 @@ class NormalRunWithFallback(NormalRun):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         result = None
         if self.device is not None:
-            func_args = tree_map(wrap_to_torch_ttnn_tensor, args)
-            func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, kwds)
-            func_args = tree_map(to_ttnn_wrap, func_args)
-            func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
-            func_args = tree_map(set_device_wrap(self.device), func_args)
-            func_kwargs = tree_map(set_device_wrap(self.device), func_kwargs)
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            func_args = tree_map(transform, args)
+            func_kwargs = tree_map(transform, kwds)
             self.preprocess_weights()
             self.move_weights_to_device()
             try:
@@ -383,10 +390,9 @@ class SELRun(NormalRun):
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
         result = torch_output
         if self.device is not None:
-            func_args = tree_map(to_ttnn_wrap, func_args)
-            func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
-            func_args = tree_map(set_device_wrap(self.device), func_args)
-            func_kwargs = tree_map(set_device_wrap(self.device), func_kwargs)
+            transform = compose_transforms(to_ttnn_wrap, set_device_wrap(self.device))
+            func_args = tree_map(transform, func_args)
+            func_kwargs = tree_map(transform, func_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
@@ -430,12 +436,9 @@ class DPLRun(NormalRun):
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
         result = torch_output
         if self.device is not None:
-            func_args = tree_map(wrap_to_torch_ttnn_tensor, args)
-            func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, kwds)
-            func_args = tree_map(to_ttnn_wrap, func_args)
-            func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
-            func_args = tree_map(set_device_wrap(self.device), func_args)
-            func_kwargs = tree_map(set_device_wrap(self.device), func_kwargs)
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            func_args = tree_map(transform, func_args)
+            func_kwargs = tree_map(transform, func_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
@@ -483,12 +486,10 @@ class DPLRunNoErrorProp(NormalRun):
         if self.device is not None:
             ttnn_no_error_prop_args = tree_map(copy_to_ttnn(self.__class__.__name__), args)
             ttnn_no_error_prop_kwargs = tree_map(copy_to_ttnn(self.__class__.__name__), kwds)
-            func_args = tree_map(wrap_to_torch_ttnn_tensor, ttnn_no_error_prop_args)
-            func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, ttnn_no_error_prop_kwargs)
-            func_args = tree_map(to_ttnn_wrap, func_args)
-            func_kwargs = tree_map(to_ttnn_wrap, func_kwargs)
-            func_args = tree_map(set_device_wrap(self.device), func_args)
-            func_kwargs = tree_map(set_device_wrap(self.device), func_kwargs)
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+
+            func_args = tree_map(transform, ttnn_no_error_prop_args)
+            func_kwargs = tree_map(transform, ttnn_no_error_prop_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
