@@ -21,6 +21,8 @@ struct AdamWFusedConfig {
 
 class AdamWFused : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override;
+
     explicit AdamWFused(ttml::serialization::NamedParameters parameters, const AdamWFusedConfig& config);
 
     void zero_grad() override;

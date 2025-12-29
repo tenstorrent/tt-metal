@@ -20,6 +20,8 @@ struct AdamWFullPrecisionConfig {
 
 class AdamWFullPrecision : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override;
+
     explicit AdamWFullPrecision(
         ttml::serialization::NamedParameters parameters, const AdamWFullPrecisionConfig& config);
 

@@ -14,6 +14,10 @@
 
 namespace ttml::optimizers {
 
+std::string AdamWFused::get_name() const {
+    return "AdamWFused";
+}
+
 AdamWFused::AdamWFused(ttml::serialization::NamedParameters parameters, const AdamWFusedConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
