@@ -15,7 +15,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
-    load_reference_io_tensors_for_module,
     run_module_forward,
 )
 
@@ -67,22 +66,22 @@ def test_forward_pass(
     hidden_size = getattr(hf_config, hf_config_size_attr)
 
     # Get the reference inputs and outputs
-    if reference_layernorm_path is None:
-        reference_model = DeepseekV3RMSNorm(
-            hidden_size=hidden_size,
-            eps=hf_config.rms_norm_eps,
-        ).eval()
+    reference_model = DeepseekV3RMSNorm(
+        hidden_size=hidden_size,
+        eps=hf_config.rms_norm_eps,
+    ).eval()
+
+    if reference_layernorm_path is not None:
+        # Use real weights from the model
+        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
+        reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
+        state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
+    else:
         state_dict = reference_model.to(torch.bfloat16).state_dict()
 
-        torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
-        reference_model = reference_model.to(torch.float32)
-        reference_output = reference_model(torch_input)
-
-    else:
-        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
-        torch_input, reference_output = load_reference_io_tensors_for_module(
-            mode, reference_layernorm_path, seq_len, num_module_layers
-        )
+    torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+    reference_model = reference_model.to(torch.float32)
+    reference_output = reference_model(torch_input)
 
     # Generate module configs and state
     weight_config = get_test_weight_config(
