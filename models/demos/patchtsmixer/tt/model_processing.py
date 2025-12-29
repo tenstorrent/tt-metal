@@ -103,6 +103,34 @@ def preprocess_linear(state_dict, path: str, device=None, dtype=ttnn.bfloat16):
     return tt_w, tt_b
 
 
+def preprocess_feature_mixer_block(parameters: dict, state_dict: dict, base: str, device, *, norm_type="LayerNorm"):
+    # --- norm ---
+    # Expect Pytorch keys at f"{base}.norm.*" because FeatureMixerBlock has self.norm, a module
+    # which itself stores parameters under "norm.weight" "norm.bias", etc.
+    # In our fake-state dict tests we'll map accordingly.
+
+    if "batch" in norm_type.lower():
+        w, b, m, v = preprocess_norm_layer_batchnorm(state_dict, f"{base}.norm", device=device)
+        parameters[f"{base}.norm.norm.weight"] = w
+        parameters[f"{base}.norm.norm.bias"] = b
+        parameters[f"{base}.norm.norm.running_mean"] = m
+        parameters[f"{base}.norm.norm.running_var"] = v
+    else:
+        gamma, beta = preprocess_layernorm(state_dict, f"{base}.norm", device=device)
+        parameters[f"{base}.norm.norm.weight"] = gamma
+        parameters[f"{base}.norm.norm.bias"] = beta
+
+    # --- mlp ---
+    w1, b1 = preprocess_linear(state_dict, f"{base}.mlp.fc1", device=device)
+    w2, b2 = preprocess_linear(state_dict, f"{base}.mlp.fc2", device=device)
+    parameters[f"{base}.mlp.fc1.weight"] = w1
+    parameters[f"{base}.mlp.fc1.bias"] = b1
+    parameters[f"{base}.mlp.fc2.weight"] = w2
+    parameters[f"{base}.mlp.fc2.bias"] = b2
+
+    # --- gate (optional) handled by caller if enabled ---
+
+
 def patchtsmixer_preprocessor(device, state_dict):
     parameters = {}
 
