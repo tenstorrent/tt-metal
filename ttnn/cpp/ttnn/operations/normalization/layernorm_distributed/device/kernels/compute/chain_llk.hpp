@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint_pages.h"
 
 using fn_compute_5 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 using fn_compute_6 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);

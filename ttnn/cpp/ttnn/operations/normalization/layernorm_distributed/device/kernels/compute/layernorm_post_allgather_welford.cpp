@@ -23,7 +23,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-// read dest reg
 #include "chain_llk.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
@@ -110,7 +109,6 @@ struct beta_optional_node {
 
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
-    DPRINT << "pop_gamma_beta: " << pop_gamma_beta << ENDL();
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
     constexpr uint32_t blk = get_compile_time_arg_val(2);
