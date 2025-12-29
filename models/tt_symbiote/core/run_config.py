@@ -521,17 +521,50 @@ class CPU(NormalRun):
         return result
 
 
+# Add at module level
+_RUN_MODE_REGISTRY = {
+    "NORMAL": NormalRun,
+    "NORMAL_WITH_FALLBACK": NormalRunWithFallback,
+    "SEL": SELRun,
+    "DPL": DPLRun,
+    "DPL_NO_ERROR_PROP": DPLRunNoErrorProp,
+    "CPU": CPU,
+}
+
+_current_run_mode = None  # Default
+
+
+def set_run_mode(mode: str) -> None:
+    """Set the global run mode. Must be called before any tensor operations."""
+    global _current_run_mode
+    assert (
+        _current_run_mode is None or _current_run_mode == mode
+    ), "Run mode has already been set and cannot be changed."
+    if mode not in _RUN_MODE_REGISTRY:
+        raise ValueError(f"Invalid run mode '{mode}'. Valid modes: {list(_RUN_MODE_REGISTRY.keys())}")
+    _current_run_mode = mode
+
+
+def add_run_mode(mode: str, implementation: Any) -> None:
+    """Add a new run mode to the registry."""
+    if mode in _RUN_MODE_REGISTRY:
+        raise ValueError(f"Run mode '{mode}' already exists.")
+    _RUN_MODE_REGISTRY[mode] = implementation
+
+
 def get_tensor_run_implementation():
-    if os.environ.get("TT_SYMBIOTE_RUN_MODE") == "NORMAL":
-        return NormalRun
-    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "NORMAL_WITH_FALLBACK":
-        return NormalRunWithFallback
-    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "SEL":
-        return SELRun
-    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL":
-        return DPLRun
-    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "DPL_NO_ERROR_PROP":
-        return DPLRunNoErrorProp
-    elif os.environ.get("TT_SYMBIOTE_RUN_MODE") == "CPU":
-        return CPU
-    return NormalRun
+    # Environment variable takes precedence for backward compatibility
+    env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE")
+    if _current_run_mode is None and env_mode is None:
+        raise RuntimeError("Run mode has not been set. Please call set_run_mode() before tensor operations.")
+    if env_mode != _current_run_mode and _current_run_mode is not None:
+        print(
+            f"Warning: Run mode from environment variable '{env_mode}' overrides the previously set run mode '{_current_run_mode}'."
+        )
+    if env_mode is not None:
+        if env_mode not in _RUN_MODE_REGISTRY:
+            raise ValueError(
+                f"Invalid run mode '{env_mode}' from environment variable. Valid modes: {list(_RUN_MODE_REGISTRY.keys())}"
+            )
+        return _RUN_MODE_REGISTRY[env_mode]
+    return _RUN_MODE_REGISTRY[_current_run_mode]
