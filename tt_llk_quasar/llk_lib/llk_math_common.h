@@ -20,13 +20,13 @@ using namespace ckernel::math;
  * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32
  * otherwise default behaviour is Float16/Float16_b depending on input
  * format exponent width
- * @tparam SRCA_FORMAT: Input srcA format, used to set ALU configs if not implied math format
+ * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
- * @tparam SRCB_FORMAT: Input srcB format, used to set ALU configs if not implied math format
+ * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT, DataFormat SRCA_FORMAT, DataFormat SRCB_FORMAT>
-inline void _llk_math_srcAB_hw_configure_()
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
+inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
 {
     // Turn on automatic Tensix-TRISC synchronization
     // RT: This is turned on by default by HW, this should be removed
@@ -34,20 +34,11 @@ inline void _llk_math_srcAB_hw_configure_()
 
     static_assert(!(EN_FP32_MATH_FORMAT && EN_INT32_MATH_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 
-    // Check valid integer conversions
-    if constexpr (EN_INT32_MATH_FORMAT)
-    {
-        static_assert(
-            (SRCA_FORMAT == DataFormat::Int8 && SRCB_FORMAT == DataFormat::Int8) || (SRCA_FORMAT == DataFormat::Uint8 && SRCB_FORMAT == DataFormat::Uint8) ||
-                (SRCA_FORMAT == DataFormat::Int16 && SRCB_FORMAT == DataFormat::Int16),
-            "Cannot have Int32 Destination register + non-integer source formats");
-    }
-
     // Set implied math dest format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
-    constexpr uint8_t SRCA_FORMAT_MASKED = static_cast<uint8_t>(SRCA_FORMAT) & 0xFF;
-    constexpr uint8_t SRCB_FORMAT_MASKED = static_cast<uint8_t>(SRCB_FORMAT) & 0xFF;
+    uint8_t SRCA_FORMAT_MASKED = static_cast<uint8_t>(srcA_format) & 0xFF;
+    uint8_t SRCB_FORMAT_MASKED = static_cast<uint8_t>(srcB_format) & 0xFF;
 
     alu_config_u alu_config;
     for (uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
