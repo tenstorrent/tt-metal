@@ -225,7 +225,6 @@ init_packages() {
                 "clang-tools-extra" # for linker-wrapper
                 "cmake"
                 "ninja-build"
-                "mold" # EL9 family ships with 2.40+
                 "pkgconf-pkg-config"
                 "xz"
                 "python3-devel"
