@@ -125,6 +125,12 @@ class MasterConfigLoader:
             configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
             return self._normalize_configs(configs)
 
+        # Try with ttnn::experimental:: namespace (e.g., ttnn::experimental::create_qkv_heads)
+        experimental_full_op_name = f"ttnn::experimental::{operation_name}"
+        if experimental_full_op_name in self.master_data.get("operations", {}):
+            configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
+            return self._normalize_configs(configs)
+
         # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
         if operation_name.startswith("experimental::"):
             experimental_op_name = f"ttnn::{operation_name}"
@@ -536,6 +542,11 @@ class MasterConfigLoader:
             elif self._matches_operation(operation_name, "nlp_create_qkv_heads_decode"):
                 print(f"🔧 Detected nlp_create_qkv_heads_decode operation - extracting num_heads and num_kv_heads")
                 return self._get_nlp_create_qkv_heads_decode_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
+            elif self._matches_operation(operation_name, "create_qkv_heads"):
+                print(f"🔧 Detected create_qkv_heads operation - using unary operation extractor")
+                return self._get_unary_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
             elif self._matches_operation(operation_name, "paged_scaled_dot_product_attention_decode"):
