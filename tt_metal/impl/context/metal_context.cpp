@@ -8,6 +8,7 @@
 #include <mutex>
 #include <future>
 #include <vector>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -62,6 +63,60 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
         "Worker L1 size {} is larger than max size {}",
         worker_l1_size,
         max_worker_l1_size);
+}
+
+// Construct compute-only distributed context by filtering out switch meshes
+std::shared_ptr<distributed::multihost::DistributedContext> construct_compute_only_distributed_context(
+    MetalContext& metal_context) {
+    const auto& global_context = distributed::multihost::DistributedContext::get_current_world();
+    if (*global_context->size() == 1) {
+        return global_context;
+    }
+
+    // Get all compute mesh IDs (excludes switches) from control plane mesh graph
+    const auto& mesh_graph = metal_context.get_control_plane().get_mesh_graph();
+
+    // If there are no switch meshes, return the global context directly
+    if (mesh_graph.get_switch_ids().empty()) {
+        return global_context;
+    }
+
+    const auto& compute_mesh_ids = mesh_graph.get_mesh_ids();
+
+    // Get global logical bindings to map ranks to mesh IDs
+    const auto& global_logical_bindings = metal_context.get_control_plane().get_global_logical_bindings();
+
+    // Collect all MPI ranks for compute meshes only
+    std::unordered_set<int> compute_mpi_ranks;
+    for (const auto& [rank, mesh_binding] : global_logical_bindings) {
+        const auto& [mesh_id, _] = mesh_binding;
+        // Check if this mesh_id is a compute mesh (not a switch)
+        if (std::find(compute_mesh_ids.begin(), compute_mesh_ids.end(), mesh_id) != compute_mesh_ids.end()) {
+            compute_mpi_ranks.insert(rank.get());
+        }
+    }
+
+    // If no compute meshes found, fall back to host_local_context
+    if (compute_mpi_ranks.empty()) {
+        TT_THROW("No compute meshes found in mesh graph.");
+    }
+
+    // Convert to sorted vector for create_sub_context
+    std::vector<int> compute_ranks_vec(compute_mpi_ranks.begin(), compute_mpi_ranks.end());
+    std::sort(compute_ranks_vec.begin(), compute_ranks_vec.end());
+
+    // Check if current rank is in compute ranks
+    int current_rank = *global_context->rank();
+    bool is_current_rank_in_compute =
+        std::find(compute_ranks_vec.begin(), compute_ranks_vec.end(), current_rank) != compute_ranks_vec.end();
+
+    // If current rank is not in compute ranks (e.g., host only has switches), return host_local_context
+    if (!is_current_rank_in_compute) {
+        return metal_context.get_control_plane().get_host_local_context();
+    }
+
+    // Create sub-context with only compute mesh ranks
+    return global_context->create_sub_context(compute_ranks_vec);
 }
 
 }  // namespace
@@ -425,9 +480,21 @@ MetalContext::MetalContext() {
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
-distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
+}
+
+const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+    // If control plane is not initilazed, return the global distributed context
+    if (!control_plane_) {
+        return *distributed_context_;
+    }
+    // Lazy initilazation of compute only distributed context
+    if (!compute_only_distributed_context_) {
+        compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
+    }
+    return *compute_only_distributed_context_;
 }
 
 std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {
@@ -566,6 +633,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
+        log_critical(tt::LogMetal, "Initializing control plane");
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
@@ -1301,11 +1369,11 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
-    core_info.core_magic_number() = programmable_core_type == HalProgrammableCoreType::TENSIX
-                                        ? dev_msgs::CoreMagicNumber::WORKER
-                                        : (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH
-                                               ? dev_msgs::CoreMagicNumber::ACTIVE_ETH
-                                               : dev_msgs::CoreMagicNumber::IDLE_ETH);
+    core_info.core_magic_number() =
+        programmable_core_type == HalProgrammableCoreType::TENSIX
+            ? dev_msgs::CoreMagicNumber::WORKER
+            : (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? dev_msgs::CoreMagicNumber::ACTIVE_ETH
+                                                                             : dev_msgs::CoreMagicNumber::IDLE_ETH);
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0);
     // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
     // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing

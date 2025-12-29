@@ -461,14 +461,14 @@ def create_panoptic_visualization(
     return blended, {"segments": segments_info, "panoptic_seg": panoptic_seg, "pure_vis": vis_image}
 
 
-def skip_if_not_blackhole_20_or_130_cores(device):
+def skip_if_not_blackhole_20_or_110_cores(device):
     """
     This function is meant to be run only inside pytest tests.
     """
     if not is_blackhole():
-        pytest.skip("This test is intended to run only on Blackhole devices with 20 or 130 cores.")
+        pytest.skip("This test is intended to run only on Blackhole devices with 20 or 110 cores.")
     compute_grid = device.compute_with_storage_grid_size()
-    if not ((compute_grid.x == 5 and compute_grid.y == 4) or (compute_grid.x == 13 and compute_grid.y == 10)):
+    if not ((compute_grid.x == 5 and compute_grid.y == 4) or (compute_grid.x == 11 and compute_grid.y == 10)):
         pytest.skip(
-            f"This test is intended to run only on Blackhole devices with 20 or 130 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [5, 4] or [13, 10]."
+            f"This test is intended to run only on Blackhole devices with 20 or 110 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [5, 4] or [11, 10]."
         )

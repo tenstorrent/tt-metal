@@ -421,7 +421,8 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t output_width,
     bool fp32_accum,
     bool full_inner_dim,
-    bool enable_activation_reuse) {
+    bool enable_activation_reuse,
+    bool is_1d_depthwise_conv) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -466,9 +467,15 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        act_block_w = enable_activation_reuse
-                          ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
-                          : tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        // For 1D depthwise conv, each channel is processed independently, so activation
+        // block width doesn't need to be multiplied by the kernel window size
+        if (is_1d_depthwise_conv) {
+            act_block_w = tt::round_up(padded_in_channels, tt::constants::TILE_WIDTH);
+        } else {
+            act_block_w = enable_activation_reuse
+                              ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
+                              : tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        }
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         act_block_w = tt::round_up(
             padded_in_channels / act_c_num_blocks * window_w * (full_inner_dim ? window_h : 1),
@@ -510,17 +517,20 @@ bool use_matmul_for_1x1_conv(
            (not is_width_sharded);
 }
 
-bool is_1d_conv(uint32_t kernel_width, uint32_t image_width) { return kernel_width == 1 && image_width == 1; }
+bool is_1d_conv(uint32_t kernel_height, uint32_t image_height) { return kernel_height == 1 && image_height == 1; }
 
-bool is_1d_deptwise_conv(
+bool is_1d_depthwise_conv(
     uint32_t groups,
     uint32_t input_channels,
     uint32_t output_channels,
+    uint32_t kernel_height,
     uint32_t kernel_width,
-    uint32_t image_width,
+    uint32_t image_height,
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
+    // Only use 1D depthwise path when kernel is truly pointwise (1x1)
+    // is_1d_conv checks height=1, we also need kernel_width=1 to ensure no spatial computation
+    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && kernel_width == 1 && !has_bias;
 }
 
 SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
@@ -536,8 +546,12 @@ SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_con
     return SkipMcast{skip_act_mcast, skip_weights_mcast};
 }
 
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device) {
-    return init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
+    MeshDevice* device, DataType input_dtype, DataType weight_dtype) {
+    // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
+    bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
+    return init_device_compute_kernel_config(
+        device->arch(), std::nullopt, MathFidelity::HiFi4, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
@@ -926,8 +940,8 @@ core_count_and_size calculate_L1_usage_for_conv_op(
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    const bool conv_is_1d_deptwise =
-        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
 
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -967,6 +981,7 @@ core_count_and_size calculate_L1_usage_for_conv_op(
 
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
+
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
@@ -978,7 +993,8 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         output_height,
         output_width,
         kernel_size,
-        compute_grid_size);
+        compute_grid_size,
+        conv_is_1d_depthwise);
 
     SlidingWindowConfig sliding_window_config{
         .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
@@ -994,7 +1010,7 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         output_datatype,
         output_width,
         enable_bias,
-        conv_is_1d_deptwise,
+        conv_is_1d_depthwise,
         in_channels_padded);
 
     auto halo_input_memory_config = _halo_input_memory_config.has_value()
@@ -1091,8 +1107,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-    const bool conv_is_1d_deptwise =
-        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
         return calculate_L1_usage_for_conv_op(
@@ -1120,8 +1136,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     };
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
-    // 1d deptwise convs support only height sharding
-    if (conv_is_1d_deptwise) {
+    // 1d depthwise convs support only height sharding
+    if (conv_is_1d_depthwise) {
         return height.conv_config;
     }
 
@@ -1157,7 +1173,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
-    const CoreCoord& compute_grid) {
+    const CoreCoord& compute_grid,
+    bool is_1d_depthwise_conv) {
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
     uint32_t nhw_out = batch_size * output_height * output_width;
     uint32_t out_channels_padded = tt::round_up(
@@ -1187,7 +1204,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
         output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse);
+        conv_config.enable_activation_reuse,
+        is_1d_depthwise_conv);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
