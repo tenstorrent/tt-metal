@@ -23,11 +23,14 @@ triage_home = os.path.join(metal_home, "tools", "triage")
 sys.path.insert(0, triage_home)
 
 
+import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
 
+
+triage.progress_disabled = True  # Disable progress bars for tests
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
