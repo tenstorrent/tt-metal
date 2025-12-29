@@ -54,6 +54,12 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }
 }  // namespace
 
+namespace tt::tt_metal {
+
+void on_dispatch_timeout_detected();
+
+}  // namespace tt::tt_metal
+
 // llrt = lower-level runtime
 namespace tt::llrt {
 
@@ -282,8 +288,14 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
+    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
+    // timeout means: use the configured timeout for operations.
     if (is_simulator) {
         timeout_ms = 0;
+    } else if (timeout_ms == 0) {
+        timeout_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
+                .count();
     }
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -296,6 +308,9 @@ void wait_until_cores_done(
                     }
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+
+                tt::tt_metal::on_dispatch_timeout_detected();
+
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
                     device_id,
