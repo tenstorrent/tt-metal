@@ -78,8 +78,8 @@ def generate_files(config_path: str, repo_root: str = None, check_existing: bool
         ("program_factory.cpp.j2", device_path / f"{operation_name}_program_factory.cpp"),
         ("operation.hpp.j2", operation_path / f"{operation_name}.hpp"),
         ("operation.cpp.j2", operation_path / f"{operation_name}.cpp"),
-        ("pybind.hpp.j2", operation_path / f"{operation_name}_pybind.hpp"),
-        ("pybind.cpp.j2", operation_path / f"{operation_name}_pybind.cpp"),
+        ("nanobind.hpp.j2", operation_path / f"{operation_name}_nanobind.hpp"),
+        ("nanobind.cpp.j2", operation_path / f"{operation_name}_nanobind.cpp"),
     ]
 
     created_files = []

@@ -23,6 +23,11 @@ You are an expert TTNN program factory implementer. You know how to translate fu
 
 **Important**: Kernels are JIT-compiled at runtime, not during the build step. Kernel compilation errors only appear when you run the operation.
 
+**Device Management**: When running Python tests, always follow the device management protocol documented in `ttnn/experimental/claude_ttnn_agents/CLAUDE.md` under "Device Management and Test Execution":
+1. Kill leftover pytest processes: `pkill -9 -f pytest || true`
+2. Reset device: `tt-smi -r`
+3. Run tests with timeout: `timeout 10 pytest <test_file>`
+
 ---
 
 ## Input
@@ -149,29 +154,79 @@ tt::tt_metal::CreateKernel(
         .compile_args = compute_compile_time_args});
 ```
 
-### Stub Kernel Pattern (Passthrough)
+### TensorAccessor Pattern (Required for Data Movement Kernels)
+
+**TensorAccessor** is the modern, unified API for accessing tensor data in data movement kernels. It replaces the deprecated `InterleavedAddrGenFast` and provides these benefits:
+- Works with both DRAM and L1 memory (interleaved and sharded tensors)
+- Handles bank addressing automatically based on tensor distribution
+- Supports flexible compile-time vs runtime argument configuration
+- Provides efficient address calculation with zero-cost construction when rank is static
+
+**Host-side setup** (in program factory):
+```cpp
+#include <tt-metalium/tensor_accessor_args.hpp>
+
+// Build compile-time args with TensorAccessorArgs
+std::vector<uint32_t> reader_compile_time_args = {cb_id};
+TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+
+// Alternative: get args directly
+const auto accessor_args = TensorAccessorArgs(buffer);
+auto compile_args = accessor_args.get_compile_time_args();
+// For runtime args (if using RuntimeX flags):
+SetCommonRuntimeArgs(program, kernel_id, accessor_args.get_common_runtime_args());
+```
+
+**Device-side usage** (in kernel):
+```cpp
+#include "api/dataflow/dataflow_api.h"  // TensorAccessor included automatically
+
+// Create from compile-time args starting at index 1
+constexpr auto src_tensor_args = TensorAccessorArgs<1>();
+const auto s = TensorAccessor(src_tensor_args, base_addr, page_size);
+
+// Use get_noc_addr for address calculation
+noc_async_read(s.get_noc_addr(page_id), l1_write_addr, page_size);
+// Or use helper functions:
+noc_async_read_page(page_id, s, l1_write_addr);
+```
+
+**Reference**: See `tech_reports/tensor_accessor/tensor_accessor.md` for full documentation.
+
+### Stub Kernel Pattern (Passthrough with TensorAccessor)
+
+**Important**: Use TensorAccessor instead of the deprecated InterleavedAddrGenFast. TensorAccessor:
+- Works with both DRAM and L1 (interleaved and sharded tensors)
+- Handles bank addressing automatically
+- Provides flexible compile-time vs runtime argument configuration
+
 ```cpp
 // Reader stub: Read tiles and push to CB
 // kernels/dataflow/reader_{operation}.cpp
-#include "dataflow_api.h"
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-
+    // Compile-time args
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    // Additional compile-time args for tensor accessor...
+    constexpr auto src_tensor_args = TensorAccessorArgs<1>();  // Starts at index 1
+
+    // Runtime args
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
 
     const uint32_t tile_bytes = get_tile_size(cb_id);
-    const auto data_format = get_dataformat(cb_id);
-    const InterleavedAddrGenFast<true> s = { /* from tensor accessor args */ };
+
+    // Create TensorAccessor from args
+    const auto s = TensorAccessor(src_tensor_args, src_addr, tile_bytes);
 
     uint32_t tile_id = start_id;
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read_tile(tile_id, s, l1_write_addr);
+        // Use get_noc_addr + noc_async_read (or noc_async_read_page helper)
+        noc_async_read(s.get_noc_addr(tile_id), l1_write_addr, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
         tile_id++;
@@ -180,25 +235,30 @@ void kernel_main() {
 
 // Writer stub: Pop from CB and write tiles
 // kernels/dataflow/writer_{operation}.cpp
-#include "dataflow_api.h"
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-
+    // Compile-time args
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    // Additional compile-time args for tensor accessor...
+    constexpr auto dst_tensor_args = TensorAccessorArgs<1>();  // Starts at index 1
+
+    // Runtime args
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_id = get_arg_val<uint32_t>(2);
 
     const uint32_t tile_bytes = get_tile_size(cb_id);
-    const auto data_format = get_dataformat(cb_id);
-    const InterleavedAddrGenFast<true> d = { /* from tensor accessor args */ };
+
+    // Create TensorAccessor from args
+    const auto d = TensorAccessor(dst_tensor_args, dst_addr, tile_bytes);
 
     uint32_t tile_id = start_id;
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(tile_id, d, l1_read_addr);
+        // Use get_noc_addr + noc_async_write (or noc_async_write_page helper)
+        noc_async_write(l1_read_addr, d.get_noc_addr(tile_id), tile_bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
         tile_id++;
@@ -625,39 +685,32 @@ device/kernels/
 
 **Reader kernel stub** `device/kernels/dataflow/reader_{operation_name}_interleaved.cpp`:
 ```cpp
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Runtime args
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-
     // Compile-time args
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    // TensorAccessorArgs compile-time args follow...
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto src_tensor_args = TensorAccessorArgs<1>();  // TensorAccessor args start at index 1
 
-    // Setup address generator
+    // Runtime args
+    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
+
+    // Setup TensorAccessor
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
-    const DataFormat data_format = get_dataformat(cb_id_in);
-
-    const InterleavedAddrGenFast<src_is_dram> src_addr_gen = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+    const auto s = TensorAccessor(src_tensor_args, src_addr, tile_bytes);
 
     // Read tiles from source to CB
     uint32_t tile_id = start_tile_id;
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id_in, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-        noc_async_read_tile(tile_id, src_addr_gen, l1_write_addr);
+        noc_async_read(s.get_noc_addr(tile_id), l1_write_addr, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_id_in, 1);
         tile_id++;
@@ -667,39 +720,32 @@ void kernel_main() {
 
 **Writer kernel stub** `device/kernels/dataflow/writer_{operation_name}_interleaved.cpp`:
 ```cpp
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    // Runtime args
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-
     // Compile-time args
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    // TensorAccessorArgs compile-time args follow...
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto dst_tensor_args = TensorAccessorArgs<1>();  // TensorAccessor args start at index 1
 
-    // Setup address generator
+    // Runtime args
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
+
+    // Setup TensorAccessor
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
-
-    const InterleavedAddrGenFast<dst_is_dram> dst_addr_gen = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+    const auto d = TensorAccessor(dst_tensor_args, dst_addr, tile_bytes);
 
     // Write tiles from CB to destination
     uint32_t tile_id = start_tile_id;
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id_out, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(tile_id, dst_addr_gen, l1_read_addr);
+        noc_async_write(l1_read_addr, d.get_noc_addr(tile_id), tile_bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_id_out, 1);
         tile_id++;
@@ -709,7 +755,7 @@ void kernel_main() {
 
 **Compute kernel stub (passthrough)** `device/kernels/compute/{operation_name}_compute.cpp`:
 ```cpp
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -745,17 +791,21 @@ void MAIN {
 
 **Complete the program factory** - In `device/{operation_name}_program_factory.cpp`, remove the `TT_THROW` and add kernel creation:
 
+**Important**: Add this include at the top of the file:
+```cpp
+#include <tt-metalium/tensor_accessor_args.hpp>
+```
+
 ```cpp
 // In {operation_name}_program_factory.cpp, replace the TT_THROW with:
 
-// Compile-time args for reader
+// Compile-time args for reader - use TensorAccessorArgs to handle memory type automatically
 std::vector<uint32_t> reader_compile_time_args = {cb_input_idx};
-// Add is_dram flag: 1 if DRAM, 0 if L1
-reader_compile_time_args.push_back(src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0);
+TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-// Compile-time args for writer
+// Compile-time args for writer - use TensorAccessorArgs to handle memory type automatically
 std::vector<uint32_t> writer_compile_time_args = {cb_output_idx};
-writer_compile_time_args.push_back(dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0);
+TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
 // Create reader kernel (RISCV_0 / BRISC)
 tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

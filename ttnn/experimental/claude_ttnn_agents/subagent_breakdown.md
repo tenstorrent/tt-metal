@@ -103,8 +103,8 @@ The TDD plan produced by the planner defines 6 incremental stages to build up th
 **Purpose**: Create minimal Python binding that is callable.
 
 **Output**:
-- `{operation_name}_pybind.hpp/cpp` with stub that throws `NotImplementedError`
-- Category pybind updated
+- `{operation_name}_nanobind.hpp/cpp` with stub that throws `NotImplementedError`
+- Category nanobind updated
 
 **Test**: `test_dev/test_stage1_api_exists.py`
 
@@ -130,7 +130,7 @@ The TDD plan produced by the planner defines 6 incremental stages to build up th
 
 **Output**:
 - `{operation_name}.hpp` with `register_operation`
-- `bind_registered_operation` in pybind
+- `bind_registered_operation` in nanobind
 - `compute_output_specs()` implementing shape formula from spec
 
 **Test**: `test_dev/test_stage3_registration.py`
@@ -388,7 +388,7 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
 │  │ Stage 1:     │    │ Stage 2:     │    │ Stage 3:     │  │
 │  │ API Exists   │───►│ Validation   │───►│ Registration │  │
-│  │ (pybind)     │    │ (TT_FATAL)   │    │ (register_op)│  │
+│  │ (nanobind)   │    │ (TT_FATAL)   │    │ (register_op)│  │
 │  └──────────────┘    └──────────────┘    └──────────────┘  │
 │         │                                       │           │
 │         ▼ test_stage1                           ▼           │
