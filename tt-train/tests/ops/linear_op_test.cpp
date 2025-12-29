@@ -80,7 +80,7 @@ TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
     auto moreh_weight_grad = weight->get_grad();
     auto moreh_bias_grad = bias->get_grad();
 
-    const float eps = 3125e-5F;
+    const float eps = 2e-2F;
     compare_tensors(ttnn_tensor_grad, moreh_tensor_grad, eps);
     compare_tensors(ttnn_weight_grad, moreh_weight_grad, eps);
     compare_tensors(ttnn_bias_grad, moreh_bias_grad, eps);

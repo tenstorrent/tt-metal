@@ -76,7 +76,7 @@ inline auto create_chunks(std::span<T> output, size_t num_threads, size_t chunk_
     return std::views::iota(0u, num_threads) | std::views::transform([output, chunk_size](size_t i) {
                const size_t offset = i * chunk_size;
                const size_t size = std::min(chunk_size, output.size() - offset);
-               return output.subspan(offset, size);
+               return std::span{output.data() + offset, size};
            }) |
            std::views::take_while([](auto chunk) { return !chunk.empty(); });
 }
