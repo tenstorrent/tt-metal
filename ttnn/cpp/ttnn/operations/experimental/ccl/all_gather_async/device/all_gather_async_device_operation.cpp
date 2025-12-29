@@ -181,7 +181,7 @@ AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation
 
 AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.persistent_output_buffer.has_value()) {
+    if (tensor_args.persistent_output_buffer.has_value() && args.using_persistent_buffers) {
         return tensor_args.persistent_output_buffer.value();
     } else {
         auto output_spec = compute_output_specs(args, tensor_args);
