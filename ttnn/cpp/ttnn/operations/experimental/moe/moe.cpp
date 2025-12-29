@@ -7,8 +7,13 @@
 
 namespace ttnn::operations::experimental::moe {
 
-ttnn::Tensor ExecuteMoE::invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& weight_tensor) {
-    return ttnn::prim::moe(input_tensor, weight_tensor);
+ttnn::Tensor ExecuteMoE::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& w0_tensor,
+    const ttnn::Tensor& w1_tensor,
+    const ttnn::Tensor& w2_tensor,
+    const ttnn::Tensor& output_tensor) {
+    return ttnn::prim::moe(input_tensor, w0_tensor, w1_tensor, w2_tensor, output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::moe
