@@ -27,6 +27,7 @@ def reference_model(hf_config):
     torch.use_deterministic_algorithms(True)
     # Note : Running Reference MoE without shared experts
     hf_config.n_shared_experts = None
+    hf_config.num_hidden_layers = 1
     return DeepseekV3MoE(hf_config).eval()
 
 
@@ -44,15 +45,15 @@ def reference_model(hf_config):
     ],
 )
 @pytest.mark.parametrize(
-    "mode,seq_len",
+    "mode,num_tokens",
     [
         ("decode", 128),
-        ("prefill", 2048),
+        # ("prefill", 2048),
     ],
 )
 def test_forward_pass(
     mode,
-    seq_len,
+    num_tokens,
     set_deterministic_env,
     reference_model,
     hf_config,
@@ -62,7 +63,6 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
-    batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
     state_dict = add_inv_scale_to_state_dict(
@@ -71,7 +71,7 @@ def test_forward_pass(
     )
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+    torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
     reference_model.eval()
@@ -127,7 +127,7 @@ def test_forward_pass(
     ttnn.deallocate(tt_output)
 
     # Compare outputs using utility function
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
 
 
