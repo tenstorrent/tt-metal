@@ -62,18 +62,6 @@ export PYTHONPATH=/path/to/tt-metal  # Required for Python imports
 export ARCH_NAME=wormhole_b0         # or grayskull, blackhole
 ```
 
-### Debugging and Development
-```bash
-# Enable operation logging
-export TT_LOGGER_TYPES=Op
-export TT_LOGGER_LEVEL=DEBUG
-
-# Make ops blocking with logging (useful for debugging)
-export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
-```
-
-For kernel-level debugging (hangs, CB issues, device errors), use the `ttnn-riscv-debugger` agent.
-
 ## Development Workflow
 
 ### Virtual Environment Setup
@@ -83,11 +71,35 @@ For kernel-level debugging (hangs, CB issues, device errors), use the `ttnn-risc
 source python_env/bin/activate
 ```
 
-### Device Reset
-If device hangs or misbehaves:
+### Device Management and Test Execution
+
+**CRITICAL**: Always follow these steps when running Python tests to avoid false debugging conclusions from stale device state or hung processes.
+
+#### 1. Kill Leftover Pytest Processes
+Before running any test, kill any hung pytest processes from previous runs:
 ```bash
-tt-smi -r # Reset device
+# Find and kill any leftover pytest processes
+pkill -9 -f pytest || true
 ```
+The device may be occupied by a hung pytest process, leading to false conclusions.
+
+#### 2. Reset the Device
+Reset the device before running any Python test:
+```bash
+tt-smi -r  # Reset all devices allocated to you
+```
+
+**IMPORTANT**: Use `tt-smi -r` WITHOUT device ID arguments. The device may be in a hung state from previous runs.
+
+**NEVER use `tt-smi -r 0`** or any other device ID. The `-r` flag without arguments resets all devices allocated to you. Using `tt-smi -r 0` will fail with "Error accessing board at PCI index 0" in multi-user environments.
+
+#### 3. Run Tests with Timeout
+Run all Python tests with a timeout to detect hangs:
+```bash
+timeout 10 pytest <test_file>  # 10 second timeout (adjust as needed)
+```
+
+Unless explicitly instructed otherwise, use a 10-second timeout as the default.
 
 ## Debugging Guide
 
@@ -182,6 +194,16 @@ quasi-full-duplex operation.
 ### Data Flow
 Typical pattern: NoC0 → Unpacker → FPU/SFPU → Packer → NoC1
 
+### Kernel Helper Library
+
+`ttnn/cpp/ttnn/kernel_lib/` provides header-only helpers for compute kernels:
+- **tilize_helpers.hpp**: Unified `tilize()` - handles simple/activation/fast/DT patterns
+- **untilize_helpers.hpp**: Unified `untilize()` - auto-dispatches pack_untilize vs standard based on width/datatype
+- **reduce_helpers.hpp**: Unified `reduce()` - handles ROW/COL/SCALAR with streaming or preloaded input
+- **dest_helpers.hpp**: Auto-detects DEST register limits (4-16 tiles based on sync/accum mode)
+
+All functions use templates for zero runtime overhead. Include via `#include "ttnn/cpp/ttnn/kernel_lib/<helper>.hpp"`. Requires `compute_kernel_hw_startup()` first.
+
 ## Common Pitfalls
 
 1. **Fast vs Slow Dispatch**: Always use fast dispatch (default) for production. Slow dispatch is debugging-only.
@@ -232,10 +254,59 @@ For example:
 To create a new operation based on an existing reference, use the agents in `.claude/agents/`:
 
 ```
-1. ttnn-operation-analyzer  → Analyze reference op → {ref}_analysis.md
-2. ttnn-operation-planner   → Design new op       → {new}_spec.md  [USER REVIEW]
-3. ttnn-operation-scaffolder → Stages 1-3         → API, validation, registration
-4. ttnn-factory-builder     → Stages 4-6         → Program factory, stub kernels
+## Creating New TTNN Operations — MANDATORY ROUTING
+
+When user requests a new TTNN operation, STOP and answer these questions:
+
+### Step 1: Are reference operations specified?
+- YES with paths to reference_operation_analysis.md → Skip to Phase 1 (Analyzer)
+- YES but vague ("like softmax") → Search for that operation's program_factory.cpp
+- NO → Continue to discovery
+
+### Step 2: Discovery Checklist (if references not specified)
+
+□ Parse for format keywords:
+  - "row-major input" + "tilize" → need tilize reference
+  - "untilize" + "row-major output" → need untilize reference
+  - "sharded" → need sharded-input reference (layernorm, etc.)
+
+□ Select appropriate variant:
+  - Match memory layout: interleaved → *_interleaved_*, sharded → *_sharded_*
+  - Prefer simpler variant (single_core) for templates
+
+□ Query DeepWiki for unknowns:
+  - "Which TTNN operations perform [X]?"
+  - "Which operations convert ROW_MAJOR to TILE_LAYOUT?"
+
+### Step 3: Mode Determination
+- Single reference → Derivative mode
+- Multiple references with different roles → Hybrid mode
+
+### Step 4: Reference Confirmation (USER CHECKPOINT)
+
+Before running analyzers, present discovered references:
+
+"I identified these references:
+| Role | Operation | Path | Reason |
+|------|-----------|------|--------|
+| input_stage | tilize | .../tilize_multi_core_interleaved_program_factory.cpp | row-major + tilize keywords |
+| output_stage | untilize | .../untilize_multi_core_program_factory.cpp | untilize + row-major keywords |
+
+Planning Mode: Hybrid
+
+Proceed with analysis, or suggest different references?"
+
+- User confirms → proceed to Phase 1
+- User suggests alternatives → update references and re-confirm
+
+### Step 5: Execute Workflow
+1. Phase 1: Run `ttnn-operation-analyzer` on EACH confirmed reference
+2. Phase 2: Run `ttnn-operation-planner` with all analyzer outputs
+3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user
+   - User approves → proceed to Phase 3
+   - User requests changes → refine spec, re-present for approval
+   - Do NOT proceed without explicit user approval
+4. Phase 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
 ```
 
 See `.claude/subagent_breakdown.md` for detailed workflow and https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html for official docs.
@@ -259,5 +330,3 @@ Invoke with symptom only (e.g., "test hangs"). The agent autonomously:
 - **Tile sizes**: Operations on 32×32 tiles are native and most efficient
 - **NoC bandwidth**: Minimize data movement, use sharded memory when beneficial
 - **SRAM capacity**: 1.5MB per Tensix—keep intermediate results in SRAM when possible
-- **Operator fusion**: Less critical than on CPU/GPU due to abundant on-chip SRAM
-- **Tracy Profiler**: Use for performance analysis (enabled by default, disable with `--disable-profiler`)
