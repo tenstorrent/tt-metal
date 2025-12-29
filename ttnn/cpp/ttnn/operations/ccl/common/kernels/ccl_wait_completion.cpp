@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include <cstdint>
 #include <array>
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr size_t num_signals_to_wait_for = get_compile_time_arg_val(0);

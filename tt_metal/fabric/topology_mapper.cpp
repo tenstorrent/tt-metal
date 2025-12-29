@@ -456,7 +456,7 @@ void TopologyMapper::build_mapping() {
         "Multi-mesh-per-host systems are not supported by this algorithm, please use custom fabric topology via "
         "MetalContext::set_custom_fabric_topology");
 
-    generate_mapping_locally_ = (mesh_graph_.get_mesh_ids().size() == 1) &&
+    generate_mapping_locally_ = (mesh_graph_.get_all_mesh_ids().size() == 1) &&
                                 (mesh_graph_.get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
 
     // Build ASIC ID to mesh rank mapping using the gathered mesh bindings directly
@@ -465,7 +465,8 @@ void TopologyMapper::build_mapping() {
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
-    if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+    if (generate_mapping_locally_ ||
+        *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() == 0) {
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph_);
         auto adjacency_map_physical = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_physical(
@@ -477,7 +478,7 @@ void TopologyMapper::build_mapping() {
         // Use sat solver algo to preserve the logical connectivity in the physical topology
         // Note: physical_chip_id is filled in during populate_fabric_node_id_to_asic_id_mappings
         // for ASICs that belong to this host, so no separate loop is needed here
-        for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+        for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
             populate_fabric_node_id_to_asic_id_mappings(
                 mesh_id,
                 adjacency_map_physical.at(mesh_id),
@@ -505,7 +506,7 @@ void TopologyMapper::build_mapping() {
 std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping()
     const {
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
-    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+    for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
             TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
@@ -527,7 +528,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
         // Get asics on current host
         auto asics =
             physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
-        for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+        for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
             for (const auto& asic : asics) {
                 mapping[mesh_id][asic] = host_rank;
                 mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = mpi_rank;
@@ -677,7 +678,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
 void TopologyMapper::broadcast_mapping_to_all_hosts() {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
 
     const std::size_t world_size = *distributed_context.size();
     if (world_size <= 1) {
@@ -727,7 +728,7 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
         std::uint32_t count_copy = count;
         distributed_context.ssend(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
-            Rank{static_cast<uint32_t>(peer)},
+            Rank{static_cast<int>(peer)},
             Tag{0});
 
         // Send one record at a time using synchronous send
@@ -767,12 +768,12 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
             std::uint32_t record_size = static_cast<std::uint32_t>(record.size());
             distributed_context.ssend(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
-                Rank{static_cast<uint32_t>(peer)},
+                Rank{static_cast<int>(peer)},
                 Tag{1});  // Use Tag{1} for size messages
 
             distributed_context.ssend(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
-                Rank{static_cast<uint32_t>(peer)},
+                Rank{static_cast<int>(peer)},
                 Tag{0});  // Use Tag{0} for data messages
         }
     }
@@ -780,7 +781,7 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
 
 void TopologyMapper::receive_mapping_from_host(int rank) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
 
     // If not in distributed context, nothing to receive
     if (*distributed_context.size() <= 1) {
@@ -797,7 +798,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
     {
         auto req = distributed_context.irecv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
-            Rank{static_cast<uint32_t>(rank)},
+            Rank{static_cast<int>(rank)},
             Tag{0});
 
         wait_for_request_with_timeout(req, "topology mapping header", rank);
@@ -830,7 +831,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         {
             auto req = distributed_context.irecv(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
-                Rank{static_cast<uint32_t>(rank)},
+                Rank{static_cast<int>(rank)},
                 Tag{1});  // Use Tag{1} for size messages
 
             wait_for_request_with_timeout(
@@ -849,7 +850,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         std::vector<uint8_t> record(record_size);
         auto req = distributed_context.irecv(
             tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
-            Rank{static_cast<uint32_t>(rank)},
+            Rank{static_cast<int>(rank)},
             Tag{0});  // Use Tag{0} for data messages
 
         wait_for_request_with_timeout(
@@ -1190,7 +1191,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     // If there's only one host rank per mesh in the mesh graph, ensure all meshes have host_rank entries
     // even if the current rank doesn't participate in all meshes. This is needed for initialize_distributed_contexts()
     // to be able to look up MPI ranks for all (mesh_id, host_rank) pairs.
-    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+    for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
         const auto& host_ranks = mesh_graph_.get_host_ranks(mesh_id);
         // If there's only one host rank in the mesh graph and we don't have an entry for it, add it
         if (host_ranks.size() == 1) {
@@ -1367,12 +1368,21 @@ namespace {
 std::uint32_t get_num_connections_per_direction(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     // Check the number of connections per direction for each asic
     std::uint32_t num_connections_per_direction = 1;  // Default to 1 connection per direction
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     for (const auto& [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
         auto neighbors = psd.get_asic_neighbors(asic_id);
         for (const auto& neighbor : neighbors) {
             auto connections = psd.get_eth_connections(asic_id, neighbor);
             std::uint32_t num_local_connections = 0;
             for (const auto& connection : connections) {
+                if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                    (connection.src_chan == 8 || connection.src_chan == 9)) {
+                    // Skip internally connected Z links, since these are not to be used by any single node
+                    // Fabric Topologies.
+                    // TODO: Ridvan - need a better way of handling internally connected Z links.
+                    // Relying on ports 8 and 9 is not sustainable
+                    continue;
+                }
                 if (connection.is_local) {
                     num_local_connections++;
                 }

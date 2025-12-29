@@ -20,7 +20,7 @@ namespace tt::tt_metal {
 
 template <bool hugepage_write>
 DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB) :
-    cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region), cmd_write_offsetB(0) {
+    cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region) {
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
         "Command sequence size B={} is not {}-byte aligned",
@@ -30,8 +30,7 @@ DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequ
 
 template <bool hugepage_write>
 template <bool hp_w, typename std::enable_if_t<!hp_w, int>>
-DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) :
-    cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_write_offsetB(0) {
+DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_sequence_sizeB(cmd_sequence_sizeB) {
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
         "Command sequence size B={} is not {}-byte aligned",
@@ -751,8 +750,11 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     increment_sizeB = tt::align(packed_data_sizeB, this->l1_alignment);
     uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
     for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
-        this->memcpy(
-            (char*)this->cmd_region + this->cmd_write_offsetB, data_collection[i].first, data_collection[i].second);
+        if (data_collection[i].first) {
+            this->memcpy(
+                (char*)this->cmd_region + this->cmd_write_offsetB, data_collection[i].first, data_collection[i].second);
+        }
+        // Always advanced by the packed stride, even if no data was copied
         this->cmd_write_offsetB += increment_sizeB;
     }
 
@@ -829,8 +831,11 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
         uint32_t offset = 0;
         for (const auto& data : data_collection[i]) {
-            this->memcpy(
-                (char*)this->cmd_region + this->cmd_write_offsetB + offset, std::get<0>(data), std::get<1>(data));
+            if (std::get<0>(data)) {
+                this->memcpy(
+                    (char*)this->cmd_region + this->cmd_write_offsetB + offset, std::get<0>(data), std::get<1>(data));
+            }
+            // Always advanced by the stride, even if no data was copied
             offset += std::get<2>(data);
         }
         this->cmd_write_offsetB += increment_sizeB;

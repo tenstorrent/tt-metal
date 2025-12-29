@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-// #include "debug/dprint.h"  // required in all kernels using DPRINT
+// #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
 void kernel_main() {
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);

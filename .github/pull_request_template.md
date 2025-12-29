@@ -9,14 +9,41 @@ Describe the approach used to solve the problem.
 Summarize the changes made and its impact.
 
 ### Checklist
-- [ ] [All post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml) CI passes
-- [ ] [Blackhole Post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml) CI with demo tests passes (if applicable)
-- [ ] [Model regression](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml) CI passes (if applicable)
-- [ ] [Device performance regression](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml) CI passes (if applicable)
-- [ ] (For models and ops writers) [Single-card demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml) CI passes (if applicable) See [recommended dev flow](https://github.com/tenstorrent/tt-metal/blob/main/models/docs/MODEL_ADD.md#a-recommended-dev-flow-on-github-for-adding-new-models).
-- [ ] [Galaxy quick](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-quick.yaml) CI passes (if applicable)
-- [ ] [Galaxy demo tests, for Llama](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-demo-tests.yaml) CI passes, if applicable, because of current Llama work
-- [ ] (For runtime and ops writers) [T3000 unit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-unit-tests.yaml) CI passes (if applicable, since this is run on push to main)
-- [ ] (For models and ops writers) [T3000 demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-demo-tests.yaml) CI passes (if applicable, since this is required for release)
-- [ ] [cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) job passes
+
+- [ ] [![All post-commit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml?query=branch:{{branch_name}})
+- [ ] [![Blackhole Post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml?query=branch:{{branch_name}})
+- [ ] [![cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml?query=branch:{{branch_name}})
 - [ ] New/Existing tests provide coverage for changes
+
+
+#### Model tests
+
+If your changes cover model-related code, you should run tests corresponding to affected models and platforms (Single card, T3K, Galaxy). "Choose your pipeline" workflows facilitate running multiple kinds of tests in a single run. Each offers `models-mandatory` and `models-extended` presets.
+The former includes a minimal set of tests, to be run always. The latter extends that with additional ones - use your best judgement in deciding which is the most appropriate for your PR.
+
+- [ ] [![(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml?query=branch:{{branch_name}})
+  - [ ] `models-mandatory` preset (runs:
+      [Device perf regressions](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml) and
+      [Frequent model and ttnn tests](https://github.com/tenstorrent/tt-metal/actions/workflows/fast-dispatch-full-regressions-and-models.yaml))
+  - [ ] `models-extended` preset (runs:
+      the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/single-card-demo-tests.yaml)
+      and [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml) tests)
+  - [ ] other selection - specify runs
+
+- [ ] [![(T3K) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-t3k.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-t3k.yaml?query=branch:{{branch_name}})
+  - [ ] `models-mandatory` preset (runs:
+      [Unit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-unit-tests.yaml))
+  - [ ] `models-extended` preset
+      (runs:
+      the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-demo-tests.yaml) and
+      [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-model-perf-tests.yaml) tests)
+  - [ ] other selection - specify runs
+
+- [ ] [![(Galaxy) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-galaxy.yaml/badge.svg?branch={{branch_name}})](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-galaxy.yaml?query=branch:{{branch_name}})
+  - [ ] `models-mandatory` preset (runs:
+      [Quick tests](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-quick.yaml))
+  - [ ] `models-extended` preset
+      (runs:
+      the mandatory tests, plus [Demo](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-demo-tests.yaml) and
+      [Model perf](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-model-perf-tests.yaml) tests)
+  - [ ] other selection - specify runs

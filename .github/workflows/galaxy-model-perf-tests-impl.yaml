@@ -37,6 +37,15 @@ jobs:
           # Create matrix in two parts: disabled and active models
           DISABLED_MODELS=$(jq -n '[
             {
+              "name": "Galaxy CNN model perf tests",
+              "model-type": "CNN",
+              "model-name": "cnn",
+              "arch": "wormhole_b0",
+              "save-perf-data": false,
+              "timeout": 50,
+              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
+            }, # Pavle Josipovic
+            {
               "name": "Galaxy Llama 70B model perf tests",
               "model-type": "Llama-70B",
               "model-name": "llama70b",
@@ -65,19 +74,20 @@ jobs:
               "timeout": 60,
               "cmd": "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device --timeout=1000",
               "owner_id": "U03PUAKE719"
-            } # Miguel Tairum
+            }, # Miguel Tairum
+            {
+              "name": "Galaxy Sentence Bert tests",
+              "arch": "wormhole_b0",
+              "model-type": "sentence_bert",
+              "model-name": "sentence_bert",
+              "save-perf-data": false,
+              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
+              "timeout": 30,
+              "owner_id": "U088413NP0Q"
+            } # Ashai Reddy
           ]' --compact-output)
 
           ACTIVE_MODELS=$(jq -n '[
-            {
-              "name": "Galaxy CNN model perf tests",
-              "model-type": "CNN",
-              "model-name": "cnn",
-              "arch": "wormhole_b0",
-              "save-perf-data": false,
-              "timeout": 50,
-              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
-            }, # Pavle Josipovic
             {
               "name": "Galaxy DiT SD3.5 model perf tests",
               "model-type": "SD3.5",
@@ -109,16 +119,6 @@ jobs:
               "owner_id": "U08TED0JM9D"
             }, # Samuel Adesoye
             {
-              "name": "Galaxy Sentence Bert tests",
-              "arch": "wormhole_b0",
-              "model-type": "sentence_bert",
-              "model-name": "sentence_bert",
-              "save-perf-data": false,
-              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
-              "timeout": 30,
-              "owner_id": "U088413NP0Q"
-            }, # Ashai Reddy
-            {
               "name": "Galaxy DiT Wan2.2 model perf tests",
               "model-type": "Wan2.2",
               "model-name": "wan2-2",
@@ -135,7 +135,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 50,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 and yes_use_cache\"",
+              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 \"",
               "owner_id": "U09ELB03XRU"
             } # Stephen Osborne
           ]' --compact-output)

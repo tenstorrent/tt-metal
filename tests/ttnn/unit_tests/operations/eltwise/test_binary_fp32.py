@@ -6,11 +6,13 @@ import torch
 import ttnn
 
 import pytest
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     compare_pcc,
 )
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(

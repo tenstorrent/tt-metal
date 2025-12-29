@@ -5,7 +5,7 @@
 import os
 import pytest
 
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from models.perf.device_perf_utils import run_model_device_perf_test
 
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
@@ -13,6 +13,7 @@ from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
+CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 
 @pytest.mark.parametrize(
@@ -48,36 +49,6 @@ def test_unet(
         is_ci_v2_env=is_ci_v2_env,
         model_location_generator=model_location_generator,
         iterations=iterations,
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 191_651_771
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
-
-    command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    batch_size = 1
-    total_batch_size = batch_size * UNET_DEVICE_TEST_TOTAL_ITERATIONS
-
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-    post_processed_results = run_device_perf(
-        command, subdir="sdxl_unet", num_iterations=1, cols=cols, batch_size=total_batch_size
-    )
-    expected_perf_cols = {
-        inference_time_key: expected_device_perf_cycles_per_iteration * UNET_DEVICE_TEST_TOTAL_ITERATIONS
-    }
-    expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-    prep_device_perf_report(
-        model_name=f"sdxl_unet",
-        batch_size=total_batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
     )
 
 
@@ -117,85 +88,91 @@ def test_refiner_unet(
     )
 
 
+@pytest.mark.parametrize(
+    "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
+    [
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet",
+            191_651_771 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            "sdxl_unet",
+            "sdxl_unet",
+            1,
+            1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            0.015,
+            f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
+            610_108_504 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            "sdxl_refiner_unet",
+            "sdxl_refiner_unet",
+            1,
+            1 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            0.06,
+            f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'",
+            691_445_943,
+            "sdxl_vae",
+            "sdxl_vae_decode",
+            VAE_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'",
+            348_815_743,
+            "sdxl_vae",
+            "sdxl_vae_encode",
+            VAE_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_1'",
+            13_112_562,
+            "sdxl_clip_encoder_1",
+            "sdxl_clip_encoder_1",
+            CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+        (
+            "pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_sdxl_clip_encoders.py::test_clip_encoder -k 'encoder_2'",
+            63_023_709,  # Note: this is an average value of 5 test runs due to high variability
+            "sdxl_clip_encoder_2",
+            "sdxl_clip_encoder_2",
+            CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
+            1,
+            0.015,
+            "",
+        ),
+    ],
+    ids=[
+        "test_sdxl_unet",
+        "test_sdxl_refiner_unet",
+        "test_sdxl_vae_decode",
+        "test_sdxl_vae_encode",
+        "test_sdxl_clip_encoder_1",
+        "test_sdxl_clip_encoder_2",
+    ],
+)
 @pytest.mark.models_device_performance_bare_metal
-def test_sdxl_refiner_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 602_265_531
+def test_sdxl_perf_device(
+    command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
+):
     os.environ["TT_MM_THROTTLE_PERF"] = "5"
-
-    command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    batch_size = 1
-    total_batch_size = batch_size * UNET_DEVICE_TEST_TOTAL_ITERATIONS
-
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-    post_processed_results = run_device_perf(
-        command, subdir="sdxl_refiner_unet", num_iterations=1, cols=cols, batch_size=total_batch_size
-    )
-    expected_perf_cols = {
-        inference_time_key: expected_device_perf_cycles_per_iteration * UNET_DEVICE_TEST_TOTAL_ITERATIONS
-    }
-    expected_results = check_device_perf(
-        post_processed_results, margin=0.06, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-    prep_device_perf_report(
-        model_name=f"sdxl_refiner_unet",
-        batch_size=total_batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-def test_sdxl_vae_decode_perf_device():
-    expected_device_perf_cycles_per_iteration = 680_239_540
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
-
-    command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    batch_size = 1
-
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-    post_processed_results = run_device_perf(
-        command, subdir="sdxl_vae", num_iterations=VAE_DEVICE_TEST_TOTAL_ITERATIONS, cols=cols, batch_size=batch_size
-    )
-    expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
-    expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-    prep_device_perf_report(
-        model_name=f"sdxl_vae_decode",
+    run_model_device_perf_test(
+        command=command,
+        expected_device_perf_ns_per_iteration=expected_device_perf_ns_per_iteration,
+        subdir=subdir,
+        model_name=model_name,
+        num_iterations=num_iterations,
         batch_size=batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments="",
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-def test_sdxl_vae_encode_perf_device():
-    expected_device_perf_cycles_per_iteration = 343_068_075
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
-
-    command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    batch_size = 1
-
-    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
-    post_processed_results = run_device_perf(
-        command, subdir="sdxl_vae", num_iterations=VAE_DEVICE_TEST_TOTAL_ITERATIONS, cols=cols, batch_size=batch_size
-    )
-    expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
-    expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-    prep_device_perf_report(
-        model_name=f"sdxl_vae_encode",
-        batch_size=batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments="",
+        margin=margin,
+        comments=comments,
     )

@@ -949,7 +949,7 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
     };
 
     // Iterate over all mesh IDs from the mesh graph
-    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         LogicalAdjacencyMap logical_adjacency_map;
         for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
             auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
@@ -996,7 +996,17 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
                         // they cause issues with uniform mesh mapping since topology mapper algorithm does not prefer
                         // taking the full connectivity path vs downgrading through z channels for intramesh
                         // connectivity https://github.com/tenstorrent/tt-metal/issues/31846
-                        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                        // This is required until we can encode a preference for links.
+                        // To support use-cases where a big-mesh must be built over Z Links, a workaround has been added
+                        // to allow cross host intramesh connections to be spawned over cross host Z Links.
+                        // See: https://github.com/tenstorrent/tt-metal/issues/31846#issuecomment-3644965757
+                        bool cross_host_connection =
+                            physical_system_descriptor.is_cross_host_eth_link(asic_id, eth_connection.src_chan);
+                        TT_ASSERT(
+                            cross_host_connection ==
+                                physical_system_descriptor.is_cross_host_eth_link(neighbor, eth_connection.dst_chan),
+                            "Expected both ethernet endpoints to be mapped as cross host connections.");
+                        if (!cross_host_connection && cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
                             (z_channels.contains(eth_connection.src_chan) ||
                              z_channels.contains(eth_connection.dst_chan))) {
                             continue;

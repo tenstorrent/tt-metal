@@ -273,6 +273,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back(
                 {src_chip_id, dst_chip_id, connection_data.count});
 
+            // Track mesh pairs that should use Z direction
+            if (connection_data.assign_z_direction) {
+                mesh_pairs_assign_z_direction_[*src_mesh_id].insert(*dst_mesh_id);
+                mesh_pairs_assign_z_direction_[*dst_mesh_id].insert(*src_mesh_id);
+            }
+
             // Track switch-to-mesh connections
             if (src_mesh_instance.kind == NodeKind::Switch && dst_mesh_instance.kind == NodeKind::Mesh) {
                 switch_to_connected_meshes_[src_mesh_id].push_back(dst_mesh_id);
@@ -285,6 +291,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             MeshId dst_mesh_id(dst_instance.local_id);
 
             requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] = connection_data.count;
+
+            // Track mesh pairs that should use Z direction
+            if (connection_data.assign_z_direction) {
+                mesh_pairs_assign_z_direction_[*src_mesh_id].insert(*dst_mesh_id);
+                mesh_pairs_assign_z_direction_[*dst_mesh_id].insert(*src_mesh_id);
+            }
 
             // Track switch-to-mesh connections
             if (src_instance.kind == NodeKind::Switch && dst_instance.kind == NodeKind::Mesh) {
@@ -614,6 +626,14 @@ const RequestedIntermeshConnections& MeshGraph::get_requested_intermesh_connecti
 
 const RequestedIntermeshPorts& MeshGraph::get_requested_intermesh_ports() const { return requested_intermesh_ports_; }
 
+bool MeshGraph::should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const {
+    auto it = mesh_pairs_assign_z_direction_.find(*src_mesh_id);
+    if (it != mesh_pairs_assign_z_direction_.end()) {
+        return it->second.find(*dst_mesh_id) != it->second.end();
+    }
+    return false;
+}
+
 const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& MeshGraph::get_mesh_edge_ports_to_chip_id() const {
     return mesh_edge_ports_to_chip_id_;
 }
@@ -738,13 +758,28 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
     return std::nullopt;
 }
 
-std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+std::vector<MeshId> MeshGraph::get_all_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
     mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         mesh_ids.push_back(mesh_id);
     }
     return mesh_ids;
+}
+
+std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
+    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
+        if (!this->is_switch_mesh(mesh_id)) {
+            mesh_ids.push_back(mesh_id);
+        }
+    }
+    return mesh_ids;
+}
+
+bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {
+    return std::find(switch_ids_.begin(), switch_ids_.end(), mesh_id) != switch_ids_.end();
 }
 
 MeshContainer<ChipId> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {

@@ -4,7 +4,10 @@
 
 #include "scatter_program_factory.hpp"
 
+#include "scatter_common.hpp"
+
 #include "scatter_device_operation_types.hpp"
+#include "tt-metalium/allocator.hpp"
 #include "tt-metalium/device.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -12,34 +15,8 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
-namespace {
-constexpr uint32_t BIT_MASK_32 = 32 - 1;
-
-uint64_t ceil32(const uint64_t& number) {
-    return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
-}
-
-}  // namespace
-
-// maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
-// BH available L1 mem size of nearly 1.5 MB...
-// ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
-// tensors)
-// ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
-// ... minimized by ~20% to account for reserved memory
-
-inline uint32_t get_max_l1_space(IDevice* device) {
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    return max_l1_space;
-}
-
-uint32_t calculate_optimal_chunk_size(IDevice* device) {
-    // Use floating-point division to preserve precision before multiplying by 0.8.
-    // Example: 100 bytes: was (100/4)/4*0.8 = 6*0.8 = 4.8, now (100.0/4.0)/4.0*0.8 = 6.25*0.8 = 5.0
-    return ceil32(static_cast<uint32_t>(((static_cast<double>(get_max_l1_space(device)) / 4.0) / 4.0) * 0.8) - 32);
-}
+using namespace tt;
+using namespace tt::tt_metal;
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -83,9 +60,9 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
-    // ... minimized by ~20% to account for reserved memory
-    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
-    const uint32_t index_and_source_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
+    // ... minimized by ~10% to account for reserved memory
+    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor);
+    const uint32_t index_and_source_max_chunk_size = calculate_optimal_chunk_size(index_tensor);
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
     const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
@@ -215,34 +192,6 @@ void ScatterProgramFactory::override_runtime_arguments(
         reader_runtime_args[2] = source_buffer_address;
         writer_runtime_args[0] = output_buffer_address;
     }
-}
-
-CBHandle ScatterProgramFactory::create_cb(
-    Program& program,
-    const DataType& dtype,
-    const ScatterCB& scatter_cb,
-    const CoreRangeSet& core_range_set,
-    const uint32_t& page_size_bytes) {
-    const uint32_t cb_id{static_cast<uint32_t>(scatter_cb)};
-    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    const auto cb_config{
-        CircularBufferConfig{page_size_bytes, {{cb_id, cb_data_format}}}.set_page_size(cb_id, page_size_bytes)};
-    return CreateCircularBuffer(program, core_range_set, cb_config);
-}
-
-KernelHandle ScatterProgramFactory::create_kernel(
-    Program& program,
-    const char* kernel_path,
-    const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-    const std::vector<uint32_t>& runtime_args) {
-    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    if (!runtime_args.empty()) {
-        SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
-    }
-
-    return kernel_id;
 }
 
 }  // namespace ttnn::operations::data_movement::scatter

@@ -10,8 +10,10 @@
 #include <cstdio>
 #include <set>
 #include <unordered_set>
+#include <fstream>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 using namespace tt::tt_fabric;
 
@@ -1421,6 +1423,160 @@ TEST(MeshGraphDescriptorTests, SwitchMixedWithMeshesInGraph) {
     // Verify we have meshes and switches
     EXPECT_EQ(desc.all_meshes().size(), 2) << "Should have 2 mesh instances";
     EXPECT_EQ(desc.all_switches().size(), 1) << "Should have 1 switch instance";
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionInMeshGraph) {
+    // Test that assign_z_direction flag is properly tracked in MeshGraph
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M1"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M2"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M2" mesh_id: 2 device_id: 0 } }
+            channels: { count: 1 }
+            assign_z_direction: true
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            nodes: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+            channels: { count: 2 }
+            # assign_z_direction not specified, should default to false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create a temporary file for the test
+    const std::filesystem::path test_file =
+        std::filesystem::temp_directory_path() / "test_assign_z_direction.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(test_file.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(test_file.string());
+
+    // Test should_assign_z_direction method
+    tt::tt_fabric::MeshId mesh_0(0);
+    tt::tt_fabric::MeshId mesh_1(1);
+    tt::tt_fabric::MeshId mesh_2(2);
+
+    // M0 <-> M1 should use Z direction (mesh-level connection with assign_z_direction: true)
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_1)) << "M0 <-> M1 should use Z direction";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_1, mesh_0))
+        << "M1 <-> M0 should use Z direction (bidirectional)";
+
+    // M0 <-> M2 should use Z direction (device-level connection with assign_z_direction: true)
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_2)) << "M0 <-> M2 should use Z direction";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_2, mesh_0))
+        << "M2 <-> M0 should use Z direction (bidirectional)";
+
+    // M1 <-> M2 should NOT use Z direction (assign_z_direction not specified, defaults to false)
+    EXPECT_FALSE(mesh_graph.should_assign_z_direction(mesh_1, mesh_2)) << "M1 <-> M2 should NOT use Z direction";
+    EXPECT_FALSE(mesh_graph.should_assign_z_direction(mesh_2, mesh_1))
+        << "M2 <-> M1 should NOT use Z direction (bidirectional)";
+
+    // Clean up
+    std::filesystem::remove(test_file);
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyInMeshGraph) {
+    // Test that assign_z_direction flag from graph topology is properly tracked in MeshGraph
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create a temporary file for the test
+    const std::filesystem::path test_file =
+        std::filesystem::temp_directory_path() / "test_assign_z_direction_graph_topology.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(test_file.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(test_file.string());
+
+    // Test should_assign_z_direction method for all mesh pairs
+    tt::tt_fabric::MeshId mesh_0(0);
+    tt::tt_fabric::MeshId mesh_1(1);
+    tt::tt_fabric::MeshId mesh_2(2);
+
+    // All pairs should use Z direction (ALL-to-ALL with assign_z_direction: true)
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_1))
+        << "M0 <-> M1 should use Z direction (ALL-to-ALL topology)";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_1, mesh_0))
+        << "M1 <-> M0 should use Z direction (bidirectional)";
+
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_2))
+        << "M0 <-> M2 should use Z direction (ALL-to-ALL topology)";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_2, mesh_0))
+        << "M2 <-> M0 should use Z direction (bidirectional)";
+
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_1, mesh_2))
+        << "M1 <-> M2 should use Z direction (ALL-to-ALL topology)";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_2, mesh_1))
+        << "M2 <-> M1 should use Z direction (bidirectional)";
+
+    // Clean up
+    std::filesystem::remove(test_file);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

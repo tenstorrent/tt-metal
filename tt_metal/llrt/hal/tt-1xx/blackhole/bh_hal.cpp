@@ -75,6 +75,8 @@ private:
 public:
     HalJitBuildQueryBlackHole(bool enable_2_erisc_mode) : enable_2_erisc_mode_(enable_2_erisc_mode) {}
 
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw) {
@@ -102,10 +104,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/tt-1xx");
-        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole");
-        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines");
-        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/noc");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx/blackhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 

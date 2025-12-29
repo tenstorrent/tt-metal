@@ -30,6 +30,11 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
+      enable-ops-recording:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy ops recording for all tests"
 
 jobs:
   define-demo-tests:
@@ -76,8 +81,9 @@ jobs:
             { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
             { name: "mobilenetv2", runner-label: "N300", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-            { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
+            # Return N150 and N300 mistral7b tests after https://github.com/tenstorrent/tt-metal/issues/34763 is done
+            # { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
+            # { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
             { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum
             { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
             { name: "efficientnet_b0", runner-label: "N300", performance: false, cmd: run_efficientnet_b0_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
@@ -91,6 +97,7 @@ jobs:
             { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
             # Moved to t3k tests until OOM on single card runners resolved
             # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
+            { name: "qwen25_vl", runner-label: "N150", performance: false, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
             { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
             { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
             # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
@@ -218,9 +225,27 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 60
         shell: bash
+        env:
+          # When ops recording is enabled, wrap pytest with Tracy profiler
+          # Tracy flags: -r (report), -p (device profiler), --dump-device-data-mid-run (prevent buffer overflow)
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run --op-support-count=30000 -m pytest' || 'pytest' }}
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
+      - name: Prepare Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: /work/generated/profiler
+          model-name: ${{ matrix.test-group.name }}
+          card: ${{ matrix.test-group.runner-label }}
+      - name: Upload Tracy profiler reports (operations recording)
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: /work/generated/profiler/reports
+          prefix: "tracy_ops_${{ matrix.test-group.name }}_${{ matrix.test-group.runner-label }}_"
       - name: Save environment data
         id: save-environment-data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
@@ -258,3 +283,31 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
+
+  aggregate-ops-recording:
+    needs: single-card-demo-tests
+    if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all Tracy profiler reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tracy_ops_*
+          path: all_tracy_reports
+          merge-multiple: false
+
+      - name: Aggregate operations report
+        id: aggregate
+        uses: ./.github/actions/aggregate-ops-report
+        with:
+          reports-path: all_tracy_reports
+          output-path: aggregated_ops
+
+      - name: Upload aggregated operations report
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregated-device-operations
+          path: aggregated_ops/

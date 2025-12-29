@@ -7,36 +7,78 @@ PCC test for the complete TtPanopticDeepLab model.
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
-from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
-    create_panoptic_deeplab_parameters,
-    fuse_conv_bn_parameters,
-)
-from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
-from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
-from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
+    preprocess_nchw_input_tensor,
+    validate_outputs_with_pcc,
+    create_pytorch_model,
+    create_ttnn_model,
 )
-from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
-from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    skip_if_not_blackhole_110_cores,
+    skip_if_not_blackhole_20_cores,
+)
 
 
 @pytest.mark.parametrize(
-    "model_category",
-    [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS],
-    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
+    "model_category, pcc_values, skip_check",
+    [
+        (
+            PANOPTIC_DEEPLAB,
+            {
+                "semantic": {"pcc": 0.986, "abs_err": 1.3, "rel_err": 0.4},
+                "center": {"pcc": 0.805, "abs_err": 0.1, "rel_err": 2.0},
+                "offset": {"pcc": 0.990, "abs_err": 10.4, "rel_err": 0.6},
+            },
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            PANOPTIC_DEEPLAB,
+            {
+                "semantic": {"pcc": 0.983, "abs_err": 1.4, "rel_err": 0.4},
+                "center": {"pcc": 0.8, "abs_err": 0.1, "rel_err": 2.2},
+                "offset": {"pcc": 0.987, "abs_err": 11.7, "rel_err": 0.7},
+            },
+            skip_if_not_blackhole_110_cores,
+        ),
+        (
+            DEEPLAB_V3_PLUS,
+            {
+                "semantic": {"pcc": 0.986, "abs_err": 1.3, "rel_err": 0.4},
+            },
+            skip_if_not_blackhole_20_cores,
+        ),
+        (
+            DEEPLAB_V3_PLUS,
+            {
+                "semantic": {"pcc": 0.983, "abs_err": 1.4, "rel_err": 0.4},
+            },
+            skip_if_not_blackhole_110_cores,
+        ),
+    ],
+    ids=[
+        "panoptic_deeplab_20_cores",
+        "panoptic_deeplab_110_cores",
+        "deeplab_v3_plus_20_cores",
+        "deeplab_v3_plus_110_cores",
+    ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-def test_model_panoptic_deeplab(device, model_category, model_location_generator):
+def test_model_panoptic_deeplab(device, model_category, pcc_values, skip_check, model_location_generator):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
 
-    skip_if_not_blackhole_20_cores(device)
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
+    compute_grid = device.compute_with_storage_grid_size()
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
+
     torch.manual_seed(0)
 
     # Get the weights path using the common utility function
@@ -64,60 +106,32 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
     ttnn_input = preprocess_nchw_input_tensor(device, pytorch_input)
 
     try:
-        pytorch_model = PytorchPanopticDeepLab(
-            num_classes=num_classes,
-            common_stride=common_stride,
-            project_channels=project_channels,
-            decoder_channels=decoder_channels,
-            sem_seg_head_channels=sem_seg_head_channels,
-            ins_embed_head_channels=ins_embed_head_channels,
-            train_size=train_size,
+        # Create PyTorch model using helper function
+        pytorch_model = create_pytorch_model(
             weights_path=complete_weights_path,
             model_category=model_category,
-        )
-        pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
-        pytorch_model.eval()
-
-        # Create TTNN parameters from the PyTorch model with loaded weights
-        # Use explicit input dimensions to match preprocessing
-        ttnn_parameters = create_panoptic_deeplab_parameters(
-            pytorch_model, device, input_height=input_height, input_width=input_width, batch_size=batch_size
-        )
-
-        # Apply Conv+BatchNorm fusion to the parameters
-        logger.info("Applying Conv+BatchNorm fusion to parameters...")
-        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
-        logger.info("Conv+BatchNorm fusion completed successfully")
-
-        # Create centralized configuration
-        model_configs = ModelOptimisations(
-            conv_act_dtype=ttnn.bfloat8_b,
-            conv_w_dtype=ttnn.bfloat8_b,
-        )
-
-        # Apply layer-specific configurations
-        logger.info("Applying ResNet backbone configurations...")
-        model_configs.setup_resnet_backbone()
-        logger.info("Applying ASPP layer overrides...")
-        model_configs.setup_aspp()
-        logger.info("Applying decoder layer overrides...")
-        model_configs.setup_decoder()
-        logger.info("Applying head layer overrides...")
-        model_configs.setup_heads()
-
-        # Create TTNN model with fused parameters and centralized configuration
-        ttnn_model = TtPanopticDeepLab(
-            device=device,
-            parameters=fused_parameters,
+            target_size=train_size,
             num_classes=num_classes,
             common_stride=common_stride,
             project_channels=project_channels,
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            train_size=train_size,
-            model_configs=model_configs,
+        )
+
+        # Create TTNN model using helper function (handles parameter creation, fusion, model configs, and model initialization)
+        ttnn_model = create_ttnn_model(
+            device=device,
+            pytorch_model=pytorch_model,
+            target_size=train_size,
+            batch_size=batch_size,
             model_category=model_category,
+            num_classes=num_classes,
+            common_stride=common_stride,
+            project_channels=project_channels,
+            decoder_channels=decoder_channels,
+            sem_seg_head_channels=sem_seg_head_channels,
+            ins_embed_head_channels=ins_embed_head_channels,
         )
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
@@ -129,44 +143,31 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
     logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")
     ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
-    all_passed = []
-    all_passed.append(
-        check_ttnn_output(
-            "Semantic",
-            pytorch_semantic,
-            ttnn_semantic,
-            to_channel_first=False,
-            output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-            exp_pcc=0.986,
-            exp_abs_err=1.3,
-            exp_rel_err=0.4,
-        )
+    # Extract PCC thresholds from parameters
+    semantic_vals = pcc_values["semantic"]
+    center_vals = pcc_values.get("center", {})
+    offset_vals = pcc_values.get("offset", {})
+
+    # Validate outputs with PCC using centralized validation function
+    all_passed = validate_outputs_with_pcc(
+        ttnn_model=ttnn_model,
+        model_category=model_category,
+        pytorch_semantic=pytorch_semantic,
+        ttnn_semantic=ttnn_semantic,
+        semantic_exp_pcc=semantic_vals["pcc"],
+        semantic_exp_abs_err=semantic_vals["abs_err"],
+        semantic_exp_rel_err=semantic_vals["rel_err"],
+        pytorch_center=pytorch_center if model_category == PANOPTIC_DEEPLAB else None,
+        ttnn_center=ttnn_center if model_category == PANOPTIC_DEEPLAB else None,
+        center_exp_pcc=center_vals.get("pcc") if model_category == PANOPTIC_DEEPLAB else None,
+        center_exp_abs_err=center_vals.get("abs_err") if model_category == PANOPTIC_DEEPLAB else None,
+        center_exp_rel_err=center_vals.get("rel_err") if model_category == PANOPTIC_DEEPLAB else None,
+        pytorch_offset=pytorch_offset if model_category == PANOPTIC_DEEPLAB else None,
+        ttnn_offset=ttnn_offset if model_category == PANOPTIC_DEEPLAB else None,
+        offset_exp_pcc=offset_vals.get("pcc") if model_category == PANOPTIC_DEEPLAB else None,
+        offset_exp_abs_err=offset_vals.get("abs_err") if model_category == PANOPTIC_DEEPLAB else None,
+        offset_exp_rel_err=offset_vals.get("rel_err") if model_category == PANOPTIC_DEEPLAB else None,
     )
-    if model_category == PANOPTIC_DEEPLAB:
-        all_passed.append(
-            check_ttnn_output(
-                "Center",
-                pytorch_center,
-                ttnn_center,
-                to_channel_first=False,
-                output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-                exp_pcc=0.805,
-                exp_abs_err=0.1,
-                exp_rel_err=2.0,
-            )
-        )
-        all_passed.append(
-            check_ttnn_output(
-                "Offset",
-                pytorch_offset,
-                ttnn_offset,
-                to_channel_first=False,
-                output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                exp_pcc=0.990,
-                exp_abs_err=10.4,
-                exp_rel_err=0.6,
-            )
-        )
 
     # Fail test based on PCC results
     assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"

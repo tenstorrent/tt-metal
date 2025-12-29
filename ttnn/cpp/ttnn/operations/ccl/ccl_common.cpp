@@ -1621,10 +1621,7 @@ Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_shape(
 }
 
 Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_offset(
-    Shape4D<uint32_t> const& input_shape,
-    int slice_dim,
-    uint32_t partition_index) {
-
+    const Shape4D<uint32_t>& input_shape, int slice_dim, uint32_t partition_index) const {
     Shape4D<uint32_t> offset(0, 0, 0, 0);
 
     // Calculate the size of the slice along the given dimension
