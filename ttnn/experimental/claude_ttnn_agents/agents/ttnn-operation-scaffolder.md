@@ -31,7 +31,7 @@ You orchestrate scripts and use your own LLM capabilities:
 ```
 1. YOU parse spec      → Extract JSON config (use your LLM capabilities)
 2. generate_files.py   → Render Jinja2 templates (deterministic script)
-3. integrate_build.py  → Update CMake/pybind files (deterministic script)
+3. integrate_build.py  → Update CMake/nanobind files (deterministic script)
 4. verify_scaffolding.sh → Check patterns (deterministic script)
 5. Build & test        → Run build
 6. YOU fix errors      → If build fails (use your LLM capabilities)
@@ -159,8 +159,8 @@ The explicit repo_root is critical - auto-detection can fail when config files a
 - `device/{op}_program_factory.cpp`
 - `{op}.hpp`
 - `{op}.cpp`
-- `{op}_pybind.hpp`
-- `{op}_pybind.cpp`
+- `{op}_nanobind.hpp`
+- `{op}_nanobind.cpp`
 
 **Options**:
 - `--force` to overwrite existing files
@@ -183,10 +183,10 @@ python3 .claude/scripts/ttnn-operation-scaffolder/integrate_build.py \
 ```
 
 **What it does**:
-1. Adds pybind source to `ttnn/CMakeLists.txt`
+1. Adds nanobind source to `ttnn/CMakeLists.txt`
 2. Adds cpp sources to `ttnn/cpp/ttnn/operations/{category}/CMakeLists.txt`
    - Supports both `set(SOURCES ...)` and `target_sources(... PRIVATE ...)` patterns
-3. Adds include and registration to `ttnn/cpp/ttnn-pybind/__init__.cpp`
+3. Adds include and registration to `ttnn/cpp/ttnn-nanobind/__init__.cpp`
 
 **Idempotent**: Safe to run multiple times.
 
@@ -292,7 +292,7 @@ error: 'class ttnn::Tensor' has no member named 'get_dtype'
 ```
 **Fix**: Use `.dtype()` not `.get_dtype()`. Same for `.layout()`, `.logical_shape()`, etc.
 
-### Error: Invalid default value in pybind
+### Error: Invalid default value in nanobind
 ```
 error: cannot convert 'std::nullopt_t' to 'float'
 ```
@@ -302,7 +302,7 @@ error: cannot convert 'std::nullopt_t' to 'float'
 ```
 error: redefinition of 'image_rotate'
 ```
-**Fix**: Check that the pybind registration in `__init__.cpp` wasn't duplicated.
+**Fix**: Check that the nanobind registration in `__init__.cpp` wasn't duplicated.
 
 **Do NOT**:
 - Regenerate entire files (use Edit for targeted fixes)
@@ -385,8 +385,8 @@ When complete, report with actual values (not placeholders):
 ### Files Created (9 files):
 - {actual_operation_path}/{operation_name}.hpp
 - {actual_operation_path}/{operation_name}.cpp
-- {actual_operation_path}/{operation_name}_pybind.hpp
-- {actual_operation_path}/{operation_name}_pybind.cpp
+- {actual_operation_path}/{operation_name}_nanobind.hpp
+- {actual_operation_path}/{operation_name}_nanobind.cpp
 - {actual_operation_path}/device/{operation_name}_device_operation.hpp
 - {actual_operation_path}/device/{operation_name}_device_operation.cpp
 - {actual_operation_path}/device/{operation_name}_device_operation_types.hpp
@@ -394,9 +394,9 @@ When complete, report with actual values (not placeholders):
 - {actual_operation_path}/device/{operation_name}_program_factory.cpp
 
 ### Files Modified (3 files):
-- ttnn/CMakeLists.txt (added pybind source)
+- ttnn/CMakeLists.txt (added nanobind source)
 - ttnn/cpp/ttnn/operations/{category}/CMakeLists.txt (added 3 sources)
-- ttnn/cpp/ttnn-pybind/__init__.cpp (added include and registration)
+- ttnn/cpp/ttnn-nanobind/__init__.cpp (added include and registration)
 
 ### Config File:
 - {actual_operation_path}/{operation_name}_scaffolding_config.json
@@ -410,7 +410,7 @@ When complete, report with actual values (not placeholders):
 - Input validation (validate_on_program_cache_miss)
 - Output spec computation (compute_output_specs)
 - Program factory stub (ready for Stage 4-6)
-- Python bindings (py_bind_{operation_name})
+- Python bindings (bind_{operation_name}_operation)
 
 ### Ready for Stage 4-6:
 Next step: Use ttnn-factory-builder agent to implement program factory (Stages 4-6)
