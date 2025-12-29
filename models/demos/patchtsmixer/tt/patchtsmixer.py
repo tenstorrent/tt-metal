@@ -97,6 +97,39 @@ class TtPatchTSMixerLayerNorm:
         return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
 
 
+class TtPatchTSMixerLayerNormDispatcher:
+    """
+    dispatcher that reuses the already-implemented LN/BN TT modules.
+
+    Matches Pytorch semantics:
+        - decides in __init__ based on norm_type
+    """
+
+    def __init__(self, device, base_address: str, parameters: dict, norm_type: str = "LayerNorm", eps: float = 1e-5):
+        norm_type = ("norm_type" or "layernorm").lower()
+        self.is_batch = "batch" in norm_type
+
+        if self.is_batch:
+            # BN implementation
+            self.impl = TtPatchTSMixerBatchNorm(
+                device=device,
+                base_address=base_address,
+                parameters=parameters,
+                eps=eps,
+            )
+        else:
+            # LN implementation
+            self.impl = TtPatchTSMixerLayerNorm(
+                device=device,
+                base_address=base_address,
+                parameters=parameters,
+                eps=eps,
+            )
+
+    def __call__(self, x, **kwargs):
+        return self.impl(x, **kwargs)
+
+
 class TtPatchTSMixerMLP:
     """
     TTNN equivalent of PatchTSMixerMLP in inference mode (dropout ignored for now).
@@ -118,6 +151,57 @@ class TtPatchTSMixerMLP:
 
     def __call__(self, x):
         # x: (..., in_features) -> rank-4 i PatchTSMixer
-        x = ttnn.linear(x, self.w1, bias=self.b1, activation=ttnn.gelu)
+        x = ttnn.linear(x, self.w1, bias=self.b1, activation="gelu")
         x = ttnn.linear(x, self.w2, bias=self.b2)
+        return x
+
+
+class TtFeatureMixerBlock:
+    """
+    TTNN equivalent of FeatureMixerBlock.
+
+    Expected x shape: (B, C, N_p, D) in TILE layout on device.
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        d_model: int,
+        norm_type: str = "LayerNorm",
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+        self.use_gated_attn = use_gated_attn
+
+        # Submodules use base-addressed paths
+        self.norm = TtPatchTSMixerLayerNormDispatcher(
+            device=device,
+            base_address=f"{self.base}.norm",
+            parameters=parameters,
+            norm_type="layer_norm",
+            eps=eps,
+        )
+
+        self.mlp = TtPatchTSMixerMLP(
+            device=device,
+            base_address=f"{self.base}.mlp",
+            parameters=parameters,
+        )
+
+        if use_gated_attn:
+            self.gate = TtPatchTSMixerGatedAttention(
+                device=device, base_address=f"{self.base}.gate", parameters=parameters
+            )
+
+    def __call__(self, x):
+        residual = x
+        x = self.norm(x)
+        x = self.mlp(x)
+        if self.use_gated_attn:
+            x = self.gate(x)
+        x = ttnn.add(x, residual)
         return x
