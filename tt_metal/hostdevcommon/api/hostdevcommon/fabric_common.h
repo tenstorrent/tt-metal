@@ -177,22 +177,14 @@ struct RoutingFieldsConstants {
         static constexpr uint8_t FORWARD_NORTH = 0b0100;
         static constexpr uint8_t FORWARD_SOUTH = 0b1000;
 
-        // Write-and-forward commands (same values - opposite direction chosen at destination)
-        static constexpr uint8_t WRITE_NORTH = 0b0100;
-        static constexpr uint8_t WRITE_SOUTH = 0b1000;
-        static constexpr uint8_t WRITE_EAST = 0b0001;
-        static constexpr uint8_t WRITE_WEST = 0b0010;
-
-        // Multicast flags (combine NS and EW)
-        static constexpr uint8_t WRITE_AND_FORWARD_NS = FORWARD_NORTH | FORWARD_SOUTH;  // 0b1100
+        // Multicast combinations (OR of direction bits for write-and-forward)
         static constexpr uint8_t WRITE_AND_FORWARD_EW = FORWARD_EAST | FORWARD_WEST;    // 0b0011
-
-        // Multicast combination constants (used by 2D multicast router)
-        static constexpr uint8_t WRITE_AND_FORWARD_NE = FORWARD_NORTH | FORWARD_EAST;                   // 0b0101
-        static constexpr uint8_t WRITE_AND_FORWARD_NW = FORWARD_NORTH | FORWARD_WEST;                   // 0b0110
+        static constexpr uint8_t WRITE_AND_FORWARD_NS = FORWARD_NORTH | FORWARD_SOUTH;  // 0b1100
+        static constexpr uint8_t WRITE_AND_FORWARD_NE = FORWARD_NORTH | FORWARD_EAST;   // 0b0101
+        static constexpr uint8_t WRITE_AND_FORWARD_NW = FORWARD_NORTH | FORWARD_WEST;   // 0b0110
+        static constexpr uint8_t WRITE_AND_FORWARD_SE = FORWARD_SOUTH | FORWARD_EAST;   // 0b1001
+        static constexpr uint8_t WRITE_AND_FORWARD_SW = FORWARD_SOUTH | FORWARD_WEST;   // 0b1010
         static constexpr uint8_t WRITE_AND_FORWARD_NEW = FORWARD_NORTH | WRITE_AND_FORWARD_EW;          // 0b0111
-        static constexpr uint8_t WRITE_AND_FORWARD_SE = FORWARD_SOUTH | FORWARD_EAST;                   // 0b1001
-        static constexpr uint8_t WRITE_AND_FORWARD_SW = FORWARD_SOUTH | FORWARD_WEST;                   // 0b1010
         static constexpr uint8_t WRITE_AND_FORWARD_SEW = FORWARD_SOUTH | WRITE_AND_FORWARD_EW;          // 0b1011
         static constexpr uint8_t WRITE_AND_FORWARD_NSE = WRITE_AND_FORWARD_NS | FORWARD_EAST;           // 0b1101
         static constexpr uint8_t WRITE_AND_FORWARD_NSW = WRITE_AND_FORWARD_NS | FORWARD_WEST;           // 0b1110
@@ -322,13 +314,16 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
  * Canonical 2D unicast routing pattern encoder
  *
  * Handles NS -> EW routing with proper write command selection.
- * Note: Write command uses opposite direction (destination determines write direction).
  *
  * This matches the existing decode_route_to_buffer logic (fabric_routing_path_interface.h lines 45-75):
- * - Final hop uses opposite-direction bit (no forward) to indicate write
- * - If both NS and EW exist: emit (ns_hops - 1) NS forwards, then ew_hops EW forwards, then 1 EW write (opposite)
- * - If only NS: emit (ns_hops - 1) NS forwards, then 1 NS write (opposite)
- * - If only EW: emit (ew_hops - 1) EW forwards, then 1 EW write (opposite)
+ * - Final hop uses opposite-direction bit (no forward) to stop packet
+ * - If both NS and EW exist: emit (ns_hops - 1) NS forwards, then ew_hops EW forwards, then 1 EW opposite
+ * - If only NS: emit (ns_hops - 1) NS forwards, then 1 NS opposite
+ * - If only EW: emit (ew_hops - 1) EW forwards, then 1 EW opposite
+ *
+ * Example: Traveling South 2 hops, then East 1 hop:
+ *   - Forward South (0b1000), Forward South (0b1000), Forward East (0b0001), Write North (0b0100 - opposite)
+ *   - Final North bit stops the packet at destination
  *
  * @param ns_hops Number of North/South hops
  * @param ew_hops Number of East/West hops
@@ -353,9 +348,11 @@ inline void encode_2d_unicast(
     const uint8_t ns_fwd = (ns_dir == 1) ? MeshFields::FORWARD_SOUTH : MeshFields::FORWARD_NORTH;
     const uint8_t ew_fwd = (ew_dir == 1) ? MeshFields::FORWARD_EAST : MeshFields::FORWARD_WEST;
 
-    // Write commands use OPPOSITE direction (destination decides)
-    const uint8_t ns_write = (ns_dir == 1) ? MeshFields::WRITE_NORTH : MeshFields::WRITE_SOUTH;
-    const uint8_t ew_write = (ew_dir == 1) ? MeshFields::WRITE_WEST : MeshFields::WRITE_EAST;
+    // Final hop uses OPPOSITE direction to stop packet (destination logic)
+    // If traveling South (ns_dir=1), final command is North (opposite)
+    // If traveling East (ew_dir=1), final command is West (opposite)
+    const uint8_t ns_write = (ns_dir == 1) ? MeshFields::FORWARD_NORTH : MeshFields::FORWARD_SOUTH;
+    const uint8_t ew_write = (ew_dir == 1) ? MeshFields::FORWARD_WEST : MeshFields::FORWARD_EAST;
 
     if (ns_hops > 0 && ew_hops > 0) {
         // NS -> EW turn: (ns_hops-1 + prepend) NS forwards, ew_hops EW forwards, 1 EW write

@@ -94,12 +94,32 @@ uint32_t FabricContext::get_max_2d_hops_from_topology() const {
     return max_hops;
 }
 
+uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const {
+    // Precondition: max_hops validated by compute_packet_specifications()
+
+    // Two discrete header sizes based on hop count
+    // ExtensionWords=0: 48B header for 0-16 hops
+    // ExtensionWords=1: 64B header for 17-32 hops
+    static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "ExtensionWords=0 must be 48B header");
+    static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "ExtensionWords=1 must be 64B header");
+
+    return (max_hops <= 16) ? 0 : 1;
+}
+
 uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const {
+    // Precondition: max_hops validated by compute_packet_specifications()
+
+    // Alignment-driven sizing: 16-byte boundaries create two discrete tiers
+    // Tier 1 (80B headers): route buffers 8B and 16B both align to 80B
+    // Tier 2 (96B headers): route buffers 24B and 32B both align to 96B
+    // Breakpoints chosen to maximize buffer size within each tier
+    static_assert(sizeof(HybridMeshPacketHeaderT<8>) == 80, "8B buffer must be 80B tier");
+    static_assert(sizeof(HybridMeshPacketHeaderT<16>) == 80, "16B buffer must be 80B tier");
+    static_assert(sizeof(HybridMeshPacketHeaderT<24>) == 96, "24B buffer must be 96B tier");
+    static_assert(sizeof(HybridMeshPacketHeaderT<32>) == 96, "32B buffer must be 96B tier");
+
     // Map hop count to discrete route buffer sizes (8, 16, 24, 32 bytes)
-    // These sizes are chosen to:
-    // 1. Align with 16-byte packet header boundaries (compiler adds tail padding)
-    // 2. Provide good coverage for common mesh sizes without excessive granularity
-    // 3. Balance memory efficiency vs simplicity (4 discrete sizes instead of per-hop sizing)
+    // These sizes provide good coverage for common mesh sizes without excessive granularity
     if (max_hops <= 8) {
         return 8;
     } else if (max_hops <= 16) {
@@ -113,23 +133,37 @@ uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) 
 
 void FabricContext::compute_packet_specifications() {
     // Query topology to determine optimal header sizes
-    if (this->is_2D_routing_enabled()) {
-        // 2D mode: only set 2D-related values
+    if (is_2D_routing_enabled_) {
+        // 2D mode: query topology and validate against limits
         max_2d_hops_ = get_max_2d_hops_from_topology();
+
+        // Validate 2D topology against route buffer limits
+        // Each byte in route buffer encodes 1 hop, so max_hops cannot exceed buffer size
+        TT_FATAL(
+            max_2d_hops_ <= Limits::MAX_2D_HOPS,
+            "2D routing with {} hops exceeds maximum supported {} hops. "
+            "Current route buffer size ({} bytes) cannot encode paths longer than {} hops.",
+            max_2d_hops_,
+            Limits::MAX_2D_HOPS,
+            Limits::MAX_2D_ROUTE_BUFFER_SIZE,
+            Limits::MAX_2D_HOPS);
+
         routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
     } else {
-        // 1D mode: only set 1D-related values
+        // 1D mode: query topology and validate against limits
         max_1d_hops_ = get_max_1d_hops_from_topology();
 
-        // Current memory map limits: ROUTING_PATH_SIZE_1D = 256 bytes supports max 32 hops
-        // (32 chips × 8 bytes per routing entry = 256 bytes)
-        // Support for >32 hops requires L1 memory map updates and larger routing tables
+        // Validate 1D topology against memory map limits
+        // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
         TT_FATAL(
             max_1d_hops_ <= Limits::MAX_1D_HOPS,
-            "1D routing with >32 hops (max_hops={}) requires L1 memory map updates. "
+            "1D routing with {} hops exceeds maximum supported {} hops. "
             "Current allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max {} hops.",
             max_1d_hops_,
+            Limits::MAX_1D_HOPS,
             Limits::MAX_1D_HOPS);
+
+        routing_1d_extension_words_ = compute_1d_pkt_hdr_extension_words(max_1d_hops_);
     }
 
     // Compute actual packet sizes based on topology
@@ -184,17 +218,17 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
 
     if (udm_enabled) {
-        TT_FATAL(this->is_2D_routing_enabled(), "UDM mode only supports 2D routing");
+        TT_FATAL(is_2D_routing_enabled_, "UDM mode only supports 2D routing");
         return get_udm_header_size(routing_2d_buffer_size_);
-    } else if (this->is_2D_routing_enabled()) {
+    } else if (is_2D_routing_enabled_) {
         return get_2d_header_size(routing_2d_buffer_size_);
     } else {
-        return get_1d_header_size(get_1d_pkt_hdr_extension_words());
+        return get_1d_header_size(routing_1d_extension_words_);
     }
 }
 
 size_t FabricContext::compute_max_payload_size_bytes() const {
-    if (this->is_2D_routing_enabled()) {
+    if (is_2D_routing_enabled_) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
     } else {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
@@ -202,30 +236,31 @@ size_t FabricContext::compute_max_payload_size_bytes() const {
 }
 
 FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
+    // === Initialization order critical - dependencies flow downward ===
+    // fabric_config_ → topology_ → routing flags → packet specs
+
+    // Step 1: Validate and store base configuration
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
     this->fabric_config_ = fabric_config;
 
-    this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
+    // Step 2: Derive topology (depends on: fabric_config_)
     this->topology_ = this->get_topology_from_config(fabric_config);
+    this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
 
+    // Step 3: Compute routing flags (depends on: topology_)
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
     this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
-    // Compute packet specifications based on topology
+    // Step 4: Compute packet specifications (depends on: routing flags)
     this->compute_packet_specifications();
 
-    // Query tensix config from MetalContext at init time
+    // Step 5: Additional independent configs
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
-    // Compute intermesh VC configuration (requires ControlPlane to be initialized)
-    // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
-
-    // Builder context will be lazy-initialized on first access
     builder_context_ = nullptr;
-
     set_routing_mode(this->topology_);
 }
 
@@ -322,13 +357,12 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() co
     defines["UDM_MODE"] = udm_enabled ? "1" : "0";
 
     // Add dynamic packet header sizing defines based on topology
-    if (this->is_2D_routing_enabled()) {
+    if (is_2D_routing_enabled_) {
         // 2D routing: inject route buffer size
         defines["FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE"] = std::to_string(routing_2d_buffer_size_);
     } else {
         // 1D routing: inject extension words
-        uint32_t extension_words = get_1d_pkt_hdr_extension_words();
-        defines["FABRIC_1D_PKT_HDR_EXTENSION_WORDS"] = std::to_string(extension_words);
+        defines["FABRIC_1D_PKT_HDR_EXTENSION_WORDS"] = std::to_string(routing_1d_extension_words_);
     }
 
     return defines;

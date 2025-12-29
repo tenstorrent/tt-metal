@@ -41,8 +41,9 @@ public:
         static constexpr uint32_t MAX_1D_HOPS = 32;
 
         // 2D: Max route buffer size (granularity: 8, 16, 24, 32 bytes)
+        //     Each byte in route buffer encodes 1 hop, so MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE
         static constexpr uint32_t MAX_2D_ROUTE_BUFFER_SIZE = 32;
-        static constexpr uint32_t DEFAULT_2D_ROUTE_BUFFER_SIZE = 32;
+        static constexpr uint32_t MAX_2D_HOPS = MAX_2D_ROUTE_BUFFER_SIZE;
     };
 
     static constexpr auto routing_directions = {
@@ -92,7 +93,7 @@ public:
     }
     uint32_t get_1d_pkt_hdr_extension_words() const {
         TT_FATAL(!is_2D_routing_enabled(), "Cannot query 1D extension words in 2D routing mode");
-        return (max_1d_hops_ <= 16) ? 0 : 1;  // 0 or 1 only
+        return routing_1d_extension_words_;
     }
     uint32_t get_2d_pkt_hdr_route_buffer_size() const {
         TT_FATAL(is_2D_routing_enabled(), "Cannot query 2D route buffer size in 1D routing mode");
@@ -120,6 +121,7 @@ private:
     // Topology-based sizing
     uint32_t get_max_1d_hops_from_topology() const;
     uint32_t get_max_2d_hops_from_topology() const;
+    uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
     uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const;
     void compute_packet_specifications();
 
@@ -142,9 +144,10 @@ private:
     size_t channel_buffer_size_bytes_ = 0;
 
     // Dynamic header sizing (set by compute_packet_specifications based on mode)
-    uint32_t max_1d_hops_ = 0;             // Valid only in 1D mode
-    uint32_t max_2d_hops_ = 0;             // Valid only in 2D mode
-    uint32_t routing_2d_buffer_size_ = 0;  // Valid only in 2D mode
+    uint32_t max_1d_hops_ = 0;                 // Valid only in 1D mode
+    uint32_t routing_1d_extension_words_ = 0;  // Valid only in 1D mode
+    uint32_t max_2d_hops_ = 0;                 // Valid only in 2D mode
+    uint32_t routing_2d_buffer_size_ = 0;      // Valid only in 2D mode
 
     // Builder context (lazy init on first access)
     mutable std::unique_ptr<FabricBuilderContext> builder_context_;
