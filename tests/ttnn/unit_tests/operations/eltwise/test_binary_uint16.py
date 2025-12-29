@@ -666,3 +666,67 @@ def test_binary_squared_difference_uint16_bcast(a_shape, b_shape, low_a, high_a,
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (0, 100, 101, 300),
+        (0, 32000, 32001, 65535),
+    ],
+)
+def test_binary_rsub_uint16(low_a, high_a, low_b, high_b, device):
+    torch_input_tensor_a = torch.randint(low_a, high_a, torch.Size([1, 3, 320, 384]), dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(low_b, high_b, torch.Size([1, 3, 320, 384]), dtype=torch.int32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.rsub(input_tensor_a, input_tensor_b)
+
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_binary_rsub_uint16_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 0, 2, 500, 1, 30000, 0, 65530, 65528])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([0, 1, 11, 7727, 32767, 30000, 65535, 65535, 65535])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.rsub(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
