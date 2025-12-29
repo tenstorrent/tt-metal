@@ -11,6 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tests.ttnn.utils_for_testing import update_for_unsigned_single
 
 from tracy import signpost
 
@@ -447,6 +448,8 @@ def run_all_to_all_dispatch_test(
             tt_metadata_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
+
+        tt_metadata_tensor = update_for_unsigned_single(tt_metadata_tensor)
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]

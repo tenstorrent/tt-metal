@@ -10,6 +10,8 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range_dtype,
 )
 
+from tests.ttnn.utils_for_testing import update_for_unsigned_single
+
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -49,6 +51,7 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     golden_tensor = golden_tensor.int()
 
     output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
+    output_tensor = update_for_unsigned_single(output_tensor)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
