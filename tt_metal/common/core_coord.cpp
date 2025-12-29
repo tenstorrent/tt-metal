@@ -9,6 +9,7 @@
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <ranges>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -86,12 +87,7 @@ bool CoreRange::contains(const CoreRange& other) const {
 }
 
 bool CoreRange::contains(const CoreRangeSet& other) const {
-    for (const auto& cr : other.ranges()) {
-        if (!this->contains(cr)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(other.ranges(), [this](const auto& cr) { return this->contains(cr); });
 }
 
 // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
@@ -267,21 +263,11 @@ bool CoreRangeSet::intersects(const CoreCoord& other) const {
 }
 
 bool CoreRangeSet::intersects(const CoreRange& other) const {
-    for (const auto& local_cr : this->ranges_) {
-        if (local_cr.intersects(other)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(this->ranges_, [&other](const auto& local_cr) { return local_cr.intersects(other); });
 }
 
 bool CoreRangeSet::intersects(const CoreRangeSet& other) const {
-    for (const auto& cr : other.ranges()) {
-        if (this->intersects(cr)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(other.ranges(), [this](const auto& cr) { return this->intersects(cr); });
 }
 
 CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet& other) const {
@@ -297,12 +283,7 @@ CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet& other) const {
 }
 
 bool CoreRangeSet::contains(const CoreCoord& other) const {
-    for (const auto& cr : this->ranges_) {
-        if (cr.contains(other)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(this->ranges_, [&other](const auto& cr) { return cr.contains(other); });
 }
 
 bool CoreRangeSet::contains(const CoreRange& other) const {

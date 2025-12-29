@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ranges>
 
 #include "impl/context/metal_context.hpp"
 
@@ -22,13 +23,10 @@ namespace tt {
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
-    for (const tt::umd::CoreCoord& core_coord : coords) {
+    return std::ranges::any_of(coords, [core](const tt::umd::CoreCoord& core_coord) {
         CoreCoord item = {core_coord.x, core_coord.y};
-        if (item == core) {
-            return true;
-        }
-    }
-    return false;
+        return item == core;
+    });
 }
 
 static bool coord_found_p(std::unordered_set<CoreCoord> coords, CoreCoord core) {
