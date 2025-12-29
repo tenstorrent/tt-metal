@@ -95,10 +95,6 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             mesh_device.load_sub_device_manager(self.mesh_sub_device_manager_id_decode)
             mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device_id, self.worker_sub_device_id])
-            if mode == "decode":
-                # Remove dangling tensor addresses from previous test
-                global global_tt_tensor_address
-                global_tt_tensor_address = None
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses
