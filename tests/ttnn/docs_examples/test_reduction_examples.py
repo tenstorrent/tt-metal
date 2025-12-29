@@ -116,6 +116,29 @@ def test_prod(device):
     logger.info(f"Prod result: {output}")
 
 
+def test_sampling(device):
+    # Input values tensor for N*C*H = 32 users
+    input_tensor = ttnn.rand([1, 1, 32, 64], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Input indices tensor: this example uses sequential indices [0, 1, 2, ..., W-1] for each of the 32 users
+    # Resulting in a final shape of [1, 1, 32, 64]
+    indices_1d = ttnn.arange(0, 64, dtype=ttnn.int32, device=device)
+    indices_reshaped = ttnn.reshape(indices_1d, [1, 1, 1, 64])
+    input_indices_tensor = ttnn.repeat(indices_reshaped, (1, 1, 32, 1))
+
+    # k tensor: 32 values in range (0, 32] for top-k sampling
+    k_tensor = ttnn.full([32], fill_value=10, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # p tensor: 32 values in range [0.0, 1.0] for top-p sampling
+    p_tensor = ttnn.full([32], fill_value=0.9, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # temp tensor: 32 temperature values in range [0.0, 1.0]
+    temp_tensor = ttnn.ones([32], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.sampling(input_tensor, input_indices_tensor, k=k_tensor, p=p_tensor, temp=temp_tensor)
+    logger.info(f"Sampling result: {output}")
+
+
 def test_topk(device):
     # Create tensor
     tensor_input = ttnn.rand([1, 1, 32, 64], device=device)
