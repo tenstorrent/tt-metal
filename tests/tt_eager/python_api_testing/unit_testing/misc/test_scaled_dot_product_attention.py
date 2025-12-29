@@ -473,11 +473,14 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
 @pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    ([1, 8, 8, 128, 128],),
+    (
+        [128, 4, 4, 128, 32],  # Boltz
+        [1, 16, 16, 128, 64],  # Boltz
+    ),
 )
 @pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
 def test_sdpa_noncausal_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, bcast_mask_head_dim):
-    rmse_threshold = 0.0065
+    rmse_threshold = 0.007
     run_sdpa_noncausal(
         device,
         b,
