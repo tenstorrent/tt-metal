@@ -1584,8 +1584,6 @@ class ModelArgs:
         # ARCEE FIX: Set padded_vocab_size to match lm_head padding for consistency with tt_penalties
         # Both lm_head and tt_penalties need to use the same padded_vocab_size
         if "AFM" in self.model_name or "arcee" in self.model_name.lower():
-            import math
-
             self.padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
 
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
