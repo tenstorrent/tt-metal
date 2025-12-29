@@ -69,7 +69,7 @@ StochasticRoundingResult run_stochastic_rounding(
 
     // Test value: at 'fraction' position between base and upper BF16
     // This is a float32 value that cannot be exactly represented in BF16
-    const float test_value = base_bf16_float + (upper_bf16 - base_bf16_float) * fraction;
+    const float test_value = base_bf16_float + ((upper_bf16 - base_bf16_float) * fraction);
 
     const size_t tile_byte_size_input = 4U * tt::constants::TILE_HW;   // Float32: 4 bytes per element
     const size_t tile_byte_size_output = 2U * tt::constants::TILE_HW;  // BFloat16: 2 bytes per element
