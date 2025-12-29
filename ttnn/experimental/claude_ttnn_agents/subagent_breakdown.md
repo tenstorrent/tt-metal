@@ -2,6 +2,26 @@
 
 This document outlines the strategy for splitting TTNN operation creation into multiple subagents to preserve context and enable efficient development.
 
+---
+
+## Table of Contents
+
+> **START HERE**: If you're creating a new operation and don't know which references to analyze, begin with [Phase 0: Reference Discovery](#phase-0-reference-discovery-orchestrator).
+
+- [Problem Statement](#problem-statement)
+- [Design Principles](#design-principles)
+- [Quick Decision Tree](#quick-decision-tree) ← Which mode do I need?
+- **[Phase 0: Reference Discovery](#phase-0-reference-discovery-orchestrator)** ← Start here if references unclear
+- [Phase 1: Analysis](#phase-1-analysis)
+- [Phase 2: Design & Planning](#phase-2-design--planning)
+- [Phase 3: Incremental Operation Building](#phase-3-incremental-operation-building-stages-1-6)
+- [Phase 4: Kernel Implementation](#phase-4-kernel-implementation)
+- [Phase 5: Debug/Integration](#phase-5-debugintegration)
+- [Workflow Summary](#workflow-summary) ← Visual diagram
+- [Implementation Priority](#implementation-priority)
+
+---
+
 ## Problem Statement
 
 Creating a new TTNN operation is a complex, multi-stage task that includes:
@@ -36,6 +56,38 @@ Each phase has explicit pass/fail criteria. Don't proceed until the gate passes.
 - **Opus**: Planning, design, complex reasoning (Phases 1-2, 4)
 - **Sonnet**: Implementation, debugging (Phases 3, 5-6)
 - **Haiku**: Mechanical scaffolding if faster/cheaper execution is preferred (Phase 3)
+
+---
+
+## Quick Decision Tree
+
+Use this to determine which planning mode you need:
+
+```
+Does user specify exact reference operation(s)?
+│
+├─ YES → Skip to Phase 1 (Analysis)
+│   │
+│   └─ Is it a variant of ONE existing operation?
+│       ├─ YES → Derivative Mode (single reference)
+│       └─ NO (multiple references) → Hybrid Mode
+│
+└─ NO → Execute Phase 0 (Discovery)
+    │
+    └─ Does the request involve format/layout conversion?
+        (e.g., row-major input, sharded→interleaved, etc.)
+        │
+        ├─ YES → Likely Hybrid Mode
+        │   └─ Identify: input_stage + compute_core + output_stage
+        │       Each may need separate reference analysis
+        │
+        └─ NO / UNCLEAR → Ask clarifying questions:
+            • "Should format conversion be handled internally or externally?"
+            • "What are the input/output tensor layouts?"
+            Then re-evaluate mode based on answers
+```
+
+**Key insight**: Operations that convert between formats (row-major ↔ tile, sharded ↔ interleaved) typically require **Hybrid Mode** with separate references for input handling, compute, and output handling.
 
 ---
 

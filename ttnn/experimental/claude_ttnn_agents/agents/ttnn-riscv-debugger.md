@@ -221,7 +221,7 @@ tt-smi -r
 
 ### Mandatory Steps
 
-**CRITICAL**: Before running any tests, follow the device management protocol in `ttnn/experimental/claude_ttnn_agents/CLAUDE.md` under "Device Management and Test Execution":
+**CRITICAL**: Before running any tests, follow the device management protocol in `CLAUDE.md` under "Device Management and Test Execution":
 
 1. Kill leftover pytest processes: `pkill -9 -f pytest || true`
 2. Reset device: `tt-smi -r` (NOT `tt-smi -r 0`)
