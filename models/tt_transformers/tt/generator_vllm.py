@@ -415,7 +415,14 @@ class TTArceeForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -425,7 +432,7 @@ class TTArceeForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations),
         )
         return cls(tt_model, model_args, mesh_device)
 
