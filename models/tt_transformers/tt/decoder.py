@@ -114,6 +114,7 @@ class TransformerBlock(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            ag_config_key="ATTN_LN_AG_CONFIG",
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -135,6 +136,7 @@ class TransformerBlock(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            ag_config_key="FFN_LN_AG_CONFIG",
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
