@@ -53,6 +53,7 @@ class TTSampling(LightweightModule):
         k=None,
         p=None,
         temp=None,
+        sampling_seed_manager=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -68,7 +69,7 @@ class TTSampling(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
-
+        self.sampling_seed_manager = sampling_seed_manager
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
             # Calculate num_gather_links based on model config
             max_num_gather_links = args.model_config["GALAXY_NUM_LINKS"]
@@ -120,6 +121,13 @@ class TTSampling(LightweightModule):
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(self.mesh_device, self.sub_core_grids, self.tt_ccl)
+        self.sampling_sub_core_grids = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
+            )
+            if self.sub_core_grids is not None
+            else None
+        )
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -335,6 +343,12 @@ class TTSampling(LightweightModule):
         )
         ttnn.deallocate(topk_global_indices_interleaved)
 
+        # WARNING: This is a temporary fix to ensure that the sampling operation is reproducible
+        # TODO: Remove this once we have a proper way to ensure reproducibility
+        # ttnn.manual_seed must be called right before the sampling operation to ensure reproducibility
+        # so PRNG is initialized correctly for each user in the batch and it does not advance with any other operation
+        # before calling the sampling operation
+        self.sampling_seed_manager.update_seeds_on_device()
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,
@@ -342,11 +356,7 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
-            )
-            if self.sub_core_grids is not None
-            else None,
+            sub_core_grids=self.sampling_sub_core_grids,
             output_tensor=tt_out_tok,
         )
 

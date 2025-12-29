@@ -55,7 +55,10 @@ class SamplingGenerator:
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.enable_internal_trace = enable_internal_trace
 
-        self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
+        self.sampling_seed_manager = SamplingSeedManager(mesh_device=mesh_device, sub_core_grids=self.sub_core_grids)
+        self.tt_sampling = TTSampling(
+            mesh_device=mesh_device, tt_ccl=tt_ccl, args=args, sampling_seed_manager=self.sampling_seed_manager
+        )
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
 
         self._penalties_active = False
@@ -225,7 +228,7 @@ class SamplingGenerator:
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
         """
-
+        self.sampling_seed_manager.push_seeds_to_device()
         penalties_on = self._penalties_active
         log_probs_on = self._log_probs_active
         use_internal_trace = enable_trace and self.enable_internal_trace
@@ -259,18 +262,11 @@ class SamplingGenerator:
             if s is None:
                 # set to default seed value which is 0
                 seed[i] = 0
-        seed = torch.tensor(seed)
-        user_ids = torch.arange(seed.shape[0])
-
-        user_ids_tt = ttnn.from_torch(
-            user_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        seeds_tt = ttnn.from_torch(seed, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # reset seed for each user_id
-        ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grids)
-        seeds_tt.deallocate()
-        user_ids_tt.deallocate()
+        seed = [int(s) for s in seed]
+        # assert if seed is not a list of 32 ints
+        # assert len(seed) == 32 and all(isinstance(s, int) for s in seed), "Seed must be a list of 32 ints"
+        # convert seed to ints from floats
+        self.sampling_seed_manager.update_seeds(seed)
 
 
 class SamplingSeedManager:
@@ -283,19 +279,19 @@ class SamplingSeedManager:
         self.mesh_device = mesh_device
         self.sub_core_grids = sub_core_grids
 
-        self.preallocated_seeds_tensor = ttnn.allocate_tensor_on_device(
-            (32,),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
+        self.seeds_tt_tensor = ttnn.as_tensor(
+            torch.tensor(self.seeds, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.preallocated_users_tensor = ttnn.allocate_tensor_on_device(
-            (32,),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            self.mesh_device,
-            ttnn.DRAM_MEMORY_CONFIG,
+        self.user_ids_tt_tensor = ttnn.as_tensor(
+            torch.tensor(self.user_ids, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def update_seeds(self, seeds: list[int]):
@@ -308,28 +304,36 @@ class SamplingSeedManager:
             self.seeds[idx] = seed
             self.rng_objects[idx] = random.Random(seed)
 
-    def push_seeds_to_device(self, user_ids: list[int] = None):  # 5
+    def push_seeds_to_device(self, user_ids: list[int] = None):
+        """
+        `user_ids: list[int] = None` is used to specify the users to update the seeds for.
+        If None is passed, all users will be updated.
+        This is useful for prefill where we want to update only the users that are being prefilled
+        and keep the other users' seeds unchanged to avoid re-initializing the RNG objects.
+        """
         # Update next random values for the given user_ids
         self._set_next_rnd_values(user_ids)
 
         # Push next random values to device
-        on_device_seeds_tensor = ttnn.from_torch(
-            self.next_rnd_values, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        host_seeds_tensor = ttnn.from_torch(
+            torch.tensor(self.next_rnd_values, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        ttnn.copy_host_to_device_tensor(on_device_seeds_tensor, self.preallocated_seeds_tensor)
-        on_device_seeds_tensor.deallocate()
+        ttnn.copy_host_to_device_tensor(host_seeds_tensor, self.seeds_tt_tensor)
 
         # Push user ids to device
-        on_device_users_tensor = ttnn.from_torch(
-            self.user_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        host_users_tensor = ttnn.from_torch(
+            torch.tensor(self.user_ids),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        ttnn.copy_host_to_device_tensor(on_device_users_tensor, self.preallocated_users_tensor)
-        on_device_users_tensor.deallocate()
+        ttnn.copy_host_to_device_tensor(host_users_tensor, self.user_ids_tt_tensor)
 
     def update_seeds_on_device(self):
         ttnn.manual_seed(
-            seeds=self.preallocated_seeds_tensor,
-            user_ids=self.preallocated_users_tensor,
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
             sub_core_grids=self.sub_core_grids,
         )
 
@@ -337,9 +341,18 @@ class SamplingSeedManager:
         for idx, rng_object in enumerate(self.rng_objects):
             # generate random number between 1 and 2**32 - 1 (uint32_t max value)
             # WARNING: Do not put 0 inside range
-            if user_ids is not None and idx in user_ids:
+            # If None is passed, all users will be updated otherwise only the users in the list will be updated
+            # This is useful for prefill where we want to update only the users that are being prefilled
+            # and keep the other users' seeds unchanged to avoid re-initializing the RNG objects
+            # This removes dependency on prefill being called in the middle of decode iterations
+            if user_ids is None:
                 self.next_rnd_values[idx] = rng_object.randint(1, 2**32 - 1)
-
+            else:
+                if idx in user_ids:
+                    self.next_rnd_values[idx] = rng_object.randint(1, 2**32 - 1)
+                else:
+                    # Keep the current value for decode iterations where we want to keep the other users' seeds unchanged
+                    continue
         return self.next_rnd_values
 
 
