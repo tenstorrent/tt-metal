@@ -147,7 +147,6 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
             if (ncores < ncores_wh.ncores) {
                 return program::TilizeMultiCoreBlockProgramFactory{};
             }
-        }
     }
     return program::TilizeMultiCoreInterleavedProgramFactory{};
 }
