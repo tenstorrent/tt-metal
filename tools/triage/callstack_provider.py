@@ -101,6 +101,8 @@ def get_callstack(
                 try:
                     # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    if rewind_pc_for_ebreak:
+                        pc = pc - 4
                     error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
