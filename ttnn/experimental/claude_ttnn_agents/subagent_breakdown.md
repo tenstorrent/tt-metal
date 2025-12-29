@@ -33,9 +33,188 @@ The debugger agent is stateless and can be invoked repeatedly. It reads the curr
 Each phase has explicit pass/fail criteria. Don't proceed until the gate passes.
 
 ### 4. Model Selection by Task Type
-- **Opus**: Planning, design, complex reasoning, debugging (Phases 1-2, 4-5)
-- **Sonnet**: Implementation (Phases 3, 6)
+- **Opus**: Planning, design, complex reasoning (Phases 1-2, 4)
+- **Sonnet**: Implementation, debugging (Phases 3, 5-6)
 - **Haiku**: Mechanical scaffolding if faster/cheaper execution is preferred (Phase 3)
+
+---
+
+## Phase 0: Reference Discovery (Orchestrator)
+
+**Agent**: Main orchestrator (not a subagent)
+
+**Purpose**: Determine which existing operations to analyze as references before invoking the analyzer and planner agents.
+
+This phase is executed by the main orchestrator when the user's request doesn't specify exact reference operations, or when creating a hybrid operation that requires components from multiple sources.
+
+### When to Execute Phase 0
+
+- User describes desired behavior without naming specific references
+- User requests a composite/hybrid operation (e.g., "sharded input → reduction → interleaved output")
+- User asks for an operation that combines patterns from different categories
+
+### Discovery Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 0: DISCOVERY (Orchestrator)                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Step 1: IDENTIFY COMPONENT NEEDS                                          │
+│  ─────────────────────────────────                                         │
+│  Parse user request to identify needed components:                         │
+│  • Input stage: What memory layout? Sharded/interleaved? What format?      │
+│  • Compute core: What operation? Reduction/eltwise/transform?              │
+│  • Output stage: What memory layout? Format conversion needed?             │
+│                                                                             │
+│  Step 2: QUERY FOR CANDIDATES                                              │
+│  ────────────────────────────                                              │
+│  Use DeepWiki and/or codebase search to find operations with needed        │
+│  patterns. See "Discovery Query Templates" below.                          │
+│                                                                             │
+│  Step 3: SELECT BEST CANDIDATES                                            │
+│  ─────────────────────────────                                             │
+│  Choose references based on:                                               │
+│  • Code quality and documentation                                          │
+│  • Similarity to desired behavior                                          │
+│  • Complexity (prefer simpler when adequate)                               │
+│                                                                             │
+│  Step 4: INVOKE ANALYZER(S)                                                │
+│  ─────────────────────────                                                 │
+│  Run ttnn-operation-analyzer on each selected reference.                   │
+│  For hybrid mode, analyze all references needed for different roles.       │
+│                                                                             │
+│  Step 5: EVALUATE COMPONENTS                                               │
+│  ────────────────────────────                                              │
+│  Review each analysis, determine which components to use:                  │
+│  ✓ = Use this component from this reference                                │
+│  ✗ = Don't need this component from this reference                         │
+│                                                                             │
+│  Step 6: INVOKE PLANNER                                                    │
+│  ─────────────────────────                                                 │
+│  Call ttnn-operation-planner with:                                         │
+│  • Derivative mode: Single reference path + requirements                   │
+│  • Hybrid mode: Multiple references with roles + composition instructions  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Discovery Query Templates
+
+Use these DeepWiki query patterns to find candidate operations:
+
+| Component Need | DeepWiki Query |
+|---------------|----------------|
+| Sharded input | "Which TTNN operations support HEIGHT_SHARDED or BLOCK_SHARDED input tensors?" |
+| Interleaved input | "Which TTNN operations read from DRAM interleaved tensors?" |
+| Reduction compute | "Which TTNN operations use reduce_tile or accumulation in compute kernels?" |
+| Eltwise compute | "Which TTNN operations perform element-wise math on tiled data?" |
+| Sharded output | "Which TTNN operations write to sharded output tensors?" |
+| Interleaved output | "Which TTNN operations write row-major sticks to DRAM interleaved?" |
+| Tilize pattern | "Which TTNN operations convert ROW_MAJOR to TILE_LAYOUT?" |
+| Untilize pattern | "Which TTNN operations convert TILE_LAYOUT to ROW_MAJOR?" |
+| Binary operation | "Which TTNN operations take two input tensors and produce one output?" |
+| Broadcast pattern | "Which TTNN operations broadcast a smaller tensor across a larger one?" |
+
+### Codebase Search Patterns
+
+When DeepWiki results are insufficient, search the codebase:
+
+```bash
+# Find operations with sharded input handling
+grep -r "is_sharded" ttnn/cpp/ttnn/operations/*/device/*_program_factory.cpp
+
+# Find reduction patterns
+grep -r "reduce_tile" ttnn/cpp/ttnn/operations/*/device/kernels/compute/
+
+# Find interleaved output patterns
+grep -r "INTERLEAVED" ttnn/cpp/ttnn/operations/*/device/*_program_factory.cpp
+
+# Find specific CB patterns
+grep -r "CBIndex::c_" ttnn/cpp/ttnn/operations/*/device/*_program_factory.cpp
+```
+
+### Example: Hybrid Discovery Workflow
+
+```
+User: "Create operation that reads sharded, does reduction, writes interleaved"
+
+Orchestrator:
+
+Step 1 - IDENTIFY NEEDS:
+  • Input stage: HEIGHT_SHARDED reader
+  • Compute core: Reduction (sum/max/etc)
+  • Output stage: INTERLEAVED writer
+
+Step 2 - QUERY CANDIDATES:
+  DeepWiki: "Which TTNN operations support HEIGHT_SHARDED input?"
+    → layernorm, softmax, matmul, eltwise_binary...
+
+  DeepWiki: "Which TTNN operations perform reduction?"
+    → reduce_sum, reduce_max, global_avg_pool, moreh_sum...
+
+  DeepWiki: "Which TTNN operations write INTERLEAVED output?"
+    → untilize, concat, most eltwise ops...
+
+Step 3 - SELECT:
+  • Sharded input: layernorm (well-documented sharding)
+  • Reduction: reduce_sum (cleanest pattern)
+  • Interleaved output: untilize (canonical pattern)
+
+Step 4 - ANALYZE:
+  [Invoke ttnn-operation-analyzer on layernorm] → layernorm_analysis.md
+  [Invoke ttnn-operation-analyzer on reduce_sum] → reduce_analysis.md
+  [Invoke ttnn-operation-analyzer on untilize] → untilize_analysis.md
+
+Step 5 - EVALUATE:
+  From layernorm_analysis.md:
+    ✓ Reader kernel (shard handling)
+    ✓ CB_in config (shard-backed)
+    ✗ Compute kernel (layernorm-specific)
+    ✗ Writer kernel (also sharded)
+
+  From reduce_analysis.md:
+    ✗ Reader kernel (expects interleaved)
+    ✓ Compute kernel (reduce_tile loop)
+    ✓ CB sizing (accumulator pattern)
+    ✗ Writer kernel (writes reduced shape)
+
+  From untilize_analysis.md:
+    ✗ Reader kernel (not needed)
+    ✗ Compute kernel (untilize, not reduction)
+    ✓ Writer kernel (interleaved sticks)
+    ✓ CB_out config (row-major staging)
+
+Step 6 - INVOKE PLANNER (Hybrid Mode):
+  references:
+    - path: layernorm_analysis.md
+      role: input_stage
+      components: [reader_kernel, cb_in_config]
+
+    - path: reduce_analysis.md
+      role: compute_core
+      components: [compute_kernel, cb_accumulator]
+
+    - path: untilize_analysis.md
+      role: output_stage
+      components: [writer_kernel, cb_out_config]
+
+  requirements: "Reduction on sharded input producing interleaved output"
+
+  composition_instructions: |
+    - Sharded reader feeds tiles to CB_in
+    - Compute accumulates tiles, writes to CB_out
+    - Interleaved writer writes reduced rows to DRAM
+```
+
+### Skipping Phase 0
+
+Phase 0 can be skipped when:
+- User provides specific reference operation(s)
+- User says "use X as reference"
+- Creating a simple derivative (variant of single op)
+
+In these cases, proceed directly to Phase 1 (Analysis).
 
 ---
 
@@ -69,25 +248,60 @@ Each phase has explicit pass/fail criteria. Don't proceed until the gate passes.
 
 **Status**: ✅ Implemented
 
-**Purpose**: Design the new operation by comparing against the reference, producing a functional specification.
+**Purpose**: Design the new operation, producing a functional specification.
 
-**Input**:
+### Planning Modes
+
+The planner supports two modes:
+
+#### Derivative Mode (Single Reference)
+Design a new operation as a variant of one existing operation.
+- **Input**: One reference analysis + requirements
+- **Output**: Spec comparing new op to single reference
+- **Use case**: Creating masked_softmax from softmax, stack from concat, etc.
+
+#### Hybrid Mode (Multiple References)
+Design a new operation by combining components from multiple existing operations.
+- **Input**: Multiple reference analyses with roles + composition instructions
+- **Output**: Spec showing component sources and interface compatibility
+- **Use case**: Combining tilize reader + reduce compute + untilize writer
+
+### Input
+
+**Derivative Mode**:
 - Analyzer output (`{reference_operation}_analysis.md`)
 - New operation requirements (user-provided description)
 
-**Output**:
-- `{new_operation}_spec.md` - Functional specification including:
-  - Mathematical definition and API specification
-  - Input tensor requirements (with error message hints)
-  - Output tensor specification (shape formula)
-  - CB layout decisions
-  - Core distribution strategy
-  - Test criteria (what to test, not how)
-  - Implementation phases (which agents handle what)
+**Hybrid Mode**:
+- Multiple analyzer outputs with roles:
+  - `{ref1}_analysis.md` (role: `input_stage`)
+  - `{ref2}_analysis.md` (role: `compute_core`)
+  - `{ref3}_analysis.md` (role: `output_stage`)
+- New operation requirements
+- Composition instructions (how components connect)
+
+**Role Definitions**:
+- `input_stage`: Reader kernel, input CBs, compute input phase (e.g., tilize)
+- `compute_core`: Main compute logic, intermediate CBs, math operations
+- `output_stage`: Compute output phase (e.g., untilize), output CBs, writer kernel
+
+### Output
+
+`{new_operation}_spec.md` - Functional specification including:
+- Mathematical definition and API specification
+- Input tensor requirements (with error message hints)
+- Output tensor specification (shape formula)
+- CB layout decisions
+- Core distribution strategy
+- **Hybrid Mode**: Component sources table, interface compatibility analysis, CB ID resolution
+- Test criteria (what to test, not how)
+- Implementation phases (which agents handle what)
 
 **Key Principle**: Planner defines WHAT to build. Implementation agents define HOW.
 
 **User Checkpoint**: Review and approve spec before proceeding to implementation.
+
+**Location**: `.claude/agents/ttnn-operation-planner.md`
 
 ---
 
@@ -103,8 +317,8 @@ The TDD plan produced by the planner defines 6 incremental stages to build up th
 **Purpose**: Create minimal Python binding that is callable.
 
 **Output**:
-- `{operation_name}_nanobind.hpp/cpp` with stub that throws `NotImplementedError`
-- Category nanobind updated
+- `{operation_name}_pybind.hpp/cpp` with stub that throws `NotImplementedError`
+- Category pybind updated
 
 **Test**: `test_dev/test_stage1_api_exists.py`
 
@@ -130,7 +344,7 @@ The TDD plan produced by the planner defines 6 incremental stages to build up th
 
 **Output**:
 - `{operation_name}.hpp` with `register_operation`
-- `bind_registered_operation` in nanobind
+- `bind_registered_operation` in pybind
 - `compute_output_specs()` implementing shape formula from spec
 
 **Test**: `test_dev/test_stage3_registration.py`
@@ -262,82 +476,37 @@ Note: May also READ auxiliary data (masks, indices) in addition to writing outpu
 
 ## Phase 5: Debug/Integration
 
-**Agent**: `ttnn-riscv-debugger` (Opus)
+**Agent**: `ttnn-riscv-debugger` (Sonnet)
 
 **Status**: ✅ Implemented
 
-**Purpose**: Systematic debugging of TTNN kernel hangs and CB synchronization issues using hypothesis-driven methodology.
+**Purpose**: Systematic debugging of TTNN kernel issues using hypothesis-driven methodology.
 
 **Input**:
-- Journal (JSON): Debug state and history (initialized by orchestrator)
-- Symptom: Problem description
-- Operation analysis: Path to `*_analysis.md` from ttnn-operation-analyzer
+- **Bootstrap mode**: Symptoms, repro command, file paths, experiment budget
+- **Continuation mode**: Current debug journal, experiment budget
 
 **Output**:
-- Journal proposal with observations, hypotheses, experiments
-- Proposed fix (if hypothesis confidence >= 0.8)
+- Debug journal with hypotheses, observations, experiments
+- Proposed next steps with cost estimates
 - Code changes shown in diffs (all changes reverted before returning)
 
 **Key Features**:
 - Hypothesis → Falsifier → Experiment → Update methodology
 - Watcher log interpretation for hang diagnosis
-- CB deadlock debugging (producer-consumer synchronization)
-- Strategic DPRINT placement for counter/state monitoring
+- CB deadlock debugging playbook
+- Kernel correctness debugging (wrong outputs)
+- Strategic DPRINT placement
 - Always reverts code changes before returning
-- Stateless design with structured journal for anti-looping
 
 **When to Use**:
 - Kernel hangs (CB deadlocks, semaphore issues)
-- Device errors or assertions
+- Wrong output values
 - Need systematic debugging with hypothesis tracking
+- Build/test failures involving kernel behavior
 - Runtime errors in kernel execution
 
-**Current Limitations**:
-- Primarily focused on hang diagnosis via watcher
-- Kernel correctness debugging (wrong outputs) is planned but not yet robust
-
 **Location**: `.claude/agents/ttnn-riscv-debugger.md`
-
----
-
-## Phase 6: Performance Analysis
-
-**Agent**: `ttnn-pipeline-analyzer` (Opus)
-
-**Status**: ✅ Implemented
-
-**Purpose**: Deep analysis of pipeline execution behavior to understand blocking, overlap, and performance characteristics.
-
-**Input**:
-- Path to program factory (`{operation}_program_factory.cpp`)
-- OR existing analysis file (`{operation}_analysis.md` from ttnn-operation-analyzer)
-
-**Output**: `{operation_name}_pipeline_analysis.md` containing:
-- CB inventory with capacity/block ratios and lifetimes
-- Blocking point analysis for each CB (when/why producer/consumer blocks)
-- Execution simulation with CB state tracking
-- Timeline visualization (Gantt chart)
-- Performance calculations (throughput, efficiency, bottleneck identification)
-- Optimization recommendations
-
-**Key Features**:
-- Determines whether kernels can overlap (Reader/Compute/Writer)
-- Identifies single vs double buffering patterns
-- Calculates theoretical vs actual throughput
-- Provides concrete optimization recommendations
-
-**When to Use**:
-- Operation seems slower than expected
-- Verifying if double-buffering actually achieves overlap
-- Understanding CB synchronization behavior
-- Identifying performance bottlenecks
-- Planning optimizations
-
-**Key Principle**: "Never assume parallelism. Always verify through careful analysis."
-
-**Reference**: `.claude/references/ttnn-pipeline-analysis-methodology.md`
-
-**Location**: `.claude/agents/ttnn-pipeline-analyzer.md`
 
 ---
 
@@ -362,45 +531,72 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 ## Workflow Summary
 
 ```
-┌─────────────────────┐
-│  User provides:     │
-│  - Reference op     │
-│  - New op reqs      │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Phase 1: Analyzer   │ ──► {ref_op}_analysis.md
-│ (Opus)              │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Phase 2: Planner    │ ──► {new_op}_spec.md
-│ (Opus)              │     (WHAT to build)
-└──────────┬──────────┘
-           │
-           ▼ [USER REVIEW SPEC]
-           │
-┌─────────────────────────────────────────────────────────────┐
-│ Phase 3: Incremental Building (6 Stages)                    │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │ Stage 1:     │    │ Stage 2:     │    │ Stage 3:     │  │
-│  │ API Exists   │───►│ Validation   │───►│ Registration │  │
-│  │ (nanobind)   │    │ (TT_FATAL)   │    │ (register_op)│  │
-│  └──────────────┘    └──────────────┘    └──────────────┘  │
-│         │                                       │           │
-│         ▼ test_stage1                           ▼           │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │ Stage 4:     │    │ Stage 5:     │    │ Stage 6:     │  │
-│  │ Device Op    │───►│ Program      │───►│ Stub Kernels │  │
-│  │ (shape comp) │    │ Factory (CBs)│    │ (passthrough)│  │
-│  └──────────────┘    └──────────────┘    └──────────────┘  │
-│                                                  │          │
-│                                    test_stage6 ──┘          │
-└──────────────────────────────────────────────────┬──────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  User provides: New operation requirements                                   │
+│  (may or may not specify reference operations)                              │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │
+          ┌────────────────────────┴────────────────────────┐
+          │                                                 │
+          ▼ (refs not specified)                            ▼ (refs specified)
+┌─────────────────────────┐                                 │
+│ Phase 0: Discovery      │                                 │
+│ (Orchestrator)          │                                 │
+│ - Query DeepWiki        │                                 │
+│ - Search codebase       │                                 │
+│ - Select candidates     │                                 │
+└───────────┬─────────────┘                                 │
+            │                                               │
+            ▼                                               │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 1: Analyzer(s)                                                         │
+│ (Opus)                                                                       │
+│                                                                              │
+│  DERIVATIVE MODE:                    HYBRID MODE:                            │
+│  ┌──────────────┐                    ┌──────────────┐  ┌──────────────┐     │
+│  │ Analyze      │                    │ Analyze      │  │ Analyze      │ ... │
+│  │ single ref   │ ──► analysis.md    │ ref1         │  │ ref2         │     │
+│  └──────────────┘                    │ (input_stage)│  │ (compute)    │     │
+│                                      └──────┬───────┘  └──────┬───────┘     │
+│                                             │                 │              │
+│                                             ▼                 ▼              │
+│                                      ref1_analysis.md  ref2_analysis.md ...  │
+└──────────────────────────────────────────────────┬──────────────────────────┘
+                                                   │
+                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 2: Planner                                                             │
+│ (Opus)                                                                       │
+│                                                                              │
+│  DERIVATIVE MODE:                    HYBRID MODE:                            │
+│  - Single reference                  - Multiple references with roles        │
+│  - Compare differences               - Component sources table               │
+│  - {new_op}_spec.md                  - Interface compatibility               │
+│                                      - CB ID resolution                      │
+│                                      - {new_op}_spec.md                      │
+└──────────────────────────────────────────────────┬──────────────────────────┘
+                                                   │
+                                         ▼ [USER REVIEW SPEC]
+                                                   │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 3: Incremental Building (6 Stages)                                     │
+│                                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+│  │ Stage 1:     │    │ Stage 2:     │    │ Stage 3:     │                   │
+│  │ API Exists   │───►│ Validation   │───►│ Registration │                   │
+│  │ (pybind)     │    │ (TT_FATAL)   │    │ (register_op)│                   │
+│  └──────────────┘    └──────────────┘    └──────────────┘                   │
+│         │                                       │                            │
+│         ▼ test_stage1                           ▼                            │
+│                                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+│  │ Stage 4:     │    │ Stage 5:     │    │ Stage 6:     │                   │
+│  │ Device Op    │───►│ Program      │───►│ Stub Kernels │                   │
+│  │ (shape comp) │    │ Factory (CBs)│    │ (passthrough)│                   │
+│  └──────────────┘    └──────────────┘    └──────────────┘                   │
+│                                                  │                           │
+│                                    test_stage6 ──┘                           │
+└──────────────────────────────────────────────────┬──────────────────────────┘
                                                    │
                                      ▼ [USER REVIEW FACTORY]
                                                    │
@@ -431,8 +627,8 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 
      ┌──────────────────────────┐
      │ Phase 5: RISCV Debugger  │ ◄── Can be invoked at any
-     │ (Opus, hypothesis-       │     phase when kernel hangs
-     │  driven, reverts code)   │     or CB issues arise
+     │ (Sonnet, hypothesis-     │     phase when kernel issues
+     │  driven, reverts code)   │     arise (hangs, wrong output)
      └──────────────────────────┘
 ```
 
@@ -443,7 +639,6 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 1. **`ttnn-operation-planner`** ✅ - Produces the spec (WHAT to build)
 2. **`ttnn-operation-scaffolder`** ✅ - Stages 1-3, knows HOW (official TTNN patterns)
 3. **`ttnn-factory-builder`** ✅ - Stages 4-6, knows HOW (CB patterns, work split)
-4. **`ttnn-riscv-debugger`** ✅ - Debug kernel hangs and CB synchronization issues
-5. **`ttnn-pipeline-analyzer`** ✅ - Analyze pipeline blocking and performance
-6. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
-7. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation
+4. **`ttnn-riscv-debugger`** ✅ - The escape hatch for kernel issues (hangs, wrong output)
+5. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
+6. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation
