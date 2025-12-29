@@ -28,6 +28,28 @@ export TT_SYMBIOTE_RUN_MODE=NORMAL && pytest tests/test_resnet50.py
 export TT_SYMBIOTE_RUN_MODE=DPL && pytest tests/test_vit.py
 ```
 
+## Dispatcher Configuration
+
+TT-Symbiote supports multiple dispatcher implementations via the `TT_SYMBIOTE_DISPATCHER` environment variable:
+
+- **DEFAULT** - Standard TTNN operation dispatcher
+- **DEBUG** - Verbose logging dispatcher for debugging
+- **CPU** - CPU-only dispatcher for testing
+
+```bash
+# Use default dispatcher
+export TT_SYMBIOTE_DISPATCHER=DEFAULT
+
+# Use debug dispatcher for verbose operation logging
+export TT_SYMBIOTE_DISPATCHER=DEBUG
+
+# Use CPU dispatcher
+export TT_SYMBIOTE_DISPATCHER=CPU
+
+# Combine with run mode for advanced debugging
+export TT_SYMBIOTE_DISPATCHER=CPU && export TT_SYMBIOTE_RUN_MODE=DPL_NO_ERROR_PROP && pytest tests/test_speech_t5.py
+```
+
 ## Quick Start
 
 ```python
@@ -262,6 +284,7 @@ core/
 └── dispatchers/         # Dispatcher implementations
     ├── default_dispatcher.py  # Default operation dispatcher
     ├── debug_dispatcher.py    # Debug operation dispatcher
+    ├── cpu_dispatcher.py    # CPU-only operation dispatcher
     └── dispatcher_config.py   # Dispatcher configuration
 
 modules/                 # TTNN implementations
