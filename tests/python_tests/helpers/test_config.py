@@ -13,7 +13,7 @@ from dataclasses import fields
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, List
 
 import numpy as np
 import pytest
@@ -39,6 +39,8 @@ from .device import (
     wait_for_tensix_operations_finished,
 )
 from .format_config import DataFormat, FormatConfig
+from .fused_generator import FusedKernelGenerator
+from .fused_operation import FusedOperation
 from .llk_params import (
     DestAccumulation,
 )
@@ -840,6 +842,61 @@ class TestConfig:
                 )
 
         return elfs
+
+    def run_fused(self, pipeline: List[FusedOperation], location="0,0"):
+        # Generate fused kernel code
+        compiler = FusedKernelGenerator(pipeline)
+        compiler.write_kernel()
+
+        # Build and run
+        self.test_name = "fused_test"
+        self.generate_variant_hash()
+
+        VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
+        VARIANT_ELF_DIR = VARIANT_DIR / "elf"
+
+        if not VARIANT_DIR.exists():
+            create_directories([VARIANT_OBJ_DIR, VARIANT_ELF_DIR])
+            self.build_shared_artefacts()
+
+            local_options_compile, local_memory_layout_ld, _ = (
+                self.resolve_compile_options()
+            )
+            kernel_trisc_flag = (
+                ""
+                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+                else "-DCOMPILE_FOR_TRISC="
+            )
+
+            SFPI_DEPS = (
+                ""
+                if self.coverage_build == CoverageBuild.No
+                else f"-Wl,--whole-archive {TestConfig.SHARED_OBJ_DIR}/libsfpi.a -Wl,--no-whole-archive"
+            )
+            COVERAGE_DEPS = (
+                ""
+                if self.coverage_build == CoverageBuild.No
+                else f"{TestConfig.SHARED_OBJ_DIR}/libgcov.a {TestConfig.SHARED_OBJ_DIR}/profile_api.o"
+            )
+
+            # Compile and link each kernel component
+            for name in TestConfig.KERNEL_COMPONENTS:
+                # Compile kernel
+                run_shell_command(
+                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} {kernel_trisc_flag} -DLLK_TRISC_{name.upper()} -c -o {VARIANT_OBJ_DIR}/{name}.o {TestConfig.RISCV_SOURCES}/fused_test.cpp""",
+                    TestConfig.TESTS_WORKING_DIR,
+                )
+                # Link
+                run_shell_command(
+                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {TestConfig.SHARED_OBJ_DIR / f"main_{name}.o"} {VARIANT_OBJ_DIR}/{name}.o {COVERAGE_DEPS} {TestConfig.SHARED_OBJ_DIR / "tmu-crt0.o"} {SFPI_DEPS} -T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / f"{name}.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} -o {VARIANT_ELF_DIR / f"{name}.elf"}""",
+                    TestConfig.TESTS_WORKING_DIR,
+                )
+
+        # Run on device
+        reset_mailboxes(location)
+        elfs = self.run_elf_files(location)
+        wait_for_tensix_operations_finished(elfs, location)
 
     def run(self, location="0,0", delete_artefacts: bool = False):
         self.generate_variant_hash()
