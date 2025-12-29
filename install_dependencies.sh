@@ -221,10 +221,13 @@ init_packages() {
                 "gcc"
                 "gcc-c++"
                 "make"
+                "llvm"
                 "clang"
                 "clang-tools-extra" # for linker-wrapper
                 "cmake"
                 "ninja-build"
+                "openssl"
+                "openssl-devel"
                 "pkgconf-pkg-config"
                 "xz"
                 "python3-devel"
