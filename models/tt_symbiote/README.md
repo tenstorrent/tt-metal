@@ -9,6 +9,10 @@ TT-Symbiote enables TTNN acceleration of pretrained PyTorch models by replacing 
 - Device management and memory allocation
 - Fallback to PyTorch when TTNN operations fail
 
+## Flow Diagram
+
+![Architecture diagram](ARCHITECTURE.svg)
+
 ## Run Modes
 
 TT-Symbiote supports multiple execution modes via the `TT_SYMBIOTE_RUN_MODE` environment variable:
