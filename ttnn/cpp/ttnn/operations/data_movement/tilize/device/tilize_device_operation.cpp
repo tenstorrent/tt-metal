@@ -128,7 +128,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
     uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
+    uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
 
     auto* device = input_tensor_a.device();
     auto grid_size = device->compute_with_storage_grid_size();
