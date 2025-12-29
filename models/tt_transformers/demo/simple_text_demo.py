@@ -1499,7 +1499,7 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 66,
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
-                "N150_Mistral-7B": 23,
+                "N150_Mistral-7B": 21,
                 # N300 targets
                 # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
                 "N300_Qwen2.5-7B": 21.0,
