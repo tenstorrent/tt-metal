@@ -42,6 +42,7 @@ class TtSDXLPipelineConfig:
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
     _debug_mode: bool = False
+    deepcache_N = (1,)
     _torch_pipeline_type = StableDiffusionXLPipeline
 
     @property
@@ -314,8 +315,10 @@ class TtSDXLPipeline(LightweightModule):
 
             profiler.start("warmup_run")
             logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
+            use_deepcache = self.tt_unet.deepcache_N > 1
+            num_iterations = 2 if use_deepcache else 1
 
-            _, _, _, self.output_shape, _ = run_tt_image_gen(
+            _, _, _, _, self.output_shape, _ = run_tt_image_gen(
                 self.ttnn_device,
                 self.tt_unet,
                 self.tt_scheduler,
@@ -323,7 +326,7 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
-                1,
+                num_iterations,
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
@@ -582,7 +585,14 @@ class TtSDXLPipeline(LightweightModule):
             logger.info("Generating latents (skipping VAE decoding)...")
         else:
             logger.info("Generating images...")
-        imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+        (
+            imgs,
+            self.tid_unet_ref,
+            self.tid_unet_cache,
+            self.output_device,
+            self.output_shape,
+            self.tid_vae,
+        ) = run_tt_image_gen(
             self.ttnn_device,
             self.tt_unet,
             self.tt_scheduler,
@@ -597,7 +607,8 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            tid=self.tid if hasattr(self, "tid") else None,
+            tid_unet_ref=self.tid_unet_ref if hasattr(self, "tid_unet_ref") else None,
+            tid_unet_cache=self.tid_unet_cache if hasattr(self, "tid_unet_cache") else None,
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
@@ -636,6 +647,7 @@ class TtSDXLPipeline(LightweightModule):
                 "unet",
                 model_config=self.tt_unet_model_config,
                 debug_mode=pipeline_config._debug_mode,
+                deepcache_N=self.deepcache_N,
             )
             # Skip VAE for refiner pipelines
             self.tt_vae = (
@@ -775,7 +787,16 @@ class TtSDXLPipeline(LightweightModule):
         logger.info("Capturing model trace...")
         profiler.start("capture_model_trace")
 
-        _, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+        use_deepcache = self.tt_unet.deepcache_N > 1
+        num_iterations = 2 if use_deepcache else 1
+        (
+            _,
+            self.tid_unet_ref,
+            self.tid_unet_cache,
+            self.output_device,
+            self.output_shape,
+            self.tid_vae,
+        ) = run_tt_image_gen(
             self.ttnn_device,
             self.tt_unet,
             self.tt_scheduler,
@@ -783,7 +804,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            1,
+            num_iterations,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -800,9 +821,13 @@ class TtSDXLPipeline(LightweightModule):
 
     def __release_trace(self):
         # Helper method for trace release.
-        if self.pipeline_config.capture_trace and hasattr(self, "tid") and self.tid is not None:
-            ttnn.release_trace(self.ttnn_device, self.tid)
-            delattr(self, "tid")
+        if self.pipeline_config.capture_trace and hasattr(self, "tid_unet_ref") and self.tid_unet_ref is not None:
+            ttnn.release_trace(self.ttnn_device, self.tid_unet_ref)
+            delattr(self, "tid_unet_ref")
+
+        if self.pipeline_config.capture_trace and hasattr(self, "tid_unet_cache") and self.tid_unet_cache is not None:
+            ttnn.release_trace(self.ttnn_device, self.tid_unet_cache)
+            delattr(self, "tid_unet_cache")
 
         if self.pipeline_config.vae_on_device and hasattr(self, "tid_vae") and self.tid_vae is not None:
             ttnn.release_trace(self.ttnn_device, self.tid_vae)

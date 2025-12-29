@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet 
 from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_tt_unet import run_refiner_unet_model
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
-UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
+UNET_DEVICE_TEST_TOTAL_ITERATIONS = 2
 CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
 

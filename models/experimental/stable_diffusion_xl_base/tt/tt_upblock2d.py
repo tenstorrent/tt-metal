@@ -16,6 +16,8 @@ class TtUpBlock2D(LightweightModule):
 
         num_layers = 3
         self.resnets = []
+        self.cached_hidden_states = {}
+        self.cached_shapes = {}
 
         for i in range(num_layers):
             self.resnets.append(
@@ -47,17 +49,34 @@ class TtUpBlock2D(LightweightModule):
             else None
         )
 
-    def forward(self, hidden_states, res_hidden_states_tuple, input_shape, temb):
+    def forward(
+        self, hidden_states, res_hidden_states_tuple, input_shape, temb, cache=False, use_cache=False, slice_id=0
+    ):
         B, C, H, W = input_shape
 
-        for resnet in self.resnets:
+        if use_cache:
+            B, C, H, W = self.cached_shapes[slice_id]
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-
-            hidden_states = ttnn.concat([hidden_states, res_hidden_states], dim=3)
+            hidden_states = ttnn.concat([self.cached_hidden_states[slice_id], res_hidden_states], dim=3)
             C = list(hidden_states.shape)[3]
 
-            hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
+            hidden_states, [C, H, W] = self.resnets[-1].forward(hidden_states, temb, [B, C, H, W])
+        else:
+            for i, resnet in enumerate(self.resnets):
+                res_hidden_states = res_hidden_states_tuple[-1]
+                res_hidden_states_tuple = res_hidden_states_tuple[:-1]
+
+                hidden_states = ttnn.concat([hidden_states, res_hidden_states], dim=3)
+                C = list(hidden_states.shape)[3]
+
+                hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
+
+                if (i == len(self.resnets) - 2) and (cache):
+                    if slice_id in self.cached_hidden_states.keys():
+                        ttnn.deallocate(self.cached_hidden_states[slice_id])
+                    self.cached_hidden_states[slice_id] = ttnn.clone(hidden_states)
+                    self.cached_shapes[slice_id] = [B, C, H, W]
 
         if self.upsamplers is not None:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)

@@ -30,7 +30,7 @@ UNET_LOOP_PCC = {"10": 0.923, "50": 0.911}
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, debug_mode):
+def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, debug_mode, deepcache_N=1):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -58,6 +58,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
         "unet",
         model_config=tt_model_config,
         debug_mode=debug_mode,
+        deepcache_N=deepcache_N,
     )
     tt_scheduler = TtEulerDiscreteScheduler(
         ttnn_device,
