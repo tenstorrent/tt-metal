@@ -10,6 +10,7 @@
 #include <string>
 #include <chrono>
 #include <fstream>
+#include <cstdlib>
 
 #include "impl/context/metal_context.hpp"
 
