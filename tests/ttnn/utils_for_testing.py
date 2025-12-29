@@ -405,30 +405,6 @@ def maybe_trace(op_func, enable_trace, device):
     return output
 
 
-def update_for_unsigned_roundrip(py_tensor, py_tensor_after_round_trip):
-    """
-    Use when the test converts the torch data to the TTNN data and back. This function
-    updates the possibly unsigned result of the `to_torch` to match the original input.
-    """
-    if py_tensor.dtype == torch.int16:
-        # TTNN does not have int16 type, so roundtrip with default parameters will
-        # convert types as `int16 -> uint16 -> int32`
-        return py_tensor_after_round_trip.to(torch.int16)
-
-    elif py_tensor.dtype == torch.int32:
-        # Same for `int32 -> uint32 -> int64` conversion sequence
-        return py_tensor_after_round_trip.to(torch.int32)
-
-    elif py_tensor.dtype == np.int16:
-        return py_tensor_after_round_trip.astype(np.int16)
-
-    elif py_tensor.dtype == np.int32:
-        return py_tensor_after_round_trip.astype(np.int32)
-
-    else:
-        return py_tensor_after_round_trip
-
-
 def update_for_unsigned_single(py_tensor):
     """ "
     Use on the result of the `to_torch` function to convert the tensor to the signed type.
