@@ -14,6 +14,10 @@
 
 namespace ttml::optimizers {
 
+std::string AdamWFullPrecision::get_name() const {
+    return "AdamWFullPrecision";
+}
+
 AdamWFullPrecision::AdamWFullPrecision(
     ttml::serialization::NamedParameters parameters, const AdamWFullPrecisionConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
