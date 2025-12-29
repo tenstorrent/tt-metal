@@ -5,6 +5,7 @@ import torch
 import pytest
 import ttnn
 
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ...tt.tt_upsample import BilinearUpsampleMatmulTTNN
 from ...tt.tt_upsample import BilinearUpsampleTorch
@@ -212,42 +213,14 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=memory_config,
     )
-
-    # First config
-    config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(5, 4),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=4,
-        out_block_w=2,
-        per_core_M=4,
-        per_core_N=2,
-        fuse_batch=False,
-        fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
-        num_global_cb_receivers=0,
-        untilize_out=False,
+    # Create centralized configuration
+    model_configs = ModelOptimisations(
+        device=device,
+        conv_act_dtype=ttnn.bfloat8_b,
+        conv_w_dtype=ttnn.bfloat8_b,
     )
-
-    # Second config
-    config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(5, 4),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=16,
-        out_block_w=2,
-        per_core_M=16,
-        per_core_N=2,
-        fuse_batch=False,
-        fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
-        num_global_cb_receivers=0,
-        untilize_out=False,
-    )
+    config1 = model_configs.get_matmul_config("final_upsample_mm_config1")
+    config2 = model_configs.get_matmul_config("final_upsample_mm_config2")
 
     # Method 1: Custom matrix multiplication implementation
     upsampler = BilinearUpsampleMatmulTTNN(
