@@ -31,7 +31,11 @@ struct MoEDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, const Tensor& weight_tensor);
+        const Tensor& input_tensor,
+        const Tensor& w0_tensor,
+        const Tensor& w1_tensor,
+        const Tensor& w2_tensor,
+        const Tensor& output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::moe
