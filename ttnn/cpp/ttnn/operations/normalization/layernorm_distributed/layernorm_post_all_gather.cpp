@@ -4,7 +4,7 @@
 
 #include "layernorm_post_all_gather.hpp"
 
-#include "device/layernorm_post_all_gather_op.hpp"
+#include "device/layernorm_post_all_gather_device_operation.hpp"
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
@@ -39,18 +39,18 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
             DistributedLayerNormStage::POST_ALL_GATHER,
             stats);
     } else {
-        return tt::tt_metal::operation::run(
-                   LayerNormPostAllGather{
-                       .norm_type = LayerNormDistributedType::LAYERNORM,
-                       .eps = epsilon,
-                       .memory_config = memory_config.value_or(input_tensor.memory_config()),
-                       .compute_kernel_config = kernel_config_val,
-                       .dtype = dtype,
-                       .use_2d_core_grid = std::nullopt,  // LayerNorm doesn't expose this parameter
-                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{})},
-                   {input_tensor, stats},
-                   {weight, bias})
-            .at(0);
+        return ttnn::prim::layer_norm_post_all_gather(
+            input_tensor,
+            stats,
+            LayerNormDistributedType::LAYERNORM,
+            epsilon,
+            weight,
+            bias,
+            memory_config.value_or(input_tensor.memory_config()),
+            kernel_config_val,
+            dtype,
+            std::nullopt,  // use_2d_core_grid - LayerNorm doesn't expose this parameter
+            program_config.value_or(LayerNormDefaultProgramConfig{}));
     }
 }
 
