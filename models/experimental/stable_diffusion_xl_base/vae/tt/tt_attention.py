@@ -7,8 +7,6 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_gn_mask,
-    prepare_gn_beta_gamma,
     prepare_linear_params,
 )
 
@@ -19,6 +17,7 @@ class TtAttention(LightweightModule):
         device,
         state_dict,
         module_path,
+        model_config,
         query_dim: int,
         heads: int = 8,
         out_dim: int = None,
@@ -39,12 +38,7 @@ class TtAttention(LightweightModule):
         self.out_dim = out_dim if out_dim is not None else query_dim
         self.heads = out_dim // dim_head if out_dim is not None else heads
 
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=64,
-            k_chunk_size=64,
-            exp_approx_mode=False,
-        )
+        self.sdpa_program_config = model_config.get_sdpa_config(module_path=module_path, is_self_attention=True)
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -61,8 +55,18 @@ class TtAttention(LightweightModule):
 
         norm_weights = state_dict[f"{module_path}.group_norm.weight"]
         norm_bias = state_dict[f"{module_path}.group_norm.bias"]
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.x)
-        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.x)
+        (
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+        ) = model_config.get_groupnorm_params(f"{module_path}.norm", norm_weights, norm_bias, self.norm_groups, device)
+        assert (
+            self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         q_bias = state_dict[f"{module_path}.to_q.bias"]
@@ -93,26 +97,28 @@ class TtAttention(LightweightModule):
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
         B, C, H, W = input_shape
-        shard_shape = B * H * W // self.norm_core_grid.x, C // self.norm_core_grid.y
-        sharded_mem_config = ttnn.create_sharded_memory_config(
-            shard_shape,
-            core_grid=self.norm_core_grid,
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        hidden_states = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+        hidden_states = input_tensor
+
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=hidden_states.shape,
+                core_grid=self.groupnorm_config["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
             input_mask=self.input_mask,
+            negative_mask=self.input_negative_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=sharded_mem_config,
-            core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
-            negative_mask=None,
-            inplace=False,  # We are working with tiled sharded GN
+            memory_config=hidden_states.memory_config(),
+            **self.groupnorm_config,
         )
 
         assert encoder_hidden_states is None, "VAE does self attention only"
