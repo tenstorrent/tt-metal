@@ -175,6 +175,7 @@ pytest tests/test_vit.py           # ViT with TTNN Linear and LayerNorm
 pytest tests/test_llama.py         # LLaMA-3.2-1B-Instruct
 pytest tests/test_owl_vit.py       # OWL-ViT object detection
 pytest tests/test_speech_t5.py     # SpeechT5 speech synthesis
+pytest tests/test_whisper3.py      # Whisper-large-v3 automatic speech recognition
 pytest tests/test_resnet50.py      # ResNet50 with Conv and Bottleneck
 pytest tests/test_conv.py          # Standalone Conv2d, Conv+BN, Conv+BN+Activation
 pytest tests/test_glm.py           # GLM-4.5-Air with mesh device support
@@ -241,6 +242,7 @@ See [tests/](tests/) directory:
 - [test_llama.py](tests/test_llama.py) - LLaMA-3.2-1B-Instruct with bfloat8 optimizations
 - [test_owl_vit.py](tests/test_owl_vit.py) - OWL-ViT object detection model
 - [test_speech_t5.py](tests/test_speech_t5.py) - SpeechT5 speech synthesis model
+- [test_whisper3.py](tests/test_whisper3.py) - Whisper-large-v3 automatic speech recognition
 - [test_resnet50.py](tests/test_resnet50.py) - ResNet50 with Conv and Bottleneck blocks
 - [test_conv.py](tests/test_conv.py) - Standalone Conv2d, Conv+BN, and Conv+BN+Activation tests
 - [test_glm.py](tests/test_glm.py) - GLM-4.5-Air with mesh device support
