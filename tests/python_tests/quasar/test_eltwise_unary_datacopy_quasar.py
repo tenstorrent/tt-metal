@@ -152,13 +152,14 @@ def test_eltwise_unary_datacopy_quasar(
                 if data_copy_type == DataCopyType.B2D
                 else UnpackerEngine.UnpA
             ),
+            DEST_SYNC(),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
-            DEST_SYNC(),
-            TILE_COUNT(tile_cnt_A),
             DEST_INDEX(dest_index),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
