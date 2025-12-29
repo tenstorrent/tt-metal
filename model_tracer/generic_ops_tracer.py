@@ -1061,12 +1061,13 @@ def detect_pytest_tests(test_path):
         python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
 
         # Use pytest --collect-only to check if any tests are collected
+        # 60 second timeout to handle TTNN initialization time
         result = subprocess.run(
             [python_cmd, "-m", "pytest", test_path, "--collect-only", "-q"],
             cwd=BASE_DIR,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=60,
         )
 
         # Check if any tests were collected
