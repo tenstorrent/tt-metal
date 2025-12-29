@@ -1,9 +1,99 @@
 """TTNN operation dispatch handlers and mapping."""
 
+from typing import Any, Optional, Tuple
+
 import torch
 
 import ttnn
 from models.tt_symbiote.core.utils import TORCH_TO_TTNN, torch_dtype_to_ttnn_dtype
+
+# ========== Helper Functions ==========
+
+
+def _prepare_tensor_input(
+    tensor: Any, device: Optional[Any] = None, ref_dtype: Optional[torch.dtype] = None
+) -> Tuple[Any, bool, Optional[Any]]:
+    """Prepare a single tensor input for TTNN operation.
+
+    Args:
+        tensor: Input tensor (may be TorchTTNNTensor, torch.Tensor, or scalar)
+        device: Target device (optional)
+        ref_dtype: Reference dtype for scalar conversion
+
+    Returns:
+        Tuple of (prepared_tensor, should_deallocate, device)
+    """
+    from models.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    should_deallocate = False
+
+    if not isinstance(tensor, TorchTTNNTensor):
+        if isinstance(tensor, (int, float)):
+            tensor = torch.tensor(tensor)
+        tensor = TorchTTNNTensor(tensor, dtype=ref_dtype)
+        should_deallocate = True
+    else:
+        if tensor.ttnn_tensor is None:
+            should_deallocate = True
+        if device is None:
+            device = tensor.to_ttnn.device()
+
+    return tensor, should_deallocate, device
+
+
+def _prepare_binary_inputs(
+    tensor1: Any, tensor2: Any, device: Optional[Any] = None
+) -> Tuple[Any, Any, bool, bool, Any]:
+    """Prepare two tensor inputs for TTNN binary operation.
+
+    Args:
+        tensor1: First input tensor
+        tensor2: Second input tensor
+        device: Target device (optional)
+
+    Returns:
+        Tuple of (tensor1, tensor2, deallocate1, deallocate2, device)
+    """
+    tensor1, deallocate1, device = _prepare_tensor_input(tensor1, device, getattr(tensor2, "dtype", None))
+    tensor2, deallocate2, device = _prepare_tensor_input(tensor2, device, tensor1.dtype)
+
+    if device is None:
+        raise RuntimeError("At least one of the inputs must be a TTNN tensor.")
+
+    # Ensure both tensors are on the same device
+    if tensor1.to_ttnn.device() != tensor2.to_ttnn.device():
+        tensor1.ttnn_tensor = ttnn.to_device(tensor1.to_ttnn, device)
+        tensor2.ttnn_tensor = ttnn.to_device(tensor2.to_ttnn, device)
+
+    return tensor1, tensor2, deallocate1, deallocate2, device
+
+
+def _ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """Convert tensor to TILE_LAYOUT if needed.
+
+    Args:
+        tensor: TTNN tensor to convert
+
+    Returns:
+        Tensor in TILE_LAYOUT
+    """
+    if tensor.layout != ttnn.TILE_LAYOUT:
+        return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return tensor
+
+
+def _cleanup_tensors(*tensor_deallocate_pairs):
+    """Deallocate temporary tensors.
+
+    Args:
+        tensor_deallocate_pairs: Pairs of (tensor, should_deallocate)
+    """
+    for tensor, should_deallocate in tensor_deallocate_pairs:
+        if should_deallocate and tensor.ttnn_tensor is not None:
+            ttnn.deallocate(tensor.ttnn_tensor)
+
+
+# ========== Operation Handlers ==========
 
 
 def handle_view(func, args, kwargs):
@@ -46,44 +136,13 @@ def handle_mul(func, args, kwargs):
     """Handle multiplication operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = None
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
-    ttnn_tensor1 = input_tensor1.to_ttnn
-    ttnn_tensor2 = input_tensor2.to_ttnn
-    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
+
+    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
+
     res = TorchTTNNTensor(ttnn.multiply(ttnn_tensor1, ttnn_tensor2))
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -91,46 +150,13 @@ def handle_sub(func, args, kwargs):
     """Handle subtraction operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = input_tensor1.to_ttnn
-    ttnn_tensor2 = input_tensor2.to_ttnn
-    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
 
     res = TorchTTNNTensor(ttnn.subtract(ttnn_tensor1, ttnn_tensor2))
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -138,39 +164,10 @@ def handle_div(func, args, kwargs):
     """Handle division operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
     res = TorchTTNNTensor(ttnn.divide(input_tensor1.to_ttnn, input_tensor2.to_ttnn))
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -178,46 +175,13 @@ def handle_add(func, args, kwargs):
     """Handle addition operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
-    ttnn_tensor1 = input_tensor1.to_ttnn
-    ttnn_tensor2 = input_tensor2.to_ttnn
-    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
 
     res = TorchTTNNTensor(ttnn.add(ttnn_tensor1, ttnn_tensor2))
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -373,35 +337,11 @@ def handle_bmm(func, args, kwargs):
     """Handle batch matrix multiplication."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = None
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        input_tensor1 = TorchTTNNTensor(input_tensor1)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        input_tensor2 = TorchTTNNTensor(input_tensor2)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
-    ttnn_tensor1 = input_tensor1.to_ttnn
-    ttnn_tensor2 = input_tensor2.to_ttnn
-    if ttnn_tensor1.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor1 = ttnn.to_layout(ttnn_tensor1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    if ttnn_tensor2.layout != ttnn.TILE_LAYOUT:
-        ttnn_tensor2 = ttnn.to_layout(ttnn_tensor2, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
+
+    ttnn_tensor1 = _ensure_tile_layout(input_tensor1.to_ttnn)
+    ttnn_tensor2 = _ensure_tile_layout(input_tensor2.to_ttnn)
+
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -409,11 +349,9 @@ def handle_bmm(func, args, kwargs):
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+
     res = TorchTTNNTensor(ttnn.matmul(ttnn_tensor1, ttnn_tensor2, compute_kernel_config=compute_kernel_config))
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -664,39 +602,10 @@ def handle_ge(func, args, kwargs):
     """Handle greater equal operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
     res = TorchTTNNTensor(ttnn.ge(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -704,39 +613,10 @@ def handle_gt(func, args, kwargs):
     """Handle greater than operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
     res = TorchTTNNTensor(ttnn.gt(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -744,40 +624,10 @@ def handle_eq(func, args, kwargs):
     """Handle equal operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
     res = TorchTTNNTensor(ttnn.eq(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
-
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -785,40 +635,10 @@ def handle_lt(func, args, kwargs):
     """Handle less than operation."""
     from models.tt_symbiote.core.tensor import TorchTTNNTensor
 
-    input_tensor1 = args[0]
-    input_tensor2 = args[1]
-    device = None
-    deallocate_a = False
-    if not isinstance(input_tensor1, TorchTTNNTensor):
-        if isinstance(input_tensor1, (int, float)):
-            input_tensor1 = torch.tensor(input_tensor1)
-        input_tensor1 = TorchTTNNTensor(input_tensor1, dtype=input_tensor2.dtype)
-        deallocate_a = True
-    else:
-        if input_tensor1.ttnn_tensor is None:
-            deallocate_a = True
-        device = input_tensor1.to_ttnn.device()
-    deallocate_b = False
-    if not isinstance(input_tensor2, TorchTTNNTensor):
-        if isinstance(input_tensor2, (int, float)):
-            input_tensor2 = torch.tensor(input_tensor2)
-        input_tensor2 = TorchTTNNTensor(input_tensor2, dtype=input_tensor1.dtype)
-        deallocate_b = True
-    else:
-        if input_tensor2.ttnn_tensor is None:
-            deallocate_b = True
-        device = input_tensor2.to_ttnn.device() if device is None else device
-    assert device is not None, "At least one of the inputs must be a TTNN tensor."
-    if input_tensor1.to_ttnn.device() != input_tensor2.to_ttnn.device():
-        input_tensor1.ttnn_tensor = ttnn.to_device(input_tensor1.to_ttnn, device)
-        input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
+    input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
     res = TorchTTNNTensor(ttnn.lt(input_tensor1.to_ttnn, input_tensor2.to_ttnn), dtype=torch.bool)
-
-    if deallocate_a:
-        ttnn.deallocate(input_tensor1.ttnn_tensor)
-    if deallocate_b:
-        ttnn.deallocate(input_tensor2.ttnn_tensor)
+    _cleanup_tensors((input_tensor1, deallocate_a), (input_tensor2, deallocate_b))
     return res
 
 
@@ -919,7 +739,8 @@ def handle_where(func, args, kwargs):
         input_tensor2.ttnn_tensor = ttnn.to_device(input_tensor2.to_ttnn, device)
     if condition.to_ttnn.device() != input_tensor1.to_ttnn.device():
         condition.ttnn_tensor = ttnn.to_device(condition.to_ttnn, device)
-
+    input_tensor1.ttnn_tensor = _ensure_tile_layout(input_tensor1.to_ttnn)
+    input_tensor2.ttnn_tensor = _ensure_tile_layout(input_tensor2.to_ttnn)
     result = TorchTTNNTensor(ttnn.where(condition.to_ttnn, input_tensor1.to_ttnn, input_tensor2.to_ttnn))
 
     if deallocate_a:
