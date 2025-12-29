@@ -130,7 +130,6 @@ Checks: >
   -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
-  -readability-use-anyofallof,
   -abseil-*,
   -altera-*,
   -android-*,
