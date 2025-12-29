@@ -67,3 +67,35 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block"])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_mean_shard(device, mem_config, keepdim):
+    if mem_config is None and not keepdim:
+        pytest.skip("Skipping because reshape does not work in this scenario. Issue #35145")
+    torch_input_tensor = torch.randn(1, 1024, 160, dtype=torch.bfloat16)
+    block_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1024, 160),
+        core_grid=ttnn.CoreGrid(x=5, y=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=block_sharded_config,
+    )
+
+    memory_config = block_sharded_config if mem_config == "block" else mem_config
+    output_tensor = ttnn.mean(
+        input_tensor,
+        dim=-1,
+        keepdim=keepdim,
+        memory_config=memory_config,
+    )
+    tt_output_torch = ttnn.to_torch(output_tensor)
+    torch_output = torch.mean(torch_input_tensor, -1, keepdim)
+    assert_with_pcc(torch_output, tt_output_torch)
