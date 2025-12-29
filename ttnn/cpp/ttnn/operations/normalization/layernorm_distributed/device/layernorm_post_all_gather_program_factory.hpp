@@ -24,13 +24,13 @@ struct LayerNormPostAllGatherProgramFactory {
     static cached_program_t create(
         const LayerNormPostAllGatherOperationAttributes& operation_attributes,
         const LayerNormPostAllGatherTensorArgs& tensor_args,
-        LayerNormPostAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPostAllGatherTensorReturnValue& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPostAllGatherOperationAttributes& operation_attributes,
         const LayerNormPostAllGatherTensorArgs& tensor_args,
-        LayerNormPostAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPostAllGatherTensorReturnValue& output);
 };
 
 // Program factory for Welford algorithm (layernorm only)
@@ -41,13 +41,13 @@ struct LayerNormPostAllGatherWelfordProgramFactory {
     static cached_program_t create(
         const LayerNormPostAllGatherOperationAttributes& operation_attributes,
         const LayerNormPostAllGatherTensorArgs& tensor_args,
-        LayerNormPostAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPostAllGatherTensorReturnValue& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPostAllGatherOperationAttributes& operation_attributes,
         const LayerNormPostAllGatherTensorArgs& tensor_args,
-        LayerNormPostAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPostAllGatherTensorReturnValue& output);
 };
 
 }  // namespace ttnn::operations::normalization::program

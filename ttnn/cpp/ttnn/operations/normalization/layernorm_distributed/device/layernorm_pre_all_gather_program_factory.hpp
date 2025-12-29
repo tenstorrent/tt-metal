@@ -32,13 +32,13 @@ struct LayerNormPreAllGatherProgramFactory {
     static cached_program_t create(
         const LayerNormPreAllGatherOperationAttributes& operation_attributes,
         const LayerNormPreAllGatherTensorArgs& tensor_args,
-        LayerNormPreAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPreAllGatherTensorReturnValue& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPreAllGatherOperationAttributes& operation_attributes,
         const LayerNormPreAllGatherTensorArgs& tensor_args,
-        LayerNormPreAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPreAllGatherTensorReturnValue& output);
 };
 
 // Program factory for 2D core grid operation
@@ -49,13 +49,13 @@ struct LayerNormPreAllGather2DProgramFactory {
     static cached_program_t create(
         const LayerNormPreAllGatherOperationAttributes& operation_attributes,
         const LayerNormPreAllGatherTensorArgs& tensor_args,
-        LayerNormPreAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPreAllGatherTensorReturnValue& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPreAllGatherOperationAttributes& operation_attributes,
         const LayerNormPreAllGatherTensorArgs& tensor_args,
-        LayerNormPreAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPreAllGatherTensorReturnValue& output);
 };
 
 // Program factory for Welford algorithm (layernorm only)
@@ -66,13 +66,13 @@ struct LayerNormPreAllGatherWelfordProgramFactory {
     static cached_program_t create(
         const LayerNormPreAllGatherOperationAttributes& operation_attributes,
         const LayerNormPreAllGatherTensorArgs& tensor_args,
-        LayerNormPreAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPreAllGatherTensorReturnValue& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const LayerNormPreAllGatherOperationAttributes& operation_attributes,
         const LayerNormPreAllGatherTensorArgs& tensor_args,
-        LayerNormPreAllGatherTensorReturnValue& tensor_return_value);
+        LayerNormPreAllGatherTensorReturnValue& output);
 };
 
 }  // namespace ttnn::operations::normalization::program

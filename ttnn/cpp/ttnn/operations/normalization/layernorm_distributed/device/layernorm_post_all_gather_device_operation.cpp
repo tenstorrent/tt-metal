@@ -162,9 +162,9 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     // Additional validation for Welford - it doesn't support rmsnorm
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
-        if (program_config.use_welford && args.norm_type == LayerNormDistributedType::RMSNORM) {
-            TT_FATAL(false, "RMS norm is not compatible with Welford algorithm. Please disable use_welford flag.");
-        }
+        TT_FATAL(
+            !(program_config.use_welford && args.norm_type == LayerNormDistributedType::RMSNORM),
+            "RMS norm is not compatible with Welford algorithm. Please disable use_welford flag.");
     }
 }
 
