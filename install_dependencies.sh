@@ -195,6 +195,8 @@ init_packages() {
                 "$gpp_package"
                 "pandoc"
                 "xz-utils"
+                "openssl"
+                "libssl-dev"
                 "python3-dev"
                 "python3-pip"
                 "python3-venv"
