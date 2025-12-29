@@ -75,6 +75,7 @@ build_ttnn_tests="OFF"
 build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
+build_microbench="OFF"
 build_tt_train="OFF"
 build_telemetry="OFF"
 build_static_libs="OFF"
@@ -118,6 +119,7 @@ build-ttnn-tests
 build-metal-tests
 build-umd-tests
 build-programming-examples
+build-microbench
 build-tt-train
 build-packages
 build-telemetry
@@ -184,6 +186,8 @@ while true; do
             build_umd_tests="ON";;
         --build-programming-examples)
             build_programming_examples="ON";;
+        --build-microbench)
+            build_microbench="ON";;
         --build-tt-train)
             build_tt_train="ON";;
         --build-packages)
@@ -351,6 +355,10 @@ fi
 
 if [ "$build_programming_examples" = "ON" ]; then
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
+fi
+
+if [ "$build_microbench" = "ON" ]; then
+    cmake_args+=("-DBUILD_MULTI_DEVICE_MICROBENCH=ON")
 fi
 
 if [ "$build_tt_train" = "ON" ]; then

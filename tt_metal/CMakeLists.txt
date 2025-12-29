@@ -283,6 +283,10 @@ if(BUILD_PROGRAMMING_EXAMPLES)
     add_subdirectory(programming_examples)
 endif()
 
+if(BUILD_MULTI_DEVICE_MICROBENCH)
+    add_subdirectory(multi_device_microbench)
+endif()
+
 # Allow internal files to access the public API "by default" and without the
 # scoping that external consumers must use.  Scoping may still be used if desired.
 include_directories(
