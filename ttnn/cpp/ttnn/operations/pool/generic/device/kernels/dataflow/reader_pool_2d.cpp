@@ -494,15 +494,21 @@ void kernel_main() {
         // Calculate in_ntiles_c (number of channel tiles) from in_c
         constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
 
-        // Calculate weight_ntiles based on effective tiles formula
-        // This matches how the compute kernel processes tiles
-        constexpr uint32_t weight_ntiles = (kernel_h * kernel_w * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
+        // Calculate weight_ntiles for depthwise conv 2D layout: [channels, kernel_positions]
+        // Weight tensor shape: [padded_channels, padded_kernel_positions] in tiles
+        constexpr uint32_t kernel_positions = kernel_h * kernel_w;
+        constexpr uint32_t padded_kernel_positions = ((kernel_positions + TILE_WIDTH - 1) / TILE_WIDTH) * TILE_WIDTH;
+        constexpr uint32_t kernel_ntiles_hw = padded_kernel_positions / TILE_WIDTH;
+        constexpr uint32_t weight_ntiles = in_ntiles_c * kernel_ntiles_hw;
 
         const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
 
         // Get common runtime args
         uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(0);
         bool is_sender = get_arg_val<uint32_t>(1) != 0;
+
+        DPRINT << "WEIGHT_READ: weight_addr_dram_base=0x" << HEX() << weight_addr_dram_base << DEC()
+               << " is_sender=" << (uint32_t)is_sender << " weight_ntiles=" << weight_ntiles << ENDL();
 
         if (is_sender) {
             // ============================================================
@@ -518,6 +524,9 @@ void kernel_main() {
             uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(7);
             uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(8));
             uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(9));
+
+            // For WIDTH_SHARDED (num_dests=0), get starting tile_id from arg 10
+            uint32_t start_tile_id = (weights_mcast_num_dests == 0) ? get_arg_val<uint32_t>(10) : 0;
 
             // Set up semaphore pointers
             volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
@@ -542,9 +551,22 @@ void kernel_main() {
             uint32_t weight_l1_addr = get_write_ptr(weight_cb_id);
             uint32_t weights_start_address = weight_l1_addr;
 
+            DPRINT << "WEIGHT_ADDR_DEBUG: base=0x" << HEX() << weight_addr_dram_base << DEC()
+                   << " start_tile_id=" << start_tile_id << " weight_ntiles=" << weight_ntiles
+                   << " tile_nbytes=" << weight_tile_nbytes << ENDL();
+
             // Read all weight tiles from DRAM
             for (uint32_t tile_id = 0; tile_id < weight_ntiles; tile_id++) {
-                noc_async_read_tile(tile_id, s_weight, weight_l1_addr);
+                // Add start_tile_id offset to get the actual tile_id in the interleaved DRAM buffer
+                uint32_t global_tile_id = start_tile_id + tile_id;
+
+                // Get the actual DRAM address for this tile via TensorAccessor
+                uint64_t dram_noc_addr = s_weight.get_noc_addr(global_tile_id);
+
+                DPRINT << "  tile[" << tile_id << "] global_tile_id=" << global_tile_id << " dram_addr=0x" << HEX()
+                       << dram_noc_addr << DEC() << ENDL();
+
+                noc_async_read_tile(global_tile_id, s_weight, weight_l1_addr);
                 weight_l1_addr += weight_tile_nbytes;
             }
             noc_async_read_barrier();

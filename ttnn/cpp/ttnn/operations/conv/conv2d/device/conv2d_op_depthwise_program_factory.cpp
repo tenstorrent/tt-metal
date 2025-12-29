@@ -617,9 +617,8 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             // No multicast - all cores are "senders" with num_dests=0
             // ============================================================
 
-            // Calculate per-core weight shard size
-            uint32_t channels_per_core = in_c / num_cores;
-            uint32_t padded_ch_per_core = tt::round_up(channels_per_core, tt::constants::TILE_WIDTH);
+            // Calculate per-core weight shard size using in_c_per_shard_ceil (must match kernel)
+            uint32_t padded_ch_per_core = tt::round_up(in_c_per_shard_ceil, tt::constants::TILE_WIDTH);
             uint32_t padded_kernel_pos = tt::round_up(kernel_h * kernel_w, tt::constants::TILE_WIDTH);
             uint32_t shard_ntiles =
                 (padded_ch_per_core / tt::constants::TILE_WIDTH) * (padded_kernel_pos / tt::constants::TILE_WIDTH);
@@ -628,39 +627,46 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
             log_info(
                 tt::LogOp,
-                "WIDTH_SHARDED weights: ch_per_core={}, padded_ch={}, padded_kpos={}, shard_ntiles={}, "
+                "WIDTH_SHARDED weights: ch_per_shard_ceil={}, padded_ch={}, padded_kpos={}, shard_ntiles={}, "
                 "shard_bytes={}",
-                channels_per_core,
+                in_c_per_shard_ceil,
                 padded_ch_per_core,
                 padded_kernel_pos,
                 shard_ntiles,
                 shard_size_bytes);
 
             // Each core reads its own weight shard - no multicast
+            // All cores use the SAME base address but read different tile IDs
             for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
                 CoreCoord core = all_cores[core_idx];
-                uint32_t weight_offset = core_idx * shard_size_bytes;
+
+                // Calculate starting tile_id for this core
+                uint32_t start_tile_id = core_idx * shard_ntiles;
 
                 std::vector<uint32_t> reader_args = {
-                    static_cast<uint32_t>(weight_buffer_addr + weight_offset),  // 0: weight_addr with per-core offset
-                    1,                                                          // 1: is_sender = true (all cores read)
+                    static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr (SAME for all cores)
+                    1,                                          // 1: is_sender = true (all cores read)
                     0,
                     0,
                     0,
-                    0,                                   // 2-5: unused mcast coords
-                    0,                                   // 6: weights_mcast_num_dests = 0 (skip multicast!)
-                    0,                                   // 7: weights_mcast_num_cores = 0
-                    weights_mcast_sender_semaphore_id,   // 8: sender semaphore (unused but required)
-                    weights_mcast_receiver_semaphore_id  // 9: receiver semaphore (unused but required)
+                    0,                                    // 2-5: unused mcast coords
+                    0,                                    // 6: weights_mcast_num_dests = 0 (skip multicast!)
+                    0,                                    // 7: weights_mcast_num_cores = 0
+                    weights_mcast_sender_semaphore_id,    // 8: sender semaphore (unused but required)
+                    weights_mcast_receiver_semaphore_id,  // 9: receiver semaphore (unused but required)
+                    start_tile_id                         // 10: starting tile_id for this core
                 };
                 SetRuntimeArgs(program, reader0_kernel, core, reader_args);
 
-                log_debug(
+                log_info(
                     tt::LogOp,
-                    "Core {} weight args: addr=0x{:x}, offset={}",
+                    "WIDTH_SHARDED Core[{}] ({},{}): weight_base_addr=0x{:x}, start_tile_id={}, shard_ntiles={}",
                     core_idx,
-                    weight_buffer_addr + weight_offset,
-                    weight_offset);
+                    core.x,
+                    core.y,
+                    weight_buffer_addr,
+                    start_tile_id,
+                    shard_ntiles);
             }
 
             log_info(tt::LogOp, "WIDTH_SHARDED: {} cores each reading own weight shard", num_cores);
