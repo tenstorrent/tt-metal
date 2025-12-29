@@ -8,10 +8,11 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False):
+    def __init__(self, norm, args, tt_ccl, TG=False, force_interleaved_norm=False):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.force_interleaved_norm = force_interleaved_norm
 
         if TG:
             core_grid_ln = (
@@ -68,6 +69,31 @@ class DistributedNorm(LightweightModule):
                     tt_ccl=self.tt_ccl,
                     compute_kernel_config=self.ln_cfg,
                 )
+
+        if self.force_interleaved_norm:
+            if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+                x = ttnn.experimental.all_gather_async(
+                    x,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=self.args.ccl_topology(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
+            else:
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+            x = self.norm(x, mode=mode, in_sharded=False, out_sharded=False)
+
+            if mode == "decode":
+                x = ttnn.to_memory_config(x, self.norm.sharded_output_config)
+
+            return x
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 

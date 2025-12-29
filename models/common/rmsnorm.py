@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import pad_by_zero
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -178,3 +179,60 @@ class RMSNorm(LightweightModule):
         tt_stats.deallocate(True)
 
         return tt_out
+
+
+class SimpleRMSNorm(LightweightModule):
+    """
+    Simplified RMSNorm for ALLaM models that directly calls ttnn.rms_norm.
+
+    Uses padded weights to match TT tile alignment and avoids sharded program
+    configs that can trigger L1 buffer clashes on certain devices.
+    """
+
+    def __init__(
+        self,
+        device,
+        dim,
+        state_dict,
+        weight_key,
+        layer_num=None,
+        state_dict_prefix=None,
+        weight_cache_path=None,
+        weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_dtype=ttnn.bfloat16,
+        eps: float = 1e-05,
+        add_unit_offset=False,
+        sharded_output_config=None,
+    ):
+        super().__init__()
+        self.device = device
+        self.dim = dim
+        self.eps = eps
+        self.sharded_output_config = sharded_output_config
+
+        if state_dict_prefix:
+            weight_name = f"{state_dict_prefix}{weight_key}.weight"
+        else:
+            if layer_num is None:
+                weight_name = f"{weight_key}.weight"
+            else:
+                weight_name = f"layers.{layer_num}.{weight_key}.weight"
+
+        pytorch_weights = state_dict[weight_name]
+
+        if add_unit_offset:
+            pytorch_weights = pytorch_weights + 1.0
+
+        self.weight = pad_by_zero(
+            pytorch_weights,
+            self.device,
+            weight_memory_config,
+            weight_dtype,
+        )[0]
+
+    def forward(self, x: ttnn.Tensor, mode=None, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+        return ttnn.rms_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight,
+        )
