@@ -548,6 +548,7 @@ def set_run_mode(mode: str) -> None:
 
 def add_run_mode(mode: str, implementation: Any) -> None:
     """Add a new run mode to the registry."""
+    global _RUN_MODE_REGISTRY
     if mode in _RUN_MODE_REGISTRY:
         raise ValueError(f"Run mode '{mode}' already exists.")
     _RUN_MODE_REGISTRY[mode] = implementation
@@ -555,10 +556,12 @@ def add_run_mode(mode: str, implementation: Any) -> None:
 
 def get_tensor_run_implementation():
     # Environment variable takes precedence for backward compatibility
-    env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE")
-    if _current_run_mode is None and env_mode is None:
-        raise RuntimeError("Run mode has not been set. Please call set_run_mode() before tensor operations.")
-    if env_mode != _current_run_mode and _current_run_mode is not None:
+    global _current_run_mode
+    global _RUN_MODE_REGISTRY
+    env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE", _current_run_mode)
+    if env_mode is None and _current_run_mode is None:
+        _current_run_mode = "NORMAL"
+    if env_mode != _current_run_mode and _current_run_mode is not None and env_mode is not None:
         print(
             f"Warning: Run mode from environment variable '{env_mode}' overrides the previously set run mode '{_current_run_mode}'."
         )
