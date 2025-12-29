@@ -1,17 +1,26 @@
 import contextlib
 import os
-from typing import Iterator
+from dataclasses import dataclass
+from typing import Any, Iterator
 
 import torch
 from torch.utils._pytree import tree_map
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
     compare_fn_outputs,
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
+
+
+@dataclass
+class DistributedTensorConfig:
+    """Configuration for distributed tensor operations."""
+
+    mesh_mapper: Any
 
 
 @contextlib.contextmanager
@@ -236,12 +245,21 @@ class NormalRun:
     @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
+
+        def _to_torch(self):
+            is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
+            if is_mesh_device:
+                result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
+            else:
+                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
+            return result
+
         result = self.elem
         if self.ttnn_tensor is not None and self.elem is None:
-            result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
+            result = _to_torch(self)
         assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
         if result.device.type == "meta" and self.ttnn_tensor is not None:
-            result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
+            result = _to_torch(self)
         self.elem = result if self.elem is None else self.elem
         return self.elem
 
@@ -252,13 +270,22 @@ class NormalRun:
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         # convert elem to ttnn tensor here
+        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
+        if self.ttnn_distributed_config is None and is_mesh_device:
+            self.__dict__["distributed_config"] = DistributedTensorConfig(
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
+            )
         if self.elem.device.type == "meta":
             raise RuntimeError(
                 "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
             )
         if self.elem.dtype not in TORCH_TO_TTNN:
             raise RuntimeError(f"Unsupported dtype {self.elem.dtype} for conversion to TTNN tensor.")
-        self.ttnn_tensor = ttnn.from_torch(self.elem.cpu(), dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype))
+        self.ttnn_tensor = ttnn.from_torch(
+            self.elem.cpu(),
+            dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
+            mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
+        )
         return self.ttnn_tensor
 
     @staticmethod
@@ -345,18 +372,6 @@ class SELRun(NormalRun):
         return result
 
     @staticmethod
-    def to_torch(self):
-        """Convert to PyTorch tensor."""
-        result = self.elem
-        if self.ttnn_tensor is not None and self.elem is None:
-            result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        if result.device.type == "meta" and self.ttnn_tensor is not None:
-            result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-        self.elem = result if self.elem is None else self.elem
-        return self.elem
-
-    @staticmethod
     def module_run(self, *args, **kwds):
         pass
 
@@ -430,18 +445,6 @@ class DPLRun(NormalRun):
             compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
             result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
         return result
-
-    @staticmethod
-    def to_torch(self):
-        """Convert to PyTorch tensor."""
-        result = self.elem
-        if self.ttnn_tensor is not None and self.elem is None:
-            result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        if result.device.type == "meta" and self.ttnn_tensor is not None:
-            result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-        self.elem = result if self.elem is None else self.elem
-        return self.elem
 
 
 class DPLRunNoErrorProp(NormalRun):
