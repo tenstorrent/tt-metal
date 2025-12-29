@@ -335,15 +335,13 @@ void LevelizedGraph::populate_output_info() {
             if (!consumer.arguments.empty()) {
                 const std::string& first_arg = consumer.arguments[0];
                 // Check if it's a Tensor argument (starts with "Tensor(")
-                if (first_arg.starts_witht "Tensor(") {
-                    ")) {
-                        // Add to output_info if not already present (avoid duplicates)
-                        // Note: this is not scalable, but the only viable solution for now since graph capture does not
-                        // store the output info of each vertex.
-                        if (std::ranges::find(vertex.output_info, first_arg) == vertex.output_info.end()) {
+                if (first_arg.starts_with("Tensor(")) {
+                    // Add to output_info if not already present (avoid duplicates)
+                    // Note: this is not scalable, but the only viable solution for now since graph capture does not
+                    // store the output info of each vertex.
+                    if (std::ranges::find(vertex.output_info, first_arg) == vertex.output_info.end()) {
                         vertex.output_info.push_back(first_arg);
                     }
-                }
                     break;  // Found it, no need to check other consumers
                 }
             }
