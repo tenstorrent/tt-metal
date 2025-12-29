@@ -182,11 +182,12 @@ def test_unpack_unary_operand_quasar(
             DEST_SYNC(),
             UNPACK_TRANS_FACES(transpose_en),
             UNPACK_TRANS_WITHING_FACE(transpose_en),
+        ],
+        runtimes=[
             TEST_FACE_DIMS(),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

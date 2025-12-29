@@ -53,7 +53,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
     _llk_unpack_reduce_init_<REDUCE_DIM>(buf_desc_id_a, buf_desc_id_b, 1 /*num_tiles_per_pack*/, tile_shape_A);
-    for (int i = 0; i < TILE_CNT; ++i)
+    for (int i = 0; i < params->TILE_CNT; ++i)
     {
         _llk_unpack_reduce_(i, 0);
     }

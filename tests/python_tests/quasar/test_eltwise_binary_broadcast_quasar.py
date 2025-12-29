@@ -114,11 +114,12 @@ def test_eltwise_binary_broadcast_quasar(
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(),
+        ],
+        runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(4),
             TEST_FACE_DIMS(),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

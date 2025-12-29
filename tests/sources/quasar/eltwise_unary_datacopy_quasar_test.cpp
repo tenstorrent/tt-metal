@@ -19,7 +19,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     tdma_descriptor_t td_val;
     const uint buf_desc_id          = 0;
-    const uint num_tiles_per_unpack = TILE_CNT;
+    const uint num_tiles_per_unpack = params->TILE_CNT;
 
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -38,9 +38,9 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
     bd_val.f.format      = static_cast<uint8_t>(formats.unpack_src);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
+    bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
+    bd_val.f.y_dim       = params->TEST_FACE_R_DIM;
+    bd_val.f.z_dim       = params->num_faces;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
@@ -83,10 +83,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+    _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
+        params->num_faces * params->TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
     for (int i = 0; i < params->TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, DST_INDEX + i);
+        _llk_math_eltwise_unary_datacopy_(params->num_faces * params->TEST_FACE_R_DIM /*num_rows_per_tile*/, params->DST_INDEX + i);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU>();
 }
@@ -102,7 +103,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 void run_kernel(const volatile struct RuntimeParams *params)
 {
     uint32_t const buf_desc_id    = 8;
-    const uint num_tiles_per_pack = TILE_CNT;
+    const uint num_tiles_per_pack = params->TILE_CNT;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -111,9 +112,9 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     bd_val.f.l1_addr_16B = buffer_Res[0] / 16;
     bd_val.f.format      = static_cast<uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
+    bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
+    bd_val.f.y_dim       = params->TEST_FACE_R_DIM;
+    bd_val.f.z_dim       = params->num_faces;
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
@@ -121,7 +122,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
-    _llk_pack_<p_pacr::PACK0>(DST_INDEX, 0);
+    _llk_pack_<p_pacr::PACK0>(params->DST_INDEX, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

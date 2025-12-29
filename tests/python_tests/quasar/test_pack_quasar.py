@@ -113,11 +113,12 @@ def test_pack_quasar(formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT):
             INPUT_DIMENSIONS(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(),
+        ],
+        runtimes=[
             TEST_FACE_DIMS(),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
