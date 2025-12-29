@@ -1,15 +1,7 @@
 name: "Profiler CI"
-run-name: >-
-  ${{
-    github.event_name == 'push' &&
-    'Profiler CI (push → all)' ||
-    'Profiler CI'
-  }}
+run-name: "Profiler CI"
 
 on:
-  push:
-    branches:
-      - mo/34706_profiler_ci
   workflow_call:
     inputs:
       run_t3k_profiler:
@@ -54,14 +46,11 @@ jobs:
   build-artifact-profiler:
     if: >-
       ${{
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_call' && (
-          inputs.run_t3k_profiler ||
-          inputs.run_galaxy_profiler ||
-          inputs.run_blackhole_profiler ||
-          inputs.run_n300_profiler ||
-          inputs.run_n150_profiler
-        ))
+        inputs.run_t3k_profiler ||
+        inputs.run_galaxy_profiler ||
+        inputs.run_blackhole_profiler ||
+        inputs.run_n300_profiler ||
+        inputs.run_n150_profiler
       }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -75,8 +64,7 @@ jobs:
   t3k-profiler-tests:
     if: >-
       ${{
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_call' && inputs.run_t3k_profiler)
+        inputs.run_t3k_profiler
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -91,8 +79,7 @@ jobs:
   galaxy-profiler-tests:
     if: >-
       ${{
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_call' && inputs.run_galaxy_profiler)
+        inputs.run_galaxy_profiler
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -107,8 +94,7 @@ jobs:
   blackhole-profiler:
     if: >-
       ${{
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_call' && inputs.run_blackhole_profiler)
+        inputs.run_blackhole_profiler
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -121,15 +107,14 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || false }}
-      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || false }}
-      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || false }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   n300-profiler:
     if: >-
       ${{
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_call' && inputs.run_n300_profiler)
+        inputs.run_n300_profiler
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -142,15 +127,14 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || false }}
-      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || false }}
-      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || false }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   n150-profiler:
     if: >-
       ${{
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_call' && inputs.run_n150_profiler)
+        inputs.run_n150_profiler
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -163,6 +147,6 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || false }}
-      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || false }}
-      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || false }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
