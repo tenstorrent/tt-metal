@@ -82,7 +82,7 @@ def _auto_register_dispatchers():
     try:
         from models.tt_symbiote.core.dispatchers import default_dispatcher
 
-        register_dispatcher("default", default_dispatcher)
+        register_dispatcher("DEFAULT", default_dispatcher)
     except ImportError:
         pass
 
@@ -90,7 +90,7 @@ def _auto_register_dispatchers():
     try:
         from models.tt_symbiote.core.dispatchers import debug_dispatcher
 
-        register_dispatcher("debug", debug_dispatcher)
+        register_dispatcher("DEBUG", debug_dispatcher)
     except ImportError:
         pass
 
@@ -98,7 +98,7 @@ def _auto_register_dispatchers():
     try:
         from models.tt_symbiote.core.dispatchers import cpu_dispatcher
 
-        register_dispatcher("cpu", cpu_dispatcher)
+        register_dispatcher("CPU", cpu_dispatcher)
     except ImportError:
         pass
 
