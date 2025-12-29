@@ -14,11 +14,17 @@ void bind_moe(nb::module_& mod) {
         mod,
         ttnn::experimental::moe,
         R"doc(
-        moe(input_tensor, weight_tensor)
+        moe(input_tensor, weight_tensor, output_tensor)
 
         Experimental, high-performance MoE operation.
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::arg("weight_tensor")});
+        ttnn::nanobind_arguments_t{
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("w0_tensor"),
+            nb::arg("w1_tensor"),
+            nb::arg("w2_tensor"),
+            nb::arg("output_tensor")});
 }
 
 }  // namespace ttnn::operations::experimental::moe::detail
