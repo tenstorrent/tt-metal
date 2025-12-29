@@ -558,6 +558,7 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
+            # Batched entries to be removed once https://github.com/tenstorrent/tt-metal/issues/35087 gets resolved
             buffers_dict = (
                 {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
@@ -565,6 +566,11 @@ class TT_CCL:
                     "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "WO_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
+                    "FF1_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF3_batched": [(1, 32, seqlen // 32, 3584), (1, 32, seqlen // 32, 3584 // 4)],
+                    "FF2_batched": [(1, 32, seqlen // 32, 2048), (1, 32, seqlen // 32, 2048 // 8)],
                 }
                 if not self.is_qwen
                 else {
@@ -573,6 +579,11 @@ class TT_CCL:
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
+                    "FF1_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
+                    "FF3_batched": [(1, 32, seqlen // 32, 3200), (1, 32, seqlen // 32, 3200 // 4)],
+                    "FF2_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -684,6 +695,7 @@ class TT_CCL:
         buffer_key=None,
         use_noc1_only=False,
         use_optimal_ccl_for_llama=False,
+        batch_size=1,
     ):
         if self.mode == "decode":
             if lm_head:
@@ -736,6 +748,7 @@ class TT_CCL:
                 num_links=num_links,
                 math_op=ttnn.ReduceType.Sum,
                 buffer_key=buffer_key,
+                batch_size=batch_size,
             )
             # ttnn.synchronize_device(self.mesh_device)
             # Gather the scattered tensor
@@ -940,6 +953,7 @@ class TT_CCL:
         math_op=ttnn.ReduceType.Sum,
         buffer_key=None,
         use_noc1_only=False,
+        batch_size=1,
     ):
         if self.mode == "prefill":
             if self.use_ring_rs_prefill:
@@ -950,6 +964,7 @@ class TT_CCL:
                     dim=dim,
                     num_links=num_links,
                     buffer_key=buffer_key,
+                    batch_size=batch_size,
                 )
             # reshape input to [1, 1, S, x]
             B = input_tensor_mesh.shape[1]
@@ -1007,15 +1022,22 @@ class TT_CCL:
         dim=3,
         num_links=1,
         buffer_key=None,
+        batch_size=1,
     ):
         # reshape input to [1, 1, S, x]
         B = input_tensor_mesh.shape[1]
-        input_tensor_mesh = ttnn.reshape(
-            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
-        )
         seqlen = input_tensor_mesh.shape[-2]
+        persistent_buffers_list = None
+        if batch_size > 1:
+            # Temporary workaround to fix pcc issue with reduce scatter
+            # To be removed once https://github.com/tenstorrent/tt-metal/issues/35087 gets resolved
+            input_tensor_mesh = ttnn.reshape(input_tensor_mesh, (1, 32, B * seqlen // 32, input_tensor_mesh.shape[-1]))
+            buffer_key += "_batched"
+        else:
+            input_tensor_mesh = ttnn.reshape(input_tensor_mesh, (1, 1, B * seqlen, input_tensor_mesh.shape[-1]))
+
         persistent_buffers = (
-            self.persistent_buffers[seqlen].get(buffer_key, None) if seqlen in self.persistent_buffers else None
+            self.persistent_buffers[B * seqlen].get(buffer_key, None) if B * seqlen in self.persistent_buffers else None
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
@@ -1034,7 +1056,7 @@ class TT_CCL:
         )
 
         # reshape input back
-        ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+        ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
