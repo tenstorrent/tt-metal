@@ -171,6 +171,6 @@ void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) 
         uint64_t noc_addr = get_noc_addr(L1_dst_addr + 32);  // 16 elements from DRAM to L1.  L1->L1
         noc_async_read(noc_addr, L1_dst_addr + 512, 64);
     } else {
-        static_assert(false, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");
+        static_assert(t == 0 || t == 1, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");
     }
 }
