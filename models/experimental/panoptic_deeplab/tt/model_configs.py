@@ -36,8 +36,9 @@ class ModelOptimisations:
         Initialize model optimization configurations.
 
         Args:
-            conv_act_dtype: Default data type for convolution activations
-            conv_w_dtype: Default data type for convolution weights
+            device: Target device on which model optimizations will be applied.
+            conv_act_dtype: Default data type for convolution activations.
+            conv_w_dtype: Default data type for convolution weights.
         """
         self.device = device
         self.conv_output_dtype = conv_act_dtype
