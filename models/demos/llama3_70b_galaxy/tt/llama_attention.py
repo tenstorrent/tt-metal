@@ -613,6 +613,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
+            batch_size=batch_size,
         )
         ttnn.deallocate(xqkv)
 
@@ -806,7 +807,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096:
+        if seq_len < 4096 or batch_size > 1:
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 self.wo_interleaved,
