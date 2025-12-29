@@ -133,6 +133,8 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         uint32_t scratch_cb_page_size;
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
 
+        // This is done to mitigate the alignment issues.
+        // See issue #34414.
         scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
 
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
