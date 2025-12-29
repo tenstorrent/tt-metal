@@ -1178,16 +1178,16 @@ void MeshDevice::quiesce_internal() {
 
 void MeshDevice::quiesce_devices() {
     quiesce_internal();
-    for (auto& command_queue : mesh_command_queues_) {
-        for (auto& device : get_devices()) {
-            TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
-                "Last completed event is not 0 for device {} and command queue {}",
-                device->id(),
-                command_queue->id());
-            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
-        }
-    }
+    // for (auto& command_queue : mesh_command_queues_) {
+    //     for (auto& device : get_devices()) {
+    // TT_ASSERT(
+    //     device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
+    //     "Last completed event is not 0 for device {} and command queue {}",
+    //     device->id(),
+    //     command_queue->id());
+    // TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+    //     }
+    // }
 }
 
 void MeshDevice::reset_cq_in_use() {

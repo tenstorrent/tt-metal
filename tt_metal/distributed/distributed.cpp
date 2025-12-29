@@ -15,6 +15,64 @@
 namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
+    auto* mesh_device = mesh_cq.device();
+    if (mesh_device->is_parent_mesh()) {
+        auto submeshes = mesh_device->get_submeshes();
+        // Only route to submeshes that have programs in the workload
+        for (auto& submesh : submeshes) {
+            // Check if this submesh has any programs in the workload
+            // Use get_submesh_for_coordinate to check if coordinates belong to this submesh
+            bool has_programs_for_submesh = false;
+            for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+                for (const auto& coord : device_range) {
+                    auto submesh_for_coord = mesh_device->get_submesh_for_coordinate(coord);
+                    if (submesh_for_coord && submesh_for_coord.get() == submesh.get()) {
+                        has_programs_for_submesh = true;
+                        break;
+                    }
+                }
+                if (has_programs_for_submesh) {
+                    break;
+                }
+            }
+
+            // Only route to submeshes that have matching programs
+            if (has_programs_for_submesh) {
+                for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
+                    auto& submesh_cq = submesh->mesh_command_queue(cq_id);
+                    EnqueueMeshWorkload(submesh_cq, mesh_workload, blocking);
+                }
+            }
+        }
+        return;
+    }
+    // Check if this submesh has any programs in the workload
+    bool has_programs_for_device = false;
+    if (mesh_device->get_parent_mesh()) {
+        // This is a submesh - check if any programs belong to it
+        auto* parent_mesh = mesh_device->get_parent_mesh().get();
+        for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+            for (const auto& coord : device_range) {
+                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
+                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
+                    has_programs_for_device = true;
+                    break;
+                }
+            }
+            if (has_programs_for_device) {
+                break;
+            }
+        }
+    } else {
+        // Parent mesh - always has programs
+        has_programs_for_device = !mesh_workload.get_programs().empty();
+    }
+
+    // Only process if there are programs for this device
+    if (!has_programs_for_device) {
+        return;
+    }
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);

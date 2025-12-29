@@ -112,7 +112,7 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     // Reset the in_use flag on parent mesh CQs. This is safe because CCL operations have
     // built-in synchronization across devices - by the time we disaggregate, the CCL has completed.
     // This avoids the expensive quiesce_devices() call while allowing submeshes to close cleanly.
-    mesh_device->reset_cq_in_use();
+    // mesh_device->reset_cq_in_use();
 
     const auto submeshes = mesh_device->get_submeshes();
     TT_FATAL(
