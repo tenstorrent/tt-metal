@@ -72,24 +72,22 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
-        # print args and kwargs
-        logger.info(f"prefill_forward: args: {args}")
-        logger.info(f"prefill_forward: kwargs: {kwargs.keys()}")
         assert self.model_run_config_prefill is not None, "Model run config prefill is not initialized"
-        kwargs.pop("enable_trace", None)
-        logger.warning(f"Prefill tracing not supported for DeepseekGenerator")
 
+        kwargs.pop("enable_trace", None)
+        logger.warning("Prefill tracing not supported for DeepseekGenerator")
         tokens = kwargs["tokens"]
         lengths = kwargs["prompt_lens"]
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
         empty_slots = kwargs.get("empty_slots", None)
+
+        if all(length == 0 for length in lengths):
+            return torch.zeros(tokens.shape[0], self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
+
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
-            logger.info(f"prefill_forward: Setting kv_cache for {len(kv_cache)}")
             self.set_kv_cache(kv_cache)
-        else:
-            logger.info(f"prefill_forward: kv_cache not updated")
 
         pad_value = self.tokenizer.pad_token_id
         pad_block_size = self.paged_config.block_size if self.paged_config is not None else USERS_PER_ROW
@@ -103,14 +101,12 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             user_id = empty_slots[i] if empty_slots is not None else i
             prompt_len = int(lengths[i])
             if prompt_len == 0:
-                logger.info(f"prefill_forward: User {user_id} has no tokens")
                 last_logits.append(
                     torch.zeros(max_padded_len, self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
                 )
                 continue
             user_tokens = tokens[i, :prompt_len].unsqueeze(0)
             user_tokens = _pad_tokens(user_tokens, pad_value, block_size=pad_block_size).squeeze(0)
-            logger.info(f"prefill_forward: Running prefill for user {user_id}")
             user_out = self._prefill(user_tokens, user_id, page_table, local_user_id=i)
             user_logits = user_out.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
             if user_logits.shape[0] > prompt_len:
@@ -122,23 +118,16 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             last_logits.append(user_logits)
         last_logits = torch.stack(last_logits)  # [num_of_users, S, V]
 
-        logger.info(f"prefill_forward: Last logits shape: {last_logits.shape}")
         return last_logits
 
     def decode_forward(self, *args, **kwargs):
-        # print args and kwargs
-        logger.info(f"decode_forward: args: {args}")
-        logger.info(f"decode_forward: kwargs: {kwargs.keys()}")
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
-            logger.info(f"decode_forward: Setting kv_cache for {len(kv_cache)} decoder blocks")
             self.set_kv_cache(kv_cache)
-        else:
-            logger.info(f"decode_forward: kv_cache not updated")
 
         tokens_step = kwargs["tokens"].squeeze(1)
         return_value = (
@@ -158,11 +147,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         assert (
             num_layers == self.hf_config.num_hidden_layers
         ), f"Number of layers {num_layers} does not match the number of layers in the model {self.hf_config.num_hidden_layers}"
-        logger.info(f"allocate_kv_cache: kv cache shape: {kv_cache_shape}")
 
         kv_cache_config = KvCacheConfig(kv_cache_shape=kv_cache_shape, dtype=dtype)
         self._prepare_run_configs("prefill", kv_cache_override=kv_cache_config)
         self._prepare_run_configs("decode", kv_cache_override=kv_cache_config)
-
         kv_cache = self.get_kv_cache()
+
         return kv_cache

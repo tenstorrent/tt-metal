@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -719,11 +718,14 @@ class MLA1D(AbstractModule):
         if kv_cache_override is None:
             kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
             cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
-            logger.info(f"create_state: cache_shape: {cache_shape}")
         else:
-            logger.info(f"create_state: kv_cache_override: {kv_cache_override.kv_cache_shape}")
-            kvpv_os = kv_cache_override.kv_cache_shape
-            cache_shape = (kvpv_os[0] * mesh_device.shape[1], kvpv_os[1], kvpv_os[2], kvpv_os[3])
+            kv_cache_shape = kv_cache_override.kv_cache_shape
+            cache_shape = (
+                kv_cache_shape[0] * mesh_device.shape[1],
+                kv_cache_shape[1],
+                kv_cache_shape[2],
+                kv_cache_shape[3],
+            )
 
         assert (
             caches is None

@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
-from loguru import logger
 from tqdm.auto import tqdm
 from transformers.configuration_utils import PretrainedConfig
 
@@ -219,11 +218,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
-        logger.info(f"forward_decode: User {position_idxs}")
-        logger.info(f"forward_decode: page tables len : {len(page_tables)}")
-        for i in range(len(page_tables)):
-            logger.info(f"forward_decode: Page table {i} shape: {page_tables[i].shape}")
-
         x = Embedding2D.forward_decode(x, cfg["embedding"])
 
         for (block_cfg, BlockClass), page_table in zip(
@@ -255,10 +249,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_tables: Sequence[ttnn.Tensor],
     ) -> ttnn.Tensor:
         """Forward pass for prefill mode."""
-
-        logger.info(f"forward_prefill: User {user_id} has {len(page_tables)} page tables")
-        for i in range(len(page_tables)):
-            logger.info(f"forward_prefill: Page table {i} shape: {page_tables[i].shape}")
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
