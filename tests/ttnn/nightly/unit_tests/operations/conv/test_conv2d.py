@@ -109,7 +109,7 @@ def randomize_torch_tensor(
         if cache_key in torch_tensor_map.keys():
             torch_tensor = torch_tensor_map[cache_key]
         else:
-            torch_tensor = torch.ones(tensor_shape, dtype=dtype).float()
+            torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
             torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
@@ -5309,12 +5309,12 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
 
     # DEBUG: Use integer weights for easier debugging - each kernel position gets stick_id
-    for out_ch in range(conv_weight_shape[0]):
-        for in_ch in range(conv_weight_shape[1]):
-            for kh in range(conv_weight_shape[2]):
-                for kw in range(conv_weight_shape[3]):
-                    stick_id = kh * kernel[1] + kw + 1  # +1 to avoid zero values
-                    torch_weight_tensor[out_ch, in_ch, kh, kw] = stick_id
+    # for out_ch in range(conv_weight_shape[0]):
+    #     for in_ch in range(conv_weight_shape[1]):
+    #         for kh in range(conv_weight_shape[2]):
+    #             for kw in range(conv_weight_shape[3]):
+    #                 stick_id = kh * kernel[1] + kw + 1  # +1 to avoid zero values
+    #                 torch_weight_tensor[out_ch, in_ch, kh, kw] = stick_id
 
     conv_bias_shape = (1, 1, 1, output_channels)
 

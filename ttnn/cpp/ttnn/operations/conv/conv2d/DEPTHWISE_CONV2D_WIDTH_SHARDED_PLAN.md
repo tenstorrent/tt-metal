@@ -1151,7 +1151,6 @@ Each row should have the same value (stick_id) across all channel columns.
 ## Quick Reference
 
 ### File Locations
-- Test: `tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py`
 - Weight prep: `ttnn/cpp/ttnn/operations/conv/conv2d/prepare_conv2d_weights.cpp`
 - Program factory: `ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_depthwise_program_factory.cpp`
 - Reader kernel: `ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/reader_pool_2d.cpp`
