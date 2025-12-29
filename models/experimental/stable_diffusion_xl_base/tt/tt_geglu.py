@@ -33,6 +33,8 @@ class TtGEGLU(LightweightModule):
         ), "GELU isn't fused in program config for GELU linear"
 
         self.compute_config = model_config.get_mm_compute_config(f"{module_path}.proj")
+        self.output_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.proj.split")
+        self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
         # TODO: self.program_config is not None is used to differentiate base and refiner; remove this with refiner matmul optimizations
@@ -40,7 +42,7 @@ class TtGEGLU(LightweightModule):
             input_tensor,
             self.tt_weights_1,
             bias=self.tt_bias_1,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.program_config is not None else None,
+            memory_config=self.output_memory_config,
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
@@ -49,7 +51,7 @@ class TtGEGLU(LightweightModule):
             input_tensor,
             self.tt_weights_2,
             bias=self.tt_bias_2,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.program_config is not None else None,
+            memory_config=self.output_memory_config_gelu,
             program_config=self.program_config_gelu,
             compute_kernel_config=self.compute_config,
         )

@@ -950,6 +950,7 @@ class ModelOptimisations:
         )
         # endregion
 
+        # region COMPUTE KERNEL CONFIGS
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -990,6 +991,7 @@ class ModelOptimisations:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        # endregion
 
     def get_matmul_config(self, matmul_path):
         if matmul_path is None:
@@ -1116,6 +1118,30 @@ class ModelOptimisations:
         if ".to_q" in module_path:
             return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
+
+    def get_mm_output_memory_config(self, module_path):
+        if "decoder" not in module_path and "encoder" not in module_path:
+            if "attn1" in module_path or "attn2" in module_path:
+                if not "to_out" in module_path:
+                    return ttnn.L1_MEMORY_CONFIG
+                else:
+                    if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                        return ttnn.L1_MEMORY_CONFIG
+                    else:
+                        return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            if "ff.net" in module_path:
+                return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            if "attentions" in module_path and "proj_in" in module_path:
+                if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                    return ttnn.L1_MEMORY_CONFIG
+                else:
+                    return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            if "resnets" in module_path and "conv_shortcut" in module_path:
+                if "up_blocks.2" not in module_path:
+                    return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+                else:
+                    return ttnn.L1_MEMORY_CONFIG
+        return None
 
     def get_conv_config(self, conv_path):
         if conv_path is None:
@@ -1283,7 +1309,7 @@ class ModelOptimisations:
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
 
-    def generate_groupnorm_params(self, config, weights, bias, groups, device):
+    def __generate_groupnorm_params(self, config, weights, bias, groups, device):
         if config["memory_config"] != ttnn.DRAM_MEMORY_CONFIG:
             gamma, beta = prepare_gn_beta_gamma(device, weights, bias, config["op_config"]["core_grid"].x)
             mask = prepare_gn_mask(device, weights.shape[0], groups, config["op_config"]["core_grid"].x)
@@ -1305,7 +1331,7 @@ class ModelOptimisations:
 
         return mask, negative_mask, gamma, beta
 
-    def get_groupnorm_config(self, module_path):
+    def _get_groupnorm_config(self, module_path):
         if "decoder" not in module_path and "encoder" not in module_path:
             if "up_blocks.2" in module_path and "norm1" in module_path:
                 return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
@@ -1320,9 +1346,9 @@ class ModelOptimisations:
         return None
 
     def get_groupnorm_params(self, module_path, weights, bias, groups, device):
-        config = self.get_groupnorm_config(module_path)
+        config = self._get_groupnorm_config(module_path)
 
-        mask, negative_mask, gamma, beta = self.generate_groupnorm_params(config, weights, bias, groups, device)
+        mask, negative_mask, gamma, beta = self.__generate_groupnorm_params(config, weights, bias, groups, device)
         return config["op_config"], config["memory_config"], mask, negative_mask, gamma, beta
 
     def get_layernorm_config(self, module_path):

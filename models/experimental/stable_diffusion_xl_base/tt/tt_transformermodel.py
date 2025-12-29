@@ -67,8 +67,10 @@ class TtTransformer2DModel(LightweightModule):
 
         self.program_config_in = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_in")
         self.compute_config_in = model_config.get_mm_compute_config(f"{module_path}.proj_in")
+        self.memory_config_in = model_config.get_mm_output_memory_config(f"{module_path}.proj_in")
         self.program_config_out = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_out")
         self.compute_config_out = model_config.get_mm_compute_config(f"{module_path}.proj_out")
+        self.memory_config_out = model_config.get_mm_output_memory_config(f"{module_path}.proj_out")
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
@@ -107,7 +109,7 @@ class TtTransformer2DModel(LightweightModule):
             bias=self.tt_bias_in,
             program_config=self.program_config_in,
             compute_kernel_config=self.compute_config_in,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if C == 1280 else ttnn.L1_MEMORY_CONFIG,
+            memory_config=self.memory_config_in,
         )
 
         for i, transformer_block in enumerate(self.transformer_blocks):
@@ -119,6 +121,7 @@ class TtTransformer2DModel(LightweightModule):
             bias=self.tt_bias_out,
             program_config=self.program_config_out,
             compute_kernel_config=self.compute_config_out,
+            memory_config=self.memory_config_out,
         )
 
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)

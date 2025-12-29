@@ -187,6 +187,15 @@ class RefinerModelOptimisations(ModelOptimisations):
     def get_mm_compute_config(self, module_path):
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
+    def get_mm_output_memory_config(self, module_path):
+        if "attn1" in module_path or "attn2" in module_path:
+            return ttnn.L1_MEMORY_CONFIG
+        if "attentions" in module_path and "proj_in" in module_path:
+            return ttnn.L1_MEMORY_CONFIG
+        if "resnets" in module_path and "conv_shortcut" in module_path:
+            return ttnn.L1_MEMORY_CONFIG
+        return None
+
     def get_conv_config(self, conv_path):
         if "downsamplers" in conv_path:
             if "down_blocks.0" in conv_path:
@@ -262,7 +271,7 @@ class RefinerModelOptimisations(ModelOptimisations):
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
 
-    def get_groupnorm_config(self, module_path):
+    def _get_groupnorm_config(self, module_path):
         if "up_blocks.3" in module_path and "resnets.0" in module_path and "norm1" in module_path:
             return self.groupnorm_configs["DRAM_GROUPNORM_4X8"]
         if "up_blocks.3" in module_path and "resnets.0" not in module_path and "norm1" in module_path:

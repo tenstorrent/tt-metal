@@ -116,6 +116,7 @@ class TtResnetBlock2D(LightweightModule):
                 device, conv_weights_3, conv_bias_3, model_config.ff_weights_dtype
             )
             self.conv3_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.conv_shortcut")
+            self.conv3_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.conv_shortcut")
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
@@ -264,10 +265,7 @@ class TtResnetBlock2D(LightweightModule):
                 bias=self.tt_conv3_bias,
                 program_config=self.conv3_program_config,
                 compute_kernel_config=self.default_compute_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG
-                if (C == 320 and (input_shape[1] == 960 or input_shape[1] == 640))
-                or (self.conv3_program_config is None)
-                else hidden_states.memory_config(),
+                memory_config=self.conv3_memory_config,
             )
             if not self.is_first_resnet_block:
                 ttnn.deallocate(input_tensor_pre_conv)
