@@ -10,6 +10,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("batch_sizes", [(), (1,)])
 @pytest.mark.parametrize("height", [32, 64])

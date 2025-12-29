@@ -12,6 +12,29 @@ from models.common.utility_functions import is_blackhole
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 
 
+def get_expected_metrics(mesh_device):
+    if tuple(mesh_device.shape) == (2, 4):
+        return {
+            "clip_encoding_time": 0.15,
+            "t5_encoding_time": 0.1,
+            "total_encoding_time": 0.25,
+            "denoising_steps_time": 11.3,
+            "vae_decoding_time": 1.6,
+            "total_time": 13.2,
+        }
+    elif tuple(mesh_device.shape) == (4, 8):
+        return {
+            "clip_encoding_time": 0.2,
+            "t5_encoding_time": 0.12,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 4.2,
+            "vae_decoding_time": 1.35,
+            "total_time": 5.9,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
@@ -35,7 +58,6 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_sd35_new_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -50,17 +72,12 @@ def test_sd35_new_pipeline_performance(
     topology,
     num_links,
     model_location_generator,
-    use_cache,
     is_ci_env,
     galaxy_type,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
-
-    # Process skips
-    if is_ci_env and use_cache:
-        pytest.skip("use_cache not necessary for performance test in CI. See pipeline test.")
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -91,10 +108,9 @@ def test_sd35_new_pipeline_performance(
         sp_config=sp,
         tp_config=tp,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(
+        checkpoint_name=model_location_generator(
             f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
         ),
-        use_cache=use_cache,
     )
 
     # Test prompts - diverse set for comprehensive performance testing
@@ -158,8 +174,8 @@ def test_sd35_new_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     seed=0,  # Different seed for each run
                     traced=True,
-                    timer=benchmark_profiler,
-                    timer_iteration=i,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 
@@ -277,27 +293,8 @@ def test_sd35_new_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-    if tuple(mesh_device.shape) == (2, 4):
-        expected_metrics = {
-            "clip_encoding_time": 0.15,
-            "t5_encoding_time": 0.1,
-            "total_encoding_time": 0.25,
-            "denoising_steps_time": 11.3,
-            "vae_decoding_time": 1.6,
-            "total_time": 13.2,
-        }
-    elif tuple(mesh_device.shape) == (4, 8):
-        expected_metrics = {
-            "clip_encoding_time": 0.2,
-            "t5_encoding_time": 0.12,
-            "total_encoding_time": 0.6,
-            "denoising_steps_time": 4.2,
-            "vae_decoding_time": 1.35,
-            "total_time": 5.9,
-        }
-    else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
+    expected_metrics = get_expected_metrics(mesh_device)
     if is_ci_env:
         # In CI, dump a performance report
         benchmark_data = BenchmarkData()

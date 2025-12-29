@@ -28,11 +28,11 @@ void bind_fold_operation(nb::module_& mod) {
             Fold TT Tensor.
             Input tensor must be on TT accelerator device, in ROW_MAJOR.
             Output tensor will be on TT accelerator device, in ROW_MAJOR.
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-                "input", "Input tensor", "Tensor", "Tensor of shape [N, H, W, C]", "Yes"
-                "stride_h", "Stride along the H-dimension", "int", "", "Yes"
-                "stride_w", "Stride along the W-dimension", "int", "", "Yes"
+
+            Args:
+                input (ttnn.Tensor): Input tensor to be folded. Tensor of shape [N, H, W, C].
+                stride_h (int): Stride along the H-dimension.
+                stride_w (int): Stride along the W-dimension.
         )doc",
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::fold)& op,

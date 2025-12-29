@@ -153,7 +153,7 @@ Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, 
 
 ttnn::Tensor prepare_conv_transpose2d_weights(
     const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
+    ttnn::MemoryConfig input_memory_config,
     Layout input_layout,
     const std::string& weights_format,
     uint32_t in_channels,
@@ -176,16 +176,34 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     bool mirror_kernel) {
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
+    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
     TT_ASSERT(
         weights_format == "IOHW",
         "PyTorch expects weights for ConvTranspose2D in IOHW format. If you have passed the correct weights, then make "
         "sure that the weights_format string is set to \"IOHW\".");
 
+    // For grouped conv_transpose2d (groups > 1), we need to:
+    // 1. Apply grouped layout conversion BEFORE the transpose to expand the weight tensor
+    // 2. Then apply the standard transpose transformation
+    // 3. Use groups=1 for the rest of the pipeline since grouping is already handled
+    Tensor weight_for_transform = weight_tensor;
+    uint32_t groups_for_prep = groups;
+    if (groups > 1) {
+        // Convert [in_channels, out_channels/groups, H, W] -> [in_channels, out_channels, H, W]
+        weight_for_transform = conv2d::convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
+            weight_tensor, groups, weight_tensor.dtype());
+        // After grouped conversion, we use groups=1 since the grouping is already embedded in the weights
+        groups_for_prep = 1;
+    }
+
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(
         tt::tt_metal::StorageType::DEVICE, input_memory_config, dram_slice_config_);
-    Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel);
+    Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
     if (path == ConvT2dExecutionPath::L1) {
         // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
         // "full_input" dimensions (after halo/padding expansion), not the original input dimensions.
@@ -209,20 +227,20 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
             dilation,
             has_bias,
-            groups,
+            groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             device,
             input_dtype,
             output_dtype,
             conv_config_,
             compute_config_,
-            dram_slice_config_);
+            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
     } else {
         Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
         Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
                 tt::tt_metal::TensorLayout(
-                    conv_config.weights_dtype.value(),
+                    weight_dtype,
                     tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                     MemoryConfig{
                         TensorMemoryLayout::INTERLEAVED,
@@ -235,7 +253,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
                 tt::tt_metal::TensorSpec(
                     ttnn::Shape({1, 1, 1, out_channels}),
                     tt::tt_metal::TensorLayout(
-                        conv_config.weights_dtype.value(),
+                        weight_dtype,
                         tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                         MemoryConfig{
                             TensorMemoryLayout::INTERLEAVED,
@@ -305,6 +323,10 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         }
         auto [input_slice_start, input_slice_end] =
             convt2d_slice_attr->get_input_slice({0, 0}, {output_height, output_width});
+        input_memory_config = convt2d_slice_attr->get_input_memory_config(
+            {0, 0},                        // Slice Start
+            {output_height, output_width}  // Slice End
+        );
         auto [input_height_slice_start, input_width_slice_start] = input_slice_start;
         auto [input_height_slice_end, input_width_slice_end] = input_slice_end;
         auto input_height_sliced = input_height_slice_end - input_height_slice_start;
@@ -315,7 +337,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         return prepare_conv_weights(
             mirrored_weight_tensor,
             input_memory_config,
-            input_layout,
+            dram_slice_config.num_slices > 1 ? Layout::ROW_MAJOR : input_layout,
             weights_format,
             in_channels,
             out_channels,
@@ -327,13 +349,13 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
             dilation,
             has_bias,
-            groups,
+            groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             device,
             input_dtype,
             output_dtype,
             conv_config_,
             compute_config_,
-            dram_slice_config_);
+            op_slicing::Op2DSliceConfig{.slice_type = op_slicing::Op2DSliceConfig::SliceType::L1_FULL});
     }
 }
 
@@ -362,7 +384,6 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
     auto dims =
         compute_conv_transpose2d_dimensions(input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
-
 
     return prepare_conv_bias(
         bias_tensor,

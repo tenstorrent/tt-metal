@@ -10,7 +10,7 @@
 #include "ckernel_include.h"
 #include "ckernel_debug.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -439,11 +439,22 @@ ALWI void expm1_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_expm1<tr
  */
 ALWI void expm1_tile_init() { MATH((llk_math_eltwise_unary_sfpu_expm1_init<true>())); }
 
-// silu
-// Function SILU (same as Swish)
-// use activation Silu[x] = x*Sigmoid[x]
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX>(idst))); }
+// clang-format off
+/**
+ * Performs SILU (same as Swish) operation on each element of a tile
+ * in DST register at index tile_index. Uses the following implementation:
+ * Silu[x] = x*Sigmoid[x]
+ *
+ * Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
 
 ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
 
@@ -594,8 +605,7 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
 // clang-format on
 template <int num_rows = 9, ckernel::DataLayout layout = ckernel::DataLayout::TILE, int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx) {
-    // support for num_rows != 9 is tracked here: https://github.com/tenstorrent/tt-metal/issues/17202
-    static_assert(num_rows <= 9, "num_rows must be <= 9");
+    static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows, ITERATIONS, layout>(
         idst, idst_idx)));
 }

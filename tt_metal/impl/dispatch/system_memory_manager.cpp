@@ -261,7 +261,7 @@ void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
     }
 }
 
-bool SystemMemoryManager::get_bypass_mode() { return this->bypass_enable; }
+bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; }
 
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 
@@ -291,6 +291,14 @@ uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) con
 
 uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id) const {
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
+}
+
+void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
+    // The completion queue follows issue queue in contiguous memory
+    // get_issue_queue_limit() returns absolute device address where the issue queue ends.
+    // We subtract channel_offset (absolute device channel base) to get relative offset,
+    // then add it to cq_sysmem_start (host channel base) to get host virtual address
+    return (void*)(this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset));
 }
 
 uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_id) const {
