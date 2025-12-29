@@ -56,6 +56,9 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
 
 namespace NAMESPACE {
 void MAIN {
+    // Runtime argument - work count for this core
+    uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(0);
+
     constexpr uint32_t tilize_reduce_cb_0 = get_compile_time_arg_val(0);
     constexpr uint32_t tilize_reduce_cb_1 = get_compile_time_arg_val(1);
     constexpr uint32_t in_scalar_cb_id1 = get_compile_time_arg_val(2);
@@ -66,8 +69,8 @@ void MAIN {
     constexpr uint32_t in_ntiles_hwc = get_compile_time_arg_val(6);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(7);
     constexpr uint32_t out_ntiles_c = get_compile_time_arg_val(8);
-    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(9);
-    constexpr uint32_t blocks = get_compile_time_arg_val(10);
+    constexpr uint32_t blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(10);
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
 
@@ -80,8 +83,8 @@ void MAIN {
 
     constexpr bool use_neginf_srcA = false;  // Don't use negative infinity for source A
     constexpr bool zero_srcA_reduce = true;  // Zero source A for reduce operation
-    constexpr uint32_t num_faces = 2;   // Use 2 faces (top faces contain 4 rows for bilinear interpolation)
-    constexpr uint32_t face_r_dim = 4;  // 4 rows per face (sufficient for bilinear interpolation)
+    constexpr uint32_t num_faces = 2;        // Use 2 faces (top faces contain 4 rows for bilinear interpolation)
+    constexpr uint32_t face_r_dim = 4;       // 4 rows per face (sufficient for bilinear interpolation)
 
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
         tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id, num_faces, face_r_dim);

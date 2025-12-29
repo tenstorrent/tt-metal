@@ -108,11 +108,16 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
 
     if (is_bilinear) {
         TT_FATAL(!ceil_mode, "ceil_mode is not supported for bilinear operation");
+        TT_FATAL(
+            padding[0] == 1 && padding[1] == 1 && padding[2] == 1 && padding[3] == 1,
+            "Bilinear operation requires padding to be (1, 1, 1, 1)");
+        TT_FATAL(stride_hw.first == 1 && stride_hw.second == 1, "Bilinear operation requires stride to be (1, 1)");
+        TT_FATAL(
+            dilation_hw.first == 1 && dilation_hw.second == 1, "Bilinear operation requires dilation to be (1, 1)");
 
-        // for bilinear input and output should be same.. and kernel size is 2x2
-        //  we need neighboring width in the output tensor
-        output_h = input_hw.first;
-        output_w = input_hw.second;
+        // for bilinear upsampling, output dimensions are scaled by scale factors
+        output_h = input_hw.first * scale_h;
+        output_w = input_hw.second * scale_w;
     }
     log_trace(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
     return ttnn::Shape({batch_size, output_h, output_w, 0});
@@ -275,6 +280,10 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
     }
 }
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
+    if (config.is_bilinear) {
+        return generate_op_trace_metadata_bilinear(config);
+    }
+
     ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
@@ -313,6 +322,67 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     }
     return op_trace_metadata;
 }
+std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowConfig& config) {
+    const auto output_shape = config.get_output_shape();
+
+    const uint32_t padded_input_h = config.input_hw.first + config.get_pad_h();
+    const uint32_t padded_input_w = config.input_hw.second + config.get_pad_w();
+
+    // Calculate scale factors
+    const float scale_h_inv = 1.0f / static_cast<float>(config.scale_h);
+    const float scale_w_inv = 1.0f / static_cast<float>(config.scale_w);
+
+    // Create op trace metadata for the output tensor size
+    const uint32_t output_nhw = config.batch_size * output_shape[1] * output_shape[2];
+    std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
+
+    // Nested loops for output tensor coordinates with floating point offsets
+
+    uint32_t i = 0;
+
+    // Bilinear upsampling determines the value of an output pixel based on the output pixels coordinates
+    // The output pixel coordinates map to input pixel coordinates with the formula
+    // input_coord = (output_coord + 0.5) * scale_inv - 0.5
+    // However, since one pixel of padding is included at all sides (to avoid negative indices), the offset
+    // calculation is adjusted to: input_coord = (output_coord + 0.5) * scale_inv + 0.5
+    // The +0.5 comes from -0.5 (from the formula) + 1.0 (accounts for padding) and results in +0.5.
+    const float bilinear_starting_offset = 0.5f;
+
+    for (uint32_t b = 0; b < config.batch_size; ++b) {
+        float h_offset = (0.5f * scale_h_inv) + bilinear_starting_offset;
+        for (uint32_t h = 0; h < output_shape[1]; ++h) {
+            // After calculating the input coordinate, the top-left input pixel is determined by flooring the input
+            // coordinates
+            float w_offset = (0.5f * scale_w_inv) + bilinear_starting_offset;
+            for (uint32_t w = 0; w < output_shape[2]; ++w) {
+                // Get top-left input coordinate (this is the "top-left index" needed for bilinear interpolation)
+                const uint32_t top_left_h = static_cast<uint32_t>(std::floor(h_offset));
+                const uint32_t top_left_w = static_cast<uint32_t>(std::floor(w_offset));
+
+                // Calculate flattened input index (top-left coordinate for bilinear interpolation)
+                const uint32_t input_idx =
+                    (b * padded_input_h * padded_input_w) + (top_left_h * padded_input_w) + top_left_w;
+                op_trace_metadata[i++] = input_idx;
+                w_offset += scale_w_inv;
+            }
+            h_offset += scale_h_inv;
+        }
+    }
+    return op_trace_metadata;
+}
+
+std::pair<uint32_t, uint32_t> find_minmax_trace_indices(
+    const std::vector<uint32_t>& op_trace_metadata, uint32_t start_idx, uint32_t end_idx) {
+    TT_ASSERT(
+        start_idx <= end_idx && end_idx < op_trace_metadata.size() && start_idx < op_trace_metadata.size() &&
+            start_idx >= 0,
+        "Error in find_minmax_trace_indices: invalid start or end index");
+    auto [min_it, max_it] =
+        std::minmax_element(op_trace_metadata.begin() + start_idx, op_trace_metadata.begin() + end_idx + 1);
+    return {
+        static_cast<uint32_t>(min_it - op_trace_metadata.begin()),
+        static_cast<uint32_t>(max_it - op_trace_metadata.begin())};
+}
 
 std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config) {
     auto op_trace_metadata = generate_op_trace_metadata(config);
@@ -334,16 +404,30 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
         config.window_hw.second + ((config.dilation_hw.second - 1) * (config.window_hw.second - 1));
     uint32_t halo_with_pad_len = ((dilated_window_h - 1) * padded_input_w) + dilated_window_w - 1;
 
-    if (config.is_bilinear) {
-        halo_with_pad_len = (config.window_hw.first) * padded_input_w;
-    }
-
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++core) {
         const uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
-        uint32_t input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
-        uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
-        if (input_index_start == 0 and output_index_start != 0) {
+        uint32_t input_index_start;
+        uint32_t input_index_end;
+        if (config.is_bilinear) {
+            // For bilinear, find the indices with minimum and maximum values in the output shard range
+            // This is because, in the case of bilinear upsampling, the op_trace_metadata tensor is not necessarily
+            // monotonically increasing, which means that minimums and maximums (and thus the required input shard
+            // boundaries) might not correspond to the first and last output pixel
+            if (output_index_start > output_index_end) {
+                input_index_start = 1;
+                input_index_end = 0;
+            } else {
+                auto [min_trace_idx, max_trace_idx] =
+                    find_minmax_trace_indices(op_trace_metadata, output_index_start, output_index_end);
+                input_index_start = op_trace_metadata[min_trace_idx];
+                input_index_end = op_trace_metadata[max_trace_idx] + halo_with_pad_len;
+            }
+        } else {
+            input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
+            input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
+        }
+        if (input_index_start == 0 and output_index_start != 0 && !config.is_bilinear) {
             input_index_start = op_trace_metadata[output_index_end] + 1;
             input_index_end = input_index_start - 1;
             log_debug(
@@ -1116,6 +1200,7 @@ std::string SlidingWindowConfig::to_string() const {
            "_pad_r=" + std::to_string(padding[3]) + "_out_pad_h=" + std::to_string(std::get<0>(output_pad_hw)) +
            "_out_pad_w=" + std::to_string(std::get<1>(output_pad_hw)) +
            "_dil_h=" + std::to_string(std::get<0>(dilation_hw)) + "_dil_w=" + std::to_string(std::get<1>(dilation_hw)) +
+           "_scale_h=" + std::to_string(scale_h) + "_scale_w=" + std::to_string(scale_w) +
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
            (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
@@ -1157,7 +1242,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), padding=(({}, {}), "
         "({}, {})), output_padding = ({}, {}), "
-        "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={}, is_transpose={})",
+        "dilation_hw=({},{}), scale_h={}, scale_w={}, num_cores_nhw={}, num_cores_c={}, core_range_set_={}, "
+        "is_transpose={})",
         t.batch_size,
         t.input_hw.first,
         t.input_hw.second,
@@ -1173,6 +1259,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.output_pad_hw.second,
         t.dilation_hw.first,
         t.dilation_hw.second,
+        t.scale_h,
+        t.scale_w,
         t.num_cores_nhw,
         t.num_cores_c,
         t.core_range_set.str(),
