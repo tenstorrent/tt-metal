@@ -295,12 +295,44 @@ def test_qwenimage_pipeline_performance(
 
     if is_ci_env:
         # in ci, dump a performance report
-        profiler_model_name = f"qwenimage_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
+        for iteration in range(num_perf_runs):
+            for step_name, measurement_value, target_value in [
+                ("total_encoding", measurements["total_encoding_time"], expected_metrics["total_encoding_time"]),
+                ("denoising", measurements["denoising_steps_time"], expected_metrics["denoising_steps_time"]),
+                ("vae", measurements["vae_decoding_time"], expected_metrics["vae_decoding_time"]),
+                ("run", measurements["total_time"], expected_metrics["total_time"]),
+            ]:
+                benchmark_data.add_measurement(
+                    profiler=benchmark_profiler,
+                    iteration=iteration,
+                    step_name=step_name,
+                    name=step_name,
+                    value=measurement_value,
+                    target=target_value,
+                )
+        device_name_map = {
+            (2, 4): "WH_T3K",
+            (4, 8): "BH_GLX",
+        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type="qwenimage_traced",
-            ml_model_name=profiler_model_name,
+            run_type=device_name_map[tuple(mesh_device.shape)],
+            ml_model_name="QwenImage",
+            batch_size=1,
+            config_params={
+                "width": image_w,
+                "height": image_h,
+                "num_steps": num_inference_steps,
+                "cfg_factor": cfg_factor,
+                "sp_factor": sp_factor,
+                "tp_factor": tp_factor,
+                "encoder_tp_factor": encoder_tp_factor,
+                "vae_tp_factor": vae_tp_factor,
+                "topology": str(topology),
+                "num_links": num_links,
+                "fsdp": is_fsdp,
+            },
         )
 
     pass_perf_check = True
