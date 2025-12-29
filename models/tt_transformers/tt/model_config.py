@@ -1298,6 +1298,57 @@ class ModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
+            # model specific CCL configs
+            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_mlp_rs = {
+                "num_links": self.num_reduce_scatter_links,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            }
+            default_sampling_force_argmax = {
+                "allow_force_argmax": False,
+                "num_links": 1,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "topology": ttnn.Topology.Linear,
+            }
+            model_specific_ccl_configs = {
+                "Llama-3.1-8B": {
+                    "attn_ln_ag": {"num_links": 4, "chunks_per_sync": 10, "num_workers_per_link": 1},
+                    "ffn_ln_ag": {"num_links": 4, "chunks_per_sync": 25, "num_workers_per_link": 1},
+                    "attn_agmm": {"num_links": 4, "chunks_per_sync": 1, "num_workers_per_link": 1},
+                    "mlp_rs": {
+                        "num_links": 4,
+                        "chunks_per_sync": 1,
+                        "num_workers_per_link": 1,
+                        "rs_memory_config": ttnn.L1_MEMORY_CONFIG,
+                    },
+                    "sampling_force_argmax": {
+                        "allow_force_argmax": True,
+                        "num_links": 4,
+                        "chunks_per_sync": 10,
+                        "num_workers_per_link": 2,
+                        "topology": ttnn.Topology.Ring,
+                    },
+                }
+            }
+            if self.base_model_name in model_specific_ccl_configs:
+                self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
+                self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
+                self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
+                self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["mlp_rs"]
+                self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
+                    "sampling_force_argmax"
+                ]
+            else:
+                self.model_config["ATTN_LN_AG_CONFIG"] = default_ln_ag
+                self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
+                self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
+                self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
+                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
+
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")
