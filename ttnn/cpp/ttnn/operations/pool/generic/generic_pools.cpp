@@ -58,6 +58,8 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
     bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
     bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
     sliding_window::ParallelConfig parallel_config;
+
+    uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8U;
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (applied_shard_scheme.has_value()) {
         TT_FATAL(
@@ -73,7 +75,7 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
             output_shape[1],
             output_shape[2],
             channels,
-            8,  // L1 NOC Alignment in elements.
+            input_channels_alignment,  // L1 NOC Alignment in elements.
             core_grid,
             ShardOrientation::ROW_MAJOR,
             false,
@@ -101,12 +103,6 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
     }
 
     uint32_t num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
-
-    // This is the code path of the non sharded input tensor, this means that input channels
-    // can be whatever number here so we need to have the shard_width aligned to the l1 memory alignment
-    // which is 8, in case shard_width is multiple of 16 or 32 we will take largest number possible. We are aligning
-    // it by changing the padded shape of the tensor.
-    uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8U;
 
     uint32_t input_tensor_width_snapped_to_channels_alignment =
         tt::round_up(channels, num_cores_c * input_channels_alignment);
