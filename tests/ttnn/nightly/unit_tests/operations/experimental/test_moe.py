@@ -15,7 +15,7 @@ from tracy.process_model_log import (
 )
 
 
-def assert_quality(torch_output, tt_output):
+def get_accuracy_metrics(torch_output, tt_output):
     _pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
     logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
@@ -29,26 +29,36 @@ def run_test_moe(device, M, K, N):
     logger.info(f"Running test_moe with M={M}, K={K}, N={N}")
 
     torch_input = torch.randn((M, K), dtype=torch.float32)
-    weight_input = torch.randn((K, N), dtype=torch.float32)
+    torch_w0 = torch.randn((K, N), dtype=torch.float32)
+    torch_w1 = torch.randn((K, N), dtype=torch.float32)
+    torch_w2 = torch.randn((N, K), dtype=torch.float32)
 
     # Prepare TT tensors
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight0 = ttnn.from_torch(torch_w0, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight1 = ttnn.from_torch(torch_w1, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight2 = ttnn.from_torch(torch_w2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
     with torch.no_grad():
-        torch_output = torch_input @ weight_input
+        w0_output = torch.nn.functional.silu(torch_input @ torch_w0)
+        w1_output = torch_input @ torch_w1
+        w2_input = w0_output * w1_output
+        torch_output = w2_input @ torch_w2
 
     tt_output = ttnn.experimental.moe(
         tt_input,
-        tt_weight,
+        w0_tensor=tt_weight0,
+        w1_tensor=tt_weight1,
+        w2_tensor=tt_weight2,
+        output_tensor=tt_output,
     )
     tt_output = ttnn.to_torch(tt_output)
-    check_result = assert_quality(torch_output, tt_output)
-    return check_result
+    return get_accuracy_metrics(torch_output, tt_output)
 
 
 TABLE_CONFIGS = [
-    (512, 512, 512),
+    (32, 7168, 2048),
 ]
 
 
@@ -57,14 +67,14 @@ TABLE_CONFIGS = [
     TABLE_CONFIGS,
 )
 def test_moe(device, M, K, N):
-    check_result = run_test_moe(
+    accuracy_metrics = run_test_moe(
         device,
         M,
         K,
         N,
     )
-    # assert check_result["pcc"] > 0.999_500
-    # assert check_result["relative_rmse"] < 0.02
+    # assert accuracy_metrics["pcc"] > 0.999_500
+    # assert accuracy_metrics["relative_rmse"] < 0.02
 
 
 @pytest.mark.skip()

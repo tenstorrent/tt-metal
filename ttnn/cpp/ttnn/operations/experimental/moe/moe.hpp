@@ -11,7 +11,12 @@
 namespace ttnn::operations::experimental::moe {
 
 struct ExecuteMoE {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& weight_tensor);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& w0_tensor,
+        const ttnn::Tensor& w1_tensor,
+        const ttnn::Tensor& w2_tensor,
+        const ttnn::Tensor& output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::moe
