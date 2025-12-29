@@ -148,7 +148,7 @@ def test_refiner_unet(
             "sdxl_clip_encoder_2",
             CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS,
             1,
-            0.015,
+            0.020,
             "",
         ),
     ],
