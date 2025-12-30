@@ -4,33 +4,33 @@
 
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 
-#include <iostream>
-#include <iomanip>
-#include <fstream>
-#include <sstream>
 #include <algorithm>
-#include <random>
-#include <future>
 #include <chrono>
+#include <fstream>
+#include <future>
+#include <iomanip>
+#include <iostream>
+#include <random>
+#include <sstream>
 
-#include "tests/tt_metal/test_utils/test_common.hpp"
+#include "protobuf/factory_system_descriptor.pb.h"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program.hpp>
+#include <cabling_generator/cabling_generator.hpp>
+#include <enchantum/enchantum.hpp>
+#include <google/protobuf/text_format.h>
+#include <llrt/tt_cluster.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <enchantum/enchantum.hpp>
-#include <cabling_generator/cabling_generator.hpp>
-#include <google/protobuf/text_format.h>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/program.hpp>
 #include <yaml-cpp/yaml.h>
-#include "protobuf/factory_system_descriptor.pb.h"
-#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 
-// Timeout is based on the assumption that WORKLOAD_TIMEOUT_DURATION (30s) should be enough for an iteration to run.
-// Any longer and we assume that a hang has been encountered. We may need to tune this in future.
+// Timeout is based on the assumption that WORKLOAD_TIMEOUT_DURATION (30s)
+// should be enough for an iteration to run. Any longer and we assume that a
+// hang has been encountered. We may need to tune this in future.
 static constexpr std::chrono::seconds WORKLOAD_TIMEOUT_DURATION{30};
 
 // ============================================================================
@@ -58,9 +58,9 @@ struct ConnectionInfo {
 };
 
 struct LinkMetricsResult {
-    std::vector<EthernetLinkMetrics>
-        all_link_metrics;  // All metrics for all iterations (when log_ethernet_metrics is true)
-    std::vector<EthernetLinkMetrics> unhealthy_links;  // Only unhealthy links
+    std::vector<EthernetLinkMetrics> all_link_metrics;  // All metrics for all iterations (when
+                                                        // log_ethernet_metrics is true)
+    std::vector<EthernetLinkMetrics> unhealthy_links;   // Only unhealthy links
 };
 
 enum class WorkloadResult { Completed, TimedOut };
@@ -158,9 +158,11 @@ void configure_local_kernels(
                     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(neighbor_chip_id);
 
                     const auto* sender_kernel_path =
-                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+                        "eth_l1_direct_send.cpp";
                     const auto* receiver_kernel_path =
-                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+                        "eth_l1_direct_receive.cpp";
                     std::vector<uint32_t> sender_compile_args = {packet_size_bytes, packet_size_words};
                     std::vector<uint32_t> receiver_compile_args = {};
                     auto curr_kernel = tt::tt_metal::CreateKernel(
@@ -200,7 +202,8 @@ void configure_local_kernels(
                             kernel_coords[neighbor_chip_id].begin(),
                             kernel_coords[neighbor_chip_id].end(),
                             neighbor_coord) != kernel_coords[neighbor_chip_id].end(),
-                        "Expected kernel to be populated for device {}, logical eth core {}",
+                        "Expected kernel to be populated for device {}, logical eth "
+                        "core {}",
                         neighbor_chip_id,
                         neighbor_coord.str());
                 }
@@ -242,7 +245,8 @@ void configure_cross_host_kernels(
                 tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
                 auto sender_kernel = tt::tt_metal::CreateKernel(
                     my_program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+                    "eth_l1_direct_send.cpp",
                     my_coord,
                     tt::tt_metal::EthernetConfig{
                         .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
@@ -254,7 +258,8 @@ void configure_cross_host_kernels(
                 tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
                 auto receiver_kernel = tt::tt_metal::CreateKernel(
                     my_program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
+                    "eth_l1_direct_receive.cpp",
                     my_coord,
                     tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0});
                 tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
@@ -299,8 +304,8 @@ WorkloadResult execute_workloads(
             std::chrono::seconds(0));
 
         if (future.wait_for(remaining) != std::future_status::ready) {
-            // Don't wait for futures to complete because they're stuck. Just abandon them.
-            // Static storage prevents destructor from blocking.
+            // Don't wait for futures to complete because they're stuck. Just abandon
+            // them. Static storage prevents destructor from blocking.
             return WorkloadResult::TimedOut;
         }
         // Get the result to propagate any exceptions
@@ -398,7 +403,8 @@ LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
         prev_retrain_count = link_status.metrics.retrain_count;
     }
 
-    // Should not reach here if link is unhealthy, but return first iteration as fallback
+    // Should not reach here if link is unhealthy, but return first iteration as
+    // fallback
     if (!link_stats.empty()) {
         return link_stats[0];
     }
@@ -473,7 +479,8 @@ LinkMetricsResult process_link_statuses(
         }
 
         if (is_unhealthy) {
-            // Track unhealthy links - store the first iteration where failure occurred
+            // Track unhealthy links - store the first iteration where failure
+            // occurred
             result.unhealthy_links.push_back(EthernetLinkMetrics{
                 .channel_identifier = channel_identifier,
                 .link_status = get_first_failure(link_stats),
@@ -503,8 +510,8 @@ std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortInfo>> 
     for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
         auto board_type = asic_descriptor.board_type;
         auto board = tt::scaleout_tools::create_board(board_type);
-        // PhysicalSystemDescriptor internally validates that hostnames across asic descriptors are part of the graph
-        // This can't throw
+        // PhysicalSystemDescriptor internally validates that hostnames across asic
+        // descriptors are part of the graph This can't throw
         const auto& asic_edges = asic_connectivity_graph.at(asic_descriptor.host_name).at(asic_id);
         for (const auto& [dst_asic_id, eth_connections] : asic_edges) {
             for (const auto& eth_connection : eth_connections) {
@@ -605,8 +612,9 @@ void print_ethernet_connectivity(
     bool /*print_connectivity*/, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     auto port_info_map = generate_port_info(physical_system_descriptor);
 
-    // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
-    // Using map with bool key: true = cross-host, false = local
+    // Collect all connections and organize by: connection_type -> hostname ->
+    // port_type -> connections Using map with bool key: true = cross-host, false
+    // = local
     std::map<bool, std::map<std::string, std::map<std::string_view, std::vector<ConnectionInfo>>>>
         organized_connections;
 
@@ -652,8 +660,8 @@ void print_ethernet_connectivity(
         }
     }
 
-    // Print organized connections: connection_type -> hostname -> port_type -> connections
-    // Iterate through connection types (true=cross-host, false=local)
+    // Print organized connections: connection_type -> hostname -> port_type ->
+    // connections Iterate through connection types (true=cross-host, false=local)
     for (const auto& [is_cross_host, hosts_map] : organized_connections) {
         if (hosts_map.empty()) {
             continue;
@@ -662,10 +670,12 @@ void print_ethernet_connectivity(
         // Print connection type header
         std::cout << std::endl;
         if (is_cross_host) {
-            std::cout << " ============================== CROSS-HOST CONNECTIONS =============================== "
+            std::cout << " ============================== CROSS-HOST CONNECTIONS "
+                         "=============================== "
                       << std::endl;
         } else {
-            std::cout << " ============================== HOST-LOCAL CONNECTIONS =============================== "
+            std::cout << " ============================== HOST-LOCAL CONNECTIONS "
+                         "=============================== "
                       << std::endl;
         }
 
@@ -733,7 +743,8 @@ void log_link_metrics(
         log_output_rank0("Generating Ethernet Metrics Report. Num Links: " + std::to_string(link_metrics.size()));
     } else {
         log_output_rank0(
-            "✗ Found Unhealthy Links. Generating Failure Report (Only Pinging Detected Links). Num Unhealthy Links: " +
+            "✗ Found Unhealthy Links. Generating Failure Report (Only "
+            "Pinging Detected Links). Num Unhealthy Links: " +
             std::to_string(link_metrics.size()));
     }
 
@@ -764,7 +775,8 @@ void log_link_metrics(
                  link.link_status.num_mismatched_words});
         }
     } else {
-        // When logging failures: one row per link with all metrics and combined failure types
+        // When logging failures: one row per link with all metrics and combined
+        // failure types
         for (const auto& link : link_metrics) {
             std::vector<std::string> failure_types;
 
@@ -804,18 +816,20 @@ void log_link_metrics(
 
     // Print console table
     std::cout << std::endl;
-    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗"
+    std::cout << "╔══════════════════════════════════════════════════════════════"
+                 "═════════════════════════════════════╗"
               << std::endl;
     if (log_ethernet_metrics) {
-        std::cout
-            << "║                          ETHERNET METRICS REPORT                                                  ║"
-            << std::endl;
+        std::cout << "║                          ETHERNET METRICS REPORT           "
+                     "                                       ║"
+                  << std::endl;
     } else {
-        std::cout
-            << "║                              FAULTY LINKS REPORT                                                  ║"
-            << std::endl;
+        std::cout << "║                              FAULTY LINKS REPORT           "
+                     "                                       ║"
+                  << std::endl;
     }
-    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝"
+    std::cout << "╚══════════════════════════════════════════════════════════════"
+                 "═════════════════════════════════════╝"
               << std::endl;
     if (log_ethernet_metrics) {
         std::cout << "Total Links: " << link_metrics.size() << std::endl;
@@ -900,7 +914,8 @@ void log_link_metrics(
             csv_file << ",Failure_Type";
         }
         csv_file << ",Packet_Size_Bytes,Data_Size_Bytes,"
-                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words"
+                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,"
+                    "Uncorrected_Codeword_Count,Mismatched_Words"
                  << std::endl;
 
         // CSV rows
@@ -964,13 +979,16 @@ void handle_workload_timeout(
             fsd_proto, gsd_yaml_node, validation_config.fail_on_warning, ctx.physical_system_descriptor);
     } else {
         log_output_rank0(
-            "WARNING: Cannot validate Global System Descriptor against Factory System Descriptor, "
+            "WARNING: Cannot validate Global System Descriptor "
+            "against Factory System Descriptor, "
             "no cabling descriptor or factory descriptor provided.");
     }
 
     // Exit immediately since the cluster is in an unhealthy state
     TT_THROW(
-        "Workload execution timed out after {} seconds. Cluster validation failed.", WORKLOAD_TIMEOUT_DURATION.count());
+        "Workload execution timed out after {} seconds. Cluster validation "
+        "failed.",
+        WORKLOAD_TIMEOUT_DURATION.count());
 }
 
 LinkMetricsResult send_traffic_and_validate_links(
@@ -986,7 +1004,9 @@ LinkMetricsResult send_traffic_and_validate_links(
     if (sweep_traffic_configs) {
         traffic_configs = generate_sweep_traffic_configs();
         log_output_rank0(
-            "Sweeping traffic configurations across detected links. Num Iterations: " + std::to_string(num_iterations));
+            "Sweeping traffic configurations across detected links. "
+            "Num Iterations: " +
+            std::to_string(num_iterations));
     } else {
         traffic_configs = {{data_size, packet_size_bytes}};
         log_output_rank0(
@@ -1002,9 +1022,9 @@ LinkMetricsResult send_traffic_and_validate_links(
     for (auto chip : cluster.all_chip_ids()) {
         device_ids.push_back(chip);
     }
-    // This is a non-trivial operation, since it loads management firmware onto all
-    // cores in the cluster.
-    // Issue a global barrier after this to ensure that all hosts in the cluster are ready
+    // This is a non-trivial operation, since it loads management firmware onto
+    // all cores in the cluster. Issue a global barrier after this to ensure that
+    // all hosts in the cluster are ready
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices = {};
     try {
         devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -1018,7 +1038,8 @@ LinkMetricsResult send_traffic_and_validate_links(
         log_output_rank0("Error details: " + std::string(e.what()));
         throw;
     }
-    // Barrier here ensures that all ranks successfully started their devices before proceeding
+    // Barrier here ensures that all ranks successfully started their devices
+    // before proceeding
     distributed_context.barrier();
 
     ClusterContext ctx{physical_system_descriptor, asic_id_to_chip_id, devices};
@@ -1188,14 +1209,15 @@ void forward_link_reset_metadata_from_controller(
 
     TT_FATAL(
         exit_nodes_to_reset.size() == reset_pairs.size(),
-        "Expected reset pairs to be the same size as the number of links to reset {} {} {}",
+        "Expected reset pairs to be the same size as the number of links to "
+        "reset {} {} {}",
         exit_nodes_to_reset.size(),
         reset_pairs.size(),
         *distributed_context.rank());
 }
 
 void reset_local_ethernet_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology) {
+    const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
 
@@ -1247,7 +1269,7 @@ void reset_local_ethernet_links(
 
 void get_cross_node_ethernet_links_to_reset(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    const AsicTopology& asic_topology,
+    const tt::tt_metal::AsicTopology& asic_topology,
     std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
     std::vector<ResetPair>& cross_node_reset_pairs) {
     constexpr uint32_t CONTROLLER_RANK = 0;
@@ -1269,9 +1291,9 @@ void get_cross_node_ethernet_links_to_reset(
             auto src_host_rank = physical_system_descriptor.get_rank_for_hostname(
                 physical_system_descriptor.get_host_name_for_asic(asic_id));
             for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-                // These links are being retrained for the second time if the current dst_asic was paired with the
-                // current src_asic in a previous iteration.
-                // In this case, we skip the link reset.
+                // These links are being retrained for the second time if the current
+                // dst_asic was paired with the current src_asic in a previous
+                // iteration. In this case, we skip the link reset.
                 if (paired_asic_ids.find(*dst_asic_id) != paired_asic_ids.end() and
                     paired_asic_ids[*dst_asic_id].find(*asic_id) != paired_asic_ids[*dst_asic_id].end()) {
                     continue;
@@ -1286,14 +1308,14 @@ void get_cross_node_ethernet_links_to_reset(
                     ordered_exit_nodes[src_host_rank].push_back(EthChannelIdentifier{
                         physical_system_descriptor.get_host_name_for_asic(asic_id),
                         asic_id,
-                        TrayID{0},
-                        ASICLocation{0},
+                        tt::tt_metal::TrayID{0},
+                        tt::tt_metal::ASICLocation{0},
                         eth_connection.src_chan});
                     ordered_exit_nodes[dst_host_rank].push_back(EthChannelIdentifier{
                         physical_system_descriptor.get_host_name_for_asic(dst_asic_id),
                         dst_asic_id,
-                        TrayID{0},
-                        ASICLocation{0},
+                        tt::tt_metal::TrayID{0},
+                        tt::tt_metal::ASICLocation{0},
                         eth_connection.dst_chan});
                     ordered_reset_pairs[src_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
                     ordered_reset_pairs[dst_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
@@ -1340,19 +1362,21 @@ void reset_cross_node_ethernet_links(
         }
     }
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    // Barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding.
-    // This is critical because cross-node resets involve coordination between paired hosts.
+    // Barrier ensures all hosts have completed their cross-node ethernet link
+    // resets before proceeding. This is critical because cross-node resets
+    // involve coordination between paired hosts.
     distributed_context.barrier();
 }
 
 void reset_ethernet_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology) {
+    const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
+    // Reset All Local Ethernet Links, specified in the topology. Ethernet Links
+    // on Exit Nodes are reset separately.
     reset_local_ethernet_links(physical_system_descriptor, asic_topology);
-    // Barrier ensures all hosts have completed local link resets before starting cross-node resets.
-    // This prevents race conditions where one host might start cross-node reset while another is still
-    // resetting local links.
+    // Barrier ensures all hosts have completed local link resets before starting
+    // cross-node resets. This prevents race conditions where one host might start
+    // cross-node reset while another is still resetting local links.
     distributed_context.barrier();
 
     // Reset All Cross-Node Ethernet Links, specified in the topology.
@@ -1411,40 +1435,46 @@ bool generate_link_metrics(
     return result.unhealthy_links.empty();
 }
 
-AsicTopology generate_asic_topology_from_connections(
+tt::tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    AsicTopology asic_topology;
+    tt::tt_metal::AsicTopology asic_topology;
     std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
     std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
     for (const auto& connection : physical_connections) {
         auto src = connection.first;
         auto dst = connection.second;
         auto src_asic_id = physical_system_descriptor.get_asic_id(
-            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
+            src.hostname,
+            tt::tt_metal::TrayID(*src.tray_id),
+            tt::tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
-            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+            dst.hostname,
+            tt::tt_metal::TrayID(*dst.tray_id),
+            tt::tt_metal::ASICLocation(dst.asic_channel.asic_location));
         if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
-                 {EthConnection(
+                 {tt::tt_metal::EthConnection(
                      *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname)}});
             visited[src_asic_id].insert(dst_asic_id);
             visited_idx[src_asic_id][dst_asic_id] = asic_topology[src_asic_id].size() - 1;
         } else {
-            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
-                *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
+            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(
+                tt::tt_metal::EthConnection(
+                    *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
         }
         if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
             asic_topology[dst_asic_id].push_back(
                 {src_asic_id,
-                 {EthConnection(
+                 {tt::tt_metal::EthConnection(
                      *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname)}});
             visited[dst_asic_id].insert(src_asic_id);
             visited_idx[dst_asic_id][src_asic_id] = asic_topology[dst_asic_id].size() - 1;
         } else {
-            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(EthConnection(
-                *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
+            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(
+                tt::tt_metal::EthConnection(
+                    *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
         }
     }
     return asic_topology;
@@ -1515,12 +1545,14 @@ void perform_link_reset(
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
 
-    AsicTopology reset_topology =
+    tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
 
     reset_ethernet_links(physical_system_descriptor, reset_topology);
 
-    log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
+    log_output_rank0(
+        "Link reset completed. Please run the validation tool again "
+        "to verify the link.");
 }
 
 fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
@@ -1536,13 +1568,15 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
         if (fsd_path.has_value()) {
             log_warning(
                 tt::LogDistributed,
-                "Both cabling_descriptor_path and fsd_path provided; using cabling_descriptor_path to generate FSD");
+                "Both cabling_descriptor_path and fsd_path provided; using "
+                "cabling_descriptor_path to generate FSD");
         }
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
         if (!deployment_descriptor_path.has_value()) {
             TT_FATAL(
                 hostnames.size() == 1,
-                "Expected exactly one host in the cluster when no deployment descriptor is provided");
+                "Expected exactly one host in the cluster when no deployment "
+                "descriptor is provided");
             return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
                 .generate_factory_system_descriptor();
         } else {
@@ -1566,14 +1600,15 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     }
 }
 
-tt_metal::AsicTopology validate_connectivity(
+tt::tt_metal::AsicTopology validate_connectivity(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
     const YAML::Node& gsd_yaml_node,
     bool fail_on_warning,
     PhysicalSystemDescriptor& physical_system_descriptor,
     std::optional<uint32_t> min_connections) {
     log_output_rank0(
-        "Validating Factory System Descriptor (Golden Representation) against Global System Descriptor (in-memory)");
+        "Validating Factory System Descriptor (Golden Representation) against "
+        "Global System Descriptor (in-memory)");
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
         fsd_proto,

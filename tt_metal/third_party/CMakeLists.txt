@@ -4,3 +4,5 @@ set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(TT_UMD_ENABLE_CLANG_TIDY OFF CACHE BOOL "Disable clang-tidy checks for UMD" FORCE)
 
 add_subdirectory(umd)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tt_llk DESTINATION ${CMAKE_INSTALL_PREFIX}/tt_metal/third_party)
