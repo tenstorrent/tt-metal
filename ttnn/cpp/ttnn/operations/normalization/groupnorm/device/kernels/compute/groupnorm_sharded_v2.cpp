@@ -252,19 +252,14 @@ void MAIN {
 
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
-                    true,
-                    true,
-                    FP32_DEST_ACC>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
-                    1,   // Ht
-                    1,   // Wt
-                    1);  // num_batches
+                compute_kernel_lib::
+                    reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING, true, true>(
+                        cb_ex_external,
+                        cb_scaler_global,
+                        cb_ex_global,
+                        1,   // Ht
+                        1,   // Wt
+                        1);  // num_batches
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }
@@ -368,19 +363,14 @@ void MAIN {
             cb_pop_front(cb_ex2pe, 1);
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
-                    compute_kernel_lib::ReduceInputMode::STREAMING,
-                    true,
-                    true,
-                    FP32_DEST_ACC>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
-                    1,   // Ht
-                    1,   // Wt
-                    1);  // num_batches
+                compute_kernel_lib::
+                    reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING, true, true>(
+                        cb_ex_external,
+                        cb_scaler_global,
+                        cb_ex_global,
+                        1,   // Ht
+                        1,   // Wt
+                        1);  // num_batches
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }
