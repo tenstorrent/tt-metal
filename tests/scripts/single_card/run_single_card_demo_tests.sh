@@ -43,6 +43,16 @@ run_qwen7b_func() {
 
 }
 
+run_afm_func() {
+  fail=0
+  afm_model=arcee-ai/AFM-4.5B
+  afm_cache=$TT_CACHE_HOME/$afm_model
+  HF_MODEL=$afm_model TT_CACHE_PATH=$afm_cache MESH_DEVICE=N300 $PYTEST_CMD -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_qwen25_vl_perfunc() {
   fail=0
 
