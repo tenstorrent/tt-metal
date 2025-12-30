@@ -109,15 +109,15 @@ class PatchTSMixerChannelFeatureMixerBlock(nn.Module):
     """
 
     def __init__(
-        self, num_channels, d_model, norm_type="LayerNorm", expansion=2, dropout=0.1, gated_attn=False, eps=1e-5
+        self, num_channels, d_model, norm_type="LayerNorm", expansion=2, dropout=0.1, use_gated_attn=False, eps=1e-5
     ):
         super().__init__()
         self.norm = PatchTSMixerNormLayer(d_model, norm_type=norm_type, eps=eps)
-        self.gated_attn = gated_attn
+        self.use_gated_attn = use_gated_attn
         self.mlp = PatchTSMixerMLP(
             in_features=num_channels, out_features=num_channels, expansion=expansion, dropout=dropout
         )
-        if gated_attn:
+        if use_gated_attn:
             self.gate = PatchTSMixerGatedAttention(d_model=num_channels)
 
     def forward(self, x):
@@ -126,7 +126,7 @@ class PatchTSMixerChannelFeatureMixerBlock(nn.Module):
         x = self.norm(x)  # (B, C, N_p, D)
         x = x.permute(0, 3, 2, 1)  # (B, D, N_p, C)
 
-        if self.gated_attn:
+        if self.use_gated_attn:
             x = self.gate(x)  # gate over channels
 
         x = self.mlp(x)  # mix over channels
@@ -247,7 +247,7 @@ class PatchTSMixerLayer(nn.Module):
         if mode == "mix_channel":
             self.channel_mixer = PatchTSMixerChannelFeatureMixerBlock(
                 num_channels=num_channels,
-                d_model=num_channels,
+                d_model=d_model,
                 expansion=expansion,
                 dropout=dropout,
                 use_gated_attn=use_gated_attn,
