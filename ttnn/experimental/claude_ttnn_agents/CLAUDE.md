@@ -250,7 +250,7 @@ When user requests a new TTNN operation, STOP and answer these questions:
 
 ### Step 1: Are reference operations specified?
 - YES with paths to reference_operation_analysis.md → Skip to Phase 1 (Analyzer)
-- YES but vague ("like softmax") → Search (DeepWiki) for that operation's program_factory.cpp and run Analyzer
+- YES but vague ("like softmax") → Search for that operation's program_factory.cpp
 - NO → Continue to discovery
 
 ### Step 2: Discovery Checklist (if references not specified)
@@ -260,6 +260,10 @@ When user requests a new TTNN operation, STOP and answer these questions:
   - "untilize" + "row-major output" → need untilize reference
   - "sharded" → need sharded-input reference (layernorm, etc.)
 
+□ Select appropriate variant:
+  - Match memory layout: interleaved → *_interleaved_*, sharded → *_sharded_*
+  - Prefer simpler variant (single_core) for templates
+
 □ Query DeepWiki for unknowns:
   - "Which TTNN operations perform [X]?"
   - "Which operations convert ROW_MAJOR to TILE_LAYOUT?"
@@ -268,13 +272,30 @@ When user requests a new TTNN operation, STOP and answer these questions:
 - Single reference → Derivative mode
 - Multiple references with different roles → Hybrid mode
 
-### Step 4: Execute Workflow
-1. Phase 1: Run `ttnn-operation-analyzer` on EACH reference
+### Step 4: Reference Confirmation (USER CHECKPOINT)
+
+Before running analyzers, present discovered references:
+
+"I identified these references:
+| Role | Operation | Path | Reason |
+|------|-----------|------|--------|
+| input_stage | tilize | .../tilize_multi_core_interleaved_program_factory.cpp | row-major + tilize keywords |
+| output_stage | untilize | .../untilize_multi_core_program_factory.cpp | untilize + row-major keywords |
+
+Planning Mode: Hybrid
+
+Proceed with analysis, or suggest different references?"
+
+- User confirms → proceed to Phase 1
+- User suggests alternatives → update references and re-confirm
+
+### Step 5: Execute Workflow
+1. Phase 1: Run `ttnn-operation-analyzer` on EACH confirmed reference
 2. Phase 2: Run `ttnn-operation-planner` with all analyzer outputs
-3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user for review
+3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user
    - User approves → proceed to Phase 3
-   - User requests changes → refine spec (re-run planner or edit manually), then re-present for approval
-   - Do NOT proceed to scaffolder/factory-builder without explicit user approval
+   - User requests changes → refine spec, re-present for approval
+   - Do NOT proceed without explicit user approval
 4. Phase 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
 ```
 
