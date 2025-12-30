@@ -62,3 +62,14 @@ jobs:
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
+
+  report-failure:
+    name: "🔔 Report failure"
+    runs-on: ubuntu-latest
+    if: ${{ failure() }}
+    needs: nightly-summary
+    steps:
+      - name: Report failure
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "Nightly Tests"

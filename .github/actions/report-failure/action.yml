@@ -1,0 +1,44 @@
+name: 'Report Failure'
+description: 'Send Slack notification when tests fail'
+
+inputs:
+  test_name:
+    description: 'Name of the test suite that failed'
+    required: true
+    type: string
+
+runs:
+  using: composite
+  steps:
+    - name: Construct message
+      id: message
+      shell: bash
+      run: |
+        COMMIT_URL="https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}"
+        COMMIT_SHA="${GITHUB_SHA:0:7}"
+        RUN_BASE="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        RUN_URL="$RUN_BASE/job/${{ job.check_run_id }}"
+        TRIGGERER="${{ github.event.sender.login }}"
+        if [ -z "$TRIGGERER" ]; then
+          TRIGGERER="scheduled run"
+        fi
+        MESSAGE=":alert: *${{ inputs.test_name }}* have failed :alert:"
+        MESSAGE="$MESSAGE\n\n⚠️ Looks like something broke! The nightly tests didn't complete successfully."
+        MESSAGE="$MESSAGE\n\nTriggered by: \`$TRIGGERER\`"
+        MESSAGE="$MESSAGE\nCommit: <$COMMIT_URL|$COMMIT_SHA>"
+        MESSAGE="$MESSAGE\n<${RUN_URL}|Check what went wrong>"
+        {
+          echo 'text<<EOF'
+          echo "$MESSAGE"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
+    - name: Send Slack notification
+      uses: slackapi/slack-github-action@v2.1.1
+      with:
+        method: chat.postMessage
+        token: ${{ secrets.SLACK_BOT_TOKEN }}
+        payload: |
+          {
+            "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
+            "text": "${{ steps.message.outputs.text }}"
+          }
