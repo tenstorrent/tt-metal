@@ -106,7 +106,7 @@ class TtPatchTSMixerLayerNormDispatcher:
     """
 
     def __init__(self, device, base_address: str, parameters: dict, norm_type: str = "LayerNorm", eps: float = 1e-5):
-        norm_type = ("norm_type" or "layernorm").lower()
+        norm_type = (norm_type or "layernorm").lower()
         self.is_batch = "batch" in norm_type
 
         if self.is_batch:
@@ -288,17 +288,20 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
         base_address: str,
         parameters: dict,
         *,
+        d_model: int,
+        num_channels: str,
+        expansion: int,
         norm_type: str = "LayerNorm",
-        gated_attn: bool = False,
+        use_gated_attn: bool = False,
         eps: float = 1e-5,
     ):
         self.device = device
         self.base = base_address
-        self.gated_attn = gated_attn
+        self.use_gated_attn = use_gated_attn
 
         self.norm = TtPatchTSMixerLayerNormDispatcher(
             device=device,
-            base_address=base_address,
+            base_address=f"{self.base}.norm",
             parameters=parameters,
             norm_type=norm_type,
             eps=eps,
@@ -306,7 +309,7 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
 
         self.mlp = TtPatchTSMixerMLP(device=device, base_address=f"{self.base}.mlp", parameters=parameters, eps=eps)
 
-        if gated_attn:
+        if use_gated_attn:
             self.gate = TtPatchTSMixerGatedAttention(
                 device=device,
                 base_address=f"{self.base}.gate",
@@ -319,9 +322,9 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
         x = self.norm(x)
 
         # Move channel to last dim (B, C, N_p, D) -> (B, D, N_p, C)
-        x = ttnn.permute(x(0, 3, 2, 1))
+        x = ttnn.permute(x, (0, 3, 2, 1))
 
-        if self.gated_attn:
+        if self.use_gated_attn:
             x = self.gate(x)  # gate over channels
 
         x = self.mlp(x)  # MLP over channels (last dim)
@@ -329,3 +332,151 @@ class TtPatchTSMixerChannelFeatureMixerBlock:
         # Back: (B, D, N_p, C) -> (B, C, N_p, D)
         x = ttnn.permute(x, (0, 3, 2, 1))
         return ttnn.add(x, residual)
+
+
+class TtPatchTSMixerLayer:
+    """
+    TTNN equivalent of PatchTSMixerLayer.
+    Input/Output shape: (B, C, Np, D)
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        num_patches: int,
+        d_model: int,
+        num_channels: int,
+        mode: str = "common_channel",
+        norm_type: str = "LayerNorm",
+        expansion: int = 2,
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+        self.mode = mode
+
+        # Optional channel mixer (only when mode == "mix_channel")
+        self.channel_mixer = None
+        if mode == "mix_channel":
+            self.channel_mixer = TtPatchTSMixerChannelFeatureMixerBlock(
+                device=device,
+                base_address=f"{self.base}.channel_mixer",
+                parameters=parameters,
+                num_channels=num_channels,
+                d_model=num_channels,
+                norm_type=norm_type,
+                expansion=expansion,
+                use_gated_attn=use_gated_attn,
+                eps=eps,
+            )
+
+        # Patch mixer
+        self.patch_mixer = TtPatchMixerBlock(
+            device=device,
+            base_address=f"{self.base}.patch_mixer",
+            parameters=parameters,
+            norm_type=norm_type,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+
+        # Feature mixer
+        self.feature_mixer = TtFeatureMixerBlock(
+            device=device,
+            base_address=f"{self.base}.feature_mixer",
+            parameters=parameters,
+            d_model=d_model,
+            norm_type=norm_type,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+
+    def __call__(self, x):
+        if self.channel_mixer is not None:
+            x = self.channel_mixer(x)
+        x = self.patch_mixer(x)
+        x = self.feature_mixer(x)
+        return x
+
+
+class TtPatchTSMixerBlock:
+    """
+    TTNN equivalent of PatchTSMixerBlock:
+      - runs a list of TtPatchTSMixerLayer modules
+      - optionally collects hidden states
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        num_layers: int,
+        layer_kwargs: dict,
+        norm_type: str = "LayerNorm",
+    ):
+        self.device = device
+        self.base = base_address
+        self.num_layers = num_layers
+
+        self.layers = []
+        for i in range(num_layers):
+            layer_base = f"{self.base}.layers.{i}"
+            self.layers.append(
+                TtPatchTSMixerLayer(
+                    device=device,
+                    base_address=layer_base,
+                    parameters=parameters,
+                    norm_type=norm_type,
+                    **layer_kwargs,
+                )
+            )
+
+    def __call__(self, hidden, *, output_hidden_states: bool = False):
+        all_hidden_states = [] if output_hidden_states else None
+        x = hidden
+        for layer in self.layers:
+            x = layer(x)
+            if output_hidden_states:
+                all_hidden_states.append(x)
+        return x, all_hidden_states
+
+
+import ttnn
+
+
+class TtPatchTSMixerForecastHead:
+    """
+    TTNN equivalent of PatchTSMixerForecastHead.
+
+    Input:  (B, C, Np, D)  rank-4
+    Output: (B, H, C) we will return rank-3 torch-like after to_torch, but internally keep rank-4.
+    """
+
+    def __init__(self, device, base_address: str, parameters: dict, *, prediction_length: int):
+        self.device = device
+        self.base = base_address
+        self.H = prediction_length
+
+        # weight should represent [Np*D, H] or [H, Np*D] depending on transpose_b usage.
+        self.weight = parameters[f"{self.base}.proj.weight"]
+        self.bias = parameters.get(f"{self.base}.proj.bias", None)
+
+    def __call__(self, x, *, B=None, C=None, Np=None, D=None):
+        # x: (B, C, Np, D)
+        # flatten last two dims -> (B, C, 1, Np*D)
+        x = ttnn.reshape(x, (B, C, 1, Np * D))
+
+        # linear over last dim -> (B, C, 1, H)
+        # Depending on how preprocess_linear formats weights, you may need transpose_b=True/False.
+        y = ttnn.linear(x, self.weight, bias=self.bias)
+
+        # (B, C, 1, H) -> (B, H, C)
+        y = ttnn.permute(y, (0, 3, 2, 1))  # (B, H, 1, C)
+
+        return y
