@@ -286,7 +286,7 @@ template <
     int ITERATIONS = 8,
     bool SKIP_POSITIVE_CHECK = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (false && APPROXIMATION_MODE) {
         _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, false, SKIP_POSITIVE_CHECK>(
             exp_base_scale_factor);
     } else {
@@ -305,7 +305,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
 void exp_init() {
-    _init_exponential_<APPROXIMATION_MODE, false, scale>();
+    _init_exponential_<false, false, scale>();
 }
 
 }  // namespace sfpu
