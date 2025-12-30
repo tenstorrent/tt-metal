@@ -381,7 +381,7 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none(),
             // TODO: switch the default value to 'true' once model accuracy is fixed
             // See issue #28531
-            nb::arg("numeric_stable") = false});
+            nb::arg("numeric_stable") = true});
 }
 
 // Softmax with scale and causal mask in-place operation
@@ -466,7 +466,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
             nb::arg("compute_kernel_config") = nb::none(),
             // TODO: switch the default value to 'true' once model accuracy is fixed
             // See issue #28531
-            nb::arg("numeric_stable") = false});
+            nb::arg("numeric_stable") = true});
 }
 
 void bind_normalization_softmax(nb::module_& mod) {
