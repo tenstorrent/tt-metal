@@ -41,20 +41,6 @@ class FusedGolden:
         if master_golden.ndim != 1:
             master_golden = master_golden.flatten()
 
-        if self.verbose:
-            print("Result:")
-            head = ", ".join(f"{x:.2f}" for x in res_tensor[:32].tolist())
-            tail = ", ".join(f"{x:.2f}" for x in res_tensor[-32:].tolist())
-            print(f"{head}\n...\n{tail}\n")
-            print("\nL1 Golden:")
-            head = ", ".join(f"{x:.2f}" for x in l1_golden[:32].tolist())
-            tail = ", ".join(f"{x:.2f}" for x in l1_golden[-32:].tolist())
-            print(f"{head}\n...\n{tail}\n")
-            print("\nMaster Golden:")
-            head = ", ".join(f"{x:.2f}" for x in master_golden[:32].tolist())
-            tail = ", ".join(f"{x:.2f}" for x in master_golden[-32:].tolist())
-            print(f"{head}\n...\n{tail}\n")
-
         print("L1 golden check:")
         l1_passed = passed_test(l1_golden, res_tensor, output.data_format)
         print("Master golden check:")

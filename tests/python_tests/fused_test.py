@@ -22,7 +22,6 @@ def test_fused(test_name):
 
     write_pipeline_operands_to_l1(pipeline)
 
-    # run_fused_test(pipeline) (we should implement this now)
     config = TestConfig(
         test_name="fused_test",
         formats=FormatConfig(

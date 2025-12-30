@@ -240,4 +240,6 @@ class FusedOperation:
             f"  Output: {self.output}\n"
             f"  Math Fidelity: {self.math_fidelity}\n"
             f"  Dest Accumulation: {self.dest_acc}\n"
+            f"  Unpack Transpose Faces: {self.unpack_transpose_faces}\n"
+            f"  Unpack Transpose Within Faces: {self.unpack_transpose_within_face}\n"
         )

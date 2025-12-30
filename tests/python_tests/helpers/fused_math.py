@@ -72,11 +72,12 @@ class MatmulFpu(Fpu):
         rt_dim = operation_config.rt_dim
         kt_dim = operation_config.kt_dim
         math_fidelity = operation_config.math_fidelity.value
+        transpose = "true" if operation_config.unpack_transpose_faces.value else "false"
 
         code = (
             f"    // Operation {stage}: Matmul FPU\n"
             f"    _llk_math_matmul_init_<{math_fidelity}>(\n"
-            f"        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, {ct_dim}, {rt_dim}\n"
+            f"        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, {transpose}, {ct_dim}, {rt_dim}\n"
             f"    );\n"
             f"    _llk_math_wait_for_dest_available_<dest_sync{stage}>();\n"
             f"    for (uint32_t j = 0; j < {kt_dim}; j++)\n"
@@ -124,15 +125,16 @@ class EltwiseFpu(Fpu):
         dest_acc = operation_config.dest_acc.value
         tile_cnt = operation_config.output.tile_count
         op = self.operation.cpp_enum_value
+        num_faces = operation_config.num_faces
 
         code = (
             f"    // Operation {stage}: Eltwise {op} FPU\n"
-            f"    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, BroadcastType::NONE, {math_fidelity}>(4, 0);\n"
+            f"    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, BroadcastType::NONE, {math_fidelity}>({num_faces}, 0);\n"
             f"    _llk_math_wait_for_dest_available_<dest_sync{stage}>();\n"
             f"    for (int i = 0; i < {tile_cnt}; i++)\n"
             f"    {{\n"
             f"        _llk_math_eltwise_binary_<{op}, BroadcastType::NONE, dest_sync{stage},\n"
-            f"            {dest_acc}, {math_fidelity}, EltwiseBinaryReuseDestType::NONE>(4, i, false);\n"
+            f"            {dest_acc}, {math_fidelity}, EltwiseBinaryReuseDestType::NONE>({num_faces}, i, false);\n"
             f"    }}\n"
         )
 
