@@ -144,9 +144,8 @@ void MAIN {
 
 #ifndef RMSNORM
     // E[x],
-    compute_kernel_lib::
-        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
-            cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, 0, block_w);
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true>(
+        cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, 0, block_w);
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 

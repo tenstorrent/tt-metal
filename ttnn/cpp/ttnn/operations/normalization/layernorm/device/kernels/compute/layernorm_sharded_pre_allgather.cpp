@@ -121,16 +121,15 @@ void MAIN {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 #endif
     // E[x],
-    compute_kernel_lib::
-        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
-            cb_in,
-            cb_scaler,
-            cb_ex_partial2,
-            block_h,
-            num_reduce_tiles_per_block_h,  // Wt
-            1,                             // num_batches
-            0,                             // row_chunk (default)
-            block_w);                      // input_stride
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true>(
+        cb_in,
+        cb_scaler,
+        cb_ex_partial2,
+        block_h,
+        num_reduce_tiles_per_block_h,  // Wt
+        1,                             // num_batches
+        0,                             // row_chunk (default)
+        block_w);                      // input_stride
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -172,16 +171,15 @@ void MAIN {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::
-        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
-            cb_x2,
-            cb_scaler,
-            cb_ex_partial2,
-            block_h,
-            num_reduce_tiles_per_block_h,  // Wt
-            1,                             // num_batches
-            0,                             // row_chunk (default)
-            block_w);                      // input_stride
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true>(
+        cb_x2,
+        cb_scaler,
+        cb_ex_partial2,
+        block_h,
+        num_reduce_tiles_per_block_h,  // Wt
+        1,                             // num_batches
+        0,                             // row_chunk (default)
+        block_w);                      // input_stride
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
