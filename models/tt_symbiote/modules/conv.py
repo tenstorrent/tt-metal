@@ -143,13 +143,6 @@ class TTNNConv2dNHWC(TTNNModule):
         )
         super().preprocess_weights_impl()
 
-    def move_weights_to_host_impl(self):
-        """Move weights back to host."""
-        self.tt_weight = self.tt_weight.cpu()
-        if self.tt_bias is not None:
-            self.tt_bias = self.tt_bias.cpu()
-        super().move_weights_to_host_impl()
-
     def deallocate_weights_impl(self):
         """Deallocate weights from device."""
         ttnn.deallocate(self.tt_weight)

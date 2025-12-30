@@ -88,9 +88,9 @@ class TorchTTNNTensor(torch.Tensor):
     def numpy(self):
         return self.to_torch.numpy()
 
-    def clone(self):
+    def clone(self, **kwargs):
         return TorchTTNNTensor(
-            self.ttnn_tensor.clone() if self.ttnn_tensor is not None else self.elem.clone(), dtype=self.dtype
+            self.ttnn_tensor.clone() if self.ttnn_tensor is not None else self.elem.clone(**kwargs), dtype=self.dtype
         )
 
     @property
