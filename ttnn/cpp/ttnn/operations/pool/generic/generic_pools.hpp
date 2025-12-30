@@ -8,15 +8,8 @@
 #include <optional>
 #include <variant>
 #include <vector>
-#include "tt-metalium/buffer_types.hpp"
-#include "ttnn/operations/pool/pool_utils.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "op_slicing.hpp"
-#include <tt-logger/tt-logger.hpp>
 #include <ttnn/operations/core/core.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -12,7 +11,6 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/operations/experimental/slice_write/slice_write.hpp>
 #include <ttnn/operations/experimental/padded_slice/padded_slice.hpp>
-#include "tt-metalium/math.hpp"
 namespace ttnn::operations::op_slicing {
 
 static uint32_t compute_L1_usage_for_slice_config(
@@ -260,7 +258,7 @@ void run_sliced_op(
 
     uint32_t max_num_slices = tt::div_up(output_sliced_dim, slice_rounding_value);
     if (max_num_slices == 1) {
-        log_warning(
+        log_debug(
             tt::LogOp,
             "Op with Output Dimensions {}x{}, {} and {} can't be sliced. The L1 version of the op will be directly "
             "called on the full input. ",

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include "ttnn/tensor/tensor.hpp"
 namespace ttnn::operations::op_slicing {
 

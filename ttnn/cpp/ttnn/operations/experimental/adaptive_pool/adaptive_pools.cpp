@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <optional>
 #include <variant>
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"

@@ -5,32 +5,18 @@
 #include "generic_pools.hpp"
 
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal.hpp"
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
-#include <cstdint>
-#include <cstdlib>
-#include <optional>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/tensor/layout/layout.hpp"
-#include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -60,7 +46,8 @@ static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_po
     bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
     sliding_window::ParallelConfig parallel_config;
 
-    uint32_t smallest_RM_elem_size = 2;  // Size of BFloat16
+    uint32_t smallest_RM_elem_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16));  // Size of BFloat16
     uint32_t input_channels_alignment =
         is_in_tiled ? tt::constants::TILE_WIDTH : (tt::tt_metal::hal::get_l1_alignment() / smallest_RM_elem_size);
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding

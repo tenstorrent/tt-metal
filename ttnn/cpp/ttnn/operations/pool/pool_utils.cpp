@@ -9,7 +9,6 @@
 #include "tt-metalium/constants.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
