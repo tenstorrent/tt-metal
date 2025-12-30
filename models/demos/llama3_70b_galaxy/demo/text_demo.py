@@ -226,14 +226,11 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {
-                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
-                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
-                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
-                "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
-                "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
-                "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
-                "seed": torch.randint(0, 33, size=(32,)).tolist(),
-            },  # sampling_params (non-uniform)
+                "temperature": (2.0 * torch.ones((32,))).tolist(),
+                "top_p": (1.0 * torch.ones((32,))).tolist(),
+                "top_k": (32 * torch.ones((32,))).tolist(),
+                "seed": (12 * torch.ones((32,))).tolist(),
+            },
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check

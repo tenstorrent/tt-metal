@@ -83,6 +83,7 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        return
         # Avoids an infinite loop
         self.prefill_traces_warmup = True
 
@@ -181,7 +182,6 @@ class Generator:
             and not return_logits
         ):
             use_batched_prefill = True
-
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
@@ -532,7 +532,6 @@ class Generator:
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
-                sampling_module.reset_seed(sampling_params.seed)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
