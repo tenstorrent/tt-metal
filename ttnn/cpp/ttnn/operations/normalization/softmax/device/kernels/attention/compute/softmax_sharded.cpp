@@ -13,15 +13,12 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+#include "tt_metal/hw/inc/api/debug/dprint.h"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row using reduce_helpers library
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
-
-    // Wait for all block_w tiles to be available for PRELOADED mode
-    cb_wait_front(cb_in, block_w);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
