@@ -46,8 +46,8 @@ void kernel_main() {
         }
 
         cb_wait_front(tt::CBIndex::c_24, onetile);
-        reduce_init(tt::CBIndex::c_24, tt::CBIndex::c_2, tt::CBIndex::c_16);
-        reduce_tile(tt::CBIndex::c_24, tt::CBIndex::c_2, 0, 0, 0);
+        reduce_init<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_24, tt::CBIndex::c_2, tt::CBIndex::c_16);
+        reduce_tile<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_24, tt::CBIndex::c_2, 0, 0, 0);
         cb_pop_front(tt::CBIndex::c_24, onetile);
         reduce_uninit();
 

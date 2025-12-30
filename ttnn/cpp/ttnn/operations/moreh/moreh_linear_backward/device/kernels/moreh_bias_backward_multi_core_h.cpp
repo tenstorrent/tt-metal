@@ -101,8 +101,8 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format(cb_reduce, cb_scaler);
 #endif
-                reduce_init(cb_reduce, cb_scaler, cb_out0);
-                reduce_tile(cb_reduce, cb_scaler, 0, 0, 0);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_reduce, cb_scaler, cb_out0);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_reduce, cb_scaler, 0, 0, 0);
                 reduce_uninit();
 
                 if (do_mask) {

@@ -15,11 +15,14 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
     // REDUCE_OP/DIM is expected to come from add_define
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+    // NONE: First operation after hw_startup, no reconfig needed
+    compute_kernel_lib::reduce<
+        REDUCE_OP,
+        REDUCE_DIM,
+        compute_kernel_lib::ReduceInputMode::STREAMING,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         tt::CBIndex::c_0,  // input CB
         tt::CBIndex::c_2,  // scaler CB
         tt::CBIndex::c_3,  // output CB
-        Ht,
-        Wt,
-        NC);
+        compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
 }
