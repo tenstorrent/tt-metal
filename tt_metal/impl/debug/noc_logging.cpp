@@ -4,7 +4,7 @@
 
 #include "noc_logging.hpp"
 
-#include <stdint.h>
+#include <cstdint>
 #include <array>
 #include <filesystem>
 #include <fstream>
