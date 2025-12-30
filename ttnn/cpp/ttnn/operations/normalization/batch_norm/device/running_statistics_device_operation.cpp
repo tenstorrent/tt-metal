@@ -4,6 +4,7 @@
 
 #include "running_statistics_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "batch_norm_utils.hpp"
@@ -108,20 +109,25 @@ RunningStatistics::tensor_return_value_t RunningStatistics::create_output_tensor
         compute_output_specs(operation_attributes, tensor_args), tensor_args.batch_mean.device());
 }
 
-std::tuple<RunningStatistics::operation_attributes_t, RunningStatistics::tensor_args_t> RunningStatistics::invoke(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn::prim {
+ttnn::operations::normalization::RunningStatistics::tensor_return_value_t running_statistics(
     const Tensor& batch_mean,
     const Tensor& batch_var,
-    const float momentum,
+    float momentum,
     std::optional<Tensor> running_mean,
     std::optional<Tensor> running_var,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    operation_attributes_t operation_attributes{
+    using OperationType = ttnn::operations::normalization::RunningStatistics;
+    OperationType::operation_attributes_t operation_attributes{
         momentum,
         memory_config.value_or(batch_mean.memory_config()),
-        batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, batch_mean),
+        ttnn::operations::normalization::batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, batch_mean),
         batch_mean.dtype()};
-    tensor_args_t tensor_args{batch_mean, batch_var, std::move(running_mean), std::move(running_var)};
-    return {operation_attributes, tensor_args};
+    OperationType::tensor_args_t tensor_args{batch_mean, batch_var, std::move(running_mean), std::move(running_var)};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

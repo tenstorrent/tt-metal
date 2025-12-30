@@ -29,17 +29,13 @@ struct NLPConcatHeadsBoltzDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const tt::tt_metal::MemoryConfig& memory_config,
-        std::optional<Tensor> optional_output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz
 
 namespace ttnn::prim {
-constexpr auto nlp_concat_heads_boltz = ttnn::register_operation<
-    "ttnn::prim::nlp_concat_heads_boltz",
-    ttnn::operations::experimental::nlp_concat_heads_boltz::NLPConcatHeadsBoltzDeviceOperation>();
+ttnn::operations::experimental::nlp_concat_heads_boltz::tensor_return_value_t nlp_concat_heads_boltz(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    std::optional<Tensor> optional_output_tensor);
 }  // namespace ttnn::prim

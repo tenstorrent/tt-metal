@@ -29,24 +29,20 @@ struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& q_input_tensor,
-        const Tensor& k_input_tensor,
-        const Tensor& cos_cache,
-        const Tensor& sin_cache,
-        const Tensor& trans_mat,
-        const tt::tt_metal::MemoryConfig& q_output_mem_config,
-        const tt::tt_metal::MemoryConfig& k_output_mem_config,
-        const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-        bool row_major_QK);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
 
 namespace ttnn::prim {
-constexpr auto rotary_embedding_llama_fused_qk = ttnn::register_operation<
-    "ttnn::prim::rotary_embedding_llama_fused_qk",
-    ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::
-        RotaryEmbeddingLlamaFusedQKDeviceOperation>();
+ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::tensor_return_value_t
+rotary_embedding_llama_fused_qk(
+    const Tensor& q_input_tensor,
+    const Tensor& k_input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    const Tensor& trans_mat,
+    const tt::tt_metal::MemoryConfig& q_output_mem_config,
+    const tt::tt_metal::MemoryConfig& k_output_mem_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    bool row_major_QK);
 }  // namespace ttnn::prim

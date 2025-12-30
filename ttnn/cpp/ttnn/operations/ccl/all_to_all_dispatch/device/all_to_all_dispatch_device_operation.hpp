@@ -113,24 +113,20 @@ struct AllToAllDispatchDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& expert_indices_tensor,
-        const ttnn::Tensor& expert_mapping_tensor,
-        std::optional<uint32_t> axis,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
-        uint32_t num_links,
-        tt::tt_fabric::Topology topology,
-        const ttnn::MemoryConfig& memory_config,
-        const CoreRangeSet& worker_core_range_set,
-        AllToAllTransferType impl,
-        uint32_t output_concat_dim);
 };
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto all_to_all_dispatch = ttnn::
-    register_operation<"ttnn::prim::all_to_all_dispatch", ttnn::operations::ccl::AllToAllDispatchDeviceOperation>();
+ttnn::operations::ccl::AllToAllDispatchDeviceOperation::tensor_return_value_t all_to_all_dispatch(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    std::optional<uint32_t> axis,
+    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology,
+    const ttnn::MemoryConfig& memory_config,
+    const CoreRangeSet& worker_core_range_set,
+    ttnn::operations::ccl::AllToAllDispatchDeviceOperation::AllToAllTransferType impl,
+    uint32_t output_concat_dim);
 }  // namespace ttnn::prim

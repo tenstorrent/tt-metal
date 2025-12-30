@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <optional>
 #include <tuple>
@@ -193,7 +194,10 @@ tensor_return_value_t TopKDeviceOperation::create_output_tensors(
     };
 }
 
-std::tuple<TopKDeviceOperation::operation_attributes_t, TopKDeviceOperation::tensor_args_t> TopKDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn::prim {
+ttnn::operations::reduction::topk::TopKDeviceOperation::tensor_return_value_t topk(
     const Tensor& input_tensor,
     uint32_t k,
     int8_t dim,
@@ -203,16 +207,17 @@ std::tuple<TopKDeviceOperation::operation_attributes_t, TopKDeviceOperation::ten
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
     const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::reduction::topk::TopKDeviceOperation;
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .k = k,
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
             .output_memory_config = memory_config,
             .sub_core_grids = sub_core_grids},
-        tensor_args_t{
-            .input = input_tensor, .indices = indices_tensor, .preallocated_outputs = preallocated_output_tensors}};
+        OperationType::tensor_args_t{
+            .input = input_tensor, .indices = indices_tensor, .preallocated_outputs = preallocated_output_tensors});
 }
-
-}  // namespace ttnn::operations::reduction::topk
+}  // namespace ttnn::prim

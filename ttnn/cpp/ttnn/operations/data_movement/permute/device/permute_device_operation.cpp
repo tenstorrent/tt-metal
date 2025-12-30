@@ -6,11 +6,11 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "permute_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
-
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& dims = operation_attributes.dims;
@@ -85,20 +85,21 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
+}  // namespace ttnn::operations::data_movement
 
-std::tuple<PermuteDeviceOperation::operation_attributes_t, PermuteDeviceOperation::tensor_args_t>
-PermuteDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t permute(
     const Tensor& input_tensor,
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<float>& pad_value) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .dims = dims,
             .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
             .pad_value = pad_value},
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

@@ -6,6 +6,7 @@
 #include "create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -149,24 +150,31 @@ tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<CreateQKVHeadsDeviceOperation::operation_attributes_t, CreateQKVHeadsDeviceOperation::tensor_args_t>
-CreateQKVHeadsDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::create_qkv_heads
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t create_qkv_heads(
     const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool transpose_k_heads,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs) {
-    return {
-        operation_attributes_t{
-            .num_q_heads = num_q_heads,
-            .num_kv_heads = num_kv_heads,
-            .head_dim = head_dim,
-            .transpose_k_heads = transpose_k_heads,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-        },
-        tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs}};
+    using OperationType = ttnn::operations::experimental::create_qkv_heads::CreateQKVHeadsDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_q_heads = num_q_heads,
+        .num_kv_heads = num_kv_heads,
+        .head_dim = head_dim,
+        .transpose_k_heads = transpose_k_heads,
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+    };
+    auto tensor_args =
+        OperationType::tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads
+}  // namespace ttnn::prim

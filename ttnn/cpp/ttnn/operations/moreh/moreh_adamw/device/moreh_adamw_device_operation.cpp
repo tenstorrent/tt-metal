@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
@@ -139,51 +140,6 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
     return result;
 }
 
-std::tuple<MorehAdamWDeviceOperation::operation_attributes_t, MorehAdamWDeviceOperation::tensor_args_t>
-MorehAdamWDeviceOperation::invoke(
-    const Tensor& param_in,
-    const Tensor& grad,
-    const Tensor& exp_avg_in,
-    const Tensor& exp_avg_sq_in,
-
-    const std::optional<float> lr,
-    const std::optional<float> beta1,
-    const std::optional<float> beta2,
-    const std::optional<float> eps,
-    const std::optional<float> weight_decay,
-    const std::optional<uint32_t> step,
-    const std::optional<bool> amsgrad,
-
-    const std::optional<Tensor>& max_exp_avg_sq_in,
-    const std::optional<Tensor>& param_out,
-    const std::optional<Tensor>& exp_avg_out,
-    const std::optional<Tensor>& exp_avg_sq_out,
-    const std::optional<Tensor>& max_exp_avg_sq_out,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            lr.value_or(0.001f),
-            beta1.value_or(0.9f),
-            beta2.value_or(0.999f),
-            eps.value_or(1e-8f),
-            weight_decay.value_or(1e-2f),
-            step.value_or(0),
-            amsgrad.value_or(false),
-            memory_config.value_or(param_in.memory_config()),
-            init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{
-            param_in,
-            grad,
-            exp_avg_in,
-            exp_avg_sq_in,
-            max_exp_avg_sq_in,
-            param_out,
-            exp_avg_out,
-            exp_avg_sq_out,
-            max_exp_avg_sq_out}};
-}
-
 tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto operation_attributes_without_step_and_lr = operation_attributes;
@@ -192,3 +148,49 @@ tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
     return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_value_t moreh_adamw(
+    const Tensor& param_in,
+    const Tensor& grad,
+    const Tensor& exp_avg_in,
+    const Tensor& exp_avg_sq_in,
+    std::optional<float> lr,
+    std::optional<float> beta1,
+    std::optional<float> beta2,
+    std::optional<float> eps,
+    std::optional<float> weight_decay,
+    std::optional<uint32_t> step,
+    std::optional<bool> amsgrad,
+    const std::optional<Tensor>& max_exp_avg_sq_in,
+    const std::optional<Tensor>& param_out,
+    const std::optional<Tensor>& exp_avg_out,
+    const std::optional<Tensor>& exp_avg_sq_out,
+    const std::optional<Tensor>& max_exp_avg_sq_out,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType = ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            .lr = lr.value_or(0.001f),
+            .beta1 = beta1.value_or(0.9f),
+            .beta2 = beta2.value_or(0.999f),
+            .eps = eps.value_or(1e-8f),
+            .weight_decay = weight_decay.value_or(1e-2f),
+            .step = step.value_or(0),
+            .amsgrad = amsgrad.value_or(false),
+            .memory_config = memory_config.value_or(param_in.memory_config()),
+            .compute_kernel_config = init_device_compute_kernel_config(
+                param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+        OperationType::tensor_args_t{
+            .param_in = param_in,
+            .grad = grad,
+            .exp_avg_in = exp_avg_in,
+            .exp_avg_sq_in = exp_avg_sq_in,
+            .max_exp_avg_sq_in = max_exp_avg_sq_in,
+            .param_out = param_out,
+            .exp_avg_out = exp_avg_out,
+            .exp_avg_sq_out = exp_avg_sq_out,
+            .max_exp_avg_sq_out = max_exp_avg_sq_out});
+}
+}  // namespace ttnn::prim

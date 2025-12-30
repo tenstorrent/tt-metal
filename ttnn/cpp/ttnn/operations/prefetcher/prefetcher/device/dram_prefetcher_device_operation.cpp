@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <optional>
 
@@ -93,19 +94,22 @@ DramPrefetcherOperation::tensor_return_value_t DramPrefetcherOperation::create_o
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
 }
 
-std::tuple<DramPrefetcherOperation::operation_attributes_t, DramPrefetcherOperation::tensor_args_t>
-DramPrefetcherOperation::invoke(
+}  // namespace ttnn::operations::dram_prefetcher
+
+namespace ttnn::prim {
+ttnn::operations::dram_prefetcher::DramPrefetcherOperation::tensor_return_value_t dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const bool enable_performance_mode) {
-    return {
-        operation_attributes_t{
-            .num_layers = num_layers,
-            .enable_performance_mode = enable_performance_mode,
-            .global_cb = global_cb,
-        },
-        tensor_args_t{.input_tensors = tensors}};
-}
+    using OperationType = ttnn::operations::dram_prefetcher::DramPrefetcherOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_layers = num_layers,
+        .enable_performance_mode = enable_performance_mode,
+        .global_cb = global_cb,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input_tensors = tensors};
 
-}  // namespace ttnn::operations::dram_prefetcher
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

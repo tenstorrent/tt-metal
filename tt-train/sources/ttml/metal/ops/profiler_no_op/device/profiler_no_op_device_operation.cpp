@@ -4,9 +4,10 @@
 
 #include "profiler_no_op_device_operation.hpp"
 
-#include "profiler_no_op_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
+
+#include "profiler_no_op_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::profiler_no_op::device {
 
@@ -104,16 +105,23 @@ ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> ProfilerNoopOperation::invoke(
+}  // namespace ttml::metal::ops::profiler_no_op::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::profiler_no_op::device::ProfilerNoopOperation::tensor_return_value_t ttml_profiler_no_op(
     const ttnn::Tensor& input_tensor,
     const std::string& identifier,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{.identifier = identifier},
-        tensor_args_t{
-            .input = input_tensor,
-            .preallocated_output = preallocated_output,
-        }};
+    using OperationType = ttml::metal::ops::profiler_no_op::device::ProfilerNoopOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{.identifier = identifier};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .preallocated_output = preallocated_output,
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::profiler_no_op::device
+}  // namespace ttnn::prim

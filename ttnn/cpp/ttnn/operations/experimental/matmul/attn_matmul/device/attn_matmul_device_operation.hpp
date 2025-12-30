@@ -35,23 +35,21 @@ struct AttnMatmulDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const CoreCoord& compute_with_storage_grid_size,
-        std::optional<const DataType> output_dtype,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<const uint32_t> num_tokens,
-        std::optional<const bool> transpose_hw,
-        std::optional<Tensor> optional_output_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::matmul::attn_matmul
 
 namespace ttnn::prim {
-constexpr auto attn_matmul = ttnn::register_operation<
-    "ttnn::prim::attn_matmul",
-    ttnn::operations::experimental::matmul::attn_matmul::AttnMatmulDeviceOperation>();
+
+ttnn::operations::experimental::matmul::attn_matmul::AttnMatmulDeviceOperation::tensor_return_value_t attn_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const CoreCoord& compute_with_storage_grid_size,
+    std::optional<const DataType> output_dtype,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const uint32_t> num_tokens,
+    std::optional<const bool> transpose_hw,
+    std::optional<Tensor> optional_output_tensor);
+
 }  // namespace ttnn::prim

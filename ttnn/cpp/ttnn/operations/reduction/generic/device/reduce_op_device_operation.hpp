@@ -30,16 +30,6 @@ struct ReduceDeviceOperation {
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        tt::tt_metal::ReduceOpMath reduce_math,
-        tt::tt_metal::ReduceOpDim reduce_dim,
-        float scaler,
-        const MemoryConfig& output_mem_config,
-        const std::optional<DataType>& output_dtype,
-        const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-        const std::optional<CoreRangeSet>& sub_core_grids);
-
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
@@ -59,6 +49,13 @@ struct ReduceDeviceOperation {
 }  // namespace ttnn::operations::reduction::generic
 
 namespace ttnn::prim {
-constexpr auto reduce =
-    ttnn::register_operation<"ttnn::prim::reduce", ttnn::operations::reduction::generic::ReduceDeviceOperation>();
+ttnn::Tensor reduce(
+    const Tensor& input_tensor,
+    tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    float scaler,
+    const MemoryConfig& output_mem_config,
+    const std::optional<DataType>& output_dtype,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

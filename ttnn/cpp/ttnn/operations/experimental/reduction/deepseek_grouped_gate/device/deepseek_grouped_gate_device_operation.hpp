@@ -67,23 +67,22 @@ struct DeepseekGroupedGateDeviceOperation {
 
     // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& scores,
-        const Tensor& bias,
-        uint32_t n_groups,
-        uint32_t summed_experts_per_group,
-        uint32_t topk_groups,
-        uint32_t n_activated_experts,
-        float route_scale,
-        float epsilon,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
 
 namespace ttnn::prim {
-constexpr auto deepseek_grouped_gate = ttnn::register_operation<
-    "ttnn::prim::deepseek_grouped_gate",
-    ttnn::operations::experimental::reduction::DeepseekGroupedGateDeviceOperation>();
+
+ttnn::operations::experimental::reduction::DeepseekGroupedGateDeviceOperation::tensor_return_value_t
+deepseek_grouped_gate(
+    const Tensor& scores,
+    const Tensor& bias,
+    uint32_t n_groups,
+    uint32_t summed_experts_per_group,
+    uint32_t topk_groups,
+    uint32_t n_activated_experts,
+    float route_scale,
+    float epsilon,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
 }  // namespace ttnn::prim

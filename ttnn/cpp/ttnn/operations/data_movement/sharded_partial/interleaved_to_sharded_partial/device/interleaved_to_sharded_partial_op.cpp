@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "interleaved_to_sharded_partial_op.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -100,11 +101,11 @@ tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_progra
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.layout());
 }
+}  // namespace ttnn::operations::data_movement
 
-std::tuple<
-    InterleavedToShardedPartialDeviceOperation::operation_attributes_t,
-    InterleavedToShardedPartialDeviceOperation::tensor_args_t>
-InterleavedToShardedPartialDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation::tensor_return_value_t
+interleaved_to_sharded_partial(
     const Tensor& input_tensor,
     const CoreCoord& grid_size,
     const tt::tt_metal::ShardSpec& shard_spec,
@@ -112,15 +113,15 @@ InterleavedToShardedPartialDeviceOperation::invoke(
     uint32_t slice_index,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .grid_size = grid_size,
             .shard_spec = shard_spec,
             .num_slices = num_slices,
             .slice_index = slice_index,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype},
-        tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

@@ -31,8 +31,15 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterMinimalAsyncDeviceOperation::
+    tensor_return_value_t
+    reduce_scatter_minimal_async(
         const ttnn::Tensor& input_tensor,
         const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
@@ -50,13 +57,5 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
         std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel);
-};
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
-
-namespace ttnn::prim {
-constexpr auto reduce_scatter_minimal_async = ttnn::register_operation<
-    "ttnn::prim::reduce_scatter_minimal_async",
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
-        ReduceScatterMinimalAsyncDeviceOperation>();
 }  // namespace ttnn::prim
