@@ -217,8 +217,7 @@ class SigLIPAttentionTTNN:
     """
     SigLIP self-attention using TTNN operations.
 
-    Uses separate Q/K/V projections with manual reshaping (like CLIP) to avoid
-    nlp_create_qkv_heads padding issues with non-tile-aligned head dimensions.
+    OPTIMIZED: Uses fused QKV projection (single linear) and native TTNN head operations.
     """
 
     def __init__(
@@ -245,58 +244,79 @@ class SigLIPAttentionTTNN:
         self.hidden_size = config.hidden_size
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
-        # Separate Q, K, V weight matrices (transposed for TTNN linear)
-        self.wq = ttnn.from_torch(
-            weights["self_attn.q_proj.weight"].T.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.wk = ttnn.from_torch(
-            weights["self_attn.k_proj.weight"].T.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.wv = ttnn.from_torch(
-            weights["self_attn.v_proj.weight"].T.contiguous(),
+        # Pad head_dim to multiple of 32 for TTNN tile alignment
+        self.padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 72 -> 96
+
+        # Helper function to pad weights to tile-aligned head_dim
+        def pad_head_dim_weight(weight, heads_out=True):
+            """Pad weight tensor's head dimension to multiple of 32."""
+            dim = weight.shape[0]  # hidden_size
+            padded_head_dim = self.padded_head_dim
+            padding_size = padded_head_dim - self.head_dim
+
+            if padding_size > 0:
+                if heads_out:
+                    weight = weight.T  # (hidden, hidden) -> transpose for reshape
+                weight = weight.reshape(dim, self.num_heads, self.head_dim)
+                padding = torch.zeros(dim, self.num_heads, padding_size, dtype=weight.dtype)
+                weight = torch.cat([weight, padding], dim=-1)
+                weight = weight.reshape(dim, self.num_heads * padded_head_dim)
+                if heads_out:
+                    weight = weight.T  # Transpose back
+            return weight
+
+        def pad_head_dim_bias(bias):
+            """Pad 1D bias to match padded head dim."""
+            padded_head_dim = self.padded_head_dim
+            padding_size = padded_head_dim - self.head_dim
+
+            if padding_size > 0:
+                bias = bias.view(self.num_heads, self.head_dim)
+                padding = torch.zeros(self.num_heads, padding_size, dtype=bias.dtype)
+                bias = torch.cat([bias, padding], dim=-1)
+                bias = bias.view(self.num_heads * padded_head_dim)
+            return bias
+
+        # OPTIMIZATION: Fused QKV weights - single linear instead of 3
+        # Pad each weight, transpose for TTNN linear, then concatenate
+        wq_padded = pad_head_dim_weight(weights["self_attn.q_proj.weight"])
+        wk_padded = pad_head_dim_weight(weights["self_attn.k_proj.weight"])
+        wv_padded = pad_head_dim_weight(weights["self_attn.v_proj.weight"])
+
+        # Concatenate Q, K, V weights: [hidden, 3 * num_heads * padded_head_dim]
+        wqkv_combined = torch.cat([wq_padded.T, wk_padded.T, wv_padded.T], dim=-1)
+
+        self.wqkv = ttnn.from_torch(
+            wqkv_combined.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Q, K, V biases
+        # Fused QKV biases
         if "self_attn.q_proj.bias" in weights:
-            self.bq = ttnn.from_torch(
-                weights["self_attn.q_proj.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self.bk = ttnn.from_torch(
-                weights["self_attn.k_proj.bias"].unsqueeze(0),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self.bv = ttnn.from_torch(
-                weights["self_attn.v_proj.bias"].unsqueeze(0),
+            bq_padded = pad_head_dim_bias(weights["self_attn.q_proj.bias"])
+            bk_padded = pad_head_dim_bias(weights["self_attn.k_proj.bias"])
+            bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
+
+            # Concatenate biases
+            bqkv_combined = torch.cat([bq_padded, bk_padded, bv_padded], dim=-1)
+
+            self.bqkv = ttnn.from_torch(
+                bqkv_combined.unsqueeze(0).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            self.bq = self.bk = self.bv = None
+            self.bqkv = None
 
-        # Output projection (no padding needed with manual approach)
+        # Output projection - pad input head dim, output is hidden_size
+        wo_padded = pad_head_dim_weight(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
-            weights["self_attn.out_proj.weight"].T.contiguous(),
+            wo_padded.T.contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -314,22 +334,28 @@ class SigLIPAttentionTTNN:
         else:
             self.bo = None
 
-        # Compute kernel config
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        # Compute kernel configs
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,  # SDPA needs this off
+        )
 
     def forward(self, hidden_states: "ttnn.Tensor") -> "ttnn.Tensor":
         """
-        Forward pass using native TTNN SDPA with head_dim padding.
+        OPTIMIZED forward pass using fused QKV and native TTNN head operations.
 
-        Since head_dim=72 is not tile-aligned (need multiple of 32), we:
-        1. Pad Q/K/V to padded_head_dim=96
-        2. Run TTNN SDPA
-        3. Slice back to original head_dim=72
+        Key optimizations:
+        1. Single fused QKV linear (3x fewer linear ops)
+        2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+        3. Native ttnn.experimental.nlp_concat_heads (no PyTorch transfers)
 
         Args:
             hidden_states: TTNN tensor (batch_size, seq_len, hidden_size)
@@ -339,83 +365,34 @@ class SigLIPAttentionTTNN:
         """
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-        padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 72 -> 96
 
-        # Separate Q, K, V projections on TTNN -> each [batch, seq, hidden_size]
-        q = ttnn.linear(
+        # Reshape to 4D for nlp_create_qkv_heads: [batch, 1, seq, hidden]
+        if len(hidden_states.shape) == 3:
+            hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
+
+        # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
+        # Output: [batch, 1, seq, 3 * num_heads * padded_head_dim]
+        xqkv_fused = ttnn.linear(
             hidden_states,
-            self.wq,
-            bias=self.bq,
+            self.wqkv,
+            bias=self.bqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        k = ttnn.linear(
-            hidden_states,
-            self.wk,
-            bias=self.bk,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        v = ttnn.linear(
-            hidden_states,
-            self.wv,
-            bias=self.bv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
 
-        # Convert to PyTorch for reshape/pad (TTNN reshape doesn't support non-tile dims)
-        q_torch = ttnn.to_torch(q)
-        k_torch = ttnn.to_torch(k)
-        v_torch = ttnn.to_torch(v)
-
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
-
-        # Reshape: [batch, seq, hidden] -> [batch, seq, heads, head_dim]
-        q_torch = q_torch.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        k_torch = k_torch.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        v_torch = v_torch.view(batch_size, seq_len, self.num_heads, self.head_dim)
-
-        # Transpose: [batch, seq, heads, head_dim] -> [batch, heads, seq, head_dim]
-        q_torch = q_torch.transpose(1, 2).contiguous()
-        k_torch = k_torch.transpose(1, 2).contiguous()
-        v_torch = v_torch.transpose(1, 2).contiguous()
-
-        # Pad head_dim: [batch, heads, seq, 72] -> [batch, heads, seq, 96]
-        pad_size = padded_head_dim - self.head_dim  # 96 - 72 = 24
-        q_padded = torch.nn.functional.pad(q_torch, (0, pad_size), value=0.0)
-        k_padded = torch.nn.functional.pad(k_torch, (0, pad_size), value=0.0)
-        v_padded = torch.nn.functional.pad(v_torch, (0, pad_size), value=0.0)
-
-        # Convert padded tensors to TTNN
-        q_ttnn = ttnn.from_torch(
-            q_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
+        # This splits the fused QKV into separate Q, K, V with proper head layout
+        q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,  # SigLIP uses MHA, not MQA
+            transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        k_ttnn = ttnn.from_torch(
-            k_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v_ttnn = ttnn.from_torch(
-            v_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        ttnn.deallocate(xqkv_fused)
 
-        # TTNN SDPA with tile-aligned head_dim
+        # SDPA configuration
         device_grid = self.device.compute_with_storage_grid_size()
         grid_x = min(8, device_grid.x)
         grid_y = min(8, device_grid.y)
@@ -427,55 +404,45 @@ class SigLIPAttentionTTNN:
             exp_approx_mode=False,
         )
 
+        # SDPA - stays entirely on device
         attn_output = ttnn.transformer.scaled_dot_product_attention(
-            q_ttnn,
-            k_ttnn,
-            v_ttnn,
+            q_heads,
+            k_heads,
+            v_heads,
             is_causal=False,
             scale=self.scale,
             program_config=sdpa_cfg,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
-        ttnn.deallocate(q_ttnn)
-        ttnn.deallocate(k_ttnn)
-        ttnn.deallocate(v_ttnn)
+        ttnn.deallocate(q_heads)
+        ttnn.deallocate(k_heads)
+        ttnn.deallocate(v_heads)
 
-        # Convert back to PyTorch, slice to original head_dim, reshape
-        attn_torch = ttnn.to_torch(attn_output)  # [batch, heads, seq, padded_head_dim]
-        ttnn.deallocate(attn_output)
-
-        # Slice: [batch, heads, seq, 96] -> [batch, heads, seq, 72]
-        attn_torch = attn_torch[..., : self.head_dim]
-
-        # Transpose: [batch, heads, seq, head_dim] -> [batch, seq, heads, head_dim]
-        attn_torch = attn_torch.transpose(1, 2).contiguous()
-
-        # Reshape: [batch, seq, heads, head_dim] -> [batch, seq, hidden]
-        attn_torch = attn_torch.reshape(batch_size, seq_len, self.hidden_size)
-
-        # Convert back to TTNN for output projection
-        attn_ttnn = ttnn.from_torch(
-            attn_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+        # OPTIMIZATION 3: Native TTNN head concatenation (no PyTorch transfers!)
+        # This concatenates heads back to [batch, 1, seq, num_heads * padded_head_dim]
+        attn_concat = ttnn.experimental.nlp_concat_heads(
+            attn_output,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(attn_output)
 
-        # Output projection on TTNN
+        # Output projection
         output = ttnn.linear(
-            attn_ttnn,
+            attn_concat,
             self.wo,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
-        ttnn.deallocate(attn_ttnn)
+        ttnn.deallocate(attn_concat)
 
         # Add bias if present
         if self.bo is not None:
             output = ttnn.add(output, self.bo)
+
+        # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
+        output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
 
         return output
 
