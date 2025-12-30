@@ -33,28 +33,26 @@ class TTNNLinear(TTNNModule):
         """Preprocess linear weights for TTNN."""
         if self.torch_layer is None:
             self._fallback_torch_layer = nn.Linear(self.in_features, self.out_features)
-        self.tt_weight = preprocess_linear_weight(self.torch_layer.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        self.tt_bias = None
+        self.tt_weight_host = preprocess_linear_weight(
+            self.torch_layer.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        self.tt_bias_host = None
         if self.torch_layer.bias is not None:
-            self.tt_bias = preprocess_linear_bias(self.torch_layer.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            self.tt_bias_host = preprocess_linear_bias(
+                self.torch_layer.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
-        self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
-        if self.tt_bias is not None:
-            self.tt_bias = ttnn.to_device(self.tt_bias, self.device)
-
-    def move_weights_to_host_impl(self):
-        """Move weights back to host."""
-        self.tt_weight = self.tt_weight.cpu()
-        if self.tt_bias is not None:
-            self.tt_bias = self.tt_bias.cpu()
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
     def deallocate_weights_impl(self):
         """Deallocate weights from device."""
         ttnn.deallocate(self.tt_weight)
         if self.tt_bias is not None:
             ttnn.deallocate(self.tt_bias)
+        super().deallocate_weights_impl()
 
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
@@ -77,12 +75,14 @@ class TTNNLinearLLama(TTNNLinear):
         """Preprocess linear weights with bfloat8 precision."""
         if self.torch_layer is None:
             self._fallback_torch_layer = nn.Linear(self.in_features, self.out_features)
-        self.tt_weight = preprocess_linear_weight(
+        self.tt_weight_host = preprocess_linear_weight(
             self.torch_layer.weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
         )
-        self.tt_bias = None
+        self.tt_bias_host = None
         if self.torch_layer.bias is not None:
-            self.tt_bias = preprocess_linear_bias(self.torch_layer.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            self.tt_bias_host = preprocess_linear_bias(
+                self.torch_layer.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            )
 
     @classmethod
     def from_torch(cls, linear: nn.Linear):

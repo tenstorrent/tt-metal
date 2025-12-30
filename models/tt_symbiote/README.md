@@ -181,7 +181,7 @@ class TTNNCustomLayer(TTNNModule):
 
     def preprocess_weights_impl(self):
         """Convert PyTorch weights to TTNN format (called once)."""
-        self.tt_weight = ttnn.from_torch(
+        self.tt_weight_host = ttnn.from_torch(
             self.torch_layer.weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT
@@ -189,11 +189,7 @@ class TTNNCustomLayer(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move preprocessed weights to device."""
-        self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
-
-    def move_weights_to_host_impl(self):
-        """Move weights back to host."""
-        self.tt_weight = self.tt_weight.cpu()
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
 
     def deallocate_weights_impl(self):
         """Deallocate device memory."""
@@ -226,7 +222,6 @@ The framework provides sophisticated weight lifecycle management:
 # Automatic weight preprocessing and device placement
 module.preprocess_weights()           # Convert PyTorch → TTNN format (once)
 module.move_weights_to_device()       # Transfer to device
-module.move_weights_to_host()         # Move back to CPU
 module.deallocate_weights()           # Free device memory
 
 # Auto-deallocation decorator for memory-constrained scenarios
