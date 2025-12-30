@@ -277,7 +277,7 @@ ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_valu
     bool in_place,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::data_movement::bcast::BcastDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .math_op = bcast_op, .dim = bcast_dim, .output_mem_config = output_mem_config, .in_place = in_place},
         OperationType::tensor_args_t{

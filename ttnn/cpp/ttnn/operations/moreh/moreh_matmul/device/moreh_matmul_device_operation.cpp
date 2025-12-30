@@ -188,6 +188,6 @@ ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation::tensor_return_value
         output_memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)};
     auto tensor_args = OperationType::tensor_args_t{input, other, output, bias};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -141,7 +141,7 @@ ttnn::operations::copy::TypecastDeviceOperation::tensor_return_value_t typecast(
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::copy::TypecastDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .input_dtype = input.dtype(),
             .output_dtype = output_dtype,

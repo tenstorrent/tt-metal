@@ -76,6 +76,6 @@ ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad::MorehLayerNo
         memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, input, mean, rstd, gamma_grad, beta_grad};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

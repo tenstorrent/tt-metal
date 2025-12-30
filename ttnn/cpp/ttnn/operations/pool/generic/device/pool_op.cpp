@@ -227,7 +227,7 @@ std::vector<ttnn::Tensor> pool2d(
     bool return_indices,
     uint32_t memory_used) {
     using OperationType = ttnn::operations::pool::Pool2D;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,

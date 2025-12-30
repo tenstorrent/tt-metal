@@ -97,7 +97,7 @@ ttnn::Tensor ema_device(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = ttnn::operations::reduction::ema::EmaDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .alpha = alpha,
             .grid_size = grid_size,

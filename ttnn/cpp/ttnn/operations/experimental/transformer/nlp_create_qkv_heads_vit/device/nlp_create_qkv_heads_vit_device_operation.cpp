@@ -111,7 +111,7 @@ std::vector<Tensor> nlp_create_qkv_heads_vit(
     auto tensor_args =
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensors = optional_output_tensors};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

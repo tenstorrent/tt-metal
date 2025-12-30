@@ -194,7 +194,7 @@ ttnn::Tensor argmax(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = ttnn::operations::reduction::argmax::ArgMaxDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_dtype = output_dtype,
             .dim = dim,

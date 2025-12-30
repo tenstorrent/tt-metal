@@ -95,7 +95,7 @@ ttnn::operations::data_movement::reshape::ReshapeDeviceOperation::tensor_return_
     bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     using OperationType = ttnn::operations::data_movement::reshape::ReshapeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},
         OperationType::tensor_args_t{input});

@@ -218,7 +218,7 @@ tt::tt_metal::Tensor rotary_embedding_llama(
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

@@ -297,7 +297,7 @@ ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
     using OperationType = ttnn::operations::point_to_point::PointToPointOp;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
         OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
 }

@@ -215,7 +215,7 @@ ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingD
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_tensor_end = output_tensor_end,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),

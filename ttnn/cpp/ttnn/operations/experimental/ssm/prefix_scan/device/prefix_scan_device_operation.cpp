@@ -103,7 +103,7 @@ ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation::ten
     };
     auto tensor_args = OperationType::tensor_args_t{.a = a, .bx = bx, .h_prev = h_prev};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

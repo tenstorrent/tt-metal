@@ -155,7 +155,7 @@ ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_ret
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,

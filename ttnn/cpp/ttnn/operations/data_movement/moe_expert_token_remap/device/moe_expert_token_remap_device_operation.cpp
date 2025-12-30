@@ -120,7 +120,7 @@ ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation::tensor_retu
     const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
     uint32_t reduction_size) {
     using OperationType = ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.output_mem_config = output_mem_config, .reduction_size = reduction_size},
         OperationType::tensor_args_t{
             .topk_tensor = topk_tensor,

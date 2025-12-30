@@ -409,7 +409,7 @@ ttnn::operations::data_movement::concat::ConcatDeviceOperation::tensor_return_va
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::data_movement::concat::ConcatDeviceOperation;
     uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = normalized_dim,
             .groups = groups,

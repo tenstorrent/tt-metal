@@ -110,7 +110,7 @@ ttnn::Tensor embedding_backward(
     uint32_t num_embeddings,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::embedding_backward::EmbeddingBackwardDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,

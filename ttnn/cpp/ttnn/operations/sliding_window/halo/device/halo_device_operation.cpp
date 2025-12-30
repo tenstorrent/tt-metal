@@ -155,7 +155,7 @@ ttnn::operations::sliding_window::halo::HaloDeviceOperation::tensor_return_value
     p_config.shard_scheme = input_tensor.memory_config().memory_layout();
     p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .config = config,
             .parallel_config = p_config,

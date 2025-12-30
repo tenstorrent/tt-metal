@@ -439,6 +439,6 @@ ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_re
         .stats = stats,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

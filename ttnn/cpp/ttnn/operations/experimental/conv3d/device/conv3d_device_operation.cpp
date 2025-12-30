@@ -243,7 +243,7 @@ ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_val
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

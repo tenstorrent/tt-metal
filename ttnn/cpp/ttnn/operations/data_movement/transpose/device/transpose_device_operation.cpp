@@ -288,7 +288,7 @@ ttnn::Tensor transpose(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
     using OperationType = ttnn::operations::data_movement::transpose::TransposeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = dim,
             .output_mem_config = output_mem_config,

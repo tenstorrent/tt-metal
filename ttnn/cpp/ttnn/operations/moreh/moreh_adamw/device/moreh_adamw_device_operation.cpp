@@ -170,7 +170,7 @@ ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_v
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .lr = lr.value_or(0.001f),
             .beta1 = beta1.value_or(0.9f),

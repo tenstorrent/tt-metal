@@ -176,7 +176,7 @@ ttnn::operations::experimental::transformer::rotary_embedding::tensor_return_val
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input, .cos = cos, .sin = sin};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
