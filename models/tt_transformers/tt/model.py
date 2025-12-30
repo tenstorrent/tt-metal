@@ -143,6 +143,22 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
+        self.batch = 0
+        self.debug = {
+            "before": {
+                0: [],
+                1: [],
+            },
+            "after": {
+                0: [],
+                1: [],
+            },
+            "after_sampling": {
+                0: [],
+                1: [],
+            },
+        }
+
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
@@ -427,6 +443,8 @@ class Transformer(LightweightModule):
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
         x_embed = self._transform_decode_inputs_device(x)
+        self.debug["before"][self.batch].append(x_embed.cpu(blocking=True))
+        ttnn.synchronize_device(self.mesh_device)
         tt_logits = self.forward(
             x_embed,
             current_pos,
@@ -437,6 +455,8 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
+        self.debug["after"][self.batch].append(tt_logits.cpu(blocking=True))
+        ttnn.synchronize_device(self.mesh_device)
         if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
@@ -445,7 +465,13 @@ class Transformer(LightweightModule):
                 tt_logits,
                 tt_out_tok=x,
                 enable_trace=False,
+                b0=self.debug["after"][0][0],
+                b1=self.debug["after"][1][0] if len(self.debug["after"][1]) > 1 else None,
             )
+
+            ttnn.synchronize_device(self.mesh_device)
+
+            self.debug["after_sampling"][self.batch].append(tt_toks.cpu(blocking=True))
 
             return tt_toks, tt_log_probs
 

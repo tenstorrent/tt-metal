@@ -151,10 +151,12 @@ class SamplingGenerator:
         *,
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
+        b0: Optional[ttnn.Tensor] = None,
+        b1: Optional[ttnn.Tensor] = None,
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
-        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok, b0=b0, b1=b1)
         return tt_tokens, tt_log_probs
 
     def capture_trace(
@@ -219,6 +221,8 @@ class SamplingGenerator:
         *,
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        b0: Optional[ttnn.Tensor] = None,
+        b1: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -234,6 +238,8 @@ class SamplingGenerator:
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                b0=b0,
+                b1=b1,
             )
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on)

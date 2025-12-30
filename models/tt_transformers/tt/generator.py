@@ -487,6 +487,8 @@ class Generator:
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
+        enable_trace = False
+        ttnn.synchronize_device(self.model_args[0].mesh_device)
         mode_switched = False
         if self.mode != "decode":
             self.mode = "decode"

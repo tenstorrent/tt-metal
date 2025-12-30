@@ -54,6 +54,7 @@ class TTSampling(LightweightModule):
         p=None,
         temp=None,
     ):
+        self.count = 0
         super().__init__()
         self.mesh_device = mesh_device
         # Multi-step reduction is supported only on single device
@@ -210,11 +211,7 @@ class TTSampling(LightweightModule):
 
         self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
 
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        tt_out_tok: ttnn.Tensor = None,
-    ):
+    def forward(self, x: ttnn.Tensor, tt_out_tok: ttnn.Tensor = None, b0=None, b1=None):
         """
         Perform on-device sampling on logits tensor.
         The logits are sharded over the devices in the cluster.
@@ -230,6 +227,7 @@ class TTSampling(LightweightModule):
             Sampled token indices tensor
         """
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
+        self.count += 1
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
         if self.multi_step_reduction:
@@ -269,6 +267,7 @@ class TTSampling(LightweightModule):
             )
 
             # Gather top-k values across all devices
+            # OVDE DOLAZI DO RAZLIKE PRVI PUT
             topk_values_gathered = self._perform_all_gather(
                 topk_values,
                 dim=3,

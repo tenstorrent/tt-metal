@@ -302,7 +302,7 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            20,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -321,7 +321,7 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            20,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -949,6 +949,7 @@ def test_demo_text(
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
+        generator.model[0].batch = batch_idx
         # Preprocess initial prompt inputs
         (
             input_tokens_prefill_pt,
@@ -1146,7 +1147,7 @@ def test_demo_text(
                 if len(text) > 100:
                     text = "..." + text[-97:]
                 text = text.replace("\n", " ")
-                # logger.debug("[User {}] {}".format(user, text))
+                logger.debug("[User {}] {}".format(user, text))
 
             iteration += 1
 
@@ -1215,7 +1216,68 @@ def test_demo_text(
         profiler.end(f"inference_decode", iteration=batch_idx)
 
     # Finish profiling at the end of inference for all repeated batches
+
     profiler.end("run")
+    """device = generator.model_args[0].mesh_device
+    for i in range(len(generator.model[0].debug["before"][0])):
+        before0 = generator.model[0].debug["before"][0][i]
+        after0 = generator.model[0].debug["after"][0][i]
+        after_sampling0 = generator.model[0].debug["after_sampling"][0][i]
+        before1 = generator.model[0].debug["before"][1][i]
+        after1 = generator.model[0].debug["after"][1][i]
+        after_sampling1 = generator.model[0].debug["after_sampling"][1][i]
+
+        to_device0_after0 = ttnn.to_device(after0, device)
+        to_device0_after_sampling0 = ttnn.to_device(after_sampling0, device)
+        to_device1_after1 = ttnn.to_device(after1, device)
+        to_device0_before0 = ttnn.to_device(before0, device)
+        to_device1_before1 = ttnn.to_device(before1, device)
+        to_device1_after_sampling1 = ttnn.to_device(after_sampling1, device)
+
+        ttnn.synchronize_device(device)
+
+        print("--------------------------------")
+        print(f"ITERATION: {i}")
+
+        print("BEFORE:")
+        equal_before = ttnn.eq(to_device0_before0, to_device1_before1)
+        suma_before = ttnn.sum(equal_before)
+        print(suma_before)
+
+        ttnn.synchronize_device(device)
+
+        print("AFTER:")
+        equal_after = ttnn.eq(to_device0_after0, to_device1_after1)
+        suma_after = ttnn.sum(equal_after)
+        print(suma_after)
+
+        ttnn.synchronize_device(device)
+
+
+        print("AFTER SAMPLING:")
+        equal_after_sampling = ttnn.eq(to_device0_after_sampling0, to_device1_after_sampling1)
+        equal_after_sampling = ttnn.to_layout(equal_after_sampling, layout=ttnn.TILE_LAYOUT)
+        equal_after_sampling = ttnn.typecast(equal_after_sampling, dtype=ttnn.bfloat16)
+        suma_after_sampling = ttnn.sum(equal_after_sampling)
+        print(suma_after_sampling)
+
+        ttnn.synchronize_device(device)
+
+        ttnn.deallocate(to_device0_after0)
+        ttnn.deallocate(to_device1_after1)
+        ttnn.deallocate(equal_after)
+        ttnn.deallocate(suma_after)
+        ttnn.deallocate(to_device0_before0)
+        ttnn.deallocate(to_device1_before1)
+        ttnn.deallocate(equal_before)
+        ttnn.deallocate(suma_before)
+        ttnn.deallocate(to_device0_after_sampling0)
+        ttnn.deallocate(to_device1_after_sampling1)
+        ttnn.deallocate(equal_after_sampling)
+        ttnn.deallocate(suma_after_sampling)
+
+    ttnn.synchronize_device(device)
+    """
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
