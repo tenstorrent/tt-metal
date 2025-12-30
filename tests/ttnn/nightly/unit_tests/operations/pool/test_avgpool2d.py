@@ -542,6 +542,7 @@ def test_avg_pool2d_compute_kernel_config(
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
+        [(2, 2), (0, 0)],
         [(2, 2), (1, 1)],
         [(3, 3), (2, 2)],
         [(4, 4), (0, 0)],
