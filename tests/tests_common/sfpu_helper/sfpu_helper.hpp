@@ -4,6 +4,7 @@
 
 // Sfpu golden functions
 #include <cmath>
+#include <numbers>
 
 inline float exponential(float x) { return std::exp(x); }
 
@@ -23,9 +24,9 @@ inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 inline float ref_log(float x) { return logf(x); }
 
-inline float ref_log10(float x) { return ref_log(x) * 0.4342944819032518; }
+inline float ref_log10(float x) { return ref_log(x) * std::numbers::log10e; }
 
-inline float ref_log2(float x) { return ref_log(x) * 1.4426950408889634f; }
+inline float ref_log2(float x) { return ref_log(x) * std::numbers::log2e_v<float>; }
 
 inline float ref_tanh(float x) { return std::tanh(x); }
 
