@@ -90,6 +90,7 @@ int main() {
         (mesh_desc.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
     // Create a mesh device
+    tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::FABRIC_2D);
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create(
         distributed::MeshDeviceConfig(mesh_desc.mesh_shape),
         mesh_desc.l1_small_size,
@@ -160,8 +161,17 @@ int main() {
     Program receiver_program = CreateProgram();
     auto rx_core_range_set = CoreRange(fabric_desc.receiver_core, fabric_desc.receiver_core);
 
-    static GlobalSemaphore global_sema_a = CreateGlobalSemaphore(mesh_device.get(), rx_core_range_set, /*init_val*/ 0);
-    static GlobalSemaphore global_sema_b = CreateGlobalSemaphore(mesh_device.get(), rx_core_range_set, /*init_val*/ 0);
+    static std::optional<tt::tt_metal::GlobalSemaphore> global_sema_a;
+    static std::optional<tt::tt_metal::GlobalSemaphore> global_sema_b;
+    if (!global_sema_a) {
+        global_sema_a = CreateGlobalSemaphore(mesh_device.get(), rx_core_range_set, /*init_val*/ 0);
+    }
+    if (!global_sema_b) {
+        global_sema_b = CreateGlobalSemaphore(mesh_device.get(), rx_core_range_set, /*init_val*/ 0);
+    }
+
+    static uint32_t sem_sel = 0;
+    auto& cur_global_sema = (sem_sel++ & 1) ? *global_sema_b : *global_sema_a;
 
     constexpr const char* KERNEL_DIR = "tt_metal/multi_device_microbench/fabric_api_tests/kernels/dataflow/";
     auto rx_wait_kernel = CreateKernel(
@@ -169,7 +179,8 @@ int main() {
         std::string(KERNEL_DIR) + "unicast_rx.cpp",
         fabric_desc.receiver_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    SetRuntimeArgs(receiver_program, rx_wait_kernel, fabric_desc.receiver_core, /*args*/ {global_sema_a.address(), 1u});
+    SetRuntimeArgs(
+        receiver_program, rx_wait_kernel, fabric_desc.receiver_core, /*args*/ {cur_global_sema.address(), 1u});
 
     // Setup sender program
     Program sender_program = CreateProgram();
@@ -216,16 +227,17 @@ int main() {
     // find available links
     auto links = tt_fabric::get_forwarding_link_indices(src_fabric_node, dst_fabric_node);
     TT_FATAL(!links.empty(), "Need at least one available link from src to dst.");
+    log_info(tt::LogTest, "Number of links are available : {}", links.size());
     uint32_t link_to_use = links[0];
 
     CoreCoord receiver_coord = dst_dev->worker_core_from_logical_core(fabric_desc.receiver_core);
     std::vector<uint32_t> writer_rta = {
-        (uint32_t)dst_buf->address(),      // 0: dst_base (receiver DRAM offset)
-        (uint32_t)fabric_desc.mesh_id,     // 1: dst_mesh_id (logical)
-        (uint32_t)fabric_desc.dst_chip,    // 2: dst_dev_id  (logical)
-        (uint32_t)receiver_coord.x,        // 3: receiver_noc_x
-        (uint32_t)receiver_coord.y,        // 4: receiver_noc_y
-        (uint32_t)global_sema_b.address()  // 5: receiver L1 semaphore addr
+        (uint32_t)dst_buf->address(),        // 0: dst_base (receiver DRAM offset)
+        (uint32_t)fabric_desc.mesh_id,       // 1: dst_mesh_id (logical)
+        (uint32_t)fabric_desc.dst_chip,      // 2: dst_dev_id  (logical)
+        (uint32_t)receiver_coord.x,          // 3: receiver_noc_x
+        (uint32_t)receiver_coord.y,          // 4: receiver_noc_y
+        (uint32_t)cur_global_sema.address()  // 5: receiver L1 semaphore addr
     };
     // Append fabric args (encapsulate routing , link identifiers for fabric traffic)
     tt_fabric::append_fabric_connection_rt_args(
@@ -250,6 +262,14 @@ int main() {
 
     std::vector<uint32_t> rx_written_data(num_words, 0u);
     distributed::ReadShard(cq, rx_written_data, dst_buf, dst_mesh_coord, /*blocking=*/true);
+
+    // Verify communication
+    TT_FATAL(rx_written_data.size() == tx_send_data.size(), "Tx and Rx data size differs");
+    for (size_t i = 0; i < rx_written_data.size(); ++i) {
+        TT_FATAL(rx_written_data[i] == tx_send_data[i], "Data mismatch at {}-th word", i);
+    }
+
+    log_info(tt::LogTest, "Payloads are successfully transferred.");
 
     // Teardown mesh device
     mesh_device->close();
