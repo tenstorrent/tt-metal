@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -48,24 +49,28 @@ MorehLayerNormBackwardInputGradOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
 }
 
-std::tuple<
-    MorehLayerNormBackwardInputGradOperation::operation_attributes_t,
-    MorehLayerNormBackwardInputGradOperation::tensor_args_t>
-MorehLayerNormBackwardInputGradOperation::invoke(
-    const Tensor& output_grad,
-    const Tensor& input,
-    const Tensor& mean,
-    const Tensor& rstd,
-    uint32_t normalized_dims,
-    const std::optional<const Tensor>& input_grad,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        MorehLayerNormBackwardInputGradOperation::operation_attributes_t{
-            normalized_dims,
-            memory_config.value_or(output_grad.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        MorehLayerNormBackwardInputGradOperation::tensor_args_t{output_grad, input, mean, rstd, input_grad, gamma}};
-}
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation::
+    tensor_return_value_t
+    moreh_layer_norm_backward_input_grad(
+        const Tensor& output_grad,
+        const Tensor& input,
+        const Tensor& mean,
+        const Tensor& rstd,
+        uint32_t normalized_dims,
+        const std::optional<const Tensor>& input_grad,
+        const std::optional<const Tensor>& gamma,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    using OperationType =
+        ttnn::operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        normalized_dims,
+        memory_config.value_or(output_grad.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{output_grad, input, mean, rstd, input_grad, gamma};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

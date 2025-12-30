@@ -30,22 +30,18 @@ struct RMSNormForwardDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& gamma_tensor,
-        bool return_intermediates,
-        float epsilon = 1e-6F,
-        const std::optional<ttnn::Tensor>& preallocated_rms = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::rmsnorm_fw::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_rmsnorm_fw = ttnn::register_operation<
-    "ttnn::prim::ttml_rmsnorm_fw",
-    ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation>();
+ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_fw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
+    bool return_intermediates,
+    float epsilon = 1e-6F,
+    const std::optional<ttnn::Tensor>& preallocated_rms = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -22,7 +22,7 @@ ttnn::Tensor AssignOperation::invoke(
     const Tensor& input,
     const MemoryConfig& output_mem_config,
     std::optional<const DataType> output_dtype,
-    std::optional<Tensor> optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::prim::copy(input, output_mem_config, output_dtype.value_or(input.dtype()), optional_output_tensor);
 }
 

@@ -106,7 +106,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     const auto& vertex_2 = levelized_graph_2.get_vertex(2);
     EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::add");
-    EXPECT_EQ(vertex_2.name, "ttnn::prim::binary_ng");
+    EXPECT_EQ(vertex_2.name, "BinaryNgDeviceOperation");
 
     EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{64, 128}));
     EXPECT_EQ(vertex_1.output_shape[0], shape_to_string(tt::tt_metal::Array2D{64, 128}));
@@ -122,7 +122,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     EXPECT_EQ(vertex_1.in_edges[0], vertex_0.id);
     EXPECT_EQ(vertex_1.in_edges[1], vertex_0.id);
     EXPECT_TRUE(vertex_1.out_edges.empty());
-    EXPECT_EQ(vertex_1.internals.size(), 1);  // we should have expanded ttnn::add to ttnn::prim::binary_ng
+    EXPECT_EQ(vertex_1.internals.size(), 1);  // we should have expanded ttnn::add to BinaryNgDeviceOperation
     EXPECT_EQ(vertex_1.internals[0], vertex_2.id);
 
     EXPECT_EQ(vertex_2.in_edges.size(), 2);
@@ -204,7 +204,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[0]).name, "ttnn::fill_implicit_tile_padding");
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[1]).name, "ttnn::reshape");
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[2]).name, "ttnn::tilize_with_val_padding");
-    EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[3]).name, "ttnn::prim::reduce");
+    EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[3]).name, "ReduceDeviceOperation");
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[4]).name, "ttnn::reshape");
     // Find mean vertex by name
     auto mean_vertex_it =
@@ -217,7 +217,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[0]).name, "ttnn::fill_implicit_tile_padding");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[1]).name, "ttnn::reshape");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[2]).name, "ttnn::tilize_with_val_padding");
-    EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[3]).name, "ttnn::prim::reduce");
+    EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[3]).name, "ReduceDeviceOperation");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[4]).name, "ttnn::reshape");
 }
 
@@ -497,7 +497,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     const auto& vertex_2 = levelized_graph_2.get_vertex(2);
     EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::multiply");
-    EXPECT_EQ(vertex_2.name, "ttnn::prim::binary_ng");
+    EXPECT_EQ(vertex_2.name, "BinaryNgDeviceOperation");
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_EQ(vertex_0.out_edges.size(), 2);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_distributed_sdpa_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ring_distributed_sdpa_program_factory.hpp"
 
@@ -194,7 +195,12 @@ RingDistributedSdpaDeviceOperation::tensor_return_value_t RingDistributedSdpaDev
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> RingDistributedSdpaDeviceOperation::invoke(
+}  // namespace ttnn::operations::transformer::ring_distributed_sdpa
+
+namespace ttnn::prim {
+
+ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation::tensor_return_value_t
+ring_distributed_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -202,12 +208,15 @@ std::tuple<operation_attributes_t, tensor_args_t> RingDistributedSdpaDeviceOpera
     std::optional<uint32_t> ring_id,
     std::optional<float> scale,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<SDPAProgramConfig>& program_config,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    using OperationType =
+        ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation;
+
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
-    operation_attributes_t attrs{
+    auto operation_attributes = OperationType::operation_attributes_t{
         .ring_size = ring_size,
         .ring_id = ring_id,
         .scale = scale,
@@ -216,13 +225,13 @@ std::tuple<operation_attributes_t, tensor_args_t> RingDistributedSdpaDeviceOpera
         .compute_kernel_config = compute_kernel_config,
     };
 
-    tensor_args_t tensors{
+    auto tensor_args = OperationType::tensor_args_t{
         .q = input_tensor_q,
         .k = input_tensor_k,
         .v = input_tensor_v,
     };
 
-    return {attrs, tensors};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::transformer::ring_distributed_sdpa
+}  // namespace ttnn::prim

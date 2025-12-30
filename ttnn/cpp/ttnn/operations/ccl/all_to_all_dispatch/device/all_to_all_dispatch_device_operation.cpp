@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "all_to_all_dispatch_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -156,8 +157,10 @@ AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOpe
     return {output_tensor, metadata_tensor};
 }
 
-std::tuple<AllToAllDispatchDeviceOperation::operation_attributes_t, AllToAllDispatchDeviceOperation::tensor_args_t>
-AllToAllDispatchDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::operations::ccl::AllToAllDispatchDeviceOperation::tensor_return_value_t all_to_all_dispatch(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
@@ -167,10 +170,11 @@ AllToAllDispatchDeviceOperation::invoke(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    AllToAllTransferType impl,
+    ttnn::operations::ccl::AllToAllDispatchDeviceOperation::AllToAllTransferType impl,
     uint32_t output_concat_dim) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::AllToAllDispatchDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
             .output_mem_config = memory_config,
             .axis = axis,
@@ -178,11 +182,10 @@ AllToAllDispatchDeviceOperation::invoke(
             .topology = topology,
             .impl = impl,
             .output_concat_dim = output_concat_dim},
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,
             .expert_mapping_tensor = expert_mapping_tensor,
-            .optional_output_tensors = optional_output_tensors}};
+            .optional_output_tensors = optional_output_tensors});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim
