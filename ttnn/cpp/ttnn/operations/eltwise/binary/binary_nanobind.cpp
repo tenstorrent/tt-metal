@@ -2424,13 +2424,6 @@ void py_module(nb::module_& mod) {
         ". ",
         R"doc(INT32, UINT32)doc");
 
-    auto prim_module = mod.def_submodule("prim", "Primitive binary operations");
-
-    detail::bind_primitive_binary_operation(
-        prim_module,
-        ttnn::prim::binary,
-        R"doc(Applied binary operation on :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
-
     detail::bind_binary_composite(
         mod,
         ttnn::hypot,

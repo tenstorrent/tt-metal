@@ -147,7 +147,7 @@ protected:
                 tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
             for (const auto& tunnel : tunnels) {
                 for (const auto chip_id : tunnel) {
-                    if (reserved_devices_.find(chip_id) != reserved_devices_.end()) {
+                    if (reserved_devices_.contains(chip_id)) {
                         devices_.push_back(reserved_devices_.at(chip_id));
                     }
                 }

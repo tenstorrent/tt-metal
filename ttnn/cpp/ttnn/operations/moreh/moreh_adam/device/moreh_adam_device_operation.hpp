@@ -74,34 +74,32 @@ struct MorehAdamOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& param_in,
-        const Tensor& grad,
-        const Tensor& exp_avg_in,
-        const Tensor& exp_avg_sq_in,
-
-        std::optional<float> lr,
-        std::optional<float> beta1,
-        std::optional<float> beta2,
-        std::optional<float> eps,
-        std::optional<float> weight_decay,
-        std::optional<uint32_t> step,
-        std::optional<bool> amsgrad,
-
-        const std::optional<const Tensor>& max_exp_avg_sq_in,
-        std::optional<const Tensor> param_out,
-        std::optional<const Tensor> exp_avg_out,
-        std::optional<const Tensor> exp_avg_sq_out,
-        std::optional<const Tensor> max_exp_avg_sq_out,
-
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam
 
 namespace ttnn::prim {
-constexpr auto moreh_adam =
-    ttnn::register_operation<"ttnn::prim::moreh_adam", ttnn::operations::moreh::moreh_adam::MorehAdamOperation>();
+ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t moreh_adam(
+    const Tensor& param_in,
+    const Tensor& grad,
+    const Tensor& exp_avg_in,
+    const Tensor& exp_avg_sq_in,
+
+    std::optional<float> lr,
+    std::optional<float> beta1,
+    std::optional<float> beta2,
+    std::optional<float> eps,
+    std::optional<float> weight_decay,
+    std::optional<uint32_t> step,
+    std::optional<bool> amsgrad,
+
+    const std::optional<const Tensor>& max_exp_avg_sq_in,
+    std::optional<const Tensor> param_out,
+    std::optional<const Tensor> exp_avg_out,
+    std::optional<const Tensor> exp_avg_sq_out,
+    std::optional<const Tensor> max_exp_avg_sq_out,
+
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

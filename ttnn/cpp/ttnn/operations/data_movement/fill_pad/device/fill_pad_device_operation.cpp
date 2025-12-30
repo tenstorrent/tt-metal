@@ -26,8 +26,7 @@ void FillPadDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.layout() == TILE_LAYOUT, "FillPad should only be used for tile layout");
-    TT_FATAL(
-        detail::data_type_to_size.count(input_tensor.dtype()) > 0, "Unsupported datatype {}", input_tensor.dtype());
+    TT_FATAL(detail::data_type_to_size.contains(input_tensor.dtype()), "Unsupported datatype {}", input_tensor.dtype());
 }
 
 spec_return_value_t FillPadDeviceOperation::compute_output_specs(
@@ -42,14 +41,16 @@ tensor_return_value_t FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-std::tuple<FillPadDeviceOperation::operation_attributes_t, FillPadDeviceOperation::tensor_args_t>
-FillPadDeviceOperation::invoke(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
-    return {
-        operation_attributes_t{
+}  // namespace ttnn::operations::data_movement::fill_pad
+
+namespace ttnn::prim {
+ttnn::Tensor fill_pad(const Tensor& input, float fill_value, const MemoryConfig& output_memory_config) {
+    using OperationType = ttnn::operations::data_movement::fill_pad::FillPadDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .fill_value = fill_value,
             .output_mem_config = output_memory_config,
         },
-        tensor_args_t{.input = input}};
+        OperationType::tensor_args_t{.input = input});
 }
-
-}  // namespace ttnn::operations::data_movement::fill_pad
+}  // namespace ttnn::prim

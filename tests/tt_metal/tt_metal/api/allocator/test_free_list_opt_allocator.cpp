@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
-#include <stddef.h>
+#include <cstddef>
 #include <optional>
 #include <utility>
 #include <vector>

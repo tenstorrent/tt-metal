@@ -32,15 +32,11 @@ struct RotateHalfDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::rotate_half
 
 namespace ttnn::prim {
-constexpr auto rotate_half = ttnn::register_operation<
-    "ttnn::prim::rotate_half",
-    ttnn::operations::experimental::transformer::rotate_half::RotateHalfDeviceOperation>();
+ttnn::operations::experimental::transformer::rotate_half::tensor_return_value_t rotate_half(
+    const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim
