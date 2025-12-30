@@ -11,6 +11,7 @@ from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
+## For models with 2-projection MLP (e.g. AFM-4.5B)
 class MLP2Proj(LightweightModule):
     """
     2-Projection MLP for Arcee AFM models.
