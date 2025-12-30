@@ -62,18 +62,6 @@ export PYTHONPATH=/path/to/tt-metal  # Required for Python imports
 export ARCH_NAME=wormhole_b0         # or grayskull, blackhole
 ```
 
-### Debugging and Development
-```bash
-# Enable operation logging
-export TT_LOGGER_TYPES=Op
-export TT_LOGGER_LEVEL=DEBUG
-
-# Make ops blocking with logging (useful for debugging)
-export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
-```
-
-For kernel-level debugging (hangs, CB issues, device errors), use the `ttnn-riscv-debugger` agent.
-
 ## Development Workflow
 
 ### Virtual Environment Setup
@@ -256,10 +244,38 @@ For example:
 To create a new operation based on an existing reference, use the agents in `.claude/agents/`:
 
 ```
-1. ttnn-operation-analyzer  → Analyze reference op → {ref}_analysis.md
-2. ttnn-operation-planner   → Design new op       → {new}_spec.md  [USER REVIEW]
-3. ttnn-operation-scaffolder → Stages 1-3         → API, validation, registration
-4. ttnn-factory-builder     → Stages 4-6         → Program factory, stub kernels
+## Creating New TTNN Operations — MANDATORY ROUTING
+
+When user requests a new TTNN operation, STOP and answer these questions:
+
+### Step 1: Are reference operations specified?
+- YES with paths to reference_operation_analysis.md → Skip to Phase 1 (Analyzer)
+- YES but vague ("like softmax") → Search (DeepWiki) for that operation's program_factory.cpp and run Analyzer
+- NO → Continue to discovery
+
+### Step 2: Discovery Checklist (if references not specified)
+
+□ Parse for format keywords:
+  - "row-major input" + "tilize" → need tilize reference
+  - "untilize" + "row-major output" → need untilize reference
+  - "sharded" → need sharded-input reference (layernorm, etc.)
+
+□ Query DeepWiki for unknowns:
+  - "Which TTNN operations perform [X]?"
+  - "Which operations convert ROW_MAJOR to TILE_LAYOUT?"
+
+### Step 3: Mode Determination
+- Single reference → Derivative mode
+- Multiple references with different roles → Hybrid mode
+
+### Step 4: Execute Workflow
+1. Phase 1: Run `ttnn-operation-analyzer` on EACH reference
+2. Phase 2: Run `ttnn-operation-planner` with all analyzer outputs
+3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user for review
+   - User approves → proceed to Phase 3
+   - User requests changes → refine spec (re-run planner or edit manually), then re-present for approval
+   - Do NOT proceed to scaffolder/factory-builder without explicit user approval
+4. Phase 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
 ```
 
 See `.claude/subagent_breakdown.md` for detailed workflow and https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html for official docs.
@@ -283,5 +299,3 @@ Invoke with symptom only (e.g., "test hangs"). The agent autonomously:
 - **Tile sizes**: Operations on 32×32 tiles are native and most efficient
 - **NoC bandwidth**: Minimize data movement, use sharded memory when beneficial
 - **SRAM capacity**: 1.5MB per Tensix—keep intermediate results in SRAM when possible
-- **Operator fusion**: Less critical than on CPU/GPU due to abundant on-chip SRAM
-- **Tracy Profiler**: Use for performance analysis (enabled by default, disable with `--disable-profiler`)
