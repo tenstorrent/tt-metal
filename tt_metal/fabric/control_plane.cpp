@@ -931,14 +931,12 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
 size_t ControlPlane::get_num_live_routing_planes(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
     TT_FATAL(
-        this->router_port_directions_to_num_routing_planes_map_.find(fabric_node_id) !=
-            this->router_port_directions_to_num_routing_planes_map_.end(),
+        this->router_port_directions_to_num_routing_planes_map_.contains(fabric_node_id),
         "Fabric node id (mesh={}, chip={}) not found in router port directions to num routing planes map",
         fabric_node_id.mesh_id,
         fabric_node_id.chip_id);
     TT_FATAL(
-        this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).find(routing_direction) !=
-            this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).end(),
+        this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction),
         "Routing direction {} not found in router port directions to num routing planes map for fabric node id "
         "(mesh={}, chip={})",
         routing_direction,

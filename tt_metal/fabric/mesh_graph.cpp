@@ -674,10 +674,7 @@ void MeshGraph::print_connectivity() const {
 }
 
 void MeshGraph::validate_mesh_id(MeshId mesh_id) const {
-    TT_FATAL(
-        this->mesh_to_chip_ids_.find(mesh_id) != this->mesh_to_chip_ids_.end(),
-        "MeshGraph: mesh_id {} not found",
-        mesh_id);
+    TT_FATAL(this->mesh_to_chip_ids_.contains(mesh_id), "MeshGraph: mesh_id {} not found", mesh_id);
 }
 
 MeshShape MeshGraph::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {

@@ -192,7 +192,7 @@ int64_t BankManager::bank_offset(uint32_t bank_id) const {
 
 void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(
-        bank_id_to_bank_offset_.find(bank_id) != bank_id_to_bank_offset_.end(),
+        bank_id_to_bank_offset_.contains(bank_id),
         "Expected bank {} to be tracked!",
         bank_id,
         bank_id_to_bank_offset_.size());

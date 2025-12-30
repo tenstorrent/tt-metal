@@ -207,13 +207,13 @@ DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
 
 uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    TT_ASSERT(bank_id_to_dram_channel_.find(bank_id) != bank_id_to_dram_channel_.end());
+    TT_ASSERT(bank_id_to_dram_channel_.contains(bank_id));
     return bank_id_to_dram_channel_.at(bank_id);
 }
 
 CoreCoord AllocatorImpl::get_logical_core_from_bank_id(uint32_t bank_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    TT_ASSERT(bank_id_to_logical_core_.find(bank_id) != bank_id_to_logical_core_.end());
+    TT_ASSERT(bank_id_to_logical_core_.contains(bank_id));
     return bank_id_to_logical_core_.at(bank_id);
 }
 

@@ -364,7 +364,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
             std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
             for (CoreCoord coreCoord : kernel_logical_cores) {
                 TT_FATAL(
-                    !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end()),
+                    !check_kernel_logical_cores.contains(coreCoord),
                     "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
                     check_kernel->name(),
                     kernel->name(),
@@ -995,8 +995,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     const auto& kernel_defines = kernel->defines();
     const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
     for (const auto& str : reserved_defines) {
-        TT_FATAL(
-            kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
+        TT_FATAL(!kernel_defines.contains(str), "{} is a reserved define and can't be manually set", str);
     }
     std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;

@@ -1222,7 +1222,7 @@ void reset_local_ethernet_links(
 
                 if (reset_cores[*dst_asic_id].contains(dst_chan)) {
                     TT_FATAL(
-                        reset_cores[*asic_id].find(src_chan) != reset_cores[*asic_id].end(),
+                        reset_cores[*asic_id].contains(src_chan),
                         "Expected channel {} on ASIC {} to already be reset",
                         src_chan,
                         *asic_id);
@@ -1470,7 +1470,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
 
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     TT_FATAL(
-        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        asic_descriptors.contains(dst_asic_id),
         "Could not find ASIC descriptor for destination ASIC ID: {}",
         dst_asic_id);
 

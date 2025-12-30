@@ -709,22 +709,17 @@ std::vector<EthConnection> PhysicalSystemDescriptor::get_eth_connections(AsicID 
 }
 
 const AsicTopology& PhysicalSystemDescriptor::get_asic_topology(const std::string& hostname) const {
-    TT_FATAL(
-        system_graph_.asic_connectivity_graph.find(hostname) != system_graph_.asic_connectivity_graph.end(),
-        "No ASIC topology found for host {}",
-        hostname);
+    TT_FATAL(system_graph_.asic_connectivity_graph.contains(hostname), "No ASIC topology found for host {}", hostname);
     return system_graph_.asic_connectivity_graph.at(hostname);
 }
 
 TrayID PhysicalSystemDescriptor::get_tray_id(AsicID asic_id) const {
-    TT_FATAL(
-        asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
+    TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).tray_id;
 }
 
 ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
-    TT_FATAL(
-        asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
+    TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).asic_location;
 }
 
@@ -764,9 +759,7 @@ bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t ch
 
 std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std::string& hostname) const {
     TT_FATAL(
-        system_graph_.host_connectivity_graph.find(hostname) != system_graph_.host_connectivity_graph.end(),
-        "No Host connectivity found for host {}",
-        hostname);
+        system_graph_.host_connectivity_graph.contains(hostname), "No Host connectivity found for host {}", hostname);
     std::vector<std::string> neighbors;
     for (const auto& edge : system_graph_.host_connectivity_graph.at(hostname)) {
         neighbors.push_back(edge.first);
@@ -777,9 +770,7 @@ std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std:
 std::vector<ExitNodeConnection> PhysicalSystemDescriptor::get_connecting_exit_nodes(
     const std::string& src_host, const std::string& dst_host) const {
     TT_FATAL(
-        system_graph_.host_connectivity_graph.find(src_host) != system_graph_.host_connectivity_graph.end(),
-        "No Host connectivity found for host {}",
-        src_host);
+        system_graph_.host_connectivity_graph.contains(src_host), "No Host connectivity found for host {}", src_host);
     for (const auto& edge : system_graph_.host_connectivity_graph.at(src_host)) {
         if (edge.first == dst_host) {
             return edge.second;
@@ -912,7 +903,7 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
 }
 
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {
-    TT_FATAL(host_to_rank_.find(host_name) != host_to_rank_.end(), "Rank for host {} not found", host_name);
+    TT_FATAL(host_to_rank_.contains(host_name), "Rank for host {} not found", host_name);
     return host_to_rank_.at(host_name);
 }
 
@@ -926,8 +917,7 @@ std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {
-    TT_FATAL(
-        asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
+    TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).host_name;
 }
 

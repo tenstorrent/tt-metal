@@ -1203,11 +1203,7 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip
 std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const {
     std::vector<CoreCoord> fabric_ethernet_channels;
     const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(src_id);
-    TT_FATAL(
-        connected_chips.find(dst_id) != connected_chips.end(),
-        "Dst Chip {} is not connected to Src Chip {}",
-        dst_id,
-        src_id);
+    TT_FATAL(connected_chips.contains(dst_id), "Dst Chip {} is not connected to Src Chip {}", dst_id, src_id);
     for (const auto& eth_core : connected_chips.at(dst_id)) {
         if (this->device_eth_routing_info_.at(src_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.push_back(eth_core);
@@ -1232,10 +1228,8 @@ std::tuple<ChipId, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<Ch
         std::get<0>(eth_core));
     const auto& ethernet_connections_within_cluster = this->get_ethernet_connections();
     TT_FATAL(
-        (ethernet_connections_within_cluster.find(std::get<0>(eth_core)) !=
-         ethernet_connections_within_cluster.end()) and
-            (ethernet_connections_within_cluster.at(std::get<0>(eth_core)).find(eth_chan) !=
-             ethernet_connections_within_cluster.at(std::get<0>(eth_core)).end()),
+        ethernet_connections_within_cluster.contains(std::get<0>(eth_core)) and
+            ethernet_connections_within_cluster.at(std::get<0>(eth_core)).contains(eth_chan),
         "Chip {} logical eth core {} connects to a remote mmio device",
         std::get<0>(eth_core),
         std::get<1>(eth_core).str());
@@ -1260,9 +1254,8 @@ std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_m
     const auto& local_chip_id = std::get<0>(eth_core);
     const auto& local_eth_core = std::get<1>(eth_core);
     TT_FATAL(
-        (ethernet_connections_to_remote_cluster.find(local_chip_id) != ethernet_connections_to_remote_cluster.end()) and
-            (ethernet_connections_to_remote_cluster.at(local_chip_id).find(eth_chan) !=
-             ethernet_connections_to_remote_cluster.at(local_chip_id).end()),
+        ethernet_connections_to_remote_cluster.contains(local_chip_id) and
+            ethernet_connections_to_remote_cluster.at(local_chip_id).contains(eth_chan),
         "Chip {} logical eth core {} connects to a local mmio device",
         local_chip_id,
         local_eth_core.str());
@@ -1276,7 +1269,7 @@ std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_m
 std::vector<CoreCoord> Cluster::get_ethernet_sockets(ChipId local_chip, ChipId remote_chip) const {
     const auto &local_ethernet_sockets = this->ethernet_sockets_.at(local_chip);
     TT_FATAL(
-        local_ethernet_sockets.find(remote_chip) != local_ethernet_sockets.end(),
+        local_ethernet_sockets.contains(remote_chip),
         "Device {} is not connected to Device {}",
         local_chip,
         remote_chip);

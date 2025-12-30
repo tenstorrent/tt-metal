@@ -284,7 +284,7 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                     counted = true;
                 }
 
-                TT_ASSERT(this->all_data.find(core) != this->all_data.end());
+                TT_ASSERT(this->all_data.contains(core));
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
             }

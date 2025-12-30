@@ -176,7 +176,7 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
 size_t FabricTensixDatamoverBaseConfig::get_num_channels(ChannelTypes channel_type) const {
     // Return the number of channels for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).num_channels;
@@ -190,7 +190,7 @@ size_t FabricTensixDatamoverBaseConfig::get_total_num_channels() const {
 size_t FabricTensixDatamoverBaseConfig::get_num_buffers(ChannelTypes channel_type) const {
     // Return number of buffers for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).num_buffers_per_channel;
@@ -199,7 +199,7 @@ size_t FabricTensixDatamoverBaseConfig::get_num_buffers(ChannelTypes channel_typ
 size_t FabricTensixDatamoverBaseConfig::get_buffer_size_bytes(ChannelTypes channel_type) const {
     // Return buffer size for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).buffer_size_bytes;
@@ -321,7 +321,7 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
 void FabricTensixDatamoverBaseConfig::validate_channel_id(ChannelTypes channel_type, size_t channel_id) const {
     // Validate that the channel_id is valid for this specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     const auto& config = channel_configs_.at(channel_type);

@@ -269,7 +269,7 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
 
         for (const auto& mesh_coord : mesh_coords_set) {
             TT_FATAL(
-                tensor_coords_set.find(mesh_coord) != tensor_coords_set.end(),
+                tensor_coords_set.contains(mesh_coord),
                 "Mesh coordinate ({}, {}) is in mesh_coords but not found in tensor_coords. "
                 "mesh_coords size: {}, tensor_coords size: {}",
                 mesh_coord[0],

@@ -126,7 +126,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     auto* mesh_device = mesh_cq.device();
     if (!program_binary_status_.empty()) {
         TT_FATAL(
-            program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
+            program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
             program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,

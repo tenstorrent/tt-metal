@@ -720,7 +720,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     device_intermediate_streams_force_flush_lock_.lock();
     TT_ASSERT(
-        device_intermediate_streams_force_flush_.count(device_id) == 0,
+        !device_intermediate_streams_force_flush_.contains(device_id),
         "Device {} added to DPRINT server more than once!",
         device_id);
     device_intermediate_streams_force_flush_[device_id] = false;
@@ -729,7 +729,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // Save this device + core range to the print server
     device_to_core_range_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) == 0, "Device {} added to DPRINT server more than once!", device_id);
+        !device_to_core_range_.contains(device_id), "Device {} added to DPRINT server more than once!", device_id);
     device_to_core_range_[device_id] = print_cores_sanitized;
     device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
@@ -808,7 +808,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     // Remove the device from relevant data structures.
     device_intermediate_streams_force_flush_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) > 0,
+        device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_intermediate_streams_force_flush_.erase(device_id);
@@ -816,7 +816,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 
     device_to_core_range_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) > 0,
+        device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_to_core_range_.erase(device_id);

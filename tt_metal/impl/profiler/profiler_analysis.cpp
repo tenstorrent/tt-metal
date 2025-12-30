@@ -106,8 +106,8 @@ bool experimental::ProgramAnalysisData::operator==(const experimental::ProgramAn
 }
 
 bool experimental::ProgramAnalysisData::operator<(const experimental::ProgramAnalysisData& other) const {
-    TT_ASSERT(this->program_analyses_results.find("DEVICE FW DURATION [ns]") != this->program_analyses_results.end());
-    TT_ASSERT(other.program_analyses_results.find("DEVICE FW DURATION [ns]") != other.program_analyses_results.end());
+    TT_ASSERT(this->program_analyses_results.contains("DEVICE FW DURATION [ns]"));
+    TT_ASSERT(other.program_analyses_results.contains("DEVICE FW DURATION [ns]"));
 
     const experimental::ProgramSingleAnalysisResult& this_fw_duration_analysis =
         this->program_analyses_results.at("DEVICE FW DURATION [ns]");
@@ -307,9 +307,7 @@ ProgramsPerfResults generatePerfResultsForPrograms(
             program_execution_uid_to_perf_results[program_execution_uid];
 
         for (const AnalysisResults& analysis_result : analysis_results) {
-            TT_ASSERT(
-                analysis_result.results_per_program_execution_uid.find(program_execution_uid) !=
-                analysis_result.results_per_program_execution_uid.end());
+            TT_ASSERT(analysis_result.results_per_program_execution_uid.contains(program_execution_uid));
             const experimental::ProgramSingleAnalysisResult& single_result =
                 analysis_result.results_per_program_execution_uid.at(program_execution_uid);
             program_perf_results.analysis_results.push_back(single_result);

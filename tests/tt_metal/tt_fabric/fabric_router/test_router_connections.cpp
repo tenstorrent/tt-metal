@@ -602,10 +602,10 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
         sources.insert(conn.source_direction);
     }
     EXPECT_EQ(sources.size(), 4);
-    EXPECT_TRUE(sources.count(RoutingDirection::N) > 0);
-    EXPECT_TRUE(sources.count(RoutingDirection::E) > 0);
-    EXPECT_TRUE(sources.count(RoutingDirection::S) > 0);
-    EXPECT_TRUE(sources.count(RoutingDirection::W) > 0);
+    EXPECT_TRUE(sources.contains(RoutingDirection::N));
+    EXPECT_TRUE(sources.contains(RoutingDirection::E));
+    EXPECT_TRUE(sources.contains(RoutingDirection::S));
+    EXPECT_TRUE(sources.contains(RoutingDirection::W));
 }
 
 TEST_F(RouterConnectionsTest, Phase1_5_EdgeDevice_VariableTargetCount) {

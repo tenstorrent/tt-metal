@@ -1243,19 +1243,19 @@ void DeviceProfiler::readProfilerBuffer(IDevice* device) {
 }
 
 void DeviceProfiler::markTraceBegin(uint32_t trace_id) {
-    TT_ASSERT(traces_being_recorded.find(trace_id) == traces_being_recorded.end());
+    TT_ASSERT(!traces_being_recorded.contains(trace_id));
     traces_being_recorded.insert(trace_id);
 }
 
 void DeviceProfiler::markTraceEnd(uint32_t trace_id) {
-    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    TT_ASSERT(traces_being_recorded.contains(trace_id));
     traces_being_recorded.erase(trace_id);
 }
 
 void DeviceProfiler::markTraceReplay(uint32_t trace_id) { traces_replayed.push_back(trace_id); }
 
 void DeviceProfiler::addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id) {
-    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    TT_ASSERT(traces_being_recorded.contains(trace_id));
     runtime_ids_per_trace[trace_id].insert(runtime_id);
 }
 

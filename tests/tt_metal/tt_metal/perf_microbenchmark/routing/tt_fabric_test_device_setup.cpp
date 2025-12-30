@@ -67,7 +67,7 @@ void FabricConnectionManager::process(
 
             // mux config shouldnt exist already (one config per connection/mux)
             TT_FATAL(
-                mux_configs_.find(mux_core.value()) == mux_configs_.end(),
+                !mux_configs_.contains(mux_core.value()),
                 "Mux config already exists for mux core {}",
                 mux_core.value());
 
