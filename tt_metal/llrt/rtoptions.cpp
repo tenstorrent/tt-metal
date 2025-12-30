@@ -5,8 +5,8 @@
 #include "rtoptions.hpp"
 
 #include <algorithm>
-#include <ctype.h>
-#include <stdio.h>
+#include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1290,12 +1290,12 @@ void RunTimeOptions::ParseWatcherEnv() {
         TT_ASSERT(watcher_settings.enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
         // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
         TT_ASSERT(
-            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            !watcher_disabled_features.contains(watcher_noc_sanitize_str),
             "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
     if (watcher_settings.noc_sanitize_linked_transaction) {
         TT_ASSERT(
-            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            !watcher_disabled_features.contains(watcher_noc_sanitize_str),
             "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
 }

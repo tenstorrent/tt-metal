@@ -27,14 +27,10 @@ struct ProdAllDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
 }  // namespace ttnn::operations::reduction::prod_all
 
 namespace ttnn::prim {
-constexpr auto prod_all =
-    ttnn::register_operation<"ttnn::prim::prod_all", ttnn::operations::reduction::prod_all::ProdAllDeviceOperation>();
+ttnn::Tensor prod_all(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_getitem_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <cstdint>
 
@@ -166,15 +167,18 @@ MorehGetItemOperation::tensor_return_value_t MorehGetItemOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MorehGetItemOperation::operation_attributes_t, MorehGetItemOperation::tensor_args_t>
-MorehGetItemOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_getitem
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_value_t moreh_getitem(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
     const ttnn::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
-    operation_attributes_t operation_attributes = {index_dims, memory_config.value_or(input.memory_config())};
-    tensor_args_t tensor_args = {input, index_tensors, output};
-    return {operation_attributes, tensor_args};
+    using OperationType = ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{index_dims, memory_config.value_or(input.memory_config())};
+    auto tensor_args = OperationType::tensor_args_t{input, index_tensors, output};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_getitem
+}  // namespace ttnn::prim

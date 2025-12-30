@@ -60,18 +60,16 @@ struct RunningStatistics {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& batch_mean,
-        const Tensor& batch_var,
-        float momentum,
-        std::optional<Tensor> running_mean,
-        std::optional<Tensor> running_var,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {
-constexpr auto running_statistics =
-    ttnn::register_operation<"ttnn::prim::running_statistics", ttnn::operations::normalization::RunningStatistics>();
-}
+ttnn::operations::normalization::RunningStatistics::tensor_return_value_t running_statistics(
+    const Tensor& batch_mean,
+    const Tensor& batch_var,
+    float momentum,
+    std::optional<Tensor> running_mean,
+    std::optional<Tensor> running_var,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+}  // namespace ttnn::prim

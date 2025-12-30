@@ -4,13 +4,12 @@
 
 #include "jit_build_utils.hpp"
 
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <string>
-#include <chrono>
-#include <fstream>
-#include <cstdlib>
 
 #include "impl/context/metal_context.hpp"
 
