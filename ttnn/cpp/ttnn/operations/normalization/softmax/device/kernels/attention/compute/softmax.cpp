@@ -285,8 +285,8 @@ void MAIN {
                 /*idst0=*/dst0);
         }
         reduce_uninit();
-        recip_tile_init<false>();
-        recip_tile<false>(dst0);  // DST[0] = 1/sum(exp(x))
+        recip_tile_init<false, false>();
+        recip_tile<false, false>(dst0);  // DST[0] = 1/sum(exp(x))
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, cb_recipsumexps);
