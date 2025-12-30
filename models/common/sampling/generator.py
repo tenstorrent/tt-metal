@@ -268,16 +268,24 @@ class SamplingGenerator:
                 self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
 
-    def reset_seed(self, seed):
+    def reset_seed(self, seed, empty_slots=None):
         """
         `seed` is a list of 32 non-zero integers. Zeros will be ignored.
         Seed must have non-zero values for all users that are doing prefill
         If seed is not provided, seed slots won't be updated
+        `empty_slots` is a list of indices of the empty slots in the seed list.
+        This is used to reset the seed for the empty slots.
         """
-        for i, s in enumerate(seed):
-            if s is None:
-                # set to 0 to have reproducibility
-                seed[i] = 0
+        if empty_slots is not None:
+            final_seed = [0] * 32
+            for idx, empty_slot_idx in enumerate(empty_slots):
+                final_seed[empty_slot_idx] = seed[idx]
+            seed = final_seed
+        else:
+            for i, s in enumerate(seed):
+                if s is None:
+                    # set to 0 to have reproducibility
+                    seed[i] = 0
 
         seed = [int(s) for s in seed]
         # At least one seed must be non-zero

@@ -290,23 +290,20 @@ class Generator:
             # lm_head output is a list [logits_tensor], extract the tensor
             logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in tt_logits_accumulated]
 
-            if use_batched_prefill:
-                # Batched prefill: logits already have 32 entries (one per slot), ordered by slot.
-                tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
-            else:
-                # Non-batched prefill: we have `batch` logits, need to pad to 32.
-                # Logits are in batch order (same as tokens and sampling_params).
-                if len(logits_tensors) > 1:
-                    tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
-                else:
-                    tt_logits_batch = logits_tensors[0]
+            num_users = len(logits_tensors)
+            assert_msg = f"logits_tensors and empty_slots must have same length, {num_users} != {len(empty_slots)}"
+            assert num_users == len(empty_slots), assert_msg
 
-                # Pad to 32 users for sampling
-                num_users = len(logits_tensors)
-                if num_users < padded_batch:
-                    padding_needed = padded_batch - num_users
-                    padding_tensors = [logits_tensors[-1]] * padding_needed
-                    tt_logits_batch = ttnn.concat([tt_logits_batch] + padding_tensors, dim=2)
+            # Prepare list of 32 tensors, one per slot
+            dummy_logits = ttnn.clone(logits_tensors[-1])
+            slot_logits = [dummy_logits for _ in range(padded_batch)]
+
+            # Put each real user's logits into the correct slot
+            for idx, empty_slot_idx in enumerate(empty_slots):
+                slot_logits[empty_slot_idx] = logits_tensors[idx]
+
+            # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
+            tt_logits_batch = ttnn.concat(slot_logits, dim=2)
 
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
@@ -320,7 +317,7 @@ class Generator:
             # if prompt_tokens is not None:  # Guard for warmup
             sampling_module.reset_prompt_tokens(prefill_ids)
             sampling_module.reset_output_state()
-            sampling_module.reset_seed(sampling_params.seed)
+            sampling_module.reset_seed(sampling_params.seed, empty_slots=empty_slots)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
