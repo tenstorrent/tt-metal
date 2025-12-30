@@ -8,8 +8,6 @@ import re
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_gn_mask,
-    prepare_gn_beta_gamma,
     prepare_linear_params,
 )
 
@@ -20,7 +18,6 @@ class TtTransformer2DModel(LightweightModule):
 
         self.device = device
 
-        self.norm_core_grid = ttnn.CoreGrid(y=8, x=4) if out_dim == 640 else ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-6
 
@@ -44,8 +41,18 @@ class TtTransformer2DModel(LightweightModule):
 
         norm_weights = state_dict[f"{module_path}.norm.weight"]
         norm_bias = state_dict[f"{module_path}.norm.bias"]
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.x)
-        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.x)
+        (
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+        ) = model_config.get_groupnorm_params(f"{module_path}.norm", norm_weights, norm_bias, self.norm_groups, device)
+        assert (
+            self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
         proj_weights_dtype = (
             model_config.attention_weights_dtype
@@ -60,43 +67,39 @@ class TtTransformer2DModel(LightweightModule):
 
         self.program_config_in = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_in")
         self.compute_config_in = model_config.get_mm_compute_config(f"{module_path}.proj_in")
+        self.memory_config_in = model_config.get_mm_output_memory_config(f"{module_path}.proj_in")
         self.program_config_out = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_out")
         self.compute_config_out = model_config.get_mm_compute_config(f"{module_path}.proj_out")
+        self.memory_config_out = model_config.get_mm_output_memory_config(f"{module_path}.proj_out")
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
-        if C != 640 and C != 1280:
-            hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-            orientation = ttnn.ShardOrientation.COL_MAJOR
-            rm_gn = True
-        else:
-            hidden_states = input_tensor
-            rm_gn = False
-            orientation = ttnn.ShardOrientation.ROW_MAJOR
-        sharded_mem_config = ttnn.create_sharded_memory_config(
-            input_tensor.shape,
-            core_grid=self.norm_core_grid,
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=orientation,
-        )
-        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
+        hidden_states = input_tensor
+
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=hidden_states.shape,
+                core_grid=self.groupnorm_config["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
             input_mask=self.input_mask,
+            negative_mask=self.input_negative_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=sharded_mem_config,
-            core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
-            inplace=rm_gn,
+            memory_config=hidden_states.memory_config(),
+            **self.groupnorm_config,
         )
 
-        if rm_gn:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        elif C == 1280:
+        if C == 1280:
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -106,7 +109,7 @@ class TtTransformer2DModel(LightweightModule):
             bias=self.tt_bias_in,
             program_config=self.program_config_in,
             compute_kernel_config=self.compute_config_in,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if C == 1280 else ttnn.L1_MEMORY_CONFIG,
+            memory_config=self.memory_config_in,
         )
 
         for i, transformer_block in enumerate(self.transformer_blocks):
@@ -118,6 +121,7 @@ class TtTransformer2DModel(LightweightModule):
             bias=self.tt_bias_out,
             program_config=self.program_config_out,
             compute_kernel_config=self.compute_config_out,
+            memory_config=self.memory_config_out,
         )
 
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
