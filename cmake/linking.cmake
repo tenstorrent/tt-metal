@@ -224,21 +224,21 @@ if(TT_ENABLE_LTO)
         set(TT_LTO_ENABLED ON)
 
         # Check for fat LTO objects support (allows object files to be used with or without LTO)
-        ##check_cxx_compiler_flag(
-        ##    "-ffat-lto-objects"
-        ##    COMPILER_SUPPORTS_FAT_LTO_OBJECTS
-        ##)
-        ##check_linker_flag(
-        ##    CXX
-        ##    "-ffat-lto-objects"
-        ##    LINKER_SUPPORTS_FAT_LTO_OBJECTS
-        ##)
+        check_cxx_compiler_flag(
+            "-ffat-lto-objects"
+            COMPILER_SUPPORTS_FAT_LTO_OBJECTS
+        )
+        check_linker_flag(
+            CXX
+            "-ffat-lto-objects"
+            LINKER_SUPPORTS_FAT_LTO_OBJECTS
+        )
 
-        ##if(COMPILER_SUPPORTS_FAT_LTO_OBJECTS AND LINKER_SUPPORTS_FAT_LTO_OBJECTS)
-        ##    message(STATUS "Using fat LTO objects")
-        ##    add_compile_options(-ffat-lto-objects)
-        ##    add_link_options(-ffat-lto-objects)
-        ##endif()
+        if(COMPILER_SUPPORTS_FAT_LTO_OBJECTS AND LINKER_SUPPORTS_FAT_LTO_OBJECTS)
+            message(STATUS "Using fat LTO objects")
+            add_compile_options(-ffat-lto-objects)
+            add_link_options(-ffat-lto-objects)
+        endif()
 
         add_compile_options(
             $<$<CONFIG:Release>:-ffunction-sections>
