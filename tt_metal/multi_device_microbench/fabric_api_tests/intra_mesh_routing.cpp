@@ -1,29 +1,33 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// metalium headers
-#include <tt-metalium/host_api.hpp>
+// Basically, this is clone of the microbenchmark program `run_unicast_once.cpp`
+// Check it for more details.
+
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "common/tt_backend_api_types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/shape2d.hpp>
-
-// umd headers
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "llrt.hpp"
+#include <llrt/tt_cluster.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include "system_mesh.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-#include <llrt/tt_cluster.hpp>
-
-#include "llrt.hpp"
-#include "system_mesh.hpp"
-#include "impl/context/metal_context.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "common/tt_backend_api_types.hpp"
+// custom util
+#include "buffer_utils.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -35,39 +39,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Helper function to create a sharded buffer config similar to Python's mesh_mapper
-// cluster_axis: 0 = shard along height (rows), 1 = shard along width (cols)
-distributed::ShardedBufferConfig create_sharded_buffer_config(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const Shape2D& global_shape,
-    uint32_t element_size_bytes,
-    int cluster_axis = 0) {
-    // Calculate shard shape based on cluster_axis
-    Shape2D shard_shape(0, 0);
-    if (cluster_axis == 0) {
-        // Shard along height (rows) - divide height by num_rows
-        shard_shape = Shape2D(
-            global_shape.height() / mesh_device->num_rows(),
-            global_shape.width()  // width is preserved
-        );
-    } else {
-        // Shard along width (cols) - divide width by num_cols
-        shard_shape = Shape2D(
-            global_shape.height(),  // height is preserved
-            global_shape.width() / mesh_device->num_cols());
-    }
-
-    // Calculate global buffer size
-    uint32_t global_size = global_shape.height() * global_shape.width() * element_size_bytes;
-
-    return distributed::ShardedBufferConfig{
-        .global_size = global_size,
-        .global_buffer_shape = global_shape,
-        .shard_shape = shard_shape,
-        .shard_orientation = (cluster_axis == 0) ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR};
-}
-
-struct TestConfig {
+struct MeshDescriptor {
     // If specified, the fixture will open a mesh device with the specified shape and offset.
     // Otherwise, SystemMesh shape with zero offset will be used.
     std::optional<distributed::MeshShape> mesh_shape;
@@ -79,141 +51,207 @@ struct TestConfig {
     uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
     uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
     uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
-    tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
 };
 
+struct FabricTestDescriptor {
+    uint32_t mesh_id = uint32_t(0);
+    ChipId src_chip = 0;
+    ChipId dst_chip = 1;
+    uint32_t page_size = 0;
+    CoreCoord sender_core = {0, 0};
+    CoreCoord receiver_core = {0, 0};
+};
+
+inline std::vector<uint32_t> make_src_data(size_t num_words) {
+    std::vector<uint32_t> tx(num_words);
+    for (size_t i = 0; i < num_words; ++i) {
+        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
+    }
+    return tx;
+}
+
 int main() {
-    // Initialize test config
-    TestConfig config{};
+    // Check number of devices
+    auto num_devices = GetNumAvailableDevices();
+    TT_FATAL(
+        num_devices > 1, "Currently {} devices are available. Cannot test number of devices under two.", num_devices);
+
+    // ------------ Setup MeshDevice ------------
+    // Initialize test mesh_desc
+    MeshDescriptor mesh_desc{};
 
     // Set system mesh shape as default
-    config.mesh_shape = distributed::SystemMesh::instance().shape();
+    mesh_desc.mesh_shape = distributed::SystemMesh::instance().shape();
 
-    // Extract core config
+    // Extract core mesh_desc
     auto cluster_type = MetalContext::instance().get_cluster().get_cluster_type();
     bool is_n300_or_t3k_cluster = cluster_type == ClusterType::T3K or cluster_type == ClusterType::N300;
     auto core_type =
-        (config.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        (mesh_desc.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
     // Create a mesh device
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create(
-        distributed::MeshDeviceConfig(config.mesh_shape),
-        config.l1_small_size,
-        config.trace_region_size,
-        config.num_cqs,
+        distributed::MeshDeviceConfig(mesh_desc.mesh_shape),
+        mesh_desc.l1_small_size,
+        mesh_desc.trace_region_size,
+        mesh_desc.num_cqs,
         core_type,
         {},
-        config.worker_l1_size);
+        mesh_desc.worker_l1_size);
 
-    // Mesh command queue and program setup
+    // ------------ Setup Fabric ------------
+    // Initialize fabric test descriptor
+    FabricTestDescriptor fabric_desc{};
+
+    // Get control plance instance
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+
+    // Set fabric node ids. One is composed of {MeshId, ChipId}
+    // MeshId is same for both src and dst because it is intra-routing test.
+    tt_fabric::FabricNodeId src_fabric_node{tt_fabric::MeshId{fabric_desc.mesh_id}, fabric_desc.src_chip};
+    tt_fabric::FabricNodeId dst_fabric_node{tt_fabric::MeshId{fabric_desc.mesh_id}, fabric_desc.dst_chip};
+
+    auto src_phy_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node);
+    auto dst_phy_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node);
+
+    auto src_dev = tt::tt_metal::detail::GetActiveDevice(src_phy_id);
+    auto dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phy_id);
+    TT_FATAL(src_dev && dst_dev, "Both devices should be valid.");
+
+    auto extract_coord_of_phy_id = [&mesh_device](ChipId phy_id) -> distributed::MeshCoordinate {
+        auto view = mesh_device->get_view();
+        for (const auto& c : distributed::MeshCoordinateRange(view.shape())) {
+            // check if current device id is given phy_id
+            if (view.get_device(c)->id() == phy_id) {
+                return c;
+            }
+        }
+        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phy_id);
+        return distributed::MeshCoordinate(0);
+    };
+
+    distributed::MeshCoordinate src_mesh_coord = extract_coord_of_phy_id(src_phy_id);
+    distributed::MeshCoordinate dst_mesh_coord = extract_coord_of_phy_id(dst_phy_id);
+
+    // ------------ Setup MeshBuffer ------------
+    constexpr uint32_t page_size = sizeof(uint32_t) * tt::constants::TILE_HW;
+    constexpr uint32_t buffer_size = 1u << 20;  // 1MiB
+
+    distributed::DeviceLocalBufferConfig dram_local_config{
+        .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig global_config{.size = buffer_size};
+    auto src_buf = distributed::MeshBuffer::create(global_config, dram_local_config, mesh_device.get());
+    auto dst_buf = distributed::MeshBuffer::create(global_config, dram_local_config, mesh_device.get());
+
+    const auto num_words = buffer_size / 4;
+    auto tx_send_data = make_src_data(num_words);
+    std::vector<uint32_t> zeros(num_words, 0u);
+
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    // blocking write data to buffers.
+    distributed::WriteShard(cq, src_buf, tx_send_data, src_mesh_coord, /*blocking=*/true);
+    distributed::WriteShard(cq, dst_buf, zeros, dst_mesh_coord, /*blocking=*/true);
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
 
-    // Core range setup
-    constexpr CoreCoord core0 = {0, 0};
-    constexpr CoreCoord core1 = {0, 1};
-    const auto core0_physical_coord = mesh_device->worker_core_from_logical_core(core0);
-    const auto core1_physical_coord = mesh_device->worker_core_from_logical_core(core1);
+    // ------------ Setup Workloads ------------
+    // Setup receiver program
+    Program receiver_program = CreateProgram();
+    auto rx_core_range_set = CoreRange(fabric_desc.receiver_core, fabric_desc.receiver_core);
 
-    CoreRange sem_core_range = CoreRange(core0, core1);
+    static GlobalSemaphore global_sema_a = CreateGlobalSemaphore(mesh_device.get(), rx_core_range_set, /*init_val*/ 0);
+    static GlobalSemaphore global_sema_b = CreateGlobalSemaphore(mesh_device.get(), rx_core_range_set, /*init_val*/ 0);
 
-    // Check if the environment variable for kernels print is set
-    char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
-    if (env_var == nullptr) {
-        fmt::print(
-            stderr,
-            "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(0,1) to see the output of "
-            "the Data Movement kernels. Command: export TT_METAL_DPRINT_CORES=(0,0),(0,1)\n");
-    }
+    constexpr const char* KERNEL_DIR = "tt_metal/multi_device_microbench/fabric_api_tests/kernels/dataflow/";
+    auto rx_wait_kernel = CreateKernel(
+        receiver_program,
+        std::string(KERNEL_DIR) + "unicast_rx.cpp",
+        fabric_desc.receiver_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(receiver_program, rx_wait_kernel, fabric_desc.receiver_core, /*args*/ {global_sema_a.address(), 1u});
 
-    // Input data preparation
-    constexpr uint32_t single_tile_size = sizeof(uint16_t) * tt::constants::TILE_HW;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    // Setup sender program
+    Program sender_program = CreateProgram();
+    auto tx_core_range_set = CoreRange(fabric_desc.sender_core, fabric_desc.sender_core);
+    auto num_pages = tt::div_up(buffer_size, page_size);
+    constexpr auto CB_ID = tt::CBIndex::c_0;
 
-    // Create sharded buffers instead of replicated buffers
-    // For a single tile, we'll shard it across the mesh (though for a single tile this is a bit unusual)
-    // In practice, you'd have a larger tensor. Here we use cluster_axis=0 to shard along rows
-    const Shape2D global_buffer_shape = Shape2D(tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 2);
-    auto sharded_buffer_config =
-        create_sharded_buffer_config(mesh_device, global_buffer_shape, sizeof(uint16_t), 0 /* cluster_axis */);
+    // CB to buffer local dram read
+    auto cb_cfg =
+        CircularBufferConfig(8 * page_size, {{CB_ID, tt::DataFormat::Float16}}).set_page_size(CB_ID, page_size);
+    CreateCircularBuffer(sender_program, fabric_desc.sender_core, cb_cfg);
 
-    auto src_dram_buffer = distributed::MeshBuffer::create(sharded_buffer_config, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(sharded_buffer_config, dram_config, mesh_device.get());
+    std::vector<uint32_t> reader_cta;
+    TensorAccessorArgs(*src_buf).append_to(reader_cta);
+    reader_cta.push_back(1u /*SRC_IS_DRAM*/);
+    reader_cta.push_back(num_pages);
+    reader_cta.push_back(page_size);
 
-    // Core synchronization semaphore setup
-    const uint32_t sem_id = CreateSemaphore(program, sem_core_range, 0);
+    auto reader_kernel = CreateKernel(
+        sender_program,
+        std::string(KERNEL_DIR) + "unicast_tx_reader_to_cb.cpp",
+        fabric_desc.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_cta});
+    tt::tt_metal::SetRuntimeArgs(
+        sender_program, reader_kernel, fabric_desc.sender_core, {(uint32_t)src_buf->address()});
 
-    // Source data preparation and DRAM transfer
-    const uint16_t input_data = 14;  // Example input data
-    std::vector<uint16_t> src_vec(1, input_data);
-    distributed::git(cq, src_dram_buffer, src_vec, false);
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
+    writer_cta.push_back(num_pages);
+    writer_cta.push_back(page_size);
 
-    // L1 circular buffer setup
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::UInt16}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, sem_core_range, cb_src0_config);
+    auto writer_kernel = tt::tt_metal::CreateKernel(
+        sender_program,
+        std::string(KERNEL_DIR) + "unicast_tx_writer_cb_to_dst.cpp",
+        fabric_desc.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .compile_args = writer_cta});
 
-    constexpr uint32_t src1_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::UInt16}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, sem_core_range, cb_src1_config);
+    // find available links
+    auto links = tt_fabric::get_forwarding_link_indices(src_fabric_node, dst_fabric_node);
+    TT_FATAL(!links.empty(), "Need at least one available link from src to dst.");
+    uint32_t link_to_use = links[0];
 
-    // Kernels setup
-    // Core 0 kernels
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
-    TensorAccessorArgs(*src_dram_buffer).append_to(reader_compile_time_args);
-    KernelHandle core0_reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "fabric_api_tests/kernels/dataflow/reader0.cpp",
-        core0,
-        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
-    KernelHandle core0_writer_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "fabric_api_tests/kernels/dataflow/writer0.cpp",
-        core0,
-        tt::tt_metal::WriterDataMovementConfig{{src0_cb_index, src1_cb_index}});
+    CoreCoord receiver_coord = dst_dev->worker_core_from_logical_core(fabric_desc.receiver_core);
+    std::vector<uint32_t> writer_rta = {
+        (uint32_t)dst_buf->address(),      // 0: dst_base (receiver DRAM offset)
+        (uint32_t)fabric_desc.mesh_id,     // 1: dst_mesh_id (logical)
+        (uint32_t)fabric_desc.dst_chip,    // 2: dst_dev_id  (logical)
+        (uint32_t)receiver_coord.x,        // 3: receiver_noc_x
+        (uint32_t)receiver_coord.y,        // 4: receiver_noc_y
+        (uint32_t)global_sema_b.address()  // 5: receiver L1 semaphore addr
+    };
+    // Append fabric args (encapsulate routing , link identifiers for fabric traffic)
+    tt_fabric::append_fabric_connection_rt_args(
+        src_fabric_node,
+        dst_fabric_node,
+        /*link_idx=*/link_to_use,
+        sender_program,
+        fabric_desc.sender_core,
+        writer_rta);
+    SetRuntimeArgs(sender_program, writer_kernel, fabric_desc.sender_core, writer_rta);
 
-    // Core 1 kernels
-    KernelHandle core1_reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "fabric_api_tests/kernels/dataflow/reader1.cpp",
-        core1,
-        tt::tt_metal::ReaderDataMovementConfig{{src0_cb_index, src1_cb_index}});
-    std::vector<uint32_t> writer_compile_time_args = {src1_cb_index};
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-    KernelHandle core1_writer_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "fabric_api_tests/kernels/dataflow/writer1.cpp",
-        core1,
-        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+    // Enqueue workloads
+    distributed::MeshWorkload sender_workload;
+    distributed::MeshWorkload receiver_workload;
+    sender_workload.add_program(distributed::MeshCoordinateRange(src_mesh_coord), std::move(sender_program));
+    receiver_workload.add_program(distributed::MeshCoordinateRange(dst_mesh_coord), std::move(receiver_program));
 
-    // Runtime args setup
-    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer->address()});
-    SetRuntimeArgs(program, core0_writer_kernel_id, core0, {core1_physical_coord.x, core1_physical_coord.y, sem_id});
-    SetRuntimeArgs(program, core1_reader_kernel_id, core1, {core0_physical_coord.x, core0_physical_coord.y, sem_id});
-    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
+    distributed::EnqueueMeshWorkload(cq, receiver_workload, /*blocking=*/false);
+    distributed::EnqueueMeshWorkload(cq, sender_workload, /*blocking=*/false);
 
-    // Program enqueue (non-blocking). Wait for completion before reading back.
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    // Data transfer back to host machine
-    std::vector<uint16_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
-
-    fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
+    std::vector<uint32_t> rx_written_data(num_words, 0u);
+    distributed::ReadShard(cq, rx_written_data, dst_buf, dst_mesh_coord, /*blocking=*/true);
 
     // Teardown mesh device
     mesh_device->close();
     mesh_device.reset();
-    if (config.fabric_config != tt_fabric::FabricConfig::DISABLED) {
-        tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
-    }
 }
