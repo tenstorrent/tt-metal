@@ -29,11 +29,9 @@ def load_torch_model(reference_model, target_prefix="", model_location_generator
 
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         logger.info("Using HuggingFace AutoModel.from_pretrained path")
-        local_files_only = os.getenv("CI") == "true"
-        logger.info(f"local_files_only={local_files_only}")
-        torch_model = transformers.AutoModel.from_pretrained(
-            "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", local_files_only=local_files_only
-        )
+        # Note: Not using local_files_only to let HuggingFace handle cache/download automatically
+        # HF_HUB_CACHE is set to /mnt/MLPerf/huggingface/hub in CI
+        torch_model = transformers.AutoModel.from_pretrained("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr")
         logger.info("Successfully loaded model from HuggingFace")
         state_dict = torch_model.state_dict()
     else:
