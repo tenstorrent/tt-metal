@@ -203,7 +203,7 @@ fused_rmsnorm_post_all_gather(
         .rope_sin = rope_sin.has_value() ? std::optional<Tensor>(rope_sin.value()) : std::nullopt,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

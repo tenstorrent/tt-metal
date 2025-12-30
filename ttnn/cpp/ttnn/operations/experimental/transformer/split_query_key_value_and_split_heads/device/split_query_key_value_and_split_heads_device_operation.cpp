@@ -153,7 +153,7 @@ std::vector<Tensor> split_query_key_value_and_split_heads(
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor, optional_output_tensors.value_or(std::vector<std::optional<ttnn::Tensor>>{})};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

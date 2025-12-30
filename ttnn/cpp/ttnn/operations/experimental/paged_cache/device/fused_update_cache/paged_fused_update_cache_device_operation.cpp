@@ -309,7 +309,7 @@ paged_fused_update_cache(
             update_idxs_tensor.has_value() ? std::optional<Tensor>(update_idxs_tensor.value()) : std::nullopt,
         .page_table = page_table.has_value() ? std::optional<Tensor>(page_table.value()) : std::nullopt};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

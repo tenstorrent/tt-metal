@@ -113,7 +113,7 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     uint32_t num_links,
     tt::tt_fabric::Topology topology) {
     using OperationType = ttnn::operations::ccl::ReduceScatterDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .memory_config = memory_config,
             .dim = dim,

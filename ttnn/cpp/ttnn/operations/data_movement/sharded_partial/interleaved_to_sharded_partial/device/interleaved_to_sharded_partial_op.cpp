@@ -114,7 +114,7 @@ interleaved_to_sharded_partial(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype) {
     using OperationType = ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .grid_size = grid_size,
             .shard_spec = shard_spec,

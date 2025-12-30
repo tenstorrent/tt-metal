@@ -58,7 +58,7 @@ ProdAllDeviceOperation::tensor_return_value_t ProdAllDeviceOperation::create_out
 namespace ttnn::prim {
 ttnn::Tensor prod_all(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::reduction::prod_all::ProdAllDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.output_mem_config = output_mem_config},
         OperationType::tensor_args_t{.input = input});
 }

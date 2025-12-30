@@ -311,7 +311,7 @@ ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::Reduc
         num_buffers_per_channel};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

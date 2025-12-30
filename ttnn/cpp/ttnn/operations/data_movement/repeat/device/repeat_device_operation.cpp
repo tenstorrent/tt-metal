@@ -93,7 +93,7 @@ ttnn::operations::data_movement::repeat::RepeatDeviceOperation::tensor_return_va
     bool m_is_last_dim,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::data_movement::repeat::RepeatDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
         OperationType::tensor_args_t{.input = input});

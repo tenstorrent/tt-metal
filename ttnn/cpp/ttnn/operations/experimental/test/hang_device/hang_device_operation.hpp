@@ -54,7 +54,7 @@ struct ExecuteTestHangDeviceOperation {
 namespace ttnn {
 struct TestHangOp {
     static Tensor invoke(const Tensor& input) {
-        return device_operation::detail::launch_on_device<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input});
+        return device_operation::launch<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input});
     }
 };
 

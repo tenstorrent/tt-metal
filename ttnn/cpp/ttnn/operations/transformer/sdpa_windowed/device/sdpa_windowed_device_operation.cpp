@@ -213,7 +213,7 @@ windowed_scaled_dot_product_attention(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using OperationType =
         ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
             .output_mem_config = output_mem_config,

@@ -95,14 +95,12 @@ sharded_to_interleaved_partial(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype) {
     using OperationType = ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .num_slices = num_slices,
             .slice_index = slice_index,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype},
-        OperationType::tensor_args_t{
-            .input_tensor = input_tensor,
-            .cache_tensor = cache_tensor});
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .cache_tensor = cache_tensor});
 }
 }  // namespace ttnn::prim

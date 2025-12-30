@@ -166,7 +166,7 @@ ttnn::operations::experimental::matmul::attn_matmul::AttnMatmulDeviceOperation::
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, std::move(optional_output_tensor)};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

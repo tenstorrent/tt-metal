@@ -283,7 +283,7 @@ ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t con
     operation_attributes.pre_op_l1_allocation_size_bytes =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

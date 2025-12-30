@@ -95,7 +95,7 @@ ttnn::Tensor fill_rm(
     float val_lo,
     const MemoryConfig& output_memory_config) {
     using OperationType = ttnn::operations::data_movement::fill_rm::FillRMDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .N = N,
             .C = C,
