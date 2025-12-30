@@ -77,7 +77,8 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = i / static_cast<float>(tensor_spec.logical_shape().volume());
+            // NOLINTNEXTLINE(bugprone-integer-division)
+            auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
@@ -119,7 +120,8 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = i / static_cast<float>(tensor_spec.logical_shape().volume());
+            // NOLINTNEXTLINE(bugprone-integer-division)
+            auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
