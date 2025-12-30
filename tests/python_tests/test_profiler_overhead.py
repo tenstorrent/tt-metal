@@ -8,7 +8,6 @@ from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
 from helpers.profiler import ProfilerConfig
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig, TestMode
 
 
 def get_expected_overhead():
@@ -25,9 +24,6 @@ def get_expected_overhead():
 # Because of this, measured overhead is at 2.3k instead of ~23 cycles
 @skip_for_coverage
 def test_profiler_overhead(workers_tensix_coordinates):
-
-    if TestConfig.MODE == TestMode.PRODUCE:
-        pytest.skip()
 
     configuration = ProfilerConfig(
         "sources/profiler_overhead_test.cpp",

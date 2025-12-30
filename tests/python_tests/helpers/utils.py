@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import subprocess
 import sys
 from collections import namedtuple
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from filelock import FileLock
 
 from .format_config import DataFormat, FormatConfig
 from .llk_params import format_dict
@@ -259,5 +261,14 @@ def passed_test(
 
 
 def create_directories(dirs: list[Path]):
-    for dir in dirs:
-        dir.mkdir(exist_ok=True, parents=True)
+    """Create directories with file lock to handle race conditions in parallel execution."""
+
+    # If all directories exist, skip locking entirely
+    if all(dir.exists() for dir in dirs):
+        return
+
+    # Acquire lock and create using os.makedirs (more robust than pathlib.mkdir)
+    lock = FileLock("/tmp/tt-llk-build.lock")
+    with lock:
+        for dir in dirs:
+            os.makedirs(dir, exist_ok=True)

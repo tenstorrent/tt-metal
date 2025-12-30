@@ -1,0 +1,106 @@
+name: "⚙️ Compile for Quasar"
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        description: "The Docker image to use for the container"
+        required: true
+        type: string
+      runs_on:
+        description: "The runner to use for the job"
+        required: true
+        type: string
+      test_splits:
+        description: "Number of test groups to split tests into (e.g., 4)"
+        required: true
+        type: number
+      pytest_markers:
+        description: "Pytest mark expression to select which tests to compile (e.g., 'not perf', 'nightly or not perf')"
+        required: false
+        default: "quasar"
+        type: string
+      timeout_minutes:
+        description: "Timeout in minutes for the build job"
+        required: false
+        default: 80
+        type: number
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          matrix=$(echo "[$(seq -s, 1 ${{ inputs.test_splits }})]")
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
+  compile-quasar:
+    needs: generate-matrix
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test_group: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+    container:
+      image: ${{ inputs.docker_image }}
+
+    name: "🦄 Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Install SFPI
+      - name: Install SFPI
+        shell: bash
+        run: |
+          cd tests
+          CHIP_ARCH=blackhole ./setup_testing_env.sh
+          cd ..
+
+      # Step 3: Compile for Quasar
+      - name: Compile for Quasar
+        shell: bash
+        env:
+          TEST_SPLITS: ${{ inputs.test_splits }}
+        run: |
+          CHIP_ARCH=quasar
+          export CHIP_ARCH
+          echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
+          cd tests/python_tests/
+
+          echo "Compiling Quasar..."
+          pytest --compile-producer -n 10 \
+                -m "${{ inputs.pytest_markers }}" \
+                --splits $TEST_SPLITS --group ${{ matrix.test_group }} \
+                --override-ini="addopts=-v" --tb=short --timeout=60 \
+                --junitxml=pytest-report-${CHIP_ARCH}-compile.xml .
+
+      # Step 4: Upload JUnit report for compiling elfs
+      - name: Upload JUnit report for compiling elfs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: >-
+            ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
+                && 'perf-' || '' }}junit-report-quasar-${{ matrix.test_group }}-compile
+          path: tests/python_tests/pytest-report-quasar-compile.xml
+
+      # Step 5: Publish Test Results
+      - name: Publish Test Results
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: tests/python_tests/pytest-report-quasar-compile.xml
+          check_name: Quasar Compile Tests
+          detailed_summary: true
+          include_passed: true
+          fail_on_failure: false
