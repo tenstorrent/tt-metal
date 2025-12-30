@@ -40,6 +40,46 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector):
+    """
+    Validate that the output memory config is sharded.
+    interleaved_to_sharded requires a sharded output memory config.
+    """
+    from typing import Tuple, Optional
+
+    output_memory_config = test_vector.get("output_memory_config")
+
+    # Check if output is sharded
+    is_output_sharded = False
+
+    # Handle dict memory configs (from JSON deserialization in pipeline)
+    if isinstance(output_memory_config, dict):
+        # Check dict structure for memory_layout
+        mem_layout = output_memory_config.get("memory_layout") or output_memory_config.get("data", {}).get(
+            "memory_layout"
+        )
+        if mem_layout and "INTERLEAVED" in str(mem_layout):
+            return True, "Output memory config must be sharded for interleaved_to_sharded operation"
+        # If it's a dict with SHARDED layout, consider it valid
+        if mem_layout and "SHARDED" in str(mem_layout):
+            is_output_sharded = True
+    else:
+        # Handle proper ttnn MemoryConfig objects
+        if hasattr(output_memory_config, "is_sharded") and callable(getattr(output_memory_config, "is_sharded", None)):
+            is_output_sharded = output_memory_config.is_sharded()
+        elif hasattr(output_memory_config, "memory_layout"):
+            is_output_sharded = output_memory_config.memory_layout in [
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ]
+
+    if not is_output_sharded:
+        return True, "Output memory config must be sharded for interleaved_to_sharded operation"
+
+    return False, None
+
+
 def mesh_device_fixture():
     """
     Override default device fixture for interleaved_to_sharded operation.

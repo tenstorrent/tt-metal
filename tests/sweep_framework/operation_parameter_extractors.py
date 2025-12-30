@@ -604,16 +604,32 @@ class OperationParameterExtractors:
             # Look for arg1 which should contain the dims parameter
             for arg in config:
                 if isinstance(arg, dict) and "arg1" in arg:
-                    dims_str = arg["arg1"]
-                    # The dims are in format '[0, 2, 3, 1]' or similar
-                    if isinstance(dims_str, str) and dims_str.startswith("[") and dims_str.endswith("]"):
-                        # Parse the list string
-                        dims_str = dims_str.strip("[]")
-                        if dims_str:
-                            dims = [int(x.strip()) for x in dims_str.split(",")]
-                            return dims
-                    elif isinstance(dims_str, list):
-                        return dims_str
+                    dims_data = arg["arg1"]
+
+                    # Handle direct list
+                    if isinstance(dims_data, list):
+                        # Validate all elements are integers
+                        if all(isinstance(d, int) for d in dims_data):
+                            return dims_data
+
+                    # Handle dict with 'SmallVector' key
+                    elif isinstance(dims_data, dict) and "SmallVector" in dims_data:
+                        dims_list = dims_data["SmallVector"]
+                        if isinstance(dims_list, list) and all(isinstance(d, int) for d in dims_list):
+                            return dims_list
+
+                    # Handle string format '[0, 2, 3, 1]'
+                    elif isinstance(dims_data, str):
+                        # Skip corrupted strings containing 'unsupported type' or 'std::reference_wrapper'
+                        if "unsupported" in dims_data or "std::" in dims_data:
+                            return None
+
+                        if dims_data.startswith("[") and dims_data.endswith("]"):
+                            # Parse the list string
+                            dims_str = dims_data.strip("[]").strip()
+                            if dims_str:
+                                dims = [int(x.strip()) for x in dims_str.split(",")]
+                                return dims
             return None
         except Exception:
             return None

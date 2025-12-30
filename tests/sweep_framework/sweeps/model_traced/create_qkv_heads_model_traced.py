@@ -113,37 +113,53 @@ def run(
         # Check if memory config is sharded - create_qkv_heads requires tile-aligned shard shapes
         # If sharded, use interleaved instead to avoid non-tile-aligned shard validation errors
         is_input_sharded = False
-        if hasattr(input_a_memory_config, "is_sharded"):
-            is_input_sharded = input_a_memory_config.is_sharded()
-        elif hasattr(input_a_memory_config, "memory_layout"):
-            # Check memory_layout attribute for sharded types
-            is_input_sharded = input_a_memory_config.memory_layout in [
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ]
 
-        if is_input_sharded:
+        # Handle dict memory configs (from JSON deserialization in pipeline)
+        if isinstance(input_a_memory_config, dict):
+            # Skip dict memory configs - just use DRAM_MEMORY_CONFIG
             from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         else:
-            from_torch_kwargs["memory_config"] = input_a_memory_config
+            # Handle proper ttnn MemoryConfig objects
+            if hasattr(input_a_memory_config, "is_sharded") and callable(
+                getattr(input_a_memory_config, "is_sharded", None)
+            ):
+                is_input_sharded = input_a_memory_config.is_sharded()
+            elif hasattr(input_a_memory_config, "memory_layout"):
+                # Check memory_layout attribute for sharded types
+                is_input_sharded = input_a_memory_config.memory_layout in [
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ]
+
+            if is_input_sharded:
+                from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                from_torch_kwargs["memory_config"] = input_a_memory_config
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
     # If output memory config is sharded, use interleaved instead
     actual_output_memory_config = output_memory_config
     is_output_sharded = False
-    if hasattr(output_memory_config, "is_sharded"):
-        is_output_sharded = output_memory_config.is_sharded()
-    elif hasattr(output_memory_config, "memory_layout"):
-        is_output_sharded = output_memory_config.memory_layout in [
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ]
 
-    if is_output_sharded:
+    # Handle dict memory configs (from JSON deserialization in pipeline)
+    if isinstance(output_memory_config, dict):
+        # Skip dict memory configs - just use DRAM_MEMORY_CONFIG
         actual_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        # Handle proper ttnn MemoryConfig objects
+        if hasattr(output_memory_config, "is_sharded") and callable(getattr(output_memory_config, "is_sharded", None)):
+            is_output_sharded = output_memory_config.is_sharded()
+        elif hasattr(output_memory_config, "memory_layout"):
+            is_output_sharded = output_memory_config.memory_layout in [
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ]
+
+        if is_output_sharded:
+            actual_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     start_time = start_measuring_time()
     # This operation creates QKV heads from input tensor
