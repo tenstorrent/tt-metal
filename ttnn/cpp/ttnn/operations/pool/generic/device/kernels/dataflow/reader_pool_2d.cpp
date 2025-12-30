@@ -494,12 +494,24 @@ void kernel_main() {
         // Calculate in_ntiles_c (number of channel tiles) from in_c
         constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
 
-        // Calculate weight_ntiles for depthwise conv 2D layout: [channels, kernel_positions]
-        // Weight tensor shape: [padded_channels, padded_kernel_positions] in tiles
-        constexpr uint32_t kernel_positions = kernel_h * kernel_w;
-        constexpr uint32_t padded_kernel_positions = ((kernel_positions + TILE_WIDTH - 1) / TILE_WIDTH) * TILE_WIDTH;
-        constexpr uint32_t kernel_ntiles_hw = padded_kernel_positions / TILE_WIDTH;
-        constexpr uint32_t weight_ntiles = in_ntiles_c * kernel_ntiles_hw;
+        // Get num_shards_c from compile-time arg 47 (number of channel shards/cores)
+        constexpr uint32_t num_shards_c = get_compile_time_arg_val(47);
+        constexpr uint32_t total_tile_cols = num_shards_c * in_ntiles_c;
+
+        // Calculate weight_ntiles matching prepare_conv2d_weights face-based layout
+        // rows_per_stick = ceil(channels_per_core / FACE_SIZE)
+        // total_rows = kernel_h * kernel_w * rows_per_stick
+        // padded_rows = round_up(total_rows, TILE_HEIGHT)
+        // weight_ntiles = (padded_rows / TILE_HEIGHT) * in_ntiles_c
+        constexpr uint32_t weight_rows_per_stick = (in_ntiles_c * TILE_WIDTH + FACE_WIDTH - 1) / FACE_WIDTH;
+        constexpr uint32_t weight_total_rows = kernel_h * kernel_w * weight_rows_per_stick;
+        constexpr uint32_t weight_padded_rows = ((weight_total_rows + TILE_HEIGHT - 1) / TILE_HEIGHT) * TILE_HEIGHT;
+        constexpr uint32_t weight_ntiles_height = weight_padded_rows / TILE_HEIGHT;
+        constexpr uint32_t weight_ntiles = weight_ntiles_height * in_ntiles_c;
+
+        DPRINT << "weight_ntiles " << weight_ntiles << " (rows_per_stick=" << weight_rows_per_stick
+               << ", height=" << weight_ntiles_height << ", width=" << in_ntiles_c << ", total_cols=" << total_tile_cols
+               << ")" << ENDL();
 
         const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
 
@@ -525,11 +537,11 @@ void kernel_main() {
             uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(8));
             uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(9));
 
-            // Get starting tile_id from arg 10 (always provided by all sharding modes)
-            // - HEIGHT_SHARDED: start_tile_id = 0 (all cores use same weights)
-            // - WIDTH_SHARDED: start_tile_id = core_idx * shard_ntiles (each core different channels)
-            // - BLOCK_SHARDED: start_tile_id = col_idx * shard_ntiles (each column different channels)
-            uint32_t start_tile_id = get_arg_val<uint32_t>(10);
+            // Get starting column tile_id from arg 10 (always provided by all sharding modes)
+            // - HEIGHT_SHARDED: start_col_tile_id = 0 (all cores use same weights)
+            // - WIDTH_SHARDED: start_col_tile_id = core_idx * in_ntiles_c (each core different channels)
+            // - BLOCK_SHARDED: start_col_tile_id = col_idx * in_ntiles_c (each column different channels)
+            uint32_t start_col_tile_id = get_arg_val<uint32_t>(10);
 
             // Set up semaphore pointers
             volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
@@ -547,7 +559,8 @@ void kernel_main() {
                 weights_mcast_receiver_semaphore_addr);
 
             // Set up TensorAccessor and reserve CB
-            constexpr auto s_weight_args = TensorAccessorArgs<47>();
+            // TensorAccessorArgs starts at 48 (after num_shards_c at 47)
+            constexpr auto s_weight_args = TensorAccessorArgs<48>();
             const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
 
             cb_reserve_back(weight_cb_id, weight_ntiles);
@@ -555,24 +568,29 @@ void kernel_main() {
             uint32_t weights_start_address = weight_l1_addr;
 
             DPRINT << "WEIGHT_ADDR_DEBUG: base=0x" << HEX() << weight_addr_dram_base << DEC()
-                   << " start_tile_id=" << start_tile_id << " weight_ntiles=" << weight_ntiles
+                   << " start_col=" << start_col_tile_id << " weight_ntiles=" << weight_ntiles
                    << " tile_nbytes=" << weight_tile_nbytes << ENDL();
 
-            // Read all weight tiles from DRAM
-            for (uint32_t tile_id = 0; tile_id < weight_ntiles; tile_id++) {
-                // Add start_tile_id offset to get the actual tile_id in the interleaved DRAM buffer
-                uint32_t global_tile_id = start_tile_id + tile_id;
+            // Read all weight tiles from DRAM using 2D tile iteration
+            // Weight tensor is laid out as [padded_rows, padded_cols] where tiles are stored row-major
+            // Each core reads in_ntiles_c columns and weight_ntiles_height rows
+            for (uint32_t row = 0; row < weight_ntiles_height; row++) {
+                for (uint32_t col = 0; col < in_ntiles_c; col++) {
+                    // Calculate global tile ID for this (row, col) position
+                    // Tiles are stored row-major: tile_id = row * total_cols + col
+                    uint32_t global_tile_id = row * total_tile_cols + start_col_tile_id + col;
 
-                // Get the actual DRAM address for this tile via TensorAccessor
-                uint64_t dram_noc_addr = s_weight.get_noc_addr(global_tile_id);
+                    DPRINT << "  tile[" << (row * in_ntiles_c + col) << "] row=" << row << " col=" << col
+                           << " global_tile_id=" << global_tile_id << ENDL();
 
-                DPRINT << "  tile[" << tile_id << "] global_tile_id=" << global_tile_id << " dram_addr=0x" << HEX()
-                       << dram_noc_addr << DEC() << ENDL();
-
-                noc_async_read_tile(global_tile_id, s_weight, weight_l1_addr);
-                weight_l1_addr += weight_tile_nbytes;
+                    noc_async_read_tile(global_tile_id, s_weight, weight_l1_addr);
+                    weight_l1_addr += weight_tile_nbytes;
+                }
             }
             noc_async_read_barrier();
+
+            // Debug: print first few weight values from L1
+            tt::data_movement::common::print_bf16_pages(weights_start_address, 32, 32);
 
             // Calculate total size for multicast
             uint32_t weights_block_size_bytes = weight_ntiles * weight_tile_nbytes;

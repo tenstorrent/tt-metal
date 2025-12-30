@@ -1105,26 +1105,29 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
     constexpr uint32_t TILE_SIZE = 32;
     constexpr uint32_t FACE_SIZE = 16;
 
-    // Calculate per-core channel counts using tile-sized chunks
+    // Calculate per-core channel counts with even distribution
     std::vector<uint32_t> channels_per_core(num_channel_shards);
     std::vector<uint32_t> padded_channels_per_core(num_channel_shards);
 
-    // Distribute channels in tile-sized chunks (32, 16, etc.)
+    // Calculate base channels per core (evenly distributed, rounded up to tile size)
+    // E.g., 480 channels / 8 cores = 60 -> padded to 64 per core
+    uint32_t base_channels_per_core = (out_channels + num_channel_shards - 1) / num_channel_shards;
+    uint32_t padded_base_channels = ((base_channels_per_core + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+
     uint32_t remaining_channels = out_channels;
     uint32_t total_padded_channels = 0;
 
     for (uint32_t core_idx = 0; core_idx < num_channel_shards; core_idx++) {
-        // Assign full tiles first, then remaining channels to last core
         if (core_idx < num_channel_shards - 1) {
-            // For first cores, assign full tiles (32 channels)
-            channels_per_core[core_idx] = std::min(TILE_SIZE, remaining_channels);
+            // First N-1 cores get padded_base_channels (actual channels, not padded)
+            channels_per_core[core_idx] = std::min(padded_base_channels, remaining_channels);
         } else {
             // Last core gets remaining channels
             channels_per_core[core_idx] = remaining_channels;
         }
 
-        // Pad to tile boundaries
-        padded_channels_per_core[core_idx] = ((channels_per_core[core_idx] + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+        // All cores use the same padded size for uniform layout
+        padded_channels_per_core[core_idx] = padded_base_channels;
         total_padded_channels += padded_channels_per_core[core_idx];
         remaining_channels -= channels_per_core[core_idx];
     }
@@ -2090,8 +2093,11 @@ static ttnn::Tensor prepare_conv_weights_internal(
         }
 
         // Set target shapes for consistency with downstream code
+        // For 2D depthwise width/block-sharded layout, use padded_channels (which includes
+        // per-core tile padding) instead of out_channels_padded (simple round_up to tile).
+        // This ensures the tensor shape matches the actual buffer layout.
         ttnn::Shape target_shape({1, 1, padded_kernel_positions, out_channels});
-        ttnn::Shape padded_target_shape({1, 1, padded_kernel_positions, out_channels_padded});
+        ttnn::Shape padded_target_shape({1, 1, padded_kernel_positions, padded_channels});
         weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
     } else {
         // for conv op, pad the weights to block shape

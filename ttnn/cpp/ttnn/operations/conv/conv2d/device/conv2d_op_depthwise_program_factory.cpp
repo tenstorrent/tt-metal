@@ -187,13 +187,31 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         mul_cb_id, program, parallel_config.grid, mul_cb_pagesize, mul_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} (mul_cb) :: PS = {}, NP = {}", mul_cb_id, mul_cb_pagesize, mul_cb_npages);
 
-    // weight_cb - stores weight tensors (match pool factory sizing)
+    // weight_cb - stores weight tensors for depthwise conv
+    // Weight layout uses face-based format: rows_per_stick = ceil(channels_per_core / 16)
+    // Total rows = kernel_h * kernel_w * rows_per_stick, then padded to tile boundary
     const uint32_t weight_cb_id = next_cb_index++;
     const uint32_t weight_cb_pagesize = tt::tile_size(params.data_format);
-    const uint32_t weight_cb_npages = std::min(params.in_ntiles_c, 8u);  // Max 8 tiles per width (because of dest)
+    // Calculate weight tiles matching prepare_conv2d_weights layout
+    const uint32_t weight_rows_per_stick =
+        (params.in_ntiles_c * tt::constants::TILE_WIDTH + tt::constants::FACE_WIDTH - 1) / tt::constants::FACE_WIDTH;
+    const uint32_t weight_total_rows = kernel_h * kernel_w * weight_rows_per_stick;
+    const uint32_t weight_padded_rows =
+        ((weight_total_rows + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) *
+        tt::constants::TILE_HEIGHT;
+    const uint32_t weight_ntiles_height = weight_padded_rows / tt::constants::TILE_HEIGHT;
+    const uint32_t weight_ntiles_width = params.in_ntiles_c;
+    const uint32_t weight_cb_npages = weight_ntiles_height * weight_ntiles_width;
     tt::tt_metal::create_cb(
         weight_cb_id, program, parallel_config.grid, weight_cb_pagesize, weight_cb_npages, params.data_format);
-    log_debug(tt::LogOp, "CB {} (weight_cb) :: PS = {}, NP = {}", weight_cb_id, weight_cb_pagesize, weight_cb_npages);
+    log_debug(
+        tt::LogOp,
+        "CB {} (weight_cb) :: PS = {}, NP = {} ({}x{} tiles)",
+        weight_cb_id,
+        weight_cb_pagesize,
+        weight_cb_npages,
+        weight_ntiles_height,
+        weight_ntiles_width);
 
     // Output CB - match pool factory sizing based on output layout (same as pool factory)
     const bool is_output_tiled = output.layout() == Layout::TILE;
@@ -533,7 +551,8 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         zero_pages,                     // 43 - zero_pages (FIXED: use calculated value)
         out_cb_id,                      // 44
         out_cb_id,                      // 45 - out_idx_cb_id (point to out_cb for depthwise)
-        weight_cb_id                    // 46 - weight_cb_id (for L1 storage)
+        weight_cb_id,                   // 46 - weight_cb_id (for L1 storage)
+        num_shards_c                    // 47 - num_shards_c (for 2D tile iteration in weight reading)
     };
 
     // Add tensor accessor args for weight buffer (similar to sharded factory)
@@ -610,11 +629,10 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
     // ============================================================
     // Weight Distribution Setup - Common calculations for all sharding modes
+    // Reuse weight_cb_npages calculated earlier (same as shard_ntiles)
     // ============================================================
     const uint32_t padded_ch_per_shard = tt::round_up(in_c_per_shard_ceil, tt::constants::TILE_WIDTH);
-    const uint32_t padded_kernel_pos = tt::round_up(kernel_h * kernel_w, tt::constants::TILE_WIDTH);
-    const uint32_t shard_ntiles =
-        (padded_ch_per_shard / tt::constants::TILE_WIDTH) * (padded_kernel_pos / tt::constants::TILE_WIDTH);
+    const uint32_t shard_ntiles = weight_cb_npages;  // Already calculated for CB allocation
 
     // Grid dimensions for block sharding (also used for logging)
     const uint32_t num_cores_c = parallelization_config.num_cores_c_in;
@@ -622,13 +640,13 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
     log_info(
         tt::LogOp,
-        "Weight setup: {} cores ({}r x {}c), ch_per_shard={}, padded_ch={}, kernel_pos={}, shard_ntiles={}",
+        "Weight setup: {} cores ({}r x {}c), ch_per_shard={}, padded_ch={}, weight_rows={}, shard_ntiles={}",
         num_cores,
         num_cores_r,
         num_cores_c,
         in_c_per_shard_ceil,
         padded_ch_per_shard,
-        padded_kernel_pos,
+        weight_padded_rows,
         shard_ntiles);
 
     // Helper lambda to create sender runtime args
@@ -666,8 +684,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     if (num_cores > 0) {
         if (is_width_sharded) {
             // WIDTH_SHARDED: Each core reads its own weight shard - no multicast
+            // Pass start_col_tile_id = i * in_ntiles_c (column offset in tile coordinates)
             for (uint32_t i = 0; i < num_cores; i++) {
-                auto args = make_sender_args(0, 0, 0, 0, 0, i * shard_ntiles);  // num_dests=0 skips multicast
+                auto args = make_sender_args(0, 0, 0, 0, 0, i * params.in_ntiles_c);  // num_dests=0 skips multicast
                 SetRuntimeArgs(program, reader0_kernel, all_cores[i], args);
             }
             log_info(tt::LogOp, "WIDTH_SHARDED: {} cores each reading own weight shard", num_cores);
@@ -681,6 +700,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
                 if (row_idx == 0) {
                     // Sender: multicast to entire column
+                    // Pass start_col_tile_id = col_idx * in_ntiles_c (column offset in tile coordinates)
                     CoreCoord col_start_phys = device->worker_core_from_logical_core({col_idx, 0});
                     CoreCoord col_end_phys = device->worker_core_from_logical_core({col_idx, num_cores_r - 1});
                     auto args = make_sender_args(
@@ -689,7 +709,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                         col_end_phys.x,
                         col_end_phys.y,
                         num_cores_r - 1,
-                        col_idx * shard_ntiles);
+                        col_idx * params.in_ntiles_c);
                     SetRuntimeArgs(program, reader0_kernel, core, args);
                 } else {
                     // Receiver: wait for sender in row 0
