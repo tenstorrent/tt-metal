@@ -19,12 +19,13 @@ Attention Pattern:
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 import torch
 
 try:
     import ttnn
+
     TTNN_AVAILABLE = True
 except ImportError:
     TTNN_AVAILABLE = False
@@ -36,6 +37,7 @@ from .ttnn_common import safe_cat_torch
 @dataclass
 class PrefixConfig:
     """Configuration for prefix embedding."""
+
     vlm_width: int = 2048
     num_image_tokens: int = 256  # Tokens per image from SigLIP
     max_lang_tokens: int = 512
@@ -44,10 +46,10 @@ class PrefixConfig:
 class PrefixEmbeddingTorch:
     """
     PyTorch implementation of prefix embedding.
-    
+
     Combines image and language embeddings for the VLM backbone.
     """
-    
+
     def __init__(
         self,
         config: PrefixConfig,
@@ -56,7 +58,7 @@ class PrefixEmbeddingTorch:
     ):
         """
         Initialize prefix embedding.
-        
+
         Args:
             config: Prefix configuration
             embed_image_fn: Function to embed images (from SigLIP)
@@ -65,7 +67,7 @@ class PrefixEmbeddingTorch:
         self.config = config
         self.embed_image_fn = embed_image_fn
         self.embed_language_fn = embed_language_fn
-    
+
     def embed_images(
         self,
         images: List[torch.Tensor],
@@ -73,11 +75,11 @@ class PrefixEmbeddingTorch:
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         """
         Embed multiple images.
-        
+
         Args:
             images: List of image tensors (batch_size, channels, height, width)
             img_masks: List of boolean masks (batch_size,) indicating valid images
-        
+
         Returns:
             Tuple of (image_embeddings, expanded_masks):
                 - image_embeddings: List of (batch_size, num_tokens, hidden_dim)
@@ -85,22 +87,22 @@ class PrefixEmbeddingTorch:
         """
         if self.embed_image_fn is None:
             raise RuntimeError("embed_image_fn not set")
-        
+
         image_embs = []
         expanded_masks = []
-        
+
         for img, mask in zip(images, img_masks):
             # Embed image through vision tower
             img_emb = self.embed_image_fn(img)
             image_embs.append(img_emb)
-            
+
             # Expand mask to match token count
             batch_size, num_tokens = img_emb.shape[:2]
             expanded_mask = mask[:, None].expand(batch_size, num_tokens)
             expanded_masks.append(expanded_mask)
-        
+
         return image_embs, expanded_masks
-    
+
     def embed_language(
         self,
         lang_tokens: torch.Tensor,
@@ -108,23 +110,23 @@ class PrefixEmbeddingTorch:
     ) -> torch.Tensor:
         """
         Embed language tokens.
-        
+
         Args:
             lang_tokens: (batch_size, seq_len) token IDs
             lang_masks: (batch_size, seq_len) boolean validity mask
-        
+
         Returns:
             (batch_size, seq_len, hidden_dim) scaled embeddings
         """
         if self.embed_language_fn is None:
             raise RuntimeError("embed_language_fn not set")
-        
+
         lang_emb = self.embed_language_fn(lang_tokens)
-        
+
         # Scale by sqrt(hidden_dim) as per standard practice
         hidden_dim = lang_emb.shape[-1]
         return lang_emb * math.sqrt(hidden_dim)
-    
+
     def embed_prefix(
         self,
         images: List[torch.Tensor],
@@ -134,13 +136,13 @@ class PrefixEmbeddingTorch:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Main embedding function for prefix (images + language).
-        
+
         Args:
             images: List of image tensors
             img_masks: List of image validity masks
             lang_tokens: Language token IDs
             lang_masks: Language token masks
-        
+
         Returns:
             Tuple of (prefix_embs, prefix_pad_masks, prefix_att_masks):
                 - prefix_embs: (batch_size, prefix_len, hidden_dim)
@@ -151,7 +153,7 @@ class PrefixEmbeddingTorch:
         embs = []
         pad_masks = []
         att_masks = []
-        
+
         # Process images
         if images and self.embed_image_fn is not None:
             image_embs, img_pad_masks = self.embed_images(images, img_masks)
@@ -161,7 +163,7 @@ class PrefixEmbeddingTorch:
                 # Images use bidirectional attention (0)
                 num_img_tokens = img_emb.shape[1]
                 att_masks.extend([0] * num_img_tokens)
-        
+
         # Process language
         if self.embed_language_fn is not None:
             lang_emb = self.embed_language(lang_tokens, lang_masks)
@@ -170,27 +172,27 @@ class PrefixEmbeddingTorch:
             # Language uses bidirectional attention within prefix (0)
             num_lang_tokens = lang_emb.shape[1]
             att_masks.extend([0] * num_lang_tokens)
-        
+
         # Concatenate all embeddings
         prefix_embs = safe_cat_torch(embs, dim=1)
         prefix_pad_masks = torch.cat(pad_masks, dim=1)
-        
+
         # Create attention mask tensor
         batch_size = prefix_embs.shape[0]
         device = prefix_embs.device
         att_masks_tensor = torch.tensor(att_masks, dtype=torch.bool, device=device)
         prefix_att_masks = att_masks_tensor.unsqueeze(0).expand(batch_size, -1)
-        
+
         return prefix_embs, prefix_pad_masks, prefix_att_masks
 
 
 class PrefixEmbeddingTTNN:
     """
     TTNN implementation of prefix embedding.
-    
+
     Uses TTNN operations for efficient execution on Tenstorrent hardware.
     """
-    
+
     def __init__(
         self,
         config: PrefixConfig,
@@ -200,7 +202,7 @@ class PrefixEmbeddingTTNN:
     ):
         """
         Initialize prefix embedding with TTNN.
-        
+
         Args:
             config: Prefix configuration
             device: TTNN device
@@ -209,12 +211,12 @@ class PrefixEmbeddingTTNN:
         """
         if not TTNN_AVAILABLE:
             raise RuntimeError("TTNN not available")
-        
+
         self.config = config
         self.device = device
         self.embed_image_fn = embed_image_fn
         self.embed_language_fn = embed_language_fn
-    
+
     def embed_images(
         self,
         images: List[torch.Tensor],
@@ -222,55 +224,51 @@ class PrefixEmbeddingTTNN:
     ) -> Tuple[List["ttnn.Tensor"], List["ttnn.Tensor"]]:
         """
         Embed multiple images using TTNN.
-        
+
         Args:
             images: List of PyTorch image tensors (vision tower handles TTNN conversion)
             img_masks: List of PyTorch mask tensors
-        
+
         Returns:
             Tuple of (image_embeddings, expanded_masks) as TTNN tensors
         """
         if self.embed_image_fn is None:
             raise RuntimeError("embed_image_fn not set")
-        
+
         image_embs = []
         expanded_masks = []
-        
+
         for i, (img, mask) in enumerate(zip(images, img_masks)):
             # embed_image_fn handles PyTorch->TTNN conversion internally
             print(f"[DEBUG] Processing image {i}, shape: {img.shape}")
             img_emb = self.embed_image_fn(img)
             print(f"[DEBUG] Image {i} embedded, shape: {img_emb.shape}")
             image_embs.append(img_emb)
-            
+
             # Expand mask - convert from PyTorch if needed
             shape = img_emb.shape
             batch_size, num_tokens = shape[0], shape[1]
-            
+
             if isinstance(mask, torch.Tensor):
-                # Expand mask on CPU first, then convert to TTNN
-                mask_expanded = mask.float().unsqueeze(-1).expand(batch_size, num_tokens)
-                expanded_mask = ttnn.from_torch(
-                    mask_expanded,
+                # Convert PyTorch mask to TTNN, then expand on device
+                mask_ttnn = ttnn.from_torch(
+                    mask.float().unsqueeze(-1),  # (batch_size, 1)
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,  # Use L1 for hot data
                 )
+                # Expand on device using ttnn.repeat (no round-trip!)
+                expanded_mask = ttnn.repeat(mask_ttnn, (1, num_tokens), memory_config=ttnn.L1_MEMORY_CONFIG)
             else:
-                # Already TTNN - convert back to torch, expand, convert back
-                mask_torch = ttnn.to_torch(mask)
-                mask_expanded = mask_torch.unsqueeze(-1).expand(batch_size, num_tokens)
-                expanded_mask = ttnn.from_torch(
-                    mask_expanded,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-            
+                # Already TTNN - expand directly on device (no round-trip!)
+                mask_reshaped = ttnn.reshape(mask, (batch_size, 1))
+                expanded_mask = ttnn.repeat(mask_reshaped, (1, num_tokens), memory_config=ttnn.L1_MEMORY_CONFIG)
+
             expanded_masks.append(expanded_mask)
-        
+
         return image_embs, expanded_masks
-    
+
     def embed_language(
         self,
         lang_tokens: "ttnn.Tensor",
@@ -278,26 +276,26 @@ class PrefixEmbeddingTTNN:
     ) -> "ttnn.Tensor":
         """
         Embed language tokens using TTNN.
-        
+
         Args:
             lang_tokens: TTNN tensor of token IDs
             lang_masks: TTNN tensor of validity masks
-        
+
         Returns:
             TTNN tensor of scaled embeddings
         """
         if self.embed_language_fn is None:
             raise RuntimeError("embed_language_fn not set")
-        
+
         lang_emb = self.embed_language_fn(lang_tokens)
-        
+
         # Scale by sqrt(hidden_dim) - use scalar multiply
         hidden_dim = lang_emb.shape[-1]
         scale = math.sqrt(hidden_dim)
-        
+
         # ttnn.multiply with scalar should work, but use explicit scalar parameter
         return ttnn.mul(lang_emb, scale)
-    
+
     def embed_prefix(
         self,
         images: List["ttnn.Tensor"],
@@ -307,20 +305,20 @@ class PrefixEmbeddingTTNN:
     ) -> Tuple["ttnn.Tensor", "ttnn.Tensor", "ttnn.Tensor"]:
         """
         Main embedding function for prefix (TTNN version).
-        
+
         Args:
             images: List of TTNN image tensors
             img_masks: List of TTNN mask tensors
             lang_tokens: TTNN tensor of language tokens
             lang_masks: TTNN tensor of language masks
-        
+
         Returns:
             Tuple of (prefix_embs, prefix_pad_masks, prefix_att_masks)
         """
         embs = []
         pad_masks = []
         num_tokens_list = []
-        
+
         # Process images
         if images and self.embed_image_fn is not None:
             image_embs, img_pad_masks = self.embed_images(images, img_masks)
@@ -328,42 +326,41 @@ class PrefixEmbeddingTTNN:
                 embs.append(img_emb)
                 pad_masks.append(img_pad_mask)
                 num_tokens_list.append(img_emb.shape[1])
-        
+
         # Process language
         if self.embed_language_fn is not None:
             lang_emb = self.embed_language(lang_tokens, lang_masks)
             embs.append(lang_emb)
             pad_masks.append(lang_masks)
             num_tokens_list.append(lang_emb.shape[1])
-        
+
         # Concatenate using TTNN
         prefix_embs = ttnn.concat(embs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         prefix_pad_masks = ttnn.concat(pad_masks, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        
+
         # Create attention mask (all zeros for bidirectional prefix attention)
         total_tokens = sum(num_tokens_list)
         batch_size = prefix_embs.shape[0]
-        
-        # Create zeros mask on host then transfer
-        att_masks_torch = torch.zeros(batch_size, total_tokens, dtype=torch.bool)
-        prefix_att_masks = ttnn.from_torch(
-            att_masks_torch,
+
+        # Create zeros mask directly on device (no host transfer needed)
+        prefix_att_masks = ttnn.zeros(
+            (batch_size, total_tokens),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        
+
         return prefix_embs, prefix_pad_masks, prefix_att_masks
 
 
 class MockEmbeddingFunctions:
     """
     Mock embedding functions for testing without full model.
-    
+
     Creates random embeddings with correct shapes.
     """
-    
+
     def __init__(
         self,
         hidden_dim: int = 2048,
@@ -371,7 +368,7 @@ class MockEmbeddingFunctions:
     ):
         self.hidden_dim = hidden_dim
         self.num_image_tokens = num_image_tokens
-    
+
     def embed_image(self, image: torch.Tensor) -> torch.Tensor:
         """Mock image embedding."""
         batch_size = image.shape[0]
@@ -382,7 +379,7 @@ class MockEmbeddingFunctions:
             device=image.device,
             dtype=image.dtype,
         )
-    
+
     def embed_language(self, tokens: torch.Tensor) -> torch.Tensor:
         """Mock language embedding."""
         batch_size, seq_len = tokens.shape
@@ -400,4 +397,3 @@ if TTNN_AVAILABLE:
     PrefixEmbedding = PrefixEmbeddingTTNN  # Use TTNN by default for performance
 else:
     PrefixEmbedding = PrefixEmbeddingTorch  # Fallback to PyTorch
-
