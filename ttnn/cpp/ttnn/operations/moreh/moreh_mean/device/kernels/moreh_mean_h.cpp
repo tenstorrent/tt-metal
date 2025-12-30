@@ -50,7 +50,7 @@ void kernel_main() {
                 reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
                 for (uint32_t ht = 0; ht < Ht - 1; ++ht) {
                     cb_wait_front(cb_input, onetile);
-                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                     cb_pop_front(cb_input, onetile);
                 }
                 reduce_uninit();
@@ -96,7 +96,7 @@ void kernel_main() {
             }
 
             reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
-            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             reduce_uninit();
             tile_regs_commit();
 

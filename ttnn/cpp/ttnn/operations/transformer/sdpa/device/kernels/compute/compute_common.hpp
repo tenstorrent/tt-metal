@@ -4,10 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP (PoolType::MAX)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-
-#include "api/debug/assert.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_binary.h"

@@ -3,14 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#define REDUCE_OP (PoolType::SUM)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -173,14 +170,8 @@ void reduce_c(uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows,
     // Postcondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
 
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(in_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
-    reconfig_data_format(in_cb, scale_cb);
-    pack_reconfig_data_format(out_cb);
-
-    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        in_cb, scale_cb, out_cb, rows, cols, 1);
+    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+        in_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols));
 
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }

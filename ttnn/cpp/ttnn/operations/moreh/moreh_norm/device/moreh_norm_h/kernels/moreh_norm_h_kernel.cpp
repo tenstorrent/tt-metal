@@ -130,8 +130,8 @@ void kernel_main() {
         cb_wait_front(cb_xpowadd, onetile);
         cb_reserve_back(cb_xpowsum, onetile);
 
-        reduce_init_delta_with_dt(cb_xpowsum, cb_xpowadd, cb_one);
-        reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
+        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_xpowsum, cb_xpowadd, cb_one);
+        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_xpowadd, cb_one, 0, 0, dst0);
         reduce_uninit();
         tile_regs_commit();
 
