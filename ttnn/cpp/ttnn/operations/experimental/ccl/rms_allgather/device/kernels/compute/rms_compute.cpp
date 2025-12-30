@@ -13,6 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -129,29 +130,15 @@ void kernel_main() {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in, cb_x2);
-    reconfig_data_format_srcb(cb_in, cb_scaler);
-
     cb_wait_front(cb_x2, num_tiles_per_block);
-    cb_wait_front(cb_scaler, 1);
 
-    cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
-
-    reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
-    index_h_offset = 0;
-    tile_regs_acquire();
-    for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-        reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
-    }
-
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(dst0, cb_ex_partial2);
-    tile_regs_release();
-    index_h_offset += block_w;
-    reduce_uninit();
+    compute_kernel_lib::reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
+        cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::TileShape::row(num_reduce_tiles_per_block_h));
     cb_pop_front(cb_x2, num_tiles_per_block);
-    cb_push_back(cb_ex_partial2, 1);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr (is_allgather_worker) {
@@ -162,33 +149,16 @@ void kernel_main() {
         num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
         const uint32_t cb_reduction_out =
             (!use_two_stage_reduce or is_second_stage_reader) ? cb_to_allgather_writer : cb_ex2;
-        cb_wait_front(cb_scaler_global, 1);
-        reconfig_data_format_srca(cb_x2, cb_ex_external2);
-        reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
-        cb_reserve_back(cb_reduction_out, num_tiles_per_allgather_worker);
 
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce;
-                 w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
-                cb_wait_front(cb_ex_external2, 1);
-                reduce_tile(
-                    cb_ex_external2,
-                    cb_scaler_global,
-                    0,
-                    scaler0,
-                    0);  // E(x) and E(x^2) interleaved so we reduce each one into
-                         // different dest reg
-                cb_pop_front(cb_ex_external2, 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_reduction_out);
-            tile_regs_release();
-        }
-        reduce_uninit();
-        cb_push_back(cb_reduction_out, num_tiles_per_allgather_worker);
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            compute_kernel_lib::ReduceInputMode::STREAMING,
+            compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
+            cb_ex_external2,
+            cb_scaler_global,
+            cb_reduction_out,
+            compute_kernel_lib::TileShape::grid(num_tiles_per_allgather_worker, num_blocks_reduce));
     }
 
     // Waits for stats tensor to have valid data
@@ -206,25 +176,13 @@ void kernel_main() {
         const bool enable_sqrt = get_arg_val<uint32_t>(4) == 1;
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
-            cb_reserve_back(cb_var, 1);
-            cb_wait_front(post_cb_scaler_global, 1);
-            reduce_init(cb_stats, post_cb_scaler_global, cb_var);
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < num_distributed_blocks; w++) {
-                reduce_tile(
-                    cb_stats,
-                    post_cb_scaler_global,
-                    0,
-                    post_scaler0,
-                    0);  // reducing E(x) and E(x^2) separately to different dst
-                cb_pop_front(cb_stats, 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(post_dst0, cb_var);
-            tile_regs_release();
-            reduce_uninit();
-            cb_push_back(cb_var, 1);
+
+            compute_kernel_lib::reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                compute_kernel_lib::ReduceInputMode::STREAMING,
+                compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+                cb_stats, post_cb_scaler_global, cb_var, compute_kernel_lib::TileShape::row(num_distributed_blocks));
 
             // 1/[sqrt(Var + eps)],
             reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm
