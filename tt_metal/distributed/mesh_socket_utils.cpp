@@ -80,7 +80,7 @@ void validate_fabric_config_for_sockets(
                                            // physical device
     };
 
-    bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;
+    bool fabric_config_supported = supported_fabrics.contains(fabric_config);
     TT_FATAL(fabric_config_supported, "Unsupported Fabric Config for Sockets specified {}", fabric_config);
 }
 

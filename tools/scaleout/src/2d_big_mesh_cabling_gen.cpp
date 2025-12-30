@@ -36,16 +36,16 @@ InputConfig parse_arguments(int argc, char** argv) {
     try {
         auto result = options.parse(argc, argv);
 
-        if (result.count("help")) {
+        if (result.contains("help")) {
             std::cout << options.help() << std::endl;
             exit(0);
         }
 
-        if (!result.count("galaxy-structure")) {
+        if (!result.contains("galaxy-structure")) {
             throw std::invalid_argument("Galaxy structure is required");
         }
 
-        if (!result.count("topology")) {
+        if (!result.contains("topology")) {
             throw std::invalid_argument("Topology is required");
         }
 

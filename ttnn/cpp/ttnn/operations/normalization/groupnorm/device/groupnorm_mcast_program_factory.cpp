@@ -246,7 +246,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         core_index_offset += num_cores_per_batch;
     }
     for (size_t i = 0; i < num_cores; ++i) {
-        if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges_all.end()) {
+        if (!mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
             mcast_receiver_core_ranges_all.insert(CoreRange(core_coords[i]));
             mcast_receiver_core_ranges_group_1.insert(CoreRange(core_coords[i]));
         }
@@ -258,7 +258,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
-        if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges_all.end()) {
+        if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
             group_index += 1;
         }
         if (group_index >= static_cast<int>(mcast_groups.size())) {

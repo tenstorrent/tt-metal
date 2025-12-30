@@ -233,7 +233,7 @@ TEST(Cluster, ReportIntermeshLinks) {
 
     // Detailed information per chip
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        if (all_intermesh_links.find(chip_id) != all_intermesh_links.end()) {
+        if (all_intermesh_links.contains(chip_id)) {
             auto links = all_intermesh_links.at(chip_id);
             log_info(
                 tt::LogTest,
@@ -316,8 +316,7 @@ TEST(Cluster, ReportSystemHealth) {
                 eth_ss << " link UP " << connection_type;
                 CoreCoord connected_eth_core = CoreCoord{0, 0};
                 auto eth_conn_it = eth_connections.find(chip_id);
-                if (eth_conn_it != eth_connections.end() &&
-                    eth_conn_it->second.find(chan) != eth_conn_it->second.end()) {
+                if (eth_conn_it != eth_connections.end() && eth_conn_it->second.contains(chan)) {
                     ChipId connected_chip_id = 0;
                     std::tie(connected_chip_id, connected_eth_core) =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));

@@ -63,10 +63,7 @@ DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIR
         }
 
         if (data_format[i] != DataFormat::Invalid) {
-            TT_FATAL(
-                ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
-                "Format = {} not supported",
-                data_format[i]);
+            TT_FATAL(ALL_VALID_FORMATS.contains(data_format[i]), "Format = {} not supported", data_format[i]);
 
             if (last_valid_format != DataFormat::Invalid) {
                 TT_FATAL(
@@ -87,10 +84,7 @@ DataFormat check_valid_formats_in_out_data_formats(DataFormat data_format[NUM_CI
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         if (data_format[i] != DataFormat::Invalid) {
-            TT_FATAL(
-                ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
-                "Format = {} not supported",
-                data_format[i]);
+            TT_FATAL(ALL_VALID_FORMATS.contains(data_format[i]), "Format = {} not supported", data_format[i]);
             last_valid_format = data_format[i];
         }
     }

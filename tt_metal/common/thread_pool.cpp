@@ -60,7 +60,7 @@ uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
                         ? MetalContext::instance().get_cluster().get_numa_node_for_device(physical_device_id)
                         : physical_device_id % 2;
     }
-    if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {
+    if (cpu_cores_per_numa_node.contains(numa_node)) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
         return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
 
