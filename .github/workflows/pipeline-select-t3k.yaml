@@ -35,7 +35,6 @@ on:
           - all
           - falcon7b
           - falcon40b
-          - arcee-afm
           - llama3-small
           - llama3.2-11b
           - llama3.2-11b-vision
