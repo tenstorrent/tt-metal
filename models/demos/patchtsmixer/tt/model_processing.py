@@ -71,6 +71,10 @@ def preprocess_norm_layer_batchnorm(state_dict, path: str, device=None):
 
 
 def preprocess_layernorm(state_dict, path: str, device=None):
+    print("here state_dict")
+    print(state_dict.keys())
+    print("here path")
+    print(path)
     # Pytorch ln has norm.weight [D] and norm.bias [D],
     # we will reshape them to [1,1,1,D] so that they broadcast to (B, C, N_p, D)
     gamma = state_dict[f"{path}.norm.weight"].view(1, 1, 1, -1)  # (1, 1, 1, D)

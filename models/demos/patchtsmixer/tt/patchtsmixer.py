@@ -205,3 +205,127 @@ class TtFeatureMixerBlock:
             x = self.gate(x)
         x = ttnn.add(x, residual)
         return x
+
+
+class TtPatchMixerBlock:
+    """
+    TTNN equivalent of PatchMixerBlock.
+
+    Input shape: (B, C, N_p, D)
+    Mixes over patch dimension N_p by moving it to the last dim.
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        norm_type: str = "LayerNorm",
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+        self.use_gated_attn = use_gated_attn
+
+        self.norm = TtPatchTSMixerLayerNormDispatcher(
+            device=device,
+            base_address=f"{self.base}.norm",
+            parameters=parameters,
+            norm_type=norm_type,
+            eps=eps,
+        )
+
+        self.mlp = TtPatchTSMixerMLP(
+            device=device,
+            base_address=f"{self.base}.mlp",
+            parameters=parameters,
+            eps=eps,
+        )
+
+        if use_gated_attn:
+            self.gate = TtPatchTSMixerGatedAttention(
+                device=device,
+                base_address=f"{self.base}.gate",
+                parameters=parameters,
+            )
+
+    def __call__(self, x):
+        residual = x
+
+        # (B, C, N_p, D)
+        x = self.norm(x)
+
+        # Move patches to last dim so MLP mixes patches:
+        # (B, C, N_p, D) -> (B, C, D, N_p)
+        x = ttnn.permute(x, (0, 1, 3, 2))
+
+        # MLP over last dim (N_p)
+        x = self.mlp(x)
+
+        # Optional gated attention over patches (last dim = N_p)
+        if self.use_gated_attn:
+            x = self.gate(x)
+
+        # Back (B, C, D, N_p) -> (B, C, Np, D)
+        x = ttnn.permute(x, (0, 1, 3, 2))
+
+        return ttnn.add(x, residual)
+
+
+class TtPatchTSMixerChannelFeatureMixerBlock:
+    """
+    TTNN equivalent of PatchTSMixerChannelFeatureMixerBlock
+
+    input shape: (B, C, N_p, D)
+    Mixes over channel dim C by permuting to (B, D, N_p, C) and applying over last dim
+    """
+
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        norm_type: str = "LayerNorm",
+        gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+        self.gated_attn = gated_attn
+
+        self.norm = TtPatchTSMixerLayerNormDispatcher(
+            device=device,
+            base_address=base_address,
+            parameters=parameters,
+            norm_type=norm_type,
+            eps=eps,
+        )
+
+        self.mlp = TtPatchTSMixerMLP(device=device, base_address=f"{self.base}.mlp", parameters=parameters, eps=eps)
+
+        if gated_attn:
+            self.gate = TtPatchTSMixerGatedAttention(
+                device=device,
+                base_address=f"{self.base}.gate",
+                parameters=parameters,
+            )
+
+    def __call__(self, x):
+        residual = x
+
+        x = self.norm(x)
+
+        # Move channel to last dim (B, C, N_p, D) -> (B, D, N_p, C)
+        x = ttnn.permute(x(0, 3, 2, 1))
+
+        if self.gated_attn:
+            x = self.gate(x)  # gate over channels
+
+        x = self.mlp(x)  # MLP over channels (last dim)
+
+        # Back: (B, D, N_p, C) -> (B, C, N_p, D)
+        x = ttnn.permute(x, (0, 3, 2, 1))
+        return ttnn.add(x, residual)
