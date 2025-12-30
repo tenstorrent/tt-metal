@@ -153,10 +153,12 @@ tt::stl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<
-    AllToAllAsyncGenericDeviceOperation::operation_attributes_t,
-    AllToAllAsyncGenericDeviceOperation::tensor_args_t>
-AllToAllAsyncGenericDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::AllToAllAsyncGenericDeviceOperation::tensor_return_value_t
+all_to_all_async_generic(
     const ttnn::Tensor& input_tensor,
     const std::optional<Tensor>& persistent_output_buffer,
     int32_t in_dim,
@@ -166,23 +168,26 @@ AllToAllAsyncGenericDeviceOperation::invoke(
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis) {
+    using OperationType = ttnn::operations::experimental::ccl::AllToAllAsyncGenericDeviceOperation;
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1,
         "all_to_all_async is a collective operation and requires more than 1 device, but has {}",
         num_devices);
 
-    return {
-        operation_attributes_t{
-            .in_dim = static_cast<uint32_t>(in_dim),
-            .out_dim = static_cast<uint32_t>(out_dim),
-            .num_links = num_links,
-            .num_devices = num_devices,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-            .topology = topology,
-            .sub_device_id = sub_device_id,
-            .cluster_axis = cluster_axis},
-        tensor_args_t{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .in_dim = static_cast<uint32_t>(in_dim),
+        .out_dim = static_cast<uint32_t>(out_dim),
+        .num_links = num_links,
+        .num_devices = num_devices,
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+        .topology = topology,
+        .sub_device_id = sub_device_id,
+        .cluster_axis = cluster_axis};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::prim

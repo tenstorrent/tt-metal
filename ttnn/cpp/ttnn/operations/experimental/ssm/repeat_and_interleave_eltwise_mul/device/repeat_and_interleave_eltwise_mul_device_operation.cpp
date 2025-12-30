@@ -155,23 +155,28 @@ tt::stl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_prog
     return hash;
 }
 
-std::tuple<
-    RepeatAndInterleaveEltwiseMulDeviceOperation::operation_attributes_t,
-    RepeatAndInterleaveEltwiseMulDeviceOperation::tensor_args_t>
-RepeatAndInterleaveEltwiseMulDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ssm::repeat_mul
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ssm::repeat_mul::RepeatAndInterleaveEltwiseMulDeviceOperation::tensor_return_value_t
+repeat_and_interleave_eltwise_mul(
     const Tensor& a,
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity,
+    std::optional<DataType> dtype,
+    std::optional<MathFidelity> math_fidelity,
     const std::optional<Tensor>& preallocated_output) {
-    operation_attributes_t attrs{
+    using OperationType = ttnn::operations::experimental::ssm::repeat_mul::RepeatAndInterleaveEltwiseMulDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(a.memory_config()),
         .dtype = dtype.value_or(a.dtype()),
         .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
     };
-    tensor_args_t tensor_args{.a = a, .b = b, .preallocated_output = preallocated_output};
-    return {attrs, tensor_args};
+    auto tensor_args = OperationType::tensor_args_t{.a = a, .b = b, .preallocated_output = preallocated_output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::repeat_mul
+}  // namespace ttnn::prim

@@ -118,7 +118,7 @@ Tensor invoke_impl(
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
-        std::move(condition),
+        condition,
         t_true,
         t_false,
         output_dtype,

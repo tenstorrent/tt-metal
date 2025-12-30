@@ -250,8 +250,12 @@ tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
         input_tensor_b.device()->id());
 }
 
-std::tuple<GroupAttnMatmulDeviceOperation::operation_attributes_t, GroupAttnMatmulDeviceOperation::tensor_args_t>
-GroupAttnMatmulDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation::tensor_return_value_t
+group_attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -263,22 +267,26 @@ GroupAttnMatmulDeviceOperation::invoke(
     uint32_t out_subblock_w,
     bool row_major,
     std::optional<Tensor> preallocated_output) {
-    return std::make_tuple(
-        operation_attributes_t{
-            .num_tokens = num_tokens,
-            .transpose_hw = transpose_hw,
-            .out_subblock_w = out_subblock_w,
-            .compute_with_storage_grid_size = compute_with_storage_grid_size,
-            .output_mem_config = memory_config.value_or(input_tensor_a.memory_config()),
-            .output_dtype = output_dtype.value_or(input_tensor_a.dtype()),
-            .row_major = row_major,
-            .compute_kernel_config = compute_kernel_config.value_or(ttnn::DeviceComputeKernelConfig{}),
-        },
-        tensor_args_t{
-            .input_tensor_a = input_tensor_a,
-            .input_tensor_b = input_tensor_b,
-            .preallocated_output = std::move(preallocated_output),
-        });
+    using OperationType = ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_tokens = num_tokens,
+        .transpose_hw = transpose_hw,
+        .out_subblock_w = out_subblock_w,
+        .compute_with_storage_grid_size = compute_with_storage_grid_size,
+        .output_mem_config = memory_config.value_or(input_tensor_a.memory_config()),
+        .output_dtype = output_dtype.value_or(input_tensor_a.dtype()),
+        .row_major = row_major,
+        .compute_kernel_config = compute_kernel_config.value_or(ttnn::DeviceComputeKernelConfig{}),
+    };
+
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor_a = input_tensor_a,
+        .input_tensor_b = input_tensor_b,
+        .preallocated_output = std::move(preallocated_output),
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
+}  // namespace ttnn::prim

@@ -83,21 +83,27 @@ tt::stl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<PrefixScanDeviceOperation::operation_attributes_t, PrefixScanDeviceOperation::tensor_args_t>
-PrefixScanDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ssm::prefix_scan
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation::tensor_return_value_t prefix_scan(
     const Tensor& a,
     const Tensor& bx,
     const Tensor& h_prev,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
     std::optional<MathFidelity> math_fidelity) {
-    return {
-        operation_attributes_t{
-            .memory_config = memory_config.value_or(a.memory_config()),
-            .dtype = dtype.value_or(a.dtype()),
-            .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
-        },
-        tensor_args_t{.a = a, .bx = bx, .h_prev = h_prev}};
+    using OperationType = ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .memory_config = memory_config.value_or(a.memory_config()),
+        .dtype = dtype.value_or(a.dtype()),
+        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+    };
+    auto tensor_args = OperationType::tensor_args_t{.a = a, .bx = bx, .h_prev = h_prev};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::prefix_scan
+}  // namespace ttnn::prim

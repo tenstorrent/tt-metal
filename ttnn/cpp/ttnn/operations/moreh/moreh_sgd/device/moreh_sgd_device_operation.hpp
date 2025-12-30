@@ -65,25 +65,24 @@ struct MorehSgdOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& param_in,
-        const Tensor& grad,
-        const std::optional<Tensor>& momentum_buffer_in,
-        const std::optional<Tensor>& param_out,
-        const std::optional<Tensor>& momentum_buffer_out,
-        float lr,
-        float momentum,
-        float dampening,
-        float weight_decay,
-        bool nesterov,
-        bool momentum_initialized,
-        const std::optional<MemoryConfig>& param_out_memory_config,
-        const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
+
 }  // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn::prim {
-constexpr auto moreh_sgd =
-    ttnn::register_operation<"ttnn::prim::moreh_sgd", ttnn::operations::moreh::moreh_sgd::MorehSgdOperation>();
+ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t moreh_sgd(
+    const Tensor& param_in,
+    const Tensor& grad,
+    const std::optional<Tensor>& momentum_buffer_in,
+    const std::optional<Tensor>& param_out,
+    const std::optional<Tensor>& momentum_buffer_out,
+    float lr,
+    float momentum,
+    float dampening,
+    float weight_decay,
+    bool nesterov,
+    bool momentum_initialized,
+    const std::optional<MemoryConfig>& param_out_memory_config,
+    const std::optional<MemoryConfig>& momentum_buffer_out_memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

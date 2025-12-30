@@ -30,15 +30,13 @@ struct RecvAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor&, const tt::tt_metal::distributed::MeshSocket&);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::recv_async
 
 namespace ttnn::prim {
-constexpr auto recv_async = ttnn::register_operation<
-    "ttnn::prim::recv_async",
-    ttnn::operations::experimental::ccl::recv_async::RecvAsyncDeviceOperation>();
+
+ttnn::operations::experimental::ccl::recv_async::RecvAsyncDeviceOperation::tensor_return_value_t recv_async(
+    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+
 }  // namespace ttnn::prim

@@ -37,26 +37,23 @@ struct SliceReshardAsyncDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        uint32_t output_dim_offset,
-        uint32_t output_dim_shape,
-        uint32_t cluster_axis,
-        const GlobalSemaphore& final_semaphore,
-        const GlobalSemaphore& barrier_semaphore,
-        size_t num_links,
-        const MemoryConfig& memory_config,
-        ttnn::ccl::Topology topology);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::slice_reshard_async
 
 namespace ttnn::prim {
 
-constexpr auto slice_reshard_async = ttnn::register_operation<
-    "ttnn::prim::slice_reshard_async",
-    ttnn::operations::experimental::ccl::slice_reshard_async::SliceReshardAsyncDeviceOperation>();
+ttnn::operations::experimental::ccl::slice_reshard_async::SliceReshardAsyncDeviceOperation::tensor_return_value_t
+slice_reshard_async(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    uint32_t output_dim_offset,
+    uint32_t output_dim_shape,
+    uint32_t cluster_axis,
+    const GlobalSemaphore& final_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    size_t num_links,
+    const MemoryConfig& memory_config,
+    ttnn::ccl::Topology topology);
 
 }  // namespace ttnn::prim

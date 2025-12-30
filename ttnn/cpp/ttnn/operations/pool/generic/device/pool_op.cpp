@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/math.hpp>
 #include <utility>
@@ -210,10 +211,13 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     return result;
 }
 
-std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke(
+}  // namespace ttnn::operations::pool
+
+namespace ttnn::prim {
+std::vector<ttnn::Tensor> pool2d(
     const Tensor& input_tensor,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    Pool2DType pool_type,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
+    ttnn::operations::pool::Pool2DType pool_type,
     DataType output_dtype,
     Layout output_layout,
     MemoryConfig memory_config,
@@ -222,8 +226,9 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     std::optional<int32_t> divisor_override,
     bool return_indices,
     uint32_t memory_used) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::pool::Pool2D;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
@@ -234,7 +239,6 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
             .memory_used = memory_used},
-        tensor_args_t{input_tensor}};
+        OperationType::tensor_args_t{input_tensor});
 }
-
-}  // namespace ttnn::operations::pool
+}  // namespace ttnn::prim

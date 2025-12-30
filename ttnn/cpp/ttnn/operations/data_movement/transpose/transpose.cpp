@@ -29,7 +29,7 @@ inline Tensor transpose_(
     // TODO(#34353)
     auto pad_value_ = pad_value.value_or(0.0f);
 
-    auto prim_permute = [&](const ttnn::Tensor& input, ttnn::SmallVector<uint32_t> dims) -> ttnn::Tensor {
+    auto prim_permute = [&](const ttnn::Tensor& input, const ttnn::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value_);
     };
 

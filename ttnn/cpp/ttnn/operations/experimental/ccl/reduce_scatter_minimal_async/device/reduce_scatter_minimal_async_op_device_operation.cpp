@@ -8,6 +8,8 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail {
 
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
@@ -167,45 +169,6 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         input_tensor.memory_config());
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> ReduceScatterMinimalAsyncDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    MemoryConfig output_mem_config,
-    std::optional<MemoryConfig> optional_intermediate_mem_config,
-    ttnn::ccl::Topology topology,
-    std::vector<GlobalSemaphore> semaphore,
-    std::optional<GlobalSemaphore> barrier_semaphore,
-    bool using_persistent_buffers,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> cluster_axis,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
-    const auto resolved_sub_device_id = sub_device_id.value_or(input_tensor.device()->get_sub_device_ids().at(0));
-
-    return {
-        operation_attributes_t{
-            dim,
-            num_links,
-            ring_size,
-            std::move(output_mem_config),
-            std::move(optional_intermediate_mem_config),
-            topology,
-            std::move(semaphore),
-            std::move(barrier_semaphore),
-            using_persistent_buffers,
-            resolved_sub_device_id,
-            cluster_axis,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel},
-        tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor}};
-}
-
 // Common validation function implementation
 void reduce_scatter_common_validates(
     const ttnn::Tensor& input_tensor,
@@ -304,3 +267,51 @@ void reduce_scatter_common_validates(
 }
 
 }  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::ReduceScatterMinimalAsyncDeviceOperation::
+    tensor_return_value_t
+    reduce_scatter_minimal_async(
+        const ttnn::Tensor& input_tensor,
+        const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
+        const std::optional<ttnn::Tensor>& optional_output_tensor,
+        uint32_t dim,
+        uint32_t num_links,
+        uint32_t ring_size,
+        MemoryConfig output_mem_config,
+        std::optional<MemoryConfig> optional_intermediate_mem_config,
+        ttnn::ccl::Topology topology,
+        std::vector<GlobalSemaphore> semaphore,
+        std::optional<GlobalSemaphore> barrier_semaphore,
+        bool using_persistent_buffers,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        std::optional<uint32_t> cluster_axis,
+        std::optional<uint32_t> chunks_per_sync,
+        std::optional<uint32_t> num_workers_per_link,
+        std::optional<uint32_t> num_buffers_per_channel) {
+    using OperationType = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+        ReduceScatterMinimalAsyncDeviceOperation;
+    const auto resolved_sub_device_id = sub_device_id.value_or(input_tensor.device()->get_sub_device_ids().at(0));
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dim,
+        num_links,
+        ring_size,
+        std::move(output_mem_config),
+        std::move(optional_intermediate_mem_config),
+        topology,
+        std::move(semaphore),
+        std::move(barrier_semaphore),
+        using_persistent_buffers,
+        resolved_sub_device_id,
+        cluster_axis,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::prim

@@ -75,11 +75,13 @@ tt::stl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<ConvertToCHWDeviceOperation::operation_attributes_t, ConvertToCHWDeviceOperation::tensor_args_t>
-ConvertToCHWDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::cnn::to_chw
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation::tensor_return_value_t convert_to_chw(
     const Tensor& input, const std::optional<DataType>& dtype) {
-    // Infer output memory config from input
-    using namespace tt::constants;
+    using OperationType = ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation;
 
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded to infer output memory config");
 
@@ -102,14 +104,13 @@ ConvertToCHWDeviceOperation::invoke(
     const auto output_memory_config = tt::tt_metal::MemoryConfig(
         tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, input.memory_config().buffer_type(), output_shard_spec);
 
-    return {
-        operation_attributes_t{
-            .memory_config = output_memory_config,
-            .dtype = dtype.value_or(input.dtype()),
-        },
-        tensor_args_t{
-            .input = input
-        }};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .memory_config = output_memory_config,
+        .dtype = dtype.value_or(input.dtype()),
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::cnn::to_chw
+}  // namespace ttnn::prim

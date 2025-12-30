@@ -28,37 +28,34 @@ struct RingJointSDPADeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& joint_tensor_q,
-        const ttnn::Tensor& joint_tensor_k,
-        const ttnn::Tensor& joint_tensor_v,
-        ttnn::Tensor& persistent_output_buffer_k,
-        ttnn::Tensor& persistent_output_buffer_v,
-        const std::string& joint_strategy,
-        std::size_t logical_n,
-        SDPAProgramConfig program_config,
-        int32_t dim,
-        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-        uint32_t num_links,
-        uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
-        ttnn::ccl::Topology topology,
-        CoreCoord ccl_core_grid_offset,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        std::optional<float> scale = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint_sdpa
 
 namespace ttnn::prim {
 
-constexpr auto ring_joint_scaled_dot_product_attention = ttnn::register_operation<
-    "ttnn::prim::ring_joint_scaled_dot_product_attention",
-    ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSDPADeviceOperation>();
+ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSDPADeviceOperation::tensor_return_value_t
+ring_joint_scaled_dot_product_attention(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    ttnn::Tensor& persistent_output_buffer_k,
+    ttnn::Tensor& persistent_output_buffer_v,
+    const std::string& joint_strategy,
+    std::size_t logical_n,
+    ttnn::operations::transformer::SDPAProgramConfig program_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    CoreCoord ccl_core_grid_offset,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+    std::optional<float> scale = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::prim

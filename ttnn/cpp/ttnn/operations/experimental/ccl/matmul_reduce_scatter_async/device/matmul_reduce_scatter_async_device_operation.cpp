@@ -118,32 +118,37 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
         input_memory_config);
 }
 
-std::tuple<
-    MatmulReduceScatterAsyncDeviceOperation::operation_attributes_t,
-    MatmulReduceScatterAsyncDeviceOperation::tensor_args_t>
-MatmulReduceScatterAsyncDeviceOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    ttnn::Tensor& persistent_intermediate_buffer,
-    ttnn::Tensor& persistent_output_buffer,
-    const uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const CoreCoord reduce_scatter_core_grid_offset,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::optional<const Tensor>& bias,
-    const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config_rs,
-    const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
-    const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::optional<ttnn::MemoryConfig>& memory_config_mm,
-    const bool transpose_a,
-    const bool transpose_b,
-    const std::optional<const DataType> dtype,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceScatterAsyncDeviceOperation::
+    tensor_return_value_t
+    matmul_reduce_scatter_async(
+        const Tensor& input_tensor,
+        const Tensor& weight_tensor,
+        Tensor& persistent_intermediate_buffer,
+        Tensor& persistent_output_buffer,
+        const uint32_t dim,
+        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const CoreCoord reduce_scatter_core_grid_offset,
+        const std::optional<GlobalSemaphore>& barrier_semaphore,
+        const std::optional<const Tensor>& bias,
+        const uint32_t num_links,
+        const std::optional<ttnn::MemoryConfig>& memory_config_rs,
+        const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
+        const ttnn::ccl::Topology topology,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        const std::optional<ttnn::MemoryConfig>& memory_config_mm,
+        const bool transpose_a,
+        const bool transpose_b,
+        const std::optional<const DataType> dtype,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+        const std::optional<const std::string>& activation,
+        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+        const std::optional<const ttnn::CoreGrid> core_grid) {
+    using OperationType =
+        ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceScatterAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* Matmul setup */
@@ -177,31 +182,34 @@ MatmulReduceScatterAsyncDeviceOperation::invoke(
 
     /* ReduceScatter setup */
     constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
-    ReduceScatterMinimalAsyncParams reduce_scatter_params{
-        .dim = dim,
-        .num_links = num_links,
-        .ring_size = static_cast<uint32_t>(devices.size()),
-        .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
-        .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
-        .topology = topology,
-        .semaphore = multi_device_global_semaphore,
-        .barrier_semaphore = barrier_semaphore,
-        .using_persistent_buffers = using_persistent_buffers,
-        .sub_device_id = sub_device_id,
-        .cluster_axis = std::nullopt,
-        .chunks_per_sync = std::nullopt,
-        .num_workers_per_link = DEFAULT_WORKERS_PER_LINK,
-        .num_buffers_per_channel = std::nullopt,
-    };
+    ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::ReduceScatterMinimalAsyncParams
+        reduce_scatter_params{
+            .dim = dim,
+            .num_links = num_links,
+            .ring_size = static_cast<uint32_t>(devices.size()),
+            .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
+            .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
+            .topology = topology,
+            .semaphore = multi_device_global_semaphore,
+            .barrier_semaphore = barrier_semaphore,
+            .using_persistent_buffers = using_persistent_buffers,
+            .sub_device_id = sub_device_id,
+            .cluster_axis = std::nullopt,
+            .chunks_per_sync = std::nullopt,
+            .num_workers_per_link = DEFAULT_WORKERS_PER_LINK,
+            .num_buffers_per_channel = std::nullopt,
+        };
 
-    return {
-        operation_attributes_t(reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, devices),
-        tensor_args_t{
-            .input = input_tensor,
-            .weight = weight_tensor,
-            .bias = bias,
-            .persistent_intermediate = persistent_intermediate_buffer,
-            .persistent_output = persistent_output_buffer}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, devices);
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .weight = weight_tensor,
+        .bias = bias,
+        .persistent_intermediate = persistent_intermediate_buffer,
+        .persistent_output = persistent_output_buffer};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
+}  // namespace ttnn::prim

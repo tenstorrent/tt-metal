@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -197,28 +198,33 @@ WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> WindowedScaledDotProductAttentionDeviceOperation::invoke(
+}  // namespace ttnn::operations::transformer::sdpa_windowed
+
+namespace ttnn::prim {
+ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation::tensor_return_value_t
+windowed_scaled_dot_product_attention(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
     const Tensor& cu_window_seqlens,
     std::optional<float> scale,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<SDPAProgramConfig> program_config,
-    DeviceComputeKernelConfig compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    using OperationType =
+        ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .scale = scale,
             .output_mem_config = output_mem_config,
             .program_config = std::move(program_config),
             .compute_kernel_config = compute_kernel_config,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .q = input_tensor_q,
             .k = input_tensor_k,
             .v = input_tensor_v,
             .cu_window_seqlens = cu_window_seqlens,
-        }};
+        });
 }
-
-}  // namespace ttnn::operations::transformer::sdpa_windowed
+}  // namespace ttnn::prim

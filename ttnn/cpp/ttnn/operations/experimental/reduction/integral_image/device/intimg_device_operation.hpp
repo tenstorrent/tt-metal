@@ -43,13 +43,13 @@ struct IntImgDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static invocation_result_t invoke(const Tensor& input_tensor);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
 
 namespace ttnn::prim {
-constexpr auto intimg =
-    ttnn::register_operation<"ttnn::prim::intimg", ttnn::operations::experimental::reduction::IntImgDeviceOperation>();
+
+ttnn::operations::experimental::reduction::IntImgDeviceOperation::tensor_return_value_t intimg(
+    const Tensor& input_tensor);
+
 }  // namespace ttnn::prim

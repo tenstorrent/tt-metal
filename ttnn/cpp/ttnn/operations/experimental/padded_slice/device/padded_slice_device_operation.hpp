@@ -37,20 +37,18 @@ struct PaddedSliceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const ttnn::Shape& padded_slice_start,
-        const ttnn::Shape& padded_slice_end,
-        const ttnn::Shape& step,
-        const MemoryConfig& output_mem_config,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::padded_slice
 
 namespace ttnn::prim {
-constexpr auto padded_slice = ttnn::register_operation<
-    "ttnn::prim::padded_slice",
-    ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation>();
+
+ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation::tensor_return_value_t padded_slice(
+    const Tensor& input,
+    const ttnn::Shape& padded_slice_start,
+    const ttnn::Shape& padded_slice_end,
+    const ttnn::Shape& step,
+    const MemoryConfig& output_mem_config,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
+
 }  // namespace ttnn::prim

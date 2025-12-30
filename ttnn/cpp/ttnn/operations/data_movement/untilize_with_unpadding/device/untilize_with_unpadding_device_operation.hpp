@@ -48,23 +48,19 @@ struct UntilizeWithUnpaddingDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const ttnn::Shape& output_tensor_end,
-        const std::optional<MemoryConfig>& output_mem_config,
-        bool use_multicore,
-        bool use_pack_untilize,
-        bool fp32_dest_acc_en,
-        bool enough_space_width,
-        bool enough_space_height,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement::untilize_with_unpadding
 
 namespace ttnn::prim {
-constexpr auto untilize_with_unpadding = ttnn::register_operation<
-    "ttnn::prim::untilize_with_unpadding",
-    ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation>();
+ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t untilize_with_unpadding(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_tensor_end,
+    const std::optional<MemoryConfig>& output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    bool enough_space_width,
+    bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

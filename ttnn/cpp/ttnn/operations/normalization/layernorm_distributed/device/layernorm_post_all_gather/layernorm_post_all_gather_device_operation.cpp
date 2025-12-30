@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_device_operation.hpp"
-
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -183,37 +183,40 @@ tensor_return_value_t LayerNormPostAllGatherDeviceOperation::create_output_tenso
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<
-    LayerNormPostAllGatherDeviceOperation::operation_attributes_t,
-    LayerNormPostAllGatherDeviceOperation::tensor_args_t>
-LayerNormPostAllGatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization::layernorm_post_all_gather
+
+namespace ttnn::prim {
+ttnn::operations::normalization::layernorm_post_all_gather::LayerNormPostAllGatherDeviceOperation::tensor_return_value_t
+layernorm_post_all_gather(
     const Tensor& input,
     const Tensor& stats,
     const std::optional<Tensor>& gamma,
     const std::optional<Tensor>& beta,
-    LayerNormDistributedType norm_type,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
     float eps,
     const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const LayerNormDistributedDefaultProgramConfig& program_config) {
-    return {
-        operation_attributes_t{
-            .norm_type = norm_type,
-            .eps = eps,
-            .memory_config = memory_config,
-            .compute_kernel_config = compute_kernel_config,
-            .output_dtype = output_dtype,
-            .use_2d_core_grid = use_2d_core_grid,
-            .program_config = program_config,
-        },
-        tensor_args_t{
-            .input = input,
-            .stats = stats,
-            .gamma = gamma,
-            .beta = beta,
-        }};
-}
+    const ttnn::operations::normalization::LayerNormDistributedDefaultProgramConfig& program_config) {
+    using OperationType =
+        ttnn::operations::normalization::layernorm_post_all_gather::LayerNormPostAllGatherDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .norm_type = norm_type,
+        .eps = eps,
+        .memory_config = memory_config,
+        .compute_kernel_config = compute_kernel_config,
+        .output_dtype = output_dtype,
+        .use_2d_core_grid = use_2d_core_grid,
+        .program_config = program_config,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input,
+        .stats = stats,
+        .gamma = gamma,
+        .beta = beta,
+    };
 
-}  // namespace ttnn::operations::normalization::layernorm_post_all_gather
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

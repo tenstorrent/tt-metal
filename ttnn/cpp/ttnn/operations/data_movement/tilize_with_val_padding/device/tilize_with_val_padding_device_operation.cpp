@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -140,21 +141,22 @@ TilizeWithValPaddingDeviceOperation::tensor_return_value_t TilizeWithValPaddingD
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<
-    TilizeWithValPaddingDeviceOperation::operation_attributes_t,
-    TilizeWithValPaddingDeviceOperation::tensor_args_t>
-TilizeWithValPaddingDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_return_value_t tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue& pad_value,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const bool use_multicore,
-    const bool enough_space_width,
-    const bool enough_space_height,
+    bool use_multicore,
+    bool enough_space_width,
+    bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        TilizeWithValPaddingDeviceOperation::operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
@@ -164,7 +166,6 @@ TilizeWithValPaddingDeviceOperation::invoke(
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
         },
-        TilizeWithValPaddingDeviceOperation::tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

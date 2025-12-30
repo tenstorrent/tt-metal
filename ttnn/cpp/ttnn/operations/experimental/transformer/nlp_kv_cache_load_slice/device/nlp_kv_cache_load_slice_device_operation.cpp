@@ -4,6 +4,7 @@
 
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
 
@@ -120,14 +121,19 @@ NlpKVCacheLoadSliceDeviceOperation::tensor_return_value_t NlpKVCacheLoadSliceDev
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::
-    tuple<NlpKVCacheLoadSliceDeviceOperation::operation_attributes_t, NlpKVCacheLoadSliceDeviceOperation::tensor_args_t>
-    NlpKVCacheLoadSliceDeviceOperation::invoke(
-        const Tensor& input_tensor,
-        uint32_t seq_len_start,
-        uint32_t seq_len_end,
-        [[maybe_unused]] const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& preallocated_output) {
+}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::tensor_return_value_t nlp_kv_cache_load_slice(
+    const Tensor& input_tensor,
+    uint32_t seq_len_start,
+    uint32_t seq_len_end,
+    [[maybe_unused]] const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& preallocated_output) {
+    using OperationType =
+        ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::NlpKVCacheLoadSliceDeviceOperation;
+
     auto input_tensor_shape = input_tensor.padded_shape();
     auto dim0 = input_tensor_shape[0];
     auto dim1 = input_tensor_shape[1];
@@ -147,9 +153,10 @@ std::
         head_dim - 1,
     });
 
-    operation_attributes_t operation_attributes{output_tensor_start, output_tensor_end};
-    tensor_args_t tensor_args{input_tensor, preallocated_output};
-    return std::make_tuple(std::move(operation_attributes), std::move(tensor_args));
+    auto operation_attributes = OperationType::operation_attributes_t{output_tensor_start, output_tensor_end};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, preallocated_output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
+}  // namespace ttnn::prim

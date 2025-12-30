@@ -32,21 +32,18 @@ struct HaloDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const SlidingWindowConfig& config,
-        uint32_t pad_val,
-        bool remote_read,
-        bool transpose_mcast,
-        const MemoryConfig& output_memory_config,
-        bool is_out_tiled,
-        bool config_tensors_in_dram);
 };
 
 }  // namespace ttnn::operations::sliding_window::halo
 
 namespace ttnn::prim {
-constexpr auto halo =
-    ttnn::register_operation<"ttnn::prim::halo", ttnn::operations::sliding_window::halo::HaloDeviceOperation>();
+ttnn::operations::sliding_window::halo::HaloDeviceOperation::tensor_return_value_t halo(
+    const Tensor& input_tensor,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& config,
+    uint32_t pad_val,
+    bool remote_read,
+    bool transpose_mcast,
+    const MemoryConfig& output_memory_config,
+    bool is_out_tiled,
+    bool config_tensors_in_dram);
 }  // namespace ttnn::prim

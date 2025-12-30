@@ -38,33 +38,19 @@ struct SoftmaxDeviceOperation {
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        SoftmaxOperationType softmax_type,
-        const Tensor& input_tensor,
-        int8_t dim = -1,
-        const std::optional<const Tensor>& mask = std::nullopt,
-        std::optional<float> scale = std::nullopt,
-        bool inplace = false,
-        tt::tt_metal::MemoryConfig output_mem_config = {},
-        SoftmaxProgramConfig program_config = {},
-        bool is_causal_mask = false,
-        DeviceComputeKernelConfig compute_kernel_config = {},
-        bool is_scale_causal_mask_hw_dims_softmax = false,
-        bool numeric_stable = true);
 };
 
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim = -1,
-    tt::tt_metal::MemoryConfig output_mem_config = {},
+    const tt::tt_metal::MemoryConfig& output_mem_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
 Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
-    tt::tt_metal::MemoryConfig output_mem_config = {},
+    const tt::tt_metal::MemoryConfig& output_mem_config = {},
     bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
@@ -93,7 +79,18 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
 
 namespace ttnn::prim {
 
-constexpr auto softmax =
-    ttnn::register_operation<"ttnn::prim::softmax", ttnn::operations::normalization::softmax::SoftmaxDeviceOperation>();
+ttnn::operations::normalization::softmax::SoftmaxDeviceOperation::tensor_return_value_t softmax(
+    ttnn::operations::normalization::SoftmaxOperationType softmax_type,
+    const Tensor& input_tensor,
+    int8_t dim = -1,
+    const std::optional<const Tensor>& mask = std::nullopt,
+    std::optional<float> scale = std::nullopt,
+    bool inplace = false,
+    tt::tt_metal::MemoryConfig output_mem_config = {},
+    ttnn::operations::normalization::SoftmaxProgramConfig program_config = {},
+    bool is_causal_mask = false,
+    DeviceComputeKernelConfig compute_kernel_config = {},
+    bool is_scale_causal_mask_hw_dims_softmax = false,
+    bool numeric_stable = true);
 
 }  // namespace ttnn::prim

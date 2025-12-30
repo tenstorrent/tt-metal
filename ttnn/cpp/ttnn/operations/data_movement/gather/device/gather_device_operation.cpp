@@ -4,6 +4,7 @@
 
 #include "gather_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -135,8 +136,11 @@ GatherDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<GatherDeviceOperation::operation_attributes_t, GatherDeviceOperation::tensor_args_t>
-GatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::gather
+
+namespace ttnn::prim {
+
+ttnn::operations::data_movement::gather::tensor_return_value_t gather(
     const Tensor& input_tensor,
     const int8_t dim,
     const Tensor& input_index_tensor,
@@ -144,8 +148,13 @@ GatherDeviceOperation::invoke(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& output_tensors,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        operation_attributes_t{dim, sparse_grad, output_memory_config, sub_core_grids},
-        tensor_args_t{input_tensor, input_index_tensor, output_tensors}};
+    using OperationType = ttnn::operations::data_movement::gather::GatherDeviceOperation;
+
+    auto operation_attributes =
+        OperationType::operation_attributes_t{dim, sparse_grad, output_memory_config, sub_core_grids};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, input_index_tensor, output_tensors};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::data_movement::gather
+
+}  // namespace ttnn::prim

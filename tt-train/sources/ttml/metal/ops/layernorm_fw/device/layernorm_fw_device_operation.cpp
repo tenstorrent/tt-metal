@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include "layernorm_fw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::layernorm_fw::device {
 
@@ -170,8 +171,11 @@ ttsl::hash::hash_t LayerNormForwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<LayerNormForwardDeviceOperation::operation_attributes_t, LayerNormForwardDeviceOperation::tensor_args_t>
-LayerNormForwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::layernorm_fw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::layernorm_fw::device::LayerNormForwardDeviceOperation::tensor_return_value_t ttml_layernorm_fw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& beta_tensor,
@@ -180,16 +184,20 @@ LayerNormForwardDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& preallocated_output,
     const std::optional<ttnn::Tensor>& preallocated_mean,
     const std::optional<ttnn::Tensor>& preallocated_rstd) {
-    return {
-        operation_attributes_t{.epsilon = epsilon, .return_mean_rstd = return_mean_rstd},
-        tensor_args_t{
-            .input = input_tensor,
-            .gamma = gamma_tensor,
-            .beta = beta_tensor,
-            .preallocated_output = preallocated_output,
-            .preallocated_mean = preallocated_mean,
-            .preallocated_rstd = preallocated_rstd,
-        }};
+    using OperationType = ttml::metal::ops::layernorm_fw::device::LayerNormForwardDeviceOperation;
+
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.epsilon = epsilon, .return_mean_rstd = return_mean_rstd};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .gamma = gamma_tensor,
+        .beta = beta_tensor,
+        .preallocated_output = preallocated_output,
+        .preallocated_mean = preallocated_mean,
+        .preallocated_rstd = preallocated_rstd,
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::layernorm_fw::device
+}  // namespace ttnn::prim

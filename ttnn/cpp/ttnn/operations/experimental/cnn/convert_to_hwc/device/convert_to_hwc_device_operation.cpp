@@ -72,14 +72,21 @@ tt::stl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
         tt::stl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
-std::tuple<ConvertToHWCDeviceOperation::operation_attributes_t, ConvertToHWCDeviceOperation::tensor_args_t>
-ConvertToHWCDeviceOperation::invoke(const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype) {
-    return {
-        operation_attributes_t{
-            .memory_config = memory_config,
-            .dtype = dtype,
-        },
-        tensor_args_t{.input = input}};
+}  // namespace ttnn::operations::experimental::cnn
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
+    const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype) {
+    using OperationType = ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .memory_config = memory_config,
+        .dtype = dtype,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::prim

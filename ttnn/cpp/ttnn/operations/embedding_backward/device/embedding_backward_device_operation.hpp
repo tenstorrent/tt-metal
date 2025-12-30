@@ -29,22 +29,16 @@ struct EmbeddingBackwardDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& index_tensor,
-        const Tensor& grad_tensor,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const tt::tt_metal::DataType& output_dtype,
-        uint32_t num_embeddings,
-        const std::optional<Tensor>& preallocated_output);
 };
 
 }  // namespace ttnn::operations::embedding_backward
 
 namespace ttnn::prim {
-
-constexpr auto embedding_backward = ttnn::register_operation<
-    "ttnn::prim::embedding_backward",
-    ttnn::operations::embedding_backward::EmbeddingBackwardDeviceOperation>();
-
+ttnn::Tensor embedding_backward(
+    const Tensor& index_tensor,
+    const Tensor& grad_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype,
+    uint32_t num_embeddings,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 }  // namespace ttnn::prim

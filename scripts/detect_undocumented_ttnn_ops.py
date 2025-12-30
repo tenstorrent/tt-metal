@@ -65,9 +65,7 @@ SKIPPED_OPS = [
     "ttnn.padded_slice",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.pearson_correlation_coefficient",  # Internal operation only.
     "ttnn.plus_one",  # Experimental operation, but wrongly registered without ttnn.experimental.
-    "ttnn.prim.example",  # Example operation.
-    "ttnn.prim.example_multiple_return",  # Example operation.
-    "ttnn.prim.test_hang_device_operation",  # Internal operation only.
+    "ttnn.test_hang_device_operation",  # Internal operation only.
     "ttnn.slice_write",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.tosa_gather",  # TOSA operation omitted for docs.
     "ttnn.tosa_scatter",  # TOSA operation omitted for docs.

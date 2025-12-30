@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include "sgd_fused_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::optimizers::sgd_fused::device {
 
@@ -105,7 +106,11 @@ ttsl::hash::hash_t SGDFusedDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invoke(
+}  // namespace ttml::metal::optimizers::sgd_fused::device
+
+namespace ttnn::prim {
+
+ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation::tensor_return_value_t ttml_sgd_fused(
     const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     float lr,
@@ -114,19 +119,22 @@ std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invok
     float weight_decay,
     bool nesterov,
     const std::optional<ttnn::Tensor>& momentum_buffer) {
-    return {
-        operation_attributes_t{
-            .lr = lr,
-            .momentum = momentum,
-            .dampening = dampening,
-            .weight_decay = weight_decay,
-            .nesterov = nesterov,
-        },
-        tensor_args_t{
-            .param = param,
-            .grad = grad,
-            .momentum_buffer = momentum_buffer,
-        }};
+    using OperationType = ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .lr = lr,
+        .momentum = momentum,
+        .dampening = dampening,
+        .weight_decay = weight_decay,
+        .nesterov = nesterov,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .momentum_buffer = momentum_buffer,
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::optimizers::sgd_fused::device
+}  // namespace ttnn::prim

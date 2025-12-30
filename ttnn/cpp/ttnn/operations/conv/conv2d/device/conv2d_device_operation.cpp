@@ -223,31 +223,36 @@ Conv2dDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> Conv2dDeviceOperation::invoke(
+}  // namespace ttnn::operations::conv::conv2d
+
+namespace ttnn::prim {
+
+ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t conv2d(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const Conv2dParallelizationConfig& parallelization_config,
-    const Conv2dBlockConfig& block_config,
+    const ttnn::operations::conv::conv2d::Conv2dParallelizationConfig& parallelization_config,
+    const ttnn::operations::conv::conv2d::Conv2dBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    const DeviceComputeKernelConfig& compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
     std::optional<bool> force_split_reader) {
-    TT_FATAL(b.layout() == Layout::TILE,
-             "Weights should be in TILE layout.");  // Weights should already be formatted
+    using OperationType = ttnn::operations::conv::conv2d::Conv2dDeviceOperation;
 
-    auto args = operation_attributes_t{
+    TT_FATAL(b.layout() == Layout::TILE, "Weights should be in TILE layout.");
+
+    auto operation_attributes = OperationType::operation_attributes_t{
         .sliding_window_config = sliding_window_config,
         .output_channels = output_channels,
         .groups = groups,
@@ -266,9 +271,8 @@ std::tuple<operation_attributes_t, tensor_args_t> Conv2dDeviceOperation::invoke(
         .enable_activation_reuse = enable_activation_reuse,
         .config_tensors_in_dram = config_tensors_in_dram,
         .force_split_reader = force_split_reader,
-
     };
-    auto tensor_args = tensor_args_t{
+    auto tensor_args = OperationType::tensor_args_t{
         .a = a,
         .b = b,
         .bias = bias,
@@ -276,9 +280,10 @@ std::tuple<operation_attributes_t, tensor_args_t> Conv2dDeviceOperation::invoke(
 
     auto* device = a.device();
 
-    args.pre_op_l1_allocation_size_bytes =
+    operation_attributes.pre_op_l1_allocation_size_bytes =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    return std::make_tuple(args, tensor_args);
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

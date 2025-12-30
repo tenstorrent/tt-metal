@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -152,9 +153,10 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     }
     return result;
 }
+}  // namespace ttnn::operations::moreh::moreh_group_norm
 
-std::tuple<MorehGroupNormOperation::operation_attributes_t, MorehGroupNormOperation::tensor_args_t>
-MorehGroupNormOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_return_value_t moreh_group_norm(
     const Tensor& input,
     const uint32_t num_groups,
     const float eps,
@@ -168,7 +170,8 @@ MorehGroupNormOperation::invoke(
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    operation_attributes_t operation_attributes{
+    using OperationType = ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
         num_groups,
         eps,
         are_required_outputs,
@@ -176,7 +179,7 @@ MorehGroupNormOperation::invoke(
         mean_memory_config.value_or(input.memory_config()),
         rstd_memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-    tensor_args_t tensor_args{input, gamma, beta, output, mean, rstd};
-    return {operation_attributes, tensor_args};
+    auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_group_norm
+}  // namespace ttnn::prim

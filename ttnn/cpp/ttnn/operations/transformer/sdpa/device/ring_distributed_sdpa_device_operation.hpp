@@ -37,25 +37,22 @@ struct RingDistributedSdpaDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        uint32_t ring_size,
-        std::optional<uint32_t> ring_id,
-        std::optional<float> scale,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const std::optional<SDPAProgramConfig>& program_config,
-        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::transformer::ring_distributed_sdpa
 
 namespace ttnn::prim {
 
-constexpr auto ring_distributed_sdpa = ttnn::register_operation<
-    "ttnn::prim::ring_distributed_sdpa",
-    ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation>();
+ttnn::operations::transformer::ring_distributed_sdpa::RingDistributedSdpaDeviceOperation::tensor_return_value_t
+ring_distributed_sdpa(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    uint32_t ring_size,
+    std::optional<uint32_t> ring_id,
+    std::optional<float> scale,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 }  // namespace ttnn::prim

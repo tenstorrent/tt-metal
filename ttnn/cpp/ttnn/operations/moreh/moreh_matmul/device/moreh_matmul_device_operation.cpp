@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_matmul_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -168,9 +169,10 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
             output_shape_wo_padding,
             output_shape));
 }
+}  // namespace ttnn::operations::moreh::moreh_matmul
 
-std::tuple<MorehMatmulOperation::operation_attributes_t, MorehMatmulOperation::tensor_args_t>
-MorehMatmulOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation::tensor_return_value_t moreh_matmul(
     const Tensor& input,
     const Tensor& other,
     bool transpose_input,
@@ -179,12 +181,13 @@ MorehMatmulOperation::invoke(
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        MorehMatmulOperation::operation_attributes_t{
-            transpose_input,
-            transpose_other,
-            output_memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)},
-        MorehMatmulOperation::tensor_args_t{input, other, output, bias}};
+    using OperationType = ttnn::operations::moreh::moreh_matmul::MorehMatmulOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        transpose_input,
+        transpose_other,
+        output_memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)};
+    auto tensor_args = OperationType::tensor_args_t{input, other, output, bias};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_matmul
+}  // namespace ttnn::prim

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sort_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -146,17 +147,19 @@ SortDeviceOperation::tensor_return_value_t SortDeviceOperation::create_output_te
         create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),  // Index tensor
     };
 }
+}  // namespace ttnn::operations::data_movement::sort
 
-std::tuple<SortDeviceOperation::operation_attributes_t, SortDeviceOperation::tensor_args_t> SortDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::sort::SortDeviceOperation::tensor_return_value_t sort(
     const Tensor& input_tensor,
-    const int8_t dim,
-    const bool descending,
-    const bool stable,
+    int8_t dim,
+    bool descending,
+    bool stable,
     const MemoryConfig& output_memory_config,
     const std::vector<std::optional<Tensor>>& output_tensors) {
-    return {
-        operation_attributes_t{dim, descending, stable, output_memory_config},
-        tensor_args_t{input_tensor, output_tensors}};
+    using OperationType = ttnn::operations::data_movement::sort::SortDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{dim, descending, stable, output_memory_config},
+        OperationType::tensor_args_t{input_tensor, output_tensors});
 }
-
-}  // namespace ttnn::operations::data_movement::sort
+}  // namespace ttnn::prim
