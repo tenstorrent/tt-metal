@@ -199,8 +199,11 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<AllToAllAsyncDeviceOperation::operation_attributes_t, AllToAllAsyncDeviceOperation::tensor_args_t>
-AllToAllAsyncDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation::tensor_return_value_t all_to_all_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
@@ -211,6 +214,8 @@ AllToAllAsyncDeviceOperation::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    using OperationType = ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation;
+
     // Normalize dimensions
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t norm_in_dim = (in_dim < 0) ? rank + in_dim : in_dim;
@@ -233,20 +238,21 @@ AllToAllAsyncDeviceOperation::invoke(
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
-    return {
-        operation_attributes_t(
-            static_cast<uint32_t>(norm_in_dim),
-            static_cast<uint32_t>(norm_out_dim),
-            num_links,
-            num_devices,
-            memory_config.value_or(input_tensor.memory_config()),
-            ccl_topology,
-            multi_device_global_semaphore,
-            sub_device_id),
-        tensor_args_t{
-            .input_tensor = input_tensor,
-            .persistent_intermediate_buffer = persistent_intermediate_buffer,
-            .persistent_output_buffer = persistent_output_buffer}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        static_cast<uint32_t>(norm_in_dim),
+        static_cast<uint32_t>(norm_out_dim),
+        num_links,
+        num_devices,
+        memory_config.value_or(input_tensor.memory_config()),
+        ccl_topology,
+        multi_device_global_semaphore,
+        sub_device_id);
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor,
+        .persistent_intermediate_buffer = persistent_intermediate_buffer,
+        .persistent_output_buffer = persistent_output_buffer};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::prim

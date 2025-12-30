@@ -563,7 +563,6 @@ static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::ve
     for (const auto& config : serialized_configs) {
         max_size = std::max(max_size, config.size());
     }
-    max_size = round((max_size + 1) / 2) * 2;  // Align to 32 bytes by adding a value - do we need to do this?
     for (std::vector<uint16_t>& config : serialized_configs) {
         TT_ASSERT(config.size() <= max_size);
         config.resize(max_size, 0);
@@ -735,7 +734,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 TT_ASSERT(src_local_idx == 0);
                 src_core_id = PAD_LOCAL_SENTINAL;
             }
-            if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
+            if (per_core_gather_data.contains({src_core_id, dst_core_id})) {
                 auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
                 // src idx is 0 if it is a pad
                 if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {

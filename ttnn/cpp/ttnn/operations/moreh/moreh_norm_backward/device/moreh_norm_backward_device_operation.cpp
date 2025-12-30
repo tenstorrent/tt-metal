@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_norm_backward_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -51,8 +52,10 @@ MorehNormBackwardOperation::tensor_return_value_t MorehNormBackwardOperation::cr
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MorehNormBackwardOperation::operation_attributes_t, MorehNormBackwardOperation::tensor_args_t>
-MorehNormBackwardOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_norm_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor_return_value_t moreh_norm_backward(
     const Tensor& input,
     const Tensor& output,
     const Tensor& output_grad,
@@ -62,22 +65,17 @@ MorehNormBackwardOperation::invoke(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.padded_shape().rank());
+    using OperationType = ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation;
+    ttnn::SmallVector<int64_t> dims = ttnn::operations::get_dim(dim, input.padded_shape().rank());
     std::sort(dims.begin(), dims.end());
-    return {
-        operation_attributes_t{
-            p,
-            dims,
-            keepdim,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
-        },
-        tensor_args_t{
-            input,
-            output,
-            output_grad,
-            input_grad,
-        },
+    auto operation_attributes = OperationType::operation_attributes_t{
+        p,
+        dims,
+        keepdim,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
     };
+    auto tensor_args = OperationType::tensor_args_t{input, output, output_grad, input_grad};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_norm_backward
+}  // namespace ttnn::prim

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod_nc_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::reduction::prod_nc {
 
@@ -59,9 +60,13 @@ ProdNcDeviceOperation::tensor_return_value_t ProdNcDeviceOperation::create_outpu
     return tensor_args.output;
 }
 
-std::tuple<ProdNcDeviceOperation::operation_attributes_t, ProdNcDeviceOperation::tensor_args_t>
-ProdNcDeviceOperation::invoke(const Tensor& input, const Tensor& output, int64_t dim) {
-    return {operation_attributes_t{.dim = dim}, tensor_args_t{.input = input, .output = output}};
-}
-
 }  // namespace ttnn::operations::reduction::prod_nc
+
+namespace ttnn::prim {
+ttnn::Tensor prod_nc(const ttnn::Tensor& input, const ttnn::Tensor& output, int64_t dim) {
+    using OperationType = ttnn::operations::reduction::prod_nc::ProdNcDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{.dim = dim},
+        OperationType::tensor_args_t{.input = input, .output = output});
+}
+}  // namespace ttnn::prim

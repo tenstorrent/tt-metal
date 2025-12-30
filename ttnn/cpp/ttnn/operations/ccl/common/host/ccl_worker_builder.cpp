@@ -1118,7 +1118,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
             bool rt_args_enabled = true;
             rt_args.push_back(rt_args_enabled);
             if (tensor_device_override.has_value() and
-                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
+                tensor_device_override.value().contains(t)) {
                 std::ranges::copy(
                     ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
                     std::back_inserter(rt_args));

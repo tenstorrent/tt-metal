@@ -223,35 +223,41 @@ tt::stl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
         args.compute_kernel_config, args.share_cache, args.mesh_coords, tensor_args, program_factory.index());
 }
 
-std::tuple<PagedUpdateCacheDeviceOperation::operation_attributes_t, PagedUpdateCacheDeviceOperation::tensor_args_t>
-PagedUpdateCacheDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::paged_cache::update
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::paged_cache::update::PagedUpdateCacheDeviceOperation::tensor_return_value_t
+paged_update_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const std::vector<uint32_t>& update_idxs,
     const std::optional<const Tensor>& update_idxs_tensor,
-    const std::optional<bool> share_cache,
+    std::optional<bool> share_cache,
     const std::optional<const Tensor>& page_table,
-    const uint32_t batch_offset,
+    uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
+    using OperationType = ttnn::operations::experimental::paged_cache::update::PagedUpdateCacheDeviceOperation;
+
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
 
-    operation_attributes_t attrs{
+    auto operation_attributes = OperationType::operation_attributes_t{
         .update_idxs = update_idxs,
         .batch_offset = batch_offset,
         .compute_kernel_config = kernel_config_val,
         .share_cache = share_cache_arg,
         .mesh_coords = mesh_coords};
 
-    tensor_args_t tensor_args{
+    auto tensor_args = OperationType::tensor_args_t{
         .cache_tensor = cache_tensor,
         .input_tensor = input_tensor,
         .update_idxs_tensor =
             update_idxs_tensor.has_value() ? std::optional<Tensor>(update_idxs_tensor.value()) : std::nullopt,
         .page_table = page_table.has_value() ? std::optional<Tensor>(page_table.value()) : std::nullopt};
 
-    return {attrs, tensor_args};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::update
+}  // namespace ttnn::prim

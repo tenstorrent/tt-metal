@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>

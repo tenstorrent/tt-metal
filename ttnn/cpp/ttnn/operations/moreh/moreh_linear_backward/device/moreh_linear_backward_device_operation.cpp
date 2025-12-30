@@ -9,6 +9,7 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
@@ -64,18 +65,25 @@ MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperati
     return create_device_tensor(output_spec, tensor_args.bias->device());
 }
 
-std::tuple<MorehBiasAddBackwardOperation::operation_attributes_t, MorehBiasAddBackwardOperation::tensor_args_t>
-MorehBiasAddBackwardOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_linear_backward
+
+namespace ttnn::prim {
+
+ttnn::operations::moreh::moreh_linear_backward::MorehBiasAddBackwardOperation::tensor_return_value_t
+moreh_bias_add_backward(
     const Tensor& output_grad,
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& bias_grad,
     const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
     const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    return {
-        MorehBiasAddBackwardOperation::operation_attributes_t{
-            bias_grad_memory_config.value_or(output_grad.memory_config()),
-            init_device_compute_kernel_config(
-                output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        MorehBiasAddBackwardOperation::tensor_args_t{output_grad, bias, bias_grad}};
+    using OperationType = ttnn::operations::moreh::moreh_linear_backward::MorehBiasAddBackwardOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        bias_grad_memory_config.value_or(output_grad.memory_config()),
+        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{output_grad, bias, bias_grad};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_linear_backward
+
+}  // namespace ttnn::prim

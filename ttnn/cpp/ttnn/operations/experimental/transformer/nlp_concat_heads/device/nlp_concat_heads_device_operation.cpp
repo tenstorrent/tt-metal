@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::nlp_concat_heads {
 
@@ -102,13 +103,20 @@ tensor_return_value_t NLPConcatHeadsDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), input_tensor.device());
 }
 
-std::tuple<NLPConcatHeadsDeviceOperation::operation_attributes_t, NLPConcatHeadsDeviceOperation::tensor_args_t>
-NLPConcatHeadsDeviceOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    return {
-        operation_attributes_t{
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-        },
-        tensor_args_t{.input = input_tensor}};
+}  // namespace ttnn::operations::experimental::nlp_concat_heads
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::nlp_concat_heads::tensor_return_value_t nlp_concat_heads(
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    using OperationType = ttnn::operations::experimental::nlp_concat_heads::NLPConcatHeadsDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads
+}  // namespace ttnn::prim

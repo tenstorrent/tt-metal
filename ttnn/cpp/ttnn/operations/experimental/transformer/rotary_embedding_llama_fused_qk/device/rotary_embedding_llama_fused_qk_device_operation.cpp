@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -147,10 +148,12 @@ tensor_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::create_output_
         create_device_tensor(spec_k, tensor_args.k_input.device())};
 }
 
-std::tuple<
-    RotaryEmbeddingLlamaFusedQKDeviceOperation::operation_attributes_t,
-    RotaryEmbeddingLlamaFusedQKDeviceOperation::tensor_args_t>
-RotaryEmbeddingLlamaFusedQKDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::tensor_return_value_t
+rotary_embedding_llama_fused_qk(
     const Tensor& q_input_tensor,
     const Tensor& k_input_tensor,
     const Tensor& cos_cache,
@@ -160,20 +163,24 @@ RotaryEmbeddingLlamaFusedQKDeviceOperation::invoke(
     const tt::tt_metal::MemoryConfig& k_output_mem_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     bool row_major_QK) {
-    operation_attributes_t attributes{
+    using OperationType = ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::
+        RotaryEmbeddingLlamaFusedQKDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
         .q_output_mem_config = q_output_mem_config,
         .k_output_mem_config = k_output_mem_config,
         .compute_kernel_config = compute_kernel_config,
         .row_major_QK = row_major_QK,
     };
-    tensor_args_t tensor_args{
+    auto tensor_args = OperationType::tensor_args_t{
         .q_input = q_input_tensor,
         .k_input = k_input_tensor,
         .cos = cos_cache,
         .sin = sin_cache,
         .trans_mat = trans_mat,
     };
-    return std::make_tuple(std::move(attributes), std::move(tensor_args));
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
+}  // namespace ttnn::prim

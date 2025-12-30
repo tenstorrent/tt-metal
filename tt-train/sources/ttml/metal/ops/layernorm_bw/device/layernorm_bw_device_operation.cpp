@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include "layernorm_bw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::layernorm_bw::device {
 
@@ -162,8 +163,11 @@ ttsl::hash::hash_t LayerNormBackwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<LayerNormBackwardDeviceOperation::operation_attributes_t, LayerNormBackwardDeviceOperation::tensor_args_t>
-LayerNormBackwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::layernorm_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor_return_value_t ttml_layernorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& mean_tensor,
@@ -172,18 +176,21 @@ LayerNormBackwardDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& preallocated_dx,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
     const std::optional<ttnn::Tensor>& preallocated_dbeta_components) {
-    return {
-        operation_attributes_t{},
-        tensor_args_t{
-            .input = input_tensor,
-            .gamma = gamma_tensor,
-            .mean = mean_tensor,
-            .rstd = rstd_tensor,
-            .dL_dout = dL_dout_tensor,
-            .preallocated_dx = preallocated_dx,
-            .preallocated_dgamma_components = preallocated_dgamma_components,
-            .preallocated_dbeta_components = preallocated_dbeta_components,
-        }};
+    using OperationType = ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .gamma = gamma_tensor,
+        .mean = mean_tensor,
+        .rstd = rstd_tensor,
+        .dL_dout = dL_dout_tensor,
+        .preallocated_dx = preallocated_dx,
+        .preallocated_dgamma_components = preallocated_dgamma_components,
+        .preallocated_dbeta_components = preallocated_dbeta_components,
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::layernorm_bw::device
+}  // namespace ttnn::prim
