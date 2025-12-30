@@ -234,7 +234,7 @@ void kernel_main() {
                         num_faces_in_input_tile,
                         face_r_dim);
                     for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                        reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                     }
                 }
                 cb_pop_front(curr_in_cb_id, 1);
