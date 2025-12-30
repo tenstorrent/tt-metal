@@ -11,6 +11,7 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/rounding.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
@@ -35,24 +36,6 @@ constexpr auto cb_max_exp_avg_sq_idx = tt::CBIndex::c_26;
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t twice_block_size = 2 * block_size;
-
-// TODO: This might have to be moved higher, so other optimizers can use it too
-#ifdef TRISC_MATH
-template <int ITERATIONS = 8>
-inline void stochastic_round_tile_face() {
-#pragma GCC unroll ITERATIONS
-    for (int i = 0; i < ITERATIONS; i++) {
-        vFloat a = dst_reg[0];
-        vUInt rounded = float_to_fp16b(a, 1);
-        dst_reg[0] = reinterpret<vFloat>(rounded);
-        dst_reg++;
-    }
-}
-#endif
-
-inline void stochastic_round_tile(uint32_t idx_dst0) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(stochastic_round_tile_face<8>, idx_dst0));
-}
 
 void MAIN {
     uint32_t runtime_args_counter = 0;
