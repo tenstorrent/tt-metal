@@ -48,7 +48,7 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::
         // Host has NUMA enabled. Group CPU IDs by the NUMA nodes they belong to.
         for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
             int node = numa_node_of_cpu(cpu);
-            if (cpu_cores_per_numa_node.find(node) == cpu_cores_per_numa_node.end()) {
+            if (!cpu_cores_per_numa_node.contains(node)) {
                 cpu_cores_per_numa_node.insert({node, {}});
             }
             free_cores.insert(cpu);
@@ -77,8 +77,7 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
     int numa_node_for_device =
         tt::tt_metal::MetalContext::instance().get_cluster().get_numa_node_for_device(mmio_controlled_device_id);
 
-    if (numa_available() != -1 and
-        cpu_cores_per_numa_node.find(numa_node_for_device) != cpu_cores_per_numa_node.end()) {
+    if (numa_available() != -1 and cpu_cores_per_numa_node.contains(numa_node_for_device)) {
         // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
         const auto& cpu_core_for_numa_node = cpu_cores_per_numa_node.at(numa_node_for_device);
         int num_cores_in_numa_node = cpu_core_for_numa_node.size();
@@ -279,8 +278,7 @@ void DeviceManager::initialize_devices(const std::vector<ChipId>& device_ids) {
     std::vector<ChipId> target_mmio_ids;
     for (const auto& device_id : device_ids_to_open) {
         TT_FATAL(
-            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(device_id) !=
-                tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
+            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().contains(device_id),
             "Device index {} out of range. There are {} devices available.",
             device_id,
             tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -505,8 +503,7 @@ void DeviceManager::initialize_active_devices() {
 
 void DeviceManager::activate_device(ChipId id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(id) !=
-            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
+        tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().contains(id),
         "Device index {} out of range. There are {} devices available.",
         id,
         tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -866,7 +863,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     for (const auto& dev : devices) {
         const auto& mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
-        if (mmio_devices_to_close.find(mmio_device_id) != mmio_devices_to_close.end()) {
+        if (mmio_devices_to_close.contains(mmio_device_id)) {
             continue;
         }
         auto tunnels_from_mmio =

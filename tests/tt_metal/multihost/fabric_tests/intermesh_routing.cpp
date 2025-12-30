@@ -4,9 +4,8 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
-#include <cstddef>
 #include <cstdint>
+#include <cstddef>
 #include <cstdlib>
 #include <vector>
 

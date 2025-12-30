@@ -322,7 +322,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             "for this tensor ahead of time.");
         tensor_id = tt::tt_metal::Tensor::next_tensor_id();
     }
-    node_id tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
+    node_id tensor_counter = tensor_id_to_counter.contains(tensor_id) ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
@@ -330,7 +330,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         {kTensorId, fmt::format("{}", tensor_id)},
     };
 
-    if (tensor_id_to_counter.count(tensor_id) == 0) {
+    if (!tensor_id_to_counter.contains(tensor_id)) {
         int stacking_level = static_cast<int>(current_op_id.size()) - 1;
         graph.push_back(Vertex{
             .counter = tensor_counter,

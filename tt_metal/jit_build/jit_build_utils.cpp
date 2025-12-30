@@ -4,7 +4,7 @@
 
 #include "jit_build_utils.hpp"
 
-#include <stdlib.h>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <mutex>

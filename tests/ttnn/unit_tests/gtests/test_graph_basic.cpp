@@ -5,8 +5,8 @@
 #include <boost/move/utility_core.hpp>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <iostream>
 #include <map>

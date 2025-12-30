@@ -5,7 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 #include <optional>
