@@ -288,7 +288,7 @@ class MLA1D(AbstractModule):
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
             dim=1,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
         wkv_a_r_config = {
@@ -304,6 +304,14 @@ class MLA1D(AbstractModule):
 
         # WO
         wo_ag_config = AllGatherAsyncConfig(
+            mesh_device=MeshDeviceStub(mesh_device.shape),
+            cluster_axis=1,
+            dim=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+
+        wkv_b2_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
             dim=1,
@@ -332,6 +340,7 @@ class MLA1D(AbstractModule):
             "wq_a_ag_prefill": wq_a_ag_config,
             "wkv_a_ag_prefill": wkv_a_ag_config,
             "wkv_a_r_prefill": wkv_a_r_config,
+            "wkv_b2_ag_prefill": wkv_b2_ag_config,
             "wo_ag_prefill": wo_ag_config,
             "mesh_device": mesh_device,
         }
@@ -1206,11 +1215,13 @@ class MLA1D(AbstractModule):
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
 
-        # wkv_b2
-        v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+        # DP wkv_b2 to match decode weights
         v_out = ttnn.experimental.all_gather_async(
-            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-        )  # [1, num_heads, seq_len, v_head_dim]
+            attn_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+        )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
+
+        # wkv_b2
+        v_out = ttnn.linear(v_out, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
 
         # wo
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
