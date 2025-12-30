@@ -41,7 +41,6 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-implicit-widening-of-multiplication-result,
-  -bugprone-integer-division,
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
   -bugprone-unchecked-optional-access,
