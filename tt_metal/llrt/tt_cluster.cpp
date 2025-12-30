@@ -386,11 +386,6 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         for (const auto& [mmio_device_id, chips] : grouped_chips) {
             max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
         }
-        if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-            // We're limited by the number of hugepages in this case, so request 1 channel per mmio device and
-            // SystemMemoryManager will split the channel across the devices.
-            max_chips_per_mmio = 1;
-        }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
             .sdesc_path = sdesc_path,
