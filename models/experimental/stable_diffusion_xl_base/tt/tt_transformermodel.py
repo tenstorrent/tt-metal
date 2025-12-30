@@ -103,6 +103,7 @@ class TtTransformer2DModel(LightweightModule):
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        # TODO: To optimize
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,

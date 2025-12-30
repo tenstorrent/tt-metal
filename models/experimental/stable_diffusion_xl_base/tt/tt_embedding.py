@@ -23,7 +23,9 @@ class TtTimestepEmbedding(LightweightModule):
         self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, weights_2, bias_2, linear_weights_dtype)
 
     def forward(self, sample):
+        # TODO: To optimize
         sample = ttnn.linear(sample, self.tt_weights_1, bias=self.tt_bias_1, activation="silu")
+        # TODO: To optimize
         sample = ttnn.linear(
             sample,
             self.tt_weights_2,

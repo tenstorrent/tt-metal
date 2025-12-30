@@ -7,6 +7,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
+import tracy
+
 
 class TtGEGLU(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
@@ -38,6 +40,14 @@ class TtGEGLU(LightweightModule):
 
     def forward(self, input_tensor):
         # TODO: self.program_config is not None is used to differentiate base and refiner; remove this with refiner matmul optimizations
+        if self.program_config is not None:
+            if input_tensor.shape[2] == 4096:
+                # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
+                # hence using L1 memory config instead
+                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+
+        # TODO: To optimize
+        tracy.signpost("GEGLU_Linear1 Start")
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
@@ -46,7 +56,10 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
+        tracy.signpost("GEGLU_Linear1 End")
 
+        # TODO: To optimize
+        tracy.signpost("GEGLU_Linear2 Start")
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,
@@ -55,7 +68,7 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config_gelu,
             compute_kernel_config=self.compute_config,
         )
-
+        tracy.signpost("GEGLU_Linear2 End")
         ttnn.deallocate(input_tensor)
         hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False)
         return hidden_states

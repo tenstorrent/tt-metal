@@ -8,6 +8,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
+import tracy
+
 
 class TtFeedForward(LightweightModule):
     def __init__(
@@ -35,6 +37,8 @@ class TtFeedForward(LightweightModule):
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)
 
+        # TODO: To optimize
+        tracy.signpost("FF_Linear Start")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights,
@@ -43,5 +47,6 @@ class TtFeedForward(LightweightModule):
             memory_config=self.ff2_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
+        tracy.signpost("FF_Linear End")
 
         return hidden_states

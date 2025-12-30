@@ -96,6 +96,7 @@ class TtAttention(LightweightModule):
         B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
+            # TODO: To optimize
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
@@ -114,6 +115,7 @@ class TtAttention(LightweightModule):
             )
             ttnn.deallocate(qkv_fused)
         else:
+            # TODO: To optimize
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
@@ -121,6 +123,7 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=self.q_memory_config,
             )
+            # TODO: To optimize
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
@@ -128,6 +131,7 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.k_program_config,
             )
+            # TODO: To optimize
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
@@ -172,6 +176,7 @@ class TtAttention(LightweightModule):
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # TODO: To optimize
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
