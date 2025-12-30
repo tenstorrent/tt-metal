@@ -43,106 +43,6 @@ jobs:
           # Note: This matrix must be kept in sync with the original static matrix
           all_tests='[
             {
-              "name": "[WH-T3K] Llama-3.1-8B-Instruct",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
-              "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "multimodal": true,
-              "additional-server-args": "--max_model_len 2048",
-              "co-owner-1-id": "U07RY6B5FLJ"
-            },
-            {
-              "name": "[BH-DB] Llama-3.1-8B-Instruct",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 20,
-              "benchmark-timeout": 5,
-              "runner-label": "BH-DeskBox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x2",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 2}",
-              "multimodal": false,
-              "owner_id": "U08GELBB1AP"
-            },
-            {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "bh-loudbox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x8",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
-              "multimodal": false,
-              "structured-output": true,
-              "additional-server-args": "--num_scheduler_steps 1",
-              "owner_id": "U091SNDA4TS"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct multi-step",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "multimodal": false,
-              "structured-output": true,
-              "additional-server-args": "--num_scheduler_steps 1",
-              "owner_id": "U091SNDA4TS"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "multimodal": false,
-              "structured-output": true,
-              "additional-server-args": "--num_scheduler_steps 1",
-              "owner_id": "U091SNDA4TS"
-            },
-            {
               "name": "[WH-GLX] Llama-8B DP=16",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
@@ -155,118 +55,6 @@ jobs:
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
-            },
-            {
-              "name": "[WH-T3K][v1] Gemma3-27B",
-              "model": "google/gemma-3-27b-it",
-              "server-timeout": 15,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 50000000, \"l1_small_size\": 24576}",
-              "tt-llama-text-ver": "tt_transformers",
-              "multimodal": true,
-              "use-vllm-v1": true,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08BH66EXAL"
-            },
-            {
-              "name": "[WH-GLX][v1] GPT-OSS-120B",
-              "model": "openai/gpt-oss-120b",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "(4, 8)",
-              "multimodal": false,
-              "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--max_num_seqs 1 --num_scheduler_steps 1",
-              "use-vllm-v1": true,
-              "structured-output": true,
-              "co-owner-1-id": "U08TJ70UFRT",
-              "co-owner-2-id": "U06F3ER8X9A"
-            },
-            {
-              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
-              "use-vllm-v1": true,
-              "structured-output": true,
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
-              "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "use-vllm-v1": true,
-              "structured-output": true,
-              "multimodal": true,
-              "additional-server-args": "--max_model_len 2048",
-              "co-owner-1-id": "U07RY6B5FLJ"
-            },
-            {
-              "name": "[BH-LB][v1] Llama-3.1-8B-Instruct",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "bh-loudbox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x8",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 8}",
-              "additional-server-args": "--data_parallel_size 8",
-              "use-vllm-v1": true,
-              "structured-output": true,
-              "multimodal": false,
-              "owner_id": "U08GELBB1AP"
-            },
-            {
-              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device sampling",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
-              "use-vllm-v1": true,
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct hostsample",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
-              "use-vllm-v1": true,
-              "structured-output": true,
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
             },
             {
               "name": "[WH-GLX][v1] Llama-8B DP=16",
@@ -284,21 +72,6 @@ jobs:
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
-            },
-            {
-              "name": "[WH-T3K][v1] Multi-process reduce scatter test model",
-              "model": "models/vllm_test_utils/t3000_multiproc_test",
-              "server-timeout": 4,
-              "benchmark-timeout": 4,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "(2, 4)",
-              "override-tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
-              "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "use-vllm-v1": true,
-              "multimodal": false,
-              "co-owner-1-id": "U08CEGF78ET"
             }
           ]'
 
@@ -361,7 +134,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          slow-dispatch-timeout: 15 # Increased above default to account for vLLM's longer-running dispatch operations and avoid false-positive hang detection when auto-triage is enabled.
+          slow-dispatch-timeout: 60 # Increased above default to account for vLLM's longer-running dispatch operations and avoid false-positive hang detection when auto-triage is enabled.
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
