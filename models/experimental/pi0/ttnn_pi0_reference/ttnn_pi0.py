@@ -696,24 +696,23 @@ class PI0ModelTTNN:
         # Get timesteps (on host for control flow)
         timesteps = torch.linspace(1.0, 0.0, self.denoising.config.num_steps + 1)
 
-        # Step 3: Sample initial noise
-        x_t = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
+        # Step 3: Sample initial noise and convert to TTNN ONCE (not per step!)
+        x_t_torch = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
+        x_t_ttnn = ttnn.from_torch(
+            x_t_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
-        # Step 4: Denoising loop
+        # Step 4: Denoising loop (stays on device!)
         for i in range(self.denoising.config.num_steps):
             t = timesteps[i].item()
             t_next = timesteps[i + 1].item()
             dt = t_next - t
 
-            # Convert noisy actions to TTNN
-            x_t_ttnn = ttnn.from_torch(
-                x_t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-
-            # Create timestep tensor
+            # Create timestep tensor (still needed per step since t changes)
             t_tensor = ttnn.from_torch(
                 torch.full((batch_size,), t, dtype=torch.float32),
                 dtype=ttnn.bfloat16,
@@ -721,7 +720,7 @@ class PI0ModelTTNN:
                 device=self.device,
             )
 
-            # Embed suffix
+            # Embed suffix (x_t_ttnn already on device - no transfer!)
             suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
 
             # Forward through expert with cached prefix KV
@@ -740,14 +739,17 @@ class PI0ModelTTNN:
 
             # Project to velocity
             velocity = self.suffix_embedding.project_output(action_output)
-            velocity_torch = ttnn.to_torch(velocity)
 
-            # Euler step
-            x_t = x_t + velocity_torch * dt
+            # Euler step ON DEVICE (no transfer per step!)
+            # x_t = x_t + velocity * dt
+            velocity_scaled = ttnn.mul(velocity, dt)
+            x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+
             # Clear profiler buffer after each denoising step (~500 ops)
             ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
 
-        return x_t
+        # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
+        return ttnn.to_torch(x_t_ttnn)
 
     @classmethod
     def from_pretrained(
