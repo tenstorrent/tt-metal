@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_layer_norm_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -125,8 +126,10 @@ MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_o
     return result;
 }
 
-std::tuple<MorehLayerNormOperation::operation_attributes_t, MorehLayerNormOperation::tensor_args_t>
-MorehLayerNormOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_layer_norm
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_layer_norm::MorehLayerNormOperation::tensor_return_value_t moreh_layer_norm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
@@ -137,13 +140,13 @@ MorehLayerNormOperation::invoke(
     const std::optional<const Tensor>& rstd,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            normalized_dims,
-            eps,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
-        },
-        tensor_args_t{input, gamma, beta, output, mean, rstd}};
+    using OperationType = ttnn::operations::moreh::moreh_layer_norm::MorehLayerNormOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        normalized_dims,
+        eps,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_layer_norm
+}  // namespace ttnn::prim
