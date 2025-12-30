@@ -584,7 +584,7 @@ class MLA1D(AbstractModule):
             topology=ttnn.Topology.Linear,
         )
         wq_a_ag_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, 1536), core_grid=ttnn.CoreGrid(y=1, x=6), strategy=ttnn.ShardStrategy.WIDTH
+            shape=(USERS_PER_ROW, 1536), core_grid=ttnn.CoreGrid(y=2, x=8), strategy=ttnn.ShardStrategy.WIDTH
         )
         wq_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
@@ -595,7 +595,6 @@ class MLA1D(AbstractModule):
         )
 
         # Q all-to-all
-        # wq_a2a_out_mem_config = ttnn.create_sharded_memory_config(shape=(USERS_PER_ROW//mesh_shape[1],128, 576),core_grid=ttnn.CoreGrid(y=8, x=2),strategy=ttnn.ShardStrategy.HEIGHT)
         wq_a2a_config = AllToAllAsyncGenericConfig(
             cluster_axis=1,
             in_dim=2,
@@ -612,19 +611,12 @@ class MLA1D(AbstractModule):
         )  # 1,4,128,576, height sharded 8x8 [32,576]
 
         # KV
-        wkv_a_ag_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW * 8, 576), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT
-        )
         wkv_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=1,
-            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            memory_config=wkv_a_ag_mem_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-        )
-        wkv_a_r_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, 576), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT
         )
         wkv_a_r_config = {
             "dims": [1],
@@ -635,7 +627,7 @@ class MLA1D(AbstractModule):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             ),
-            "memory_config": wkv_a_r_mem_config,
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
         }
         wkv_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
@@ -672,21 +664,14 @@ class MLA1D(AbstractModule):
             topology=ttnn.Topology.Linear,
         )
 
-        # kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(1, 1, USERS_PER_ROW, 512), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
-        # )
+        kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, USERS_PER_ROW, 512), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
+        )
         kv_nope_slice_config = SliceConfig(
-            # memory_config=kv_nope_slice_mem_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=kv_nope_slice_mem_config,
         )
         kv_rope_slice_config = SliceConfig(
             memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        kv_nope_slice_reshard_mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, 1, USERS_PER_ROW, 512), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
-        )
-        kv_nope_slice_reshard_config = ReshardConfig(
-            memory_config=kv_nope_slice_reshard_mem_config,
         )
 
         return {
@@ -730,7 +715,6 @@ class MLA1D(AbstractModule):
             "mesh_device": mesh_device,
             "kv_nope_slice": kv_nope_slice_config,
             "kv_rope_slice": kv_rope_slice_config,
-            "kv_nope_slice_reshard": kv_nope_slice_reshard_config,
         }
 
     @classmethod
@@ -911,45 +895,41 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
         )
+        # 1,1,32,192 width sharded 6x1 [32,32]
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
-        # 1,1,32,1536, width sharded 8x6 [32,32]
+        # 1,1,32,1536, width sharded 8x2 [32,96]
 
         # AR kv_a
         # AG + Reduce b/c sub-tile RS not supported
+        # 1,1,32,576 width sharded 6x3 [32,576]
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
         )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
-        # 1,8,32,576 height sharded 1x1 [256,576]  # TODO: use more cores
+        # 1,8,32,576 height sharded 1x1 [256,576]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv,
-            **cfg[
-                "wkv_a_r_decode"
-            ],  # TODO: use l1 interleaved here?? slice is untilized and tilized, unclear why that is done.
+            **cfg["wkv_a_r_decode"],
         )  # [1, 1, bsz, kv_lora_rank + qk_rope_head_dim]
         # 1,1,32,576 height sharded 1x1 [32,576]
 
         tt_kv_nope = ttnn.slice(
             tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank], **cfg["kv_nope_slice"]
         )  # TODO: file issue that Number of shards along width 18 must not exceed number of cores 16 assert uses input shape instead of output shape!
-        # 1,1,32,512 L1 interleaved
+        # 1,1,32,512 8x2 [32,32]
         tt_kv_rope = ttnn.slice(
             tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim], **cfg["kv_rope_slice"]
         )
         # 1,1,32,64 L1 interleaved
         ttnn.deallocate(tt_kv)
 
-        # 1,1,32,512 L1 interleaved
-        tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, **cfg["kv_nope_slice_reshard"])  # TODO: can slice do that?
-        # 1,1,32,512 8x2 [32,32]
-
         #####################
         ### Norm and Rope ###
         #####################
 
         # Q Norm
-        # 1,1,32,1536, width sharded 8x6 [32,32]
+        # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
-        # 1,1,32,1536, width sharded 8x6 [32,32]
+        # 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV Norm
         # 1,1,32,512 8x2 [32,32]
@@ -983,6 +963,8 @@ class MLA1D(AbstractModule):
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
         # 1,1,32,576 L1 interleaved
+
+        # TODO: try to use scatter here
 
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # TODO: do we need this?
         # 1,32,32,576 L1 interleaved
@@ -1021,7 +1003,7 @@ class MLA1D(AbstractModule):
         ### Q Rope + Nope ###
         #####################
 
-        # 1,1,32,1536, width sharded 8x6 [32,32]
+        # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
         # 1,1,32,3072, L1 interleaved
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
@@ -1074,7 +1056,7 @@ class MLA1D(AbstractModule):
         )  # TODO: ceate issue for all_to_all_async_generic segfaulting if we pass in a sharded memory config
         # 1,4,128,576  L1 interleaved
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
-        # 1,4,128,576 L1 height sharded 8x9 [32,576] # TODO: try 8x10
+        # 1,4,128,576 L1 height sharded 8x9 [32,576]
 
         #################
         ### Flash MLA ###
@@ -1107,6 +1089,7 @@ class MLA1D(AbstractModule):
         # 1,128,4,128 L1 interleaved = [1, num_heads_local, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))
         # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
+        # TODO: what sharding to use here? Or interleaved?
 
         ####################
         ### AG + Reshape ###
