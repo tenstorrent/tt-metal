@@ -13,7 +13,6 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
-from typing import Optional, Tuple
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
