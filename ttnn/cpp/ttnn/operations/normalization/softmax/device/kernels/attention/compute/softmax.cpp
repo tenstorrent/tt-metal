@@ -23,17 +23,16 @@
 
 void calc_numeric_stable(
     uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row using PROGRESSIVE_INDEXED mode
-    // PROGRESSIVE_INDEXED: waits progressively, uses indexed access, tiles persist for reuse
+    // calculate max val per row using PERSISTENT mode
+    // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
     reconfig_data_format(cb_in, cb_bcast_scaler);
-    compute_kernel_lib::
-        reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PROGRESSIVE_INDEXED>(
-            cb_in,
-            cb_bcast_scaler,
-            cb_max,
-            1,   // Ht (1 row)
-            Wt,  // Wt tiles per row
-            1);  // num_batches
+    compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+        cb_in,
+        cb_bcast_scaler,
+        cb_max,
+        1,   // Ht (1 row)
+        Wt,  // Wt tiles per row
+        1);  // num_batches
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -265,10 +264,10 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif
 
-        // SUM reduce with reciprocal operation using PROGRESSIVE_INDEXED mode
-        // PROGRESSIVE_INDEXED: handles progressive waiting internally, auto-detects FP32 mode
+        // SUM reduce with reciprocal operation using PERSISTENT mode
+        // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PROGRESSIVE_INDEXED>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
                 cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, Wt, 1, 0, 0, []() {
                     recip_tile_init();
                     recip_tile(0);
