@@ -118,7 +118,7 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         icb, icb_scaler, idst)));
@@ -138,7 +138,7 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
  * | Function   | num_faces                 | Number of faces to reduce (optional, default 4)                                         | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, num_faces)));

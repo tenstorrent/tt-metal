@@ -307,8 +307,8 @@ void kernel_main() {
         cb_wait_front(cb_dyadd, onetile);
         cb_reserve_back(cb_dysum, onetile);
 
-        reduce_init_delta_with_dt(cb_dysum, cb_dyadd, cb_scaler);
-        reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
+        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_dysum, cb_dyadd, cb_scaler);
+        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_dyadd, cb_scaler, 0, 0, dst0);
         reduce_uninit();
         tile_regs_commit();
 
@@ -325,8 +325,8 @@ void kernel_main() {
         cb_wait_front(cb_ydyadd, onetile);
         cb_reserve_back(cb_ydysum, onetile);
 
-        reduce_init_delta_with_dt(cb_ydysum, cb_ydyadd, cb_scaler);
-        reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
+        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_ydysum, cb_ydyadd, cb_scaler);
+        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ydyadd, cb_scaler, 0, 0, dst0);
         reduce_uninit();
         tile_regs_commit();
 

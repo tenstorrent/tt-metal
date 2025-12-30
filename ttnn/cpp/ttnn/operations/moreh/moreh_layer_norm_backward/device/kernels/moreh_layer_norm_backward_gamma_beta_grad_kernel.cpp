@@ -273,8 +273,8 @@ void kernel_main() {
 
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
-                reduce_init_delta_with_dt(cb_dgamma, cb_ydyadd, cb_scaler);
-                reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
+                reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_dgamma, cb_ydyadd, cb_scaler);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ydyadd, cb_scaler, 0, 0, dst0);
                 reduce_uninit();
             } else {
                 // Just copy
@@ -299,8 +299,8 @@ void kernel_main() {
 
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
-                reduce_init_delta_with_dt(cb_dbeta, cb_dyadd, cb_scaler);
-                reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
+                reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_dbeta, cb_dyadd, cb_scaler);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_dyadd, cb_scaler, 0, 0, dst0);
                 reduce_uninit();
             } else {
                 // Just copy

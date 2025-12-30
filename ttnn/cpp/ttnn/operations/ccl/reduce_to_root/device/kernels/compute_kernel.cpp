@@ -3,10 +3,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP (PoolType::MAX)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#define EXP_APPROX_MODE false
-
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
