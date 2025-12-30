@@ -10,8 +10,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 void AllocatorState::BufferTypeState::merge(const BufferTypeState& other) {
     // Validate compatibility before merging
@@ -180,7 +179,7 @@ DeviceAddr AllocatorState::total_allocated_size() const {
 }
 
 bool AllocatorState::has_buffer_type(BufferType buffer_type) const {
-    return states_per_buffer_type_.find(buffer_type) != states_per_buffer_type_.end();
+    return states_per_buffer_type_.contains(buffer_type);
 }
 
 const std::vector<std::pair<DeviceAddr, DeviceAddr>>& AllocatorState::get_allocated_regions(
@@ -210,5 +209,4 @@ const AllocatorState::BufferTypeState* AllocatorState::get_buffer_type_state(Buf
     return &it->second;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

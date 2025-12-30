@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <cmath>
 #include <pthread.h>
 #include <algorithm>
 #include <atomic>
@@ -61,6 +61,32 @@ using namespace tt;
 
 #define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
+using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
+
+struct RiscKeyComparator {
+    bool operator()(const RiscKey& x, const RiscKey& y) const {
+        const ChipId x_device_id = get<0>(x);
+        const ChipId y_device_id = get<0>(y);
+        const uint32_t x_risc_id = get<2>(x);
+        const uint32_t y_risc_id = get<2>(y);
+        const umd::CoreDescriptor& x_core_desc = get<1>(x);
+        const umd::CoreDescriptor& y_core_desc = get<1>(y);
+
+        if (x_device_id != y_device_id) {
+            return x_device_id < y_device_id;
+        }
+
+        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
+        if (core_desc_cmp(x_core_desc, y_core_desc)) {
+            return true;
+        }
+        if (core_desc_cmp(y_core_desc, x_core_desc)) {
+            return false;
+        }
+
+        return x_risc_id < y_risc_id;
+    }
+};
 namespace {
 
 string logfile_path = "generated/dprint/";
@@ -102,33 +128,6 @@ public:
 };
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
-
-using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
-
-struct RiscKeyComparator {
-    bool operator()(const RiscKey& x, const RiscKey& y) const {
-        const ChipId x_device_id = get<0>(x);
-        const ChipId y_device_id = get<0>(y);
-        const uint32_t x_risc_id = get<2>(x);
-        const uint32_t y_risc_id = get<2>(y);
-        const umd::CoreDescriptor& x_core_desc = get<1>(x);
-        const umd::CoreDescriptor& y_core_desc = get<1>(y);
-
-        if (x_device_id != y_device_id) {
-            return x_device_id < y_device_id;
-        }
-
-        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
-        if (core_desc_cmp(x_core_desc, y_core_desc)) {
-            return true;
-        }
-        if (core_desc_cmp(y_core_desc, x_core_desc)) {
-            return false;
-        }
-
-        return x_risc_id < y_risc_id;
-    }
-};
 
 void ResetStream(ostringstream* stream) {
     stream->str("");
@@ -449,7 +448,7 @@ private:
     // out to host-side stream. Returns true if some data was read out, and false if no new
     // print data was present on the device.
     bool peek_one_risc_non_blocking(
-        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_index, bool new_data_this_iter);
+        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
 
     // Transfers data from all intermdeiate streams to output stream and flushes it.
     void transfer_all_streams_to_output(ChipId device_id);
@@ -648,7 +647,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
             tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (umd::CoreDescriptor logical_core : all_cores) {
-                if (dispatch_cores.find(logical_core) == dispatch_cores.end()) {
+                if (!dispatch_cores.contains(logical_core)) {
                     if (logical_core.type == core_type) {
                         print_cores_sanitized.push_back(logical_core);
                     }
@@ -678,7 +677,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
-                if (valid_logical_core && all_cores.count({logical_core, core_type}) > 0) {
+                if (valid_logical_core && all_cores.contains({logical_core, core_type})) {
                     print_cores_sanitized.push_back({logical_core, core_type});
                     log_info(
                         tt::LogMetal,
@@ -714,14 +713,14 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
         }
-        if (dispatch_cores.count(logical_core)) {
+        if (dispatch_cores.contains(logical_core)) {
             device_reads_dispatch_cores_[device_id] = true;
         }
     }
 
     device_intermediate_streams_force_flush_lock_.lock();
     TT_ASSERT(
-        device_intermediate_streams_force_flush_.count(device_id) == 0,
+        !device_intermediate_streams_force_flush_.contains(device_id),
         "Device {} added to DPRINT server more than once!",
         device_id);
     device_intermediate_streams_force_flush_[device_id] = false;
@@ -730,7 +729,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // Save this device + core range to the print server
     device_to_core_range_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) == 0, "Device {} added to DPRINT server more than once!", device_id);
+        !device_to_core_range_.contains(device_id), "Device {} added to DPRINT server more than once!", device_id);
     device_to_core_range_[device_id] = print_cores_sanitized;
     device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
@@ -809,7 +808,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     // Remove the device from relevant data structures.
     device_intermediate_streams_force_flush_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) > 0,
+        device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_intermediate_streams_force_flush_.erase(device_id);
@@ -817,7 +816,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 
     device_to_core_range_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) > 0,
+        device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_to_core_range_.erase(device_id);

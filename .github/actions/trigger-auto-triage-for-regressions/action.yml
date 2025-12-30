@@ -10,6 +10,16 @@ inputs:
   slack_ts:
     description: 'Slack message timestamp for threading replies'
     required: false
+  slack_channel_id:
+    description: 'Slack channel ID for sending notifications'
+    required: false
+  slack_bot_token:
+    description: 'Slack bot token for sending messages'
+    required: false
+  send-slack-message:
+    description: 'Whether auto-triage should send a Slack message'
+    required: false
+    default: true
 
 runs:
   using: 'node20'

@@ -5,7 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include <initializer_list>
 #include <memory>
@@ -33,11 +33,9 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 

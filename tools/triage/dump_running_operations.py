@@ -16,6 +16,9 @@ Description:
     previously observed operations, device/core coverage, and the full list of cores executing
     each operation.
     By default, filters out cores with DONE status. Use --include-done to see all cores.
+
+Owner:
+    miacim
 """
 
 from dataclasses import dataclass
@@ -31,12 +34,13 @@ from triage import (
     ScriptConfig,
     collection_serializer,
     hex_serializer,
-    log_check_risc,
+    log_check,
     triage_field,
     run_script,
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.elf import ElfVariable
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data"],
@@ -106,10 +110,10 @@ class RunningOperationAggregation:
         )
 
 
-def _format_operation(kernel_name: str | None, watcher_kernel_id: int | None) -> str | None:
+def _format_operation(kernel_name: str | None, watcher_kernel_id: ElfVariable | None) -> str | None:
     if kernel_name:
         return f"Kernel: {kernel_name}"
-    if watcher_kernel_id is not None and watcher_kernel_id >= 0:
+    if watcher_kernel_id is not None and watcher_kernel_id.read_value() >= 0:
         return f"Kernel ID: {watcher_kernel_id}"
     return None
 
@@ -126,7 +130,7 @@ def _collect_dispatcher_data(
     dispatcher_data: DispatcherData, location: OnChipCoordinate, risc_name: str, show_all_cores: bool = False
 ) -> DispatcherCoreData | None:
     try:
-        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     except Exception as exc:
         log_check_risc(
             risc_name,
@@ -147,10 +151,6 @@ def _collect_dispatcher_data(
 def _collect_running_operations(
     dispatcher_data: DispatcherData, run_checks: RunChecks, show_all_cores: bool = False
 ) -> list[RunningOperationSummary] | None:
-    device_descriptions: dict[int, DeviceDescription] = {
-        device.unique_id: DeviceDescription(device, run_checks.metal_device_id_mapping) for device in run_checks.devices
-    }
-
     # Use run_checks infrastructure to iterate over all cores
     collected_results = run_checks.run_per_core_check(
         lambda location, risc_name: _collect_dispatcher_data(
@@ -167,20 +167,27 @@ def _collect_running_operations(
 
     aggregations: dict[int, RunningOperationAggregation] = {}
 
-    # Process results
-    for check_result in collected_results:
-        if check_result.result is None:
-            continue
-        dispatcher_core_data = check_result.result
-        aggregation = aggregations.setdefault(
-            dispatcher_core_data.host_assigned_id, RunningOperationAggregation(dispatcher_core_data.host_assigned_id)
-        )
-        aggregation.add_core(
-            device_description_serializer(check_result.device_description),
-            check_result.location,
-            check_result.risc_name,
-            dispatcher_core_data,
-        )
+    try:
+        # Process results
+        for check_result in collected_results:
+            if check_result.result is None:
+                continue
+            assert isinstance(check_result.result, DispatcherCoreData)
+            dispatcher_core_data: DispatcherCoreData = check_result.result
+            assert dispatcher_core_data.host_assigned_id is not None
+            aggregation = aggregations.setdefault(
+                dispatcher_core_data.host_assigned_id,
+                RunningOperationAggregation(dispatcher_core_data.host_assigned_id),
+            )
+            aggregation.add_core(
+                device_description_serializer(check_result.device_description),
+                check_result.location,
+                check_result.risc_name,
+                dispatcher_core_data,
+            )
+    except Exception as e:
+        log_check(False, f"Failed to collect running operations with error {str(e)}")
+        return None
 
     if not aggregations:
         return None

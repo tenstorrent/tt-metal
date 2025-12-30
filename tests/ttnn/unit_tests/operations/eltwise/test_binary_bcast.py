@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
 from models.common.utility_functions import torch_random
@@ -16,6 +16,8 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
+
+pytestmark = pytest.mark.use_module_device
 
 
 def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -2304,7 +2306,7 @@ def test_add_i32(device):
     torch.manual_seed(2024)
     a = torch.cat([torch.zeros(128, dtype=torch.int32), torch.ones(128, dtype=torch.int32)])
     a = torch.reshape(a, (1, 1, 1, 256))
-    b = torch.zeros((1, 1, 256, 256))
+    b = torch.zeros((1, 1, 256, 256), dtype=torch.int32)
 
     torch_add = a + b
 

@@ -16,11 +16,9 @@
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -118,13 +116,15 @@ tt::tt_fabric::Topology get_fabric_topology();
  * | num_routing_planes  | Number of routing planes         | optional<uint8_t>      | No       |
  * | fabric_tensix_config| Tensix fabric configuration      | FabricTensixConfig     | No       |
  * | fabric_udm_mode     | Unified DataMovement mode        | FabricUDMMode          | No       |
+ * | fabric_manager      | Fabric manager mode              | FabricManagerMode      | No       |
  */
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
     std::optional<uint8_t> num_routing_planes = std::nullopt,
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
-    FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED);
+    FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+    FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
 
 FabricConfig GetFabricConfig();
 

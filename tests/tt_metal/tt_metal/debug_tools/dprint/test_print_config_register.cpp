@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
@@ -24,11 +24,9 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking dprint
@@ -359,9 +357,9 @@ static std::string generate_golden_output(
                 golden_output += "blobs_y_start: " + std::to_string(val) + "\n";
                 continue;
             }
-            if (format_fields.find(field_names[i]) != format_fields.end()) {
+            if (format_fields.contains(field_names[i])) {
                 golden_output += field_names[i] + ": " + data_format_to_string(values[i]) + "\n";
-            } else if (decimal_fields.find(field_names[i]) != format_fields.end()) {
+            } else if (decimal_fields.contains(field_names[i])) {
                 golden_output += field_names[i] + ": " + std::to_string(values[i]) + "\n";
             } else {
                 golden_output += field_names[i] + ": 0x" + int_to_hex(values[i]) + "\n";
@@ -400,7 +398,7 @@ static void print_config_reg(
     fixture->RunProgram(mesh_device, workload);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 }
 
 TEST_F(DPrintMeshFixture, ConfigRegAluTestPrint) {

@@ -29,9 +29,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     TT_FATAL(config_->worker_grid.contains(config_->compute_grid), "Compute grid must be a subset of worker grid");
@@ -47,10 +45,8 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     auto logical_to_noc_coord = [this](CoreCoord logical_core) {
         TT_ASSERT(
-            config_->worker_log_to_virtual_routing_x.find(logical_core.x) !=
-                    config_->worker_log_to_virtual_routing_x.end() and
-                config_->worker_log_to_virtual_routing_y.find(logical_core.y) !=
-                    config_->worker_log_to_virtual_routing_y.end(),
+            config_->worker_log_to_virtual_routing_x.contains(logical_core.x) and
+                config_->worker_log_to_virtual_routing_y.contains(logical_core.y),
             "Cannot find log_coord=[.y={}, .x={}] in logical to routing coord lookup tables... invalid AllocatorConfig "
             "setup",
             logical_core.y,
@@ -60,7 +56,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
             static_cast<std::size_t>(config_->worker_log_to_virtual_routing_y.at(logical_core.y)),
         });
         TT_ASSERT(
-            config_->core_type_from_noc_coord_table.find(noc_core) != config_->core_type_from_noc_coord_table.end(),
+            config_->core_type_from_noc_coord_table.contains(noc_core),
             "Cannot find noc-coord=[.y={}, .x={}] in core_type_from_noc_coord_table... invalid AllocatorConfig setup",
             noc_core.y,
             noc_core.x);
@@ -194,9 +190,10 @@ AllocatorConfig L1BankingAllocator::generate_config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED),
+         .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
-         .l1_unreserved_base = align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM)),
+         .l1_unreserved_base =
+             static_cast<uint32_t>(align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM))),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
@@ -244,6 +241,4 @@ AllocatorConfig L1BankingAllocator::generate_config(
     return config;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

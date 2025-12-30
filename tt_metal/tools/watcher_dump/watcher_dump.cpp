@@ -112,8 +112,8 @@ int main(int argc, char* argv[]) {
         if (s == "-h" || s == "--help") {
             print_usage(argv[0]);
             return 0;
-        } else if ((s.rfind("-d=", 0) == 0) || (s.rfind("--devices=", 0) == 0)) {
-            string list = s.substr(s.find("=") + 1);
+        } else if ((s.starts_with("-d=")) || (s.starts_with("--devices="))) {
+            string list = s.substr(s.find('=') + 1);
             // "all" is acceptable, and the same as the default.
             if (list == "all") {
                 continue;
@@ -132,8 +132,8 @@ int main(int argc, char* argv[]) {
                 }
                 device_ids.push_back(stoi(item));
             }
-        } else if ((s.rfind("-n=", 0) == 0) || (s.rfind("--num-hw-cqs==", 0) == 0)) {
-            string value_str = s.substr(s.find("=") + 1);
+        } else if ((s.starts_with("-n=")) || (s.starts_with("--num-hw-cqs=="))) {
+            string value_str = s.substr(s.find('=') + 1);
             num_hw_cqs = std::stoi(value_str);
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;

@@ -65,17 +65,14 @@ def test_pipeline_inference(
         cfg_parallel=None,
     )
     vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
     )
     # Test parameters
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
-    negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81
     num_inference_steps = 40
-    guidance_scale = 3.0
-    guidance_scale_2 = 4.0
 
     print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
@@ -85,8 +82,6 @@ def test_pipeline_inference(
         parallel_config=parallel_config,
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,
-        use_cache=True,
-        boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
@@ -96,13 +91,10 @@ def test_pipeline_inference(
     with torch.no_grad():
         result = pipeline(
             prompt=prompt,
-            negative_prompt=negative_prompt,
             height=height,
             width=width,
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            guidance_scale_2=guidance_scale_2,
         )
 
     # Check output

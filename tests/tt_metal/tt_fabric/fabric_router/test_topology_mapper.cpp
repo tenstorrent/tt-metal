@@ -787,8 +787,7 @@ TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping)
             FabricNodeId fabric_node_id(mesh_id, chip_id);
 
             // Skip if this fabric node is not in the provided mapping (for multi-mesh cases)
-            if (logical_mesh_chip_id_to_physical_chip_id_mapping.find(fabric_node_id) ==
-                logical_mesh_chip_id_to_physical_chip_id_mapping.end()) {
+            if (!logical_mesh_chip_id_to_physical_chip_id_mapping.contains(fabric_node_id)) {
                 continue;
             }
 
@@ -857,5 +856,53 @@ INSTANTIATE_TEST_SUITE_P(
     T3kTopologyMapperCustomMapping,
     T3kTopologyMapperWithCustomMappingFixture,
     ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
+
+TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
+    // Test that TopologyMapper::generate_mesh_graph_from_physical_system_descriptor uses map_mesh_to_physical
+    // to find a valid mesh shape that can be mapped to the physical topology
+    FabricConfig fabric_config = FabricConfig::FABRIC_2D;
+
+    // Generate mesh graph from physical system descriptor
+    // This should internally use map_mesh_to_physical to find a valid mapping
+    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        *physical_system_descriptor_, fabric_config);
+
+    // Verify that the mesh graph was generated successfully
+    const MeshId mesh_id{0};
+    EXPECT_TRUE(!mesh_graph.get_mesh_ids().empty()) << "Mesh graph should have at least one mesh";
+
+    // Verify that the mesh graph has chips
+    auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
+    EXPECT_EQ(chip_ids.values().size(), physical_system_descriptor_->get_asic_descriptors().size())
+        << "Mesh graph should have same number of chips as the physical system descriptor";
+
+    // Check that the mesh shape is either 2x4 or 4x2
+    auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_TRUE(mesh_shape == MeshShape(2, 4) || mesh_shape == MeshShape(4, 2))
+        << "Mesh shape should be either 2x4 or 4x2";
+
+    // Verify that host ranks are set up correctly
+    for (const auto& chip_id : chip_ids.values()) {
+        auto host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+        EXPECT_TRUE(host_rank.has_value()) << "Host rank should be set for chip " << chip_id;
+    }
+
+    // Verify that the mesh graph can be used with TopologyMapper
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {mesh_id};
+    local_mesh_binding.host_rank = MeshHostRankId{0};
+
+    // This should work without throwing since the mesh graph was generated
+    // to match the physical topology
+    EXPECT_NO_THROW({
+        TopologyMapper topology_mapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        // Verify that mappings exist
+        for (const auto& chip_id : chip_ids.values()) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node_id);
+            EXPECT_NE(asic_id.get(), 0u) << "ASIC ID should be valid for fabric node " << fabric_node_id;
+        }
+    });
+}
 
 }  // namespace tt::tt_fabric

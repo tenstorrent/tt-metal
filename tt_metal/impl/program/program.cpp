@@ -198,15 +198,19 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
 }  // namespace detail
 
+namespace experimental {
+
+void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+
+}  // namespace experimental
+
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
-    finalized_(false),
+
     cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
-    id(program_counter++),
-    runtime_id(0),
-    local_circular_buffer_allocation_needed_(false) {
+    id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -235,10 +239,12 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
-    for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
-        const auto& semaphore_descriptor = descriptor.semaphores[i];
+    for (const auto& semaphore_descriptor : descriptor.semaphores) {
         internal_->add_semaphore(
-            semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
+            semaphore_descriptor.core_ranges,
+            semaphore_descriptor.id,
+            semaphore_descriptor.initial_value,
+            semaphore_descriptor.core_type);
     }
 
     for (const auto& kernel_descriptor : descriptor.kernels) {
@@ -246,6 +252,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
         std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
+        std::unordered_map<std::string, uint32_t> named_compile_args(
+            kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
         auto config = std::visit(
             tt::stl::overloaded{
@@ -253,14 +261,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
-                        {},
+                        std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
-                        {},
+                        std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
@@ -271,7 +279,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .noc_mode = dm_descriptor.noc_mode,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
                     };
                 },
@@ -286,7 +294,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .math_approx_mode = compute_descriptor.math_approx_mode,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                     };
                 },
@@ -298,7 +306,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .processor = ethernet_descriptor.processor,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
-                        .named_compile_args = {},
+                        .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
@@ -310,10 +318,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
 
-        for (size_t i = 0; i < kernel_descriptor.runtime_args.size(); i++) {
-            for (size_t j = 0; j < kernel_descriptor.runtime_args[i].size(); j++) {
-                SetRuntimeArgs(*this, kernel_handle, CoreCoord(i, j), kernel_descriptor.runtime_args[i][j]);
-            }
+        for (const auto& [core_coord, core_runtime_args] : kernel_descriptor.runtime_args) {
+            SetRuntimeArgs(*this, kernel_handle, core_coord, core_runtime_args);
         }
         SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
     }
@@ -358,7 +364,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
             std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
             for (CoreCoord coreCoord : kernel_logical_cores) {
                 TT_FATAL(
-                    !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end()),
+                    !check_kernel_logical_cores.contains(coreCoord),
                     "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
                     check_kernel->name(),
                     kernel->name(),
@@ -378,7 +384,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     // this->id);
     //  find coretype based on kernel_id
     for (const auto& kernels : this->kernels_) {
-        if (kernels.find(kernel_id) != kernels.end()) {
+        if (kernels.contains(kernel_id)) {
             return kernels.at(kernel_id);
         }
     }
@@ -789,7 +795,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
-    if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
+    if (!this->circular_buffer_by_id_.contains(cb_id)) {
         TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
     }
     return this->circular_buffer_by_id_.at(cb_id);
@@ -936,9 +942,31 @@ void detail::ProgramImpl::init_semaphores(
     }
 }
 
+void detail::ProgramImpl::validate_semaphore_id(
+    const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const {
+    TT_FATAL(semaphore_id < NUM_SEMAPHORES, "Semaphore id {} exceeds max value {}", semaphore_id, NUM_SEMAPHORES - 1);
+
+    for (const auto& core_range : crs.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                auto existing_semaphores = semaphores_on_core(logical_core, core_type);
+                for (const auto& semaphore : existing_semaphores) {
+                    TT_FATAL(
+                        semaphore.get().id() != semaphore_id,
+                        "Semaphore id {} already in use on core {}",
+                        semaphore_id,
+                        logical_core.str());
+                }
+            }
+        }
+    }
+}
+
 void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
+    validate_semaphore_id(crs, semaphore_id, core_type);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
@@ -952,8 +980,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
         unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
             for (auto core : kernel->logical_cores()) {
-                if (unique_cores[programmable_core_type_index].find(core) !=
-                    unique_cores[programmable_core_type_index].end()) {
+                if (unique_cores[programmable_core_type_index].contains(core)) {
                     continue;
                 }
                 unique_cores[programmable_core_type_index].insert(core);
@@ -968,8 +995,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     const auto& kernel_defines = kernel->defines();
     const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
     for (const auto& str : reserved_defines) {
-        TT_FATAL(
-            kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
+        TT_FATAL(!kernel_defines.contains(str), "{} is a reserved define and can't be manually set", str);
     }
     std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
@@ -1252,10 +1278,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                        const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
+                        const auto& sub_device_cores =
+                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
                         if (!intersection.empty()) {
-                            used_sub_device_ids.insert(SubDeviceId{i});
+                            used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
                             num_intersections += intersection.num_cores();
                         }
                     }
@@ -1282,7 +1309,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically
     // allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
-    if (this->kernels_buffer_.find(device->id()) == this->kernels_buffer_.end() and binary_data_size_bytes) {
+    if (!this->kernels_buffer_.contains(device->id()) and binary_data_size_bytes) {
         std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
             device,
             binary_data_size_bytes,

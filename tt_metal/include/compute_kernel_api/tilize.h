@@ -12,6 +12,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
+#include "llk_unpack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -36,9 +37,9 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+          true /*tilize en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, true /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
 #endif
 }
 
@@ -64,7 +65,7 @@ ALWI void tilize_init_no_pack(uint32_t icb, uint32_t block) {
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+          true /*tilize en*/>(icb)));
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
@@ -95,13 +96,13 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1_scaler)));
+    MATH((llk_math_hw_configure(icb0, icb1_scaler)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
@@ -129,7 +130,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
+          true /*tilize en*/>(new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
@@ -163,7 +164,7 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
-          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
+          true /*tilize en*/>(new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
@@ -173,7 +174,7 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
 // while the *_no_pack variants do not configure the packer, testing has shown that this call is
 // still necessary to ensure the data type is properly updated
 #ifdef ARCH_BLACKHOLE
-    PACK((_llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, true>(
+    PACK((_llk_pack_init_<false, false, true>(
         pack_dst_format[new_icb],
         get_output_face_r_dim(new_icb),
         get_output_tile_c_dim(new_icb),
@@ -300,7 +301,7 @@ ALWI void unpack_tilizeA_B_block(
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*skip_inputs*/, false /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
 #endif
 }
 
@@ -476,5 +477,31 @@ ALWI void fast_tilize_block(
     }
 #endif
 }
+
+// clang-format off
+/**
+ * Uninitializes the unpack tilizeA_B configuration and restores unpacker state
+ * modified by _llk_unpack_tilizeA_B_init_.
+ *
+ * Return value: None
+ *
+ * Parameters:
+ *
+ * | Param Type | Name | Description           | Type     | Valid Range | Required |
+ * |------------|------|-----------------------|----------|-------------|----------|
+ * | Function   | icb  | Input circular buffer | uint32_t | 0 - 31.     | True     |
+ *
+ * Restored hardware state:
+ *
+ * | Field / Setting           | Scope      | Description                                           | Restored value / behavior                                                                  |
+ * |---------------------------|------------|-------------------------------------------------------|--------------------------------------------------------------------------------------------|
+ * | X-dim & base (ADCXX)      | UNP_A/B    | Face X-extent for address counters                    | face_r_dim * FACE_C_DIM elements, start at 0                                               |
+ * | XY address counters       | UNP_A/B    | X/Y counters used by tilizeA_B y-stride pattern       | Counters reset to 0 (mask selects CH0/CH1 X/Y)                                             |
+ * | ZW address counters       | UNP_A/B    | Z/W counters used for face/row stepping               | Counters reset to 0 for both unpackers                                                     |
+ * | Out_data_format/config[0] | THCON_SEC0 | Unpack config[0]: out format, throttle, tilize, shift | out_data_format = unpack_dst_format; throttle_mode = 2; tileize_mode = 0; shift_amount = 0 |
+ * | Tile_x_dim (cntx0)        | THCON_SEC0 | Tile X dimension per context for unpacker             | Restored to FACE_DIM_16x16 (16 | (16 << 16))                                               |
+ */
+// clang-format on
+ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
 
 }  // namespace ckernel

@@ -22,11 +22,10 @@
 
 #include <vector>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+class PhysicalSystemDescriptor;
+}  // namespace tt::tt_metal
 namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;
@@ -102,7 +101,6 @@ class MeshGraph {
 public:
     explicit MeshGraph(
         const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config = std::nullopt);
-    MeshGraph() = delete;
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -122,6 +120,10 @@ public:
     // Get the coordinate range of the mesh, or the coordinate range of the submesh for a given host rank if provided
     MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
+    // Get all mesh IDs (includes switches)
+    std::vector<MeshId> get_all_mesh_ids() const;
+
+    // Get compute only mesh IDs (excludes switches)
     std::vector<MeshId> get_mesh_ids() const;
 
     // Get the chip ids for a given mesh_id
@@ -134,6 +136,8 @@ public:
     std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
+    // Check if a mesh_id corresponds to a switch mesh
+    bool is_switch_mesh(MeshId mesh_id) const;
 
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
@@ -148,11 +152,18 @@ public:
         const std::string& root_dir,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
+    // Generate a mesh graph of a specific shape (used by topology mapper)
+    static MeshGraph generate_mesh_graph_of_shape(
+        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction);
+
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
 
     // Get the number of active channels the user has requested between specific logical devices across meshes
     const RequestedIntermeshPorts& get_requested_intermesh_ports() const;
+
+    // Check if a connection between two meshes should use Z direction
+    bool should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // Query the mapping of logical ports to logical device ids per mesh
     const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& get_mesh_edge_ports_to_chip_id() const;
@@ -163,6 +174,9 @@ public:
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
 private:
+    // Private constructor for static factory functions
+    MeshGraph() = default;
+
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord,
@@ -189,6 +203,9 @@ private:
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
+
+    // Track which mesh pairs should use Z direction (dev/testing feature)
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> mesh_pairs_assign_z_direction_;
 
     // Switch tracking (switches use MeshId as their identifier)
     std::vector<MeshId> switch_ids_;

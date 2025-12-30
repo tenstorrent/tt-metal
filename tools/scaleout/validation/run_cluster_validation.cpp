@@ -18,6 +18,8 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include <yaml-cpp/yaml.h>
+#include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
@@ -48,6 +50,7 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -97,7 +100,10 @@ cxxopts::Options create_validation_options() {
         cxxopts::value<uint32_t>()->default_value("64"))(
         "sweep-traffic-configs",
         "Sweep pre-generated traffic configurations across detected links (stress testing)",
-        cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
+        cxxopts::value<bool>()->default_value("false"))(
+        "min-connections",
+        "Minimum connections per ASIC pair required for relaxed validation mode",
+        cxxopts::value<uint32_t>())("h,help", "Print usage information");
 
     return options;
 }
@@ -123,14 +129,14 @@ void parse_link_reset_args(int argc, char* argv[], InputArgs& input_args) {
         // Skip the first two args (program name and "link_reset" subcommand)
         auto result = options.parse(argc - 1, argv + 1);
 
-        if (result.count("help")) {
+        if (result.contains("help")) {
             input_args.help = true;
             return;
         }
 
         // Validate that all required parameters are provided
-        if (result.count("host") && result.count("tray-id") && result.count("asic-location") &&
-            result.count("channel")) {
+        if (result.contains("host") && result.contains("tray-id") && result.contains("asic-location") &&
+            result.contains("channel")) {
             input_args.reset_host = result["host"].as<std::string>();
             input_args.reset_tray_id = result["tray-id"].as<uint32_t>();
             input_args.reset_asic_location = result["asic-location"].as<uint32_t>();
@@ -153,18 +159,18 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
     try {
         auto result = options.parse(argc, argv);
 
-        if (result.count("help")) {
+        if (result.contains("help")) {
             input_args.help = true;
             return;
         }
 
         // Parse cabling descriptor path
-        if (result.count("cabling-descriptor-path")) {
+        if (result.contains("cabling-descriptor-path")) {
             input_args.cabling_descriptor_path = result["cabling-descriptor-path"].as<std::string>();
         }
 
         // Parse deployment descriptor path
-        if (result.count("deployment-descriptor-path")) {
+        if (result.contains("deployment-descriptor-path")) {
             TT_FATAL(
                 input_args.cabling_descriptor_path.has_value(),
                 "Cabling Descriptor Path is required when Deployment Descriptor Path is provided.");
@@ -172,7 +178,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         }
 
         // Parse factory descriptor path
-        if (result.count("factory-descriptor-path")) {
+        if (result.contains("factory-descriptor-path")) {
             TT_FATAL(
                 !(input_args.cabling_descriptor_path.has_value() || input_args.deployment_descriptor_path.has_value()),
                 "Pass in either Cabling Spec + Deployment Spec or just Factory System Descriptor.");
@@ -180,12 +186,12 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         }
 
         // Parse global descriptor path
-        if (result.count("global-descriptor-path")) {
+        if (result.contains("global-descriptor-path")) {
             input_args.gsd_path = result["global-descriptor-path"].as<std::string>();
         }
 
         // Parse output path
-        if (result.count("output-path")) {
+        if (result.contains("output-path")) {
             input_args.output_path = std::filesystem::path(result["output-path"].as<std::string>());
         } else {
             input_args.output_path = generate_output_dir();
@@ -195,7 +201,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.num_iterations = result["num-iterations"].as<uint32_t>();
 
         // Parse data size
-        if (result.count("data-size")) {
+        if (result.contains("data-size")) {
             input_args.data_size = result["data-size"].as<uint32_t>();
             TT_FATAL(
                 input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
@@ -221,6 +227,16 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.sweep_traffic_configs = result["sweep-traffic-configs"].as<bool>();
         input_args.validate_connectivity =
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+
+        // Parse min-connections
+        if (result.contains("min-connections")) {
+            uint32_t min_conn_value = result["min-connections"].as<uint32_t>();
+            TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
+            input_args.min_connections = min_conn_value;
+            log_output_rank0(
+                "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
+                std::to_string(input_args.min_connections.value()));
+        }
 
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Error parsing arguments: " << e.what() << std::endl;
@@ -279,42 +295,20 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     }
 }
 
-void cleanup_metadata(const InputArgs& input_args, const std::string& gsd_file, const std::string& fsd_file) {
-    // Remove GSD file
-    std::filesystem::remove(gsd_file);
-    if (!input_args.fsd_path.has_value()) {
-        // Remove FSD file
-        std::filesystem::remove(fsd_file);
-    } else {
-        TT_FATAL(fsd_file == input_args.fsd_path.value(), "Internal error: Expected FSD File Paths to match");
-    }
-}
-
 AsicTopology run_connectivity_validation(
     const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     if (!input_args.validate_connectivity) {
         return {};
     }
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    std::string gsd_yaml_filename = "global_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".yaml";
-    std::string gsd_yaml_path = input_args.output_path / gsd_yaml_filename;
-    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
-
-    const auto fsd_path = get_factory_system_descriptor_path(
+    YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
+    auto fsd_proto = get_factory_system_descriptor(
         input_args.cabling_descriptor_path,
         input_args.deployment_descriptor_path,
         input_args.fsd_path,
-        input_args.output_path.string(),
         physical_system_descriptor.get_all_hostnames());
-    auto missing_topology =
-        validate_connectivity(fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor);
+    auto missing_topology = validate_connectivity(
+        fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
 
-    // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
-    // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
-    // post validation (for all ranks except rank 0).
-    if (*distributed_context.rank() != 0) {
-        cleanup_metadata(input_args, gsd_yaml_path, fsd_path);
-    }
     return missing_topology;
 }
 

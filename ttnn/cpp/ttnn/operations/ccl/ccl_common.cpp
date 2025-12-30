@@ -16,8 +16,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 bool is_fabric_2d() {
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
@@ -1620,10 +1619,7 @@ Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_shape(
 }
 
 Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_offset(
-    Shape4D<uint32_t> const& input_shape,
-    int slice_dim,
-    uint32_t partition_index) {
-
+    const Shape4D<uint32_t>& input_shape, int slice_dim, uint32_t partition_index) const {
     Shape4D<uint32_t> offset(0, 0, 0, 0);
 
     // Calculate the size of the slice along the given dimension
@@ -1886,5 +1882,4 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

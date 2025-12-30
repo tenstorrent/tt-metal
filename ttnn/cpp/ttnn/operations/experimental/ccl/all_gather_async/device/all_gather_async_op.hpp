@@ -219,7 +219,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     bool reverse_order = false,
@@ -241,9 +241,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_optimal_ccl_for_llama);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -289,8 +287,8 @@ std::vector<Tensor> all_gather_async(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
+    bool use_all_gather_async_llama_sharded = false,
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
@@ -315,8 +313,6 @@ Tensor all_gather_async(
     bool reverse_order = false,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

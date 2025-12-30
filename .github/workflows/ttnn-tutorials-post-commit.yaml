@@ -28,6 +28,16 @@ on:
         required: false
         type: boolean
         default: false
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -93,6 +103,9 @@ jobs:
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: 🐍 Install minimum set of packages
         timeout-minutes: 10
@@ -105,6 +118,15 @@ jobs:
         run: |
           cd scripts/basic_dev_image
           python3 -m pip install -r minimum-testing-kit.txt
+
+      - name: 🛠️ Install tt-triage dependencies
+        timeout-minutes: 10
+        run: |
+          apt-get update
+          apt-get install -y curl
+          source /opt/venv/bin/activate
+          ./scripts/install_debugger.sh
+          pip install -r ./tools/triage/requirements.txt
 
       - name: 🧪 Run tests
         timeout-minutes: ${{ inputs.timeout }}

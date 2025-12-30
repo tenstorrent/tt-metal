@@ -17,6 +17,9 @@ Description:
     This script will try to connect to Inspector RPC.
     If RPC is not available, it will try to load serialized RPC data from the log directory.
     If RPC data is not available, it will try to parse inspector logs.
+
+Owner:
+    tt-vjovanovic
 """
 
 from triage import triage_singleton, ScriptConfig, run_script
@@ -178,8 +181,12 @@ def run(args, context) -> InspectorData:
     try:
         return InspectorRpcSerialized(log_directory)
     except:
-        # Fall back to reading Inspector logs
-        return get_logs_data(log_directory)
+        raise InspectorException(
+            "There is no Inspector RPC data, cannot continue. "
+            "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
+            "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
+            "TT_METAL_INSPECTOR_RPC=1."
+        )
 
 
 if __name__ == "__main__":

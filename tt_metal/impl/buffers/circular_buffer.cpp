@@ -12,9 +12,7 @@
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 // We use 16 bits to store tiles_received and tiles_acked.
 static constexpr uint32_t cb_page_count_bits = 16;
 static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
@@ -106,7 +104,7 @@ bool CircularBuffer::is_on_logical_core(const CoreCoord& logical_core) const {
 }
 
 bool CircularBuffer::uses_buffer_index(uint32_t buffer_index) const {
-    return this->buffer_indices().find(buffer_index) != this->buffer_indices().end();
+    return this->buffer_indices().contains(buffer_index);
 }
 
 uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
@@ -176,6 +174,4 @@ void CircularBuffer::set_global_circular_buffer(const experimental::GlobalCircul
 
 DeviceAddr CircularBuffer::config_address() const { return this->global_circular_buffer_config_address_; }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -38,23 +38,19 @@ struct ReshardDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor) const;
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const tt::tt_metal::MemoryConfig& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
 };
 
 }  // namespace ttnn::operations::data_movement::reshard
 
 namespace ttnn::prim {
-constexpr auto reshard =
-    ttnn::register_operation<"ttnn::prim::reshard", ttnn::operations::data_movement::reshard::ReshardDeviceOperation>();
+ttnn::operations::data_movement::reshard::ReshardDeviceOperation::tensor_return_value_t reshard(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<Tensor>& optional_output_tensor);
 }  // namespace ttnn::prim

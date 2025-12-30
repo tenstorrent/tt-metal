@@ -5,8 +5,8 @@
 #include "rtoptions.hpp"
 
 #include <algorithm>
-#include <ctype.h>
-#include <stdio.h>
+#include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -21,9 +21,7 @@
 
 using std::vector;
 
-namespace tt {
-
-namespace llrt {
+namespace tt::llrt {
 
 const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DPRINT",
@@ -172,6 +170,11 @@ enum class EnvVarID {
     TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,  // Enable lightweight kernel asserts
 
     // ========================================
+    // LLK ASSERTIONS
+    // ========================================
+    TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
+
+    // ========================================
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
@@ -234,14 +237,7 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 
 }  // namespace
 
-RunTimeOptions::RunTimeOptions() :
-    system_kernel_dir("/usr/share/tenstorrent/kernels/"),
-    profiler_enabled(false),
-    profile_dispatch_cores(false),
-    profiler_sync_enabled(false),
-    profiler_mid_run_dump(false),
-    profiler_trace_profiler(false),
-    profiler_buffer_usage_enabled(false) {
+RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -1182,6 +1178,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
         case EnvVarID::TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: this->lightweight_kernel_asserts = true; break;
 
+        // TT_METAL_LLK_ASSERTS
+        // Enables LLK assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_ASSERTS=1
+        case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
+
         // ========================================
         // DEVICE MANAGER
         // ========================================
@@ -1277,12 +1279,12 @@ void RunTimeOptions::ParseWatcherEnv() {
         TT_ASSERT(watcher_settings.enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
         // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
         TT_ASSERT(
-            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            !watcher_disabled_features.contains(watcher_noc_sanitize_str),
             "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
     if (watcher_settings.noc_sanitize_linked_transaction) {
         TT_ASSERT(
-            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            !watcher_disabled_features.contains(watcher_noc_sanitize_str),
             "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
 }
@@ -1587,6 +1589,4 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     return dispatch_core_config;
 }
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

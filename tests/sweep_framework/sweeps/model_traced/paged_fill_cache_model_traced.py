@@ -25,6 +25,12 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_c_dtype": [ttnn.bfloat16],
+        "input_c_layout": [ttnn.TILE_LAYOUT],
+        "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
@@ -93,8 +99,9 @@ def run(
         raise ValueError("input_b_memory_config is None - required parameter missing")
     if input_c_memory_config is None:
         raise ValueError("input_c_memory_config is None - required parameter missing")
+    # Fall back to input_a_memory_config if output_memory_config is not provided
     if output_memory_config is None:
-        raise ValueError("output_memory_config is None - required parameter missing")
+        output_memory_config = input_a_memory_config
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
     output_mem_config = output_memory_config

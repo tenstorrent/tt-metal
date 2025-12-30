@@ -10,12 +10,12 @@
 #include <tuple>
 #include <utility>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "internal/ethernet/tunneling.h"
 #endif
-#include "tt_metal/hw/inc/utils/utils.h"
-#include "risc_attribs.h"
+#include "api/alignment.h"
+#include "internal/risc_attribs.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"
@@ -25,6 +25,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/datastructures/outbound_channel.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 namespace tt::tt_fabric {
 /* Ethernet channel structure is as follows (for both sender and receiver):
@@ -640,9 +641,9 @@ struct EdmChannelWorkerInterface {
 
     // Connection management methods
     //
-    template <bool posted = false>
+    template <bool posted = false, bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE void teardown_worker_connection() const {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x,
@@ -657,9 +658,9 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
     }
 
-    template <uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
     FORCE_INLINE void cache_producer_noc_addr() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address;
         worker_semaphore_address = get_noc_addr(
@@ -668,13 +669,9 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        invalidate_l1_cache();
         return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
     }
-    [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
-        invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::open_connection_value;
-    }
+
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;

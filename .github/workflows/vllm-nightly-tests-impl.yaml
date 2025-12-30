@@ -45,7 +45,7 @@ jobs:
             {
               "name": "[WH-GLX][v1] Gemma3-27B DP=4",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 10,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -121,6 +121,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          slow-dispatch-timeout: 40 # Increased above default to account for vLLM's longer-running dispatch operations and avoid false-positive hang detection when auto-triage is enabled.
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
@@ -280,45 +281,62 @@ jobs:
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          curl http://localhost:8000/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "X-User-ID: vllm_test" \
-            -d '{
-              "model": "${{ matrix.test-group.model }}",
-              "messages": [
-                {
-                  "role": "user",
-                  "content": [
-                    {
-                      "type": "text",
-                      "text": "Describe this image in 50 words."
-                    },
-                    {
-                      "type": "image_url",
-                      "image_url": {
-                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
-                      }
-                    }
-                  ]
-                }
-              ],
-              "max_tokens": 512,
-              "temperature": 0.0,
-              "top_p": 0.9,
-              "top_k": 10,
-              "repetition_penalty": 1.0,
-              "stream": false,
-              "ignore_eos": false
-          }' \
-          2>&1 | tee ${FILE_MULTIMODAL_TEST_LOG}
+          # Test multiple images with separate prompts
+          images=(
+            "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+            "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/dogs.jpeg"
+            "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers_logo.png"
+          )
 
-          # If the test fails, the response will not contain the expected word
-          keyword="cat"
-          if ! grep -q -i "$keyword" "${FILE_MULTIMODAL_TEST_LOG}"; then
-            echo "❌ The keyword \"$keyword\" not found in the response"
-            echo "Check out the server log in a step below."
-            exit 1
-          fi
+          keywords=("cat" "dog" "transformers")
+
+          for i in "${!images[@]}"; do
+            image_url="${images[$i]}"
+            keyword="${keywords[$i]}"
+
+            echo "Testing image $((i+1)): $image_url"
+
+            curl http://localhost:8000/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "X-User-ID: vllm_test" \
+              -d "{
+                \"model\": \"${{ matrix.test-group.model }}\",
+                \"messages\": [
+                  {
+                    \"role\": \"user\",
+                    \"content\": [
+                      {
+                        \"type\": \"text\",
+                        \"text\": \"Describe this image in 50 words.\"
+                      },
+                      {
+                        \"type\": \"image_url\",
+                        \"image_url\": {
+                          \"url\": \"$image_url\"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                \"max_tokens\": 512,
+                \"temperature\": 0.0,
+                \"top_p\": 0.9,
+                \"top_k\": 10,
+                \"repetition_penalty\": 1.0,
+                \"stream\": false,
+                \"ignore_eos\": false
+            }" \
+            2>&1 | tee -a ${FILE_MULTIMODAL_TEST_LOG}
+
+            # Check if the response contains the expected keyword
+            if ! tail -50 "${FILE_MULTIMODAL_TEST_LOG}" | grep -q -i "$keyword"; then
+              echo "❌ The keyword \"$keyword\" not found in the response for image $((i+1))"
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            echo "✅ Image $((i+1)) test passed with keyword: $keyword"
+          done
       - name: 🧹 Cleanup server process
         if: always()
         run: |
@@ -351,7 +369,7 @@ jobs:
           cat output/vllm_result.json
 
       - name: Show structured output report
-        if: ${{ matrix.test-group.structured-output }}
+        if: ${{ always() && matrix.test-group.structured-output }}
         continue-on-error: true
         run: |
           cat output/vllm_result_structured.json

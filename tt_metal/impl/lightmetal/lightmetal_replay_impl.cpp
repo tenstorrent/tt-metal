@@ -7,6 +7,7 @@
 #include <iostream>
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
+#include <optional>
 #include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
@@ -20,7 +21,7 @@
 
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 //////////////////////////////////////
 // Helper Functions                 //
@@ -73,7 +74,7 @@ namespace detail {
 //////////////////////////////////////
 
 LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* device) :
-    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
+    binary_(std::move(binary)), device_(device) {
     if (binary_.is_empty()) {
         log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }
@@ -84,6 +85,7 @@ LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* d
 }
 
 // Needs access to BufferMap, so part of LightMetalReplay class
+// NOLINTNEXTLINE(readability-make-member-function-const)
 std::shared_ptr<RuntimeArgs> LightMetalReplayImpl::rt_args_from_flatbuffer(
     const FlatbufferRuntimeArgVector flatbuffer_args) {
     auto runtime_args = std::make_shared<RuntimeArgs>();
@@ -145,7 +147,7 @@ std::optional<TraceDescriptor> LightMetalReplayImpl::get_trace_by_id(uint32_t ta
     if (const auto* trace_descriptors = fb_binary_ ? fb_binary_->trace_descriptors() : nullptr) {
         if (const auto* fb_trace_desc_by_id = trace_descriptors->LookupByKey(target_trace_id)) {
             if (const auto* fb_desc = fb_trace_desc_by_id->desc()) {
-                return from_flatbuffer(fb_desc);
+                return std::make_optional(from_flatbuffer(fb_desc));
             }
         }
     }
@@ -160,7 +162,7 @@ std::optional<TraceDescriptor> LightMetalReplayImpl::get_trace_by_id(uint32_t ta
 
 void LightMetalReplayImpl::add_buffer_to_map(
     uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer) {
-    if (buffer_map_.find(global_id) != buffer_map_.end()) {
+    if (buffer_map_.contains(global_id)) {
         log_warning(tt::LogMetalTrace, "Buffer with global_id: {} already exists in map.", global_id);
     }
     buffer_map_[global_id] = buffer;  // Shared ownership
@@ -175,7 +177,7 @@ void LightMetalReplayImpl::remove_bufer_from_map(uint32_t global_id) { buffer_ma
 
 void LightMetalReplayImpl::add_program_to_map(
     uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Program>& program) {
-    if (program_map_.find(global_id) != program_map_.end()) {
+    if (program_map_.contains(global_id)) {
         log_warning(tt::LogMetalTrace, "Program with global_id: {} already exists in map.", global_id);
     }
     program_map_[global_id] = program;  // Shared ownership
@@ -189,7 +191,7 @@ std::shared_ptr<::tt::tt_metal::Program> LightMetalReplayImpl::get_program_from_
 void LightMetalReplayImpl::remove_program_from_map(uint32_t global_id) { program_map_.erase(global_id); }
 
 void LightMetalReplayImpl::add_kernel_handle_to_map(uint32_t global_id, ::tt::tt_metal::KernelHandle kernel_id) {
-    if (kernel_handle_map_.find(global_id) != kernel_handle_map_.end()) {
+    if (kernel_handle_map_.contains(global_id)) {
         log_warning(tt::LogMetalTrace, "KernelHandle with global_id: {} already exists in map.", global_id);
     }
     kernel_handle_map_[global_id] = kernel_id;  // Shared ownership
@@ -204,7 +206,7 @@ void LightMetalReplayImpl::remove_kernel_handle_from_map(uint32_t global_id) { k
 
 void LightMetalReplayImpl::add_kernel_to_map(
     uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Kernel>& kernel) {
-    if (kernel_map_.find(global_id) != kernel_map_.end()) {
+    if (kernel_map_.contains(global_id)) {
         log_warning(tt::LogMetalTrace, "Kernel with global_id: {} already exists in map.", global_id);
     }
     kernel_map_[global_id] = kernel;  // Shared ownership
@@ -218,7 +220,7 @@ std::shared_ptr<::tt::tt_metal::Kernel> LightMetalReplayImpl::get_kernel_from_ma
 void LightMetalReplayImpl::remove_kernel_from_map(uint32_t global_id) { kernel_map_.erase(global_id); }
 
 void LightMetalReplayImpl::add_cb_handle_to_map(uint32_t global_id, ::tt::tt_metal::CBHandle cb_handle) {
-    if (cb_handle_map_.find(global_id) != cb_handle_map_.end()) {
+    if (cb_handle_map_.contains(global_id)) {
         log_warning(tt::LogMetalTrace, "CBHandle with global_id: {} already exists in map.", global_id);
     }
     cb_handle_map_[global_id] = cb_handle;  // Shared ownership
@@ -411,8 +413,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
         EnumNameBufferType(cmd->buffer_type()));
 
     // Handle optionals
-    const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
-    const auto dist_spec = from_flatbuffer(cmd->buffer_distribution_spec());
+    const auto shard_parameters = tt_metal::from_flatbuffer(cmd->shard_parameters());
+    const auto dist_spec = tt_metal::from_flatbuffer(cmd->buffer_distribution_spec());
     auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
@@ -425,7 +427,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->address()->value(),
             cmd->size(),
             cmd->page_size(),
-            from_flatbuffer(cmd->buffer_type()),
+            tt_metal::from_flatbuffer(cmd->buffer_type()),
             BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
@@ -436,7 +438,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             this->device_,
             cmd->size(),
             cmd->page_size(),
-            from_flatbuffer(cmd->buffer_type()),
+            tt_metal::from_flatbuffer(cmd->buffer_type()),
             BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
@@ -444,6 +446,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeallocateCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->global_id());
     TT_FATAL(
@@ -462,6 +465,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteC
     remove_bufer_from_map(cmd->global_id());
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteBufferCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
@@ -482,6 +486,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteB
     // EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) {
     auto buffer = get_buffer_from_map(cmd->buffer_global_id());
     TT_FATAL(
@@ -515,7 +520,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(Finish) cq_global_id: {}", cmd->cq_global_id());
     // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    auto sub_device_ids = from_flatbuffer(cmd->sub_device_ids());
+    auto sub_device_ids = tt_metal::from_flatbuffer(cmd->sub_device_ids());
     // Issue #24955: Enable after Light-Metal rearchitecture
     // Finish(cq, sub_device_ids);
 }
@@ -546,6 +551,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -569,6 +575,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -586,8 +593,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
         "Attempted to SetRuntimeArgs() using a kernel w/ global_id: {} that was not previously created.",
         cmd->kernel_global_id());
 
-    auto core_spec = from_flatbuffer(cmd->core_spec());
-    auto runtime_args = from_flatbuffer(cmd->args());
+    auto core_spec = tt_metal::from_flatbuffer(cmd->core_spec());
+    auto runtime_args = tt_metal::from_flatbuffer(cmd->args());
     SetRuntimeArgs(*program, kernel_id, core_spec, runtime_args);
 }
 
@@ -625,6 +632,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 }
 
 // Verification command to compare readback of a buffer with golden from either capture or user expected values.
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -731,4 +739,4 @@ bool LightMetalReplayImpl::run() {
 }
 
 }  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal

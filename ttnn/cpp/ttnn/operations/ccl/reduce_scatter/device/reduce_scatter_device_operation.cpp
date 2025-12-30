@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "reduce_scatter_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::ccl {
@@ -22,7 +23,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto input_tensor = tensor_args.input_tensor;
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
-    ttnn::reduce_scatter_common_validates(
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::reduce_scatter_common_validates(
         input_tensor,
         operation_attributes.topology,
         operation_attributes.dim,
@@ -99,8 +100,10 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         input_tensor);
 }
 
-std::tuple<ReduceScatterDeviceOperation::operation_attributes_t, ReduceScatterDeviceOperation::tensor_args_t>
-ReduceScatterDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduce_scatter(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     std::optional<uint32_t> cluster_axis,
@@ -109,15 +112,15 @@ ReduceScatterDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
     tt::tt_fabric::Topology topology) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::ccl::ReduceScatterDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .memory_config = memory_config,
             .dim = dim,
             .cluster_axis = cluster_axis,
             .subdevice_id = subdevice_id,
             .topology = topology,
             .num_links = num_links},
-        tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
-
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::prim

@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 
+#include <fstream>
 #include <string_view>
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
@@ -230,7 +231,7 @@ inline bool DeleteLinesStartingWith(const std::string& file_name, const std::str
     std::string content;
     std::string line;
     while (getline(log_file, line)) {
-        if (line.rfind(prefix, 0) == 0) {
+        if (line.starts_with(prefix)) {
             // Skip lines that begin with prefix
             continue;
         }

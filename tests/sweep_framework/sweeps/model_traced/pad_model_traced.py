@@ -35,13 +35,27 @@ parameters = {
             ((0, 1), (0, 1), (0, 2), (0, 2))
         ],  # padding as tuple of tuples: ((dim0_left, dim0_right), (dim1_left, dim1_right), ...)
         "value": [0.0],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": [
+            "StorageType::DEVICE"
+        ],  # NOTE: HOST storage does not work properly for pad - always use DEVICE
     },
 }
 
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def mesh_device_fixture():
+    """
+    Override default device fixture for pad operation.
+    Using explicit DispatchCoreConfig to handle sharded memory configs.
+    """
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
 
 
 def run(
@@ -70,64 +84,47 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Determine which pad format is being used
-    if output_padded_shape is not None and input_tensor_start is not None:
-        # Using output_padded_shape format from traced JSON
-        # Calculate padding for PyTorch reference from logical shapes
+    # Calculate padding tuples and PyTorch reference
+    # Handle both parameter formats from loader:
+    # 1. padding + value (direct format)
+    # 2. output_padded_shape + input_tensor_start + value (alternative format)
+    # PREFER padding if provided directly, as it's more reliable
+    if padding is not None:
+        # Use provided padding directly (preferred format)
+        pass
+    elif output_padded_shape is not None and input_tensor_start is not None:
+        # Calculate padding from output_padded_shape (alternative format)
         calculated_padding = []
         for i in range(len(shape)):
             start = input_tensor_start[i] if i < len(input_tensor_start) else 0
             end = output_padded_shape[i] - shape[i] - start
-            # Ensure padding is non-negative (if output < input, this is invalid for padding)
-            if end < 0:
-                # This means output is smaller than input - invalid for padding, use 0
-                calculated_padding.append([0, 0])
-            else:
-                calculated_padding.append([start, end])
-
-        # Convert to torch padding format (reverse order and flatten) for reference output
-        torch_padding = []
-        for i in range(len(calculated_padding) - 1, -1, -1):
-            for p in calculated_padding[i]:
-                torch_padding.append(p)
-        torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=value)
-
-        # Convert to padding format for ttnn.pad
-        padding = tuple(tuple(p) for p in calculated_padding)
+            calculated_padding.append([start, max(0, end)])
+        padding = calculated_padding
     else:
-        # Using padding format (default)
-        if padding is None:
-            # Fallback: no padding
-            padding = [[0, 0]] * len(shape)
+        # No padding parameters provided - use default no padding
+        padding = [[0, 0]] * len(shape)
 
-        # Convert padding format for PyTorch (reverse order and flatten)
-        torch_padding = []
-        for i in range(len(padding) - 1, -1, -1):  # go through each dim of padding
-            for p in padding[i]:
-                torch_padding.append(p)  # each dim has 2 padding values
-        torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=value)
+    # Calculate PyTorch reference
+    torch_padding = []
+    for i in range(len(padding) - 1, -1, -1):
+        for p in padding[i]:
+            torch_padding.append(p)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=value)
 
-        if isinstance(padding, list):
-            padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
+    # Convert padding to tuple format for ttnn.pad
+    if isinstance(padding, list):
+        padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+    # NOTE: HOST storage does not work properly for pad operation - always use DEVICE
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
 
     start_time = start_measuring_time()
-    # Call ttnn.pad directly - this will fail for HOST tensors (padding will be ignored)
     output_tensor = ttnn.pad(input_tensor_a, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)

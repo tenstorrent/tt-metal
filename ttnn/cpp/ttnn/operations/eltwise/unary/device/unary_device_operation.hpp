@@ -35,26 +35,24 @@ struct UnaryDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::vector<EltwiseUnaryWithParam>& op_chain,
-        DataType output_dtype,
-        const MemoryConfig& output_memory_config,
-        bool fp32_dest_acc_en,
-        bool preserve_fp32_precision,
-        bool bfp8_pack_precise,
-        const std::optional<Tensor>& preallocated_output,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::unary
 
 namespace ttnn::prim {
-constexpr auto unary = ttnn::register_operation<"ttnn::prim::unary", ttnn::operations::unary::UnaryDeviceOperation>();
+ttnn::operations::unary::UnaryDeviceOperation::tensor_return_value_t unary(
+    const Tensor& input,
+    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
+    DataType output_dtype,
+    const MemoryConfig& output_memory_config,
+    bool fp32_dest_acc_en,
+    bool preserve_fp32_precision,
+    bool bfp8_pack_precise,
+    const std::optional<Tensor>& preallocated_output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 } // namespace ttnn::prim

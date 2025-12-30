@@ -44,8 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-17-dev \
+    libclang-20-dev \
+    libclang-rt-20-dev \
     clang-tidy-17 \
     clang-tidy-20 \
+    clang-20 \
     curl \
     dialog \
     file \
@@ -201,7 +204,8 @@ ARG GIT_REF=main
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
     https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
     && cd ${TT_METAL_HOME} \
-    && git checkout ${GIT_REF}"
+    && git checkout ${GIT_REF} \
+    && git submodule update --init --recursive"
 
 WORKDIR /tt-metal
 
@@ -209,7 +213,6 @@ WORKDIR /tt-metal
 RUN /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh \
     && source $PYTHON_ENV_DIR/bin/activate \
-    && pip install -r models/tt_transformers/requirements.txt \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands

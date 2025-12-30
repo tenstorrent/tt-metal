@@ -53,11 +53,9 @@
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 struct ProgramCommandSequence;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 
@@ -934,7 +932,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     for (auto& device : mesh_device_->get_devices()) {
-        if (chip_ids_in_workload.find(device->id()) == chip_ids_in_workload.end()) {
+        if (!chip_ids_in_workload.contains(device->id())) {
             write_go_signal(
                 id_,
                 mesh_device_,

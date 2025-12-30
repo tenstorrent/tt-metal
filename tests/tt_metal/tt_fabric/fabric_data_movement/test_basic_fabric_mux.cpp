@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
@@ -24,9 +24,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-namespace fabric_mux_tests {
+namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests {
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string sender_kernel_src =
@@ -970,6 +968,4 @@ TEST_F(Fabric2DMuxFixture, TestFabricMux2DFourChipVariant) {
     run_mux_test_variant(this, test_config);
 }
 
-}  // namespace fabric_mux_tests
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests

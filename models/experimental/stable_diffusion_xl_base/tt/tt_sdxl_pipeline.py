@@ -18,6 +18,7 @@ from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs impor
     ModelOptimisations,
     RefinerModelOptimisations,
 )
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_tt_clip_text_encoders,
@@ -25,6 +26,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     batch_encode_prompt_on_device,
     retrieve_timesteps,
     run_tt_image_gen,
+    determinate_min_batch_size,
 )
 from models.common.utility_functions import profiler
 
@@ -74,9 +76,7 @@ class TtSDXLPipeline(LightweightModule):
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"
-        self.batch_size = (
-            list(self.ttnn_device.shape)[1] if pipeline_config.use_cfg_parallel else ttnn_device.get_num_devices()
-        )
+        self.batch_size = determinate_min_batch_size(ttnn_device, pipeline_config.use_cfg_parallel)
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
         self._reset_num_inference_steps()
@@ -630,7 +630,7 @@ class TtSDXLPipeline(LightweightModule):
                 if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
                 else RefinerModelOptimisations()
             )
-            self.tt_vae_model_config = ModelOptimisations()
+            self.tt_vae_model_config = VAEModelOptimisations()
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),

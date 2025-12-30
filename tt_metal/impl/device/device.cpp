@@ -60,9 +60,7 @@
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
@@ -101,7 +99,7 @@ std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserv
 
 bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores) const {
     auto active_ethernet_cores = this->get_active_ethernet_cores(skip_reserved_tunnel_cores);
-    return active_ethernet_cores.find(logical_core) != active_ethernet_cores.end();
+    return active_ethernet_cores.contains(logical_core);
 }
 
 std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
@@ -111,7 +109,7 @@ std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
-    return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
+    return inactive_ethernet_cores.contains(logical_core);
 }
 
 uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
@@ -311,9 +309,15 @@ void Device::init_command_queue_device() {
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (watcher_lock) {
@@ -669,8 +673,10 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
@@ -837,6 +843,4 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

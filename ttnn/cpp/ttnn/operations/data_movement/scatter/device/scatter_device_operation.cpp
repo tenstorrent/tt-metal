@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "scatter_device_operation.hpp"
-#include "scatter_program_factory.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <enchantum/enchantum.hpp>
@@ -12,8 +12,13 @@
 namespace ttnn::operations::data_movement::scatter {
 
 ScatterDeviceOperation::program_factory_t ScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ScatterProgramFactory{};
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if ((args.opt_reduction != ScatterReductionType::INVALID) &&
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16) {
+        return ScatterReduceBfloat16ProgramFactory{};
+    } else {
+        return ScatterProgramFactory{};
+    }
 }
 
 void ScatterDeviceOperation::validate_on_program_cache_hit(
@@ -78,17 +83,20 @@ ScatterDeviceOperation::create_op_performance_model(
     return result;
 }
 
-ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::scatter
+
+namespace ttnn::prim {
+ttnn::Tensor scatter(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
-    const ScatterReductionType& reduction,
+    const operations::data_movement::scatter::ScatterReductionType& reduction,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return {
-        operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
-        tensor_args_t{input_tensor, index_tensor, source_tensor}};
+    using OperationType = ttnn::operations::data_movement::scatter::ScatterDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
+        OperationType::tensor_args_t{input_tensor, index_tensor, source_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement::scatter
+}  // namespace ttnn::prim

@@ -25,6 +25,15 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_c_dtype": [ttnn.bfloat16],
+        "input_c_layout": [ttnn.TILE_LAYOUT],
+        "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_d_dtype": [ttnn.bfloat16],
+        "input_d_layout": [ttnn.TILE_LAYOUT],
+        "input_d_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
@@ -52,6 +61,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept extra parameters like scalar, traced_source, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -74,43 +84,40 @@ def run(
             shape = input_shape
         shape_a = shape_b = shape_c = shape_d = shape
 
-    # Use provided dtypes - fail if not provided (no fallbacks)
+    # Check if we have 3 or 4 tensors (4th tensor is optional)
+    has_input_d = input_d_dtype is not None and input_d_layout is not None and input_d_memory_config is not None
+
+    # Use provided dtypes - fail if not provided (no fallbacks for required tensors)
     dtype_a = input_a_dtype
     if input_b_dtype is None:
         raise ValueError("input_b_dtype is None - required parameter missing")
     if input_c_dtype is None:
         raise ValueError("input_c_dtype is None - required parameter missing")
-    if input_d_dtype is None:
-        raise ValueError("input_d_dtype is None - required parameter missing")
     dtype_b = input_b_dtype
     dtype_c = input_c_dtype
-    dtype_d = input_d_dtype
+    dtype_d = input_d_dtype if has_input_d else None
 
-    # Use provided layouts - fail if not provided (no fallbacks)
+    # Use provided layouts - fail if not provided (no fallbacks for required tensors)
     layout_a = input_a_layout
     if input_b_layout is None:
         raise ValueError("input_b_layout is None - required parameter missing")
     if input_c_layout is None:
         raise ValueError("input_c_layout is None - required parameter missing")
-    if input_d_layout is None:
-        raise ValueError("input_d_layout is None - required parameter missing")
     layout_b = input_b_layout
     layout_c = input_c_layout
-    layout_d = input_d_layout
 
-    # Use provided memory configs - fail if not provided (no fallbacks)
+    # Use provided memory configs - fail if not provided (no fallbacks for required tensors)
     mem_config_a = input_a_memory_config
     if input_b_memory_config is None:
         raise ValueError("input_b_memory_config is None - required parameter missing")
     if input_c_memory_config is None:
         raise ValueError("input_c_memory_config is None - required parameter missing")
-    if input_d_memory_config is None:
-        raise ValueError("input_d_memory_config is None - required parameter missing")
+    # Fall back to input_a_memory_config if output_memory_config is not provided
     if output_memory_config is None:
-        raise ValueError("output_memory_config is None - required parameter missing")
+        output_memory_config = input_a_memory_config
     mem_config_b = input_b_memory_config
     mem_config_c = input_c_memory_config
-    mem_config_d = input_d_memory_config
+    mem_config_d = input_d_memory_config if has_input_d else None
     output_mem_config = output_memory_config
 
     # Create input tensors
@@ -123,9 +130,12 @@ def run(
     torch_input_tensor_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(
         shape_c
     )
-    torch_input_tensor_d = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d)(
-        shape_d
-    )
+    # Only create 4th tensor if it's provided
+    torch_input_tensor_d = None
+    if has_input_d:
+        torch_input_tensor_d = gen_func_with_cast_tt(
+            partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d
+        )(shape_d)
 
     # For reference output, just use input_a (paged_update_cache is a caching operation)
     torch_output_tensor = torch_input_tensor_a.clone()
@@ -168,13 +178,16 @@ def run(
         device=device,
         memory_config=mem_config_c,
     )
-    input_tensor_d = ttnn.from_torch(
-        torch_input_tensor_d,
-        dtype=dtype_d,
-        layout=ttnn.ROW_MAJOR_LAYOUT,  # page_table must be ROW_MAJOR
-        device=device,
-        memory_config=mem_config_d,
-    )
+    # Only create 4th TTNN tensor if provided
+    input_tensor_d = None
+    if has_input_d:
+        input_tensor_d = ttnn.from_torch(
+            torch_input_tensor_d,
+            dtype=dtype_d,
+            layout=ttnn.ROW_MAJOR_LAYOUT,  # page_table must be ROW_MAJOR
+            device=device,
+            memory_config=mem_config_d,
+        )
 
     start_time = start_measuring_time()
     # paged_update_cache signature: (cache_tensor, input_tensor, *, update_idxs=[], update_idxs_tensor=None, share_cache=None, page_table=None, ...)

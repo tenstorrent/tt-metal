@@ -19,7 +19,8 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div
+from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -497,4 +498,6 @@ def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
         return ttnn.MeshShape(8, 8)
     elif system_name == "QUAD":
         return ttnn.MeshShape(16, 8)
-    raise ValueError(f"Unsupported system name: {system_name}. Supported values are DUAL, QUAD, and TG.")
+    elif system_name == "T3K":
+        return ttnn.MeshShape(1, 8)
+    raise ValueError(f"Unsupported system name: {system_name}. Supported values are T3K, DUAL, QUAD, and TG.")

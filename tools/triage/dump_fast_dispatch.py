@@ -11,10 +11,14 @@ Options:
 
 Description:
     Read important variables from fast dispatch kernels.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script, log_check
+from ttexalens.elf.variable import RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
@@ -169,14 +173,18 @@ def read_wait_globals(
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
 
+    # Skipping because we cannot read NCRISC private memory on wormhole
+    if risc_name == "ncrisc" and location.device.is_wormhole():
+        return None
+
     # If no kernel loaded, nothing to read
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
         return None
     assert dispatcher_core_data.kernel_name is not None
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = RiscDebugMemoryAccess(location.noc_block.get_risc_debug(risc_name), ensure_halted_access=False)
     is_dispatcher_kernel = (
         dispatcher_core_data.kernel_name == "cq_dispatch"
         or dispatcher_core_data.kernel_name == "cq_dispatch_subordinate"
@@ -319,7 +327,7 @@ def run(args, context: Context):
         # Check all RISC cores at this location for dispatcher kernels
         noc_block = location._device.get_block(location)
         for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
             if (
                 dispatcher_core_data.kernel_name is not None
                 and dispatcher_core_data.kernel_name in dispatcher_kernel_names

@@ -5,8 +5,8 @@
 #include <boost/move/utility_core.hpp>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <iostream>
 #include <map>
@@ -37,11 +37,9 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace ttnn::graph::test {
 
@@ -210,7 +208,6 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
             std::vector<std::string>(
                 {"tt::tt_metal::create_device_tensor",
                  "ttnn::softmax",
-                 "ttnn::prim::softmax",
                  "SoftmaxDeviceOperation",
                  "tt::tt_metal::create_device_tensor"}));
     }

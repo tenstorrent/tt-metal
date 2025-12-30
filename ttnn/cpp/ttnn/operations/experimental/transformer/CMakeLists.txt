@@ -52,7 +52,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
-        all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_op.cpp
+        all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
         concatenate_heads/device/concatenate_heads_device_operation.cpp
         concatenate_heads/device/concatenate_heads_program_factory.cpp
@@ -98,9 +98,9 @@ target_sources(
         fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
         fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
         fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.cpp
-        fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.cpp
         fused_distributed_rmsnorm/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
-        fused_distributed_rmsnorm/device/multicore/rmsnorm_post_all_gather_op_multi_core.cpp
+        fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.cpp
+        fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp

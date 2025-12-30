@@ -7,8 +7,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import (
-    get_DRAM_conv_config,
-    get_DRAM_GN_config,
     get_DRAM_GN_shape,
 )
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
@@ -58,20 +56,23 @@ class TtDecoder(LightweightModule):
         conv_out_weights = state_dict[f"decoder.conv_out.weight"]
         conv_out_bias = state_dict[f"decoder.conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        core_x, core_y, self.norm_blocks = get_DRAM_GN_config(None, 1)
-        self.norm_core_grid = ttnn.CoreGrid(y=core_y, x=core_x)
-
-        [self.gamma_t, self.beta_t], self.input_mask = ttnn.dram_group_norm_params_from_torch(
-            [norm_out_weights, norm_out_bias],
-            norm_out_weights.shape[0],
-            self.norm_groups,
-            device,
-            core_grid=self.norm_core_grid,
-            return_mask=True,
-        )
+        (
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+        ) = model_config.get_groupnorm_params(None, norm_out_weights, norm_out_bias, self.norm_groups, device)
+        assert (
+            self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
         N, C, H, W = get_DRAM_GN_shape(None, 1)
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, self.norm_groups, self.norm_core_grid)
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(
+            N, C, H, W, self.norm_groups, self.groupnorm_config["core_grid"]
+        )
         self.reciprocals_tensor = ttnn.from_torch(
             torch_reciprocals,
             dtype=ttnn.DataType.FLOAT32,
@@ -91,7 +92,7 @@ class TtDecoder(LightweightModule):
             conv_in_bias,
             self.conv_in_config.weights_dtype,
         )
-        self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
+        self.conv_in_slice_config = ttnn.Conv2dL1FullSliceConfig  # one slice
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
@@ -104,7 +105,7 @@ class TtDecoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
+        self.conv_out_slice_config = None  # auto slicing
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
@@ -149,25 +150,33 @@ class TtDecoder(LightweightModule):
         logger.info("Executing out ops")
         sharded_mem_config = ttnn.create_sharded_memory_config(
             shape=self.reciprocals_tensor.shape,
-            core_grid=self.norm_core_grid,
+            core_grid=self.groupnorm_config["core_grid"],
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
         reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor, sharded_mem_config)
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=hidden_states.shape,
+                core_grid=self.groupnorm_config["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
             input_mask=self.input_mask,
+            negative_mask=self.input_negative_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.norm_blocks,
+            memory_config=hidden_states.memory_config(),
             use_welford=True,
             reciprocals=reciprocals_tensor,
+            **self.groupnorm_config,
         )
 
         hidden_states = ttnn.silu(hidden_states)

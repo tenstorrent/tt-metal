@@ -31,13 +31,13 @@ struct EriscDatamoverConfig {
     static constexpr std::size_t eth_word_size_bytes = 16;
     static constexpr bool enable_merged_payload_and_channel_sync = true;
     static std::size_t get_eth_channel_sync_size_bytes();
-    uint32_t get_edm_handshake_address();
+    uint32_t get_edm_handshake_address() const;
     static std::size_t get_semaphores_region_size(std::size_t num_edm_channels);
     static std::size_t get_semaphores_region_start_offset(std::size_t num_edm_channels);
-    uint32_t get_semaphores_base_address(std::size_t num_edm_channels);
+    uint32_t get_semaphores_base_address(std::size_t num_edm_channels) const;
     static uint32_t get_buffers_region_start_offset(std::size_t num_edm_channels);
     static std::size_t get_eth_word_size();
-    uint32_t get_buffers_base_address(std::size_t num_edm_channels);
+    uint32_t get_buffers_base_address(std::size_t num_edm_channels) const;
     uint32_t compute_buffer_size(
         std::size_t num_edm_channels,
         std::size_t num_buffers_per_channel = 1,
@@ -53,14 +53,12 @@ public:
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
-    bool get_shard_grid_size() const;
     Tensor const& get_input_tensor(std::size_t i) const;
     Tensor const& get_output_tensor(std::size_t i) const;
     std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
-    uint32_t page_size;
-    uint32_t shard_grid_size;
+    uint32_t page_size{0};
     Topology topology;
     bool input_sharded;
     bool output_sharded;
@@ -126,13 +124,13 @@ private:
     uint32_t const num_channel_buffers;
     ccl::EriscDataMoverBufferSharingMode const buffer_sharing_mode;
     ccl::EriscDataMoverTerminationMode const termination_mode;
-    uint32_t num_senders;
-    uint32_t num_receivers;
+    uint32_t num_senders{0};
+    uint32_t num_receivers{0};
     std::size_t num_buffers_per_channel;
     tt::ChipId chip_id;
 
-    bool enable_sender;
-    bool enable_receiver;
+    bool enable_sender{false};
+    bool enable_receiver{false};
 
 public:
     struct ChannelBufferInterface {
@@ -157,12 +155,9 @@ public:
         num_channel_buffers(local_buffer_addresses.size()),
         buffer_sharing_mode(buffer_sharing_mode),
         termination_mode(termination_mode),
-        num_senders(0),
-        num_receivers(0),
+
         num_buffers_per_channel(num_buffers_per_channel),
-        chip_id(chip_id),
-        enable_sender(false),
-        enable_receiver(false) {
+        chip_id(chip_id) {
         TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
         active_channels.reserve(num_channel_buffers);

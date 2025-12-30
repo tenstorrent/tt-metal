@@ -387,6 +387,55 @@ class MoEGate(nn.Module):
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 
+    def grouped_gate_golden(
+        self, scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
+    ):
+        # first run sigmoid on scores
+        scores = torch.sigmoid(scores)
+
+        # then add bias (used for selection only)
+        biased_scores = scores + bias
+
+        # then reshape based on number of groups
+        grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
+
+        # then sort the scores within each group
+        top_p_experts_scores, _ = torch.topk(grouped_scores, summed_experts_per_group, dim=-1, sorted=True)
+
+        # then sum the scores of the top p experts in each group
+        summed_scores = top_p_experts_scores.sum(dim=-1, keepdim=False)
+        logger.info(f"summed_scores: {summed_scores}")
+
+        # find the top k groups
+        _, top_k_groups_indices = torch.topk(summed_scores, topk_groups, dim=-1, sorted=True)
+        logger.info(f"top_k_groups_indices: {top_k_groups_indices}")
+
+        # Create a mask for valid groups
+        # We initialize a mask of allowed groups and fill others with -inf
+        group_mask = torch.ones(grouped_scores.shape[:-1], dtype=torch.bool, device=scores.device)
+        group_mask.scatter_(-1, top_k_groups_indices, False)  # Set selected groups to False (keep)
+
+        # Fill ignored groups with -inf
+        masked_grouped_scores = grouped_scores.masked_fill(group_mask.unsqueeze(-1), float("-inf"))
+
+        # reshape back to the original shape
+        masked_scores = masked_grouped_scores.reshape(scores.shape)
+
+        # then run topk to find expert indices
+        _, top_k_experts_indices = torch.topk(masked_scores, n_activated_experts, dim=-1, sorted=True)
+
+        # then gather the UNBIASED scores (original sigmoid output) based on the top k experts indices
+        # The reference uses 'original_scores' (no bias) for the final weights
+        chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
+
+        # normalize the chosen scores
+        normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
+
+        # then scale the normalized scores by the scales
+        scaled_scores = normalized_scores * route_scale
+
+        return top_k_experts_indices, scaled_scores
+
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
         ### compute gating score
@@ -428,6 +477,21 @@ class MoEGate(nn.Module):
         topk_weight = topk_weight * self.routed_scaling_factor  # must multiply the scaling factor
 
         return topk_idx, topk_weight
+
+    def grouped_forward(self, hidden_states):
+        bsz, seq_len, h = hidden_states.shape
+        hidden_states = hidden_states.view(-1, h)
+        logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
+        return self.grouped_gate_golden(
+            logits,
+            self.e_score_correction_bias,
+            self.routed_scaling_factor,
+            1e-20,
+            self.n_group,
+            2,
+            self.topk_group,
+            self.top_k,
+        )
 
 
 class DeepseekV3MoE(nn.Module):
@@ -716,7 +780,7 @@ class DeepseekV3Attention(nn.Module):
                     "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                     "with a layer index."
                 )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+            kv_seq_len += past_key_value.get_seq_length(self.layer_idx)
         cos, sin = self.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
 
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
@@ -843,7 +907,7 @@ class DeepseekV3FlashAttention2(DeepseekV3Attention):
 
         kv_seq_len = value_states.shape[-2]
         if past_key_value is not None:
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+            kv_seq_len += past_key_value.get_seq_length(self.layer_idx)
 
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
@@ -1303,7 +1367,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
             use_legacy_cache = not isinstance(past_key_values, Cache)
             if use_legacy_cache:
                 past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            past_key_values_length = past_key_values.get_usable_length(seq_length)
+            past_key_values_length = past_key_values.get_seq_length()
 
         if position_ids is None:
             device = input_ids.device if input_ids is not None else inputs_embeds.device

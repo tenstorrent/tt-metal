@@ -21,7 +21,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -170,7 +170,7 @@ void WatcherServer::Impl::detach_devices() {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
-            TT_ASSERT(device_id_to_reader_.count(device_id) > 0);
+            TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
             log_info(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
@@ -247,7 +247,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
         s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(":") + 2));
+        kernel_names_.push_back(s.substr(s.find(':') + 2));
     }
 }
 
@@ -475,7 +475,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
         auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
-        cluster.write_core(data.data(), data.size(), {device_id, virtual_core}, addr);
+        cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
     };
 
     // Initialize worker cores debug values

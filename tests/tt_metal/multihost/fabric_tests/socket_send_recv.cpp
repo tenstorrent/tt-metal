@@ -4,10 +4,9 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <vector>
 
@@ -19,8 +18,7 @@
 #include <random>
 #include <algorithm>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
+namespace tt::tt_fabric::fabric_router_tests::multihost {
 
 using namespace multihost_utils;
 
@@ -226,5 +224,4 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     }
 }
 
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost

@@ -61,12 +61,36 @@ static constexpr float EPS_QA = 1.19209e-7f;  // TODO: verify
 static constexpr float NAN_QA = 7.0040e+19;   // TODO: verify
 static constexpr float INF_QA = 1.7014e+38;   // TODO: verify
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
+    std::string linker_flags(const Params& params) const override {
+        std::string flags;
+        if (params.is_fw) {
+            flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
+            flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
+            flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+        } else {
+            flags += fmt::format(
+                "-Wl,--defsym=__kn_text={} ",
+                MEM_DM_KERNEL_BASE + (params.processor_id * MEM_DM_KERNEL_SIZE));  // this is for legacy kernels
+            flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
+        }
+        return flags;
+    }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr-32";
@@ -92,10 +116,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/tt-2xx");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -163,7 +187,7 @@ public:
                         return fmt::format(
                             "runtime/hw/toolchain/quasar/{}_dm{}.ld",
                             params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : std::to_string(params.processor_id));
+                            params.is_fw ? "" : "_lgc");  // hard code legacy kernels for now
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -318,7 +342,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
-    this->noc_coord_reg_offset_ = 0;                                         // TODO: add correct value
+    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;                      // TODO: add correct value
     this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value
     this->noc_stream_reg_space_size_ = 0;                                    // TODO: add correct value
     this->noc_stream_remote_dest_buf_size_reg_index_ = 0;                    // TODO: add correct value
@@ -352,5 +376,4 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     };
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

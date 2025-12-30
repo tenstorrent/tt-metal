@@ -8,7 +8,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <vector>
@@ -32,8 +32,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 struct WorkerMemMap {
     uint32_t source_l1_buffer_address;
@@ -210,5 +209,4 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 TEST_F(Fabric2DFixture, TestUnicastConnAPI2DSmoke) { RunTestUnicastSmoke(this); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI1DSmoke) { RunTestUnicastSmoke(this); }
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests

@@ -176,7 +176,7 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
 size_t FabricTensixDatamoverBaseConfig::get_num_channels(ChannelTypes channel_type) const {
     // Return the number of channels for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).num_channels;
@@ -190,7 +190,7 @@ size_t FabricTensixDatamoverBaseConfig::get_total_num_channels() const {
 size_t FabricTensixDatamoverBaseConfig::get_num_buffers(ChannelTypes channel_type) const {
     // Return number of buffers for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).num_buffers_per_channel;
@@ -199,7 +199,7 @@ size_t FabricTensixDatamoverBaseConfig::get_num_buffers(ChannelTypes channel_typ
 size_t FabricTensixDatamoverBaseConfig::get_buffer_size_bytes(ChannelTypes channel_type) const {
     // Return buffer size for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).buffer_size_bytes;
@@ -321,7 +321,7 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
 void FabricTensixDatamoverBaseConfig::validate_channel_id(ChannelTypes channel_type, size_t channel_id) const {
     // Validate that the channel_id is valid for this specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     const auto& config = channel_configs_.at(channel_type);
@@ -418,7 +418,7 @@ MuxConnectionInfo FabricTensixDatamoverMuxConfig::get_mux_connection_info(
 std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     // In legacy MUX mode, we don't have MUX_TO_MUX_CHANNEL, so return empty vector (size 0)
-    if (channel_configs_.find(tt::tt_fabric::ChannelTypes::MUX_TO_MUX_CHANNEL) == channel_configs_.end()) {
+    if (!channel_configs_.contains(tt::tt_fabric::ChannelTypes::MUX_TO_MUX_CHANNEL)) {
         // Legacy MUX mode - no downstream mux connections
         return std::vector<MuxConnectionInfo>();
     }
@@ -480,16 +480,16 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     uint32_t num_channel_types = static_cast<uint32_t>(channel_configs_.size());
 
     std::vector<uint32_t> ct_args = {
-        num_total_channels_,                               // 0: total number of channels across all types
-        status_region_.get_address(),                      // 1
-        termination_signal_region_.get_address(),          // 2
-        local_fabric_router_status_region_.get_address(),  // 3
-        fabric_endpoint_status_address_,                   // 4
-        fabric_endpoint_channel_num_buffers_,              // 5
-        num_full_size_channel_iters_,                      // 6
-        num_iters_between_teardown_checks_,                // 7
-        core_type_index_,                                  // 8
-        (uint32_t)wait_for_fabric_endpoint_ready_,         // 9
+        static_cast<uint32_t>(num_total_channels_),           // 0: total number of channels across all types
+        static_cast<uint32_t>(status_region_.get_address()),  // 1
+        static_cast<uint32_t>(termination_signal_region_.get_address()),          // 2
+        static_cast<uint32_t>(local_fabric_router_status_region_.get_address()),  // 3
+        static_cast<uint32_t>(fabric_endpoint_status_address_),                   // 4
+        static_cast<uint32_t>(fabric_endpoint_channel_num_buffers_),              // 5
+        static_cast<uint32_t>(num_full_size_channel_iters_),                      // 6
+        static_cast<uint32_t>(num_iters_between_teardown_checks_),                // 7
+        static_cast<uint32_t>(core_type_index_),                                  // 8
+        (uint32_t)wait_for_fabric_endpoint_ready_,                                // 9
         static_cast<uint32_t>(mux_infos.size()),  // 10: number of downstream mux connections (0 for legacy, 3 for UDM)
         num_channel_types                         // 11: number of channel types
     };
@@ -606,6 +606,25 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
     const size_t udm_memory_pool_size = udm_memory_pool_slot_size_ * udm_memory_pool_num_slots_;
     udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
     current_address = udm_memory_pool_region_.get_end_address();
+    log_debug(
+        tt::LogMetal,
+        "udm memory pool has: {} slots, each slot is: {} bytes",
+        udm_memory_pool_num_slots_,
+        udm_memory_pool_slot_size_);
+
+    // Allocate response pool region - use remaining L1 space
+    // RegisteredResponse is 32 bytes per slot
+    const size_t available_l1_bytes = l1_end_address - current_address;
+    udm_registered_response_num_slots_ = available_l1_bytes / udm_registered_response_slot_size_;
+    const size_t udm_registered_response_pool_size =
+        udm_registered_response_num_slots_ * udm_registered_response_slot_size_;
+    udm_registered_response_pool_region_ = MemoryRegion(current_address, udm_registered_response_pool_size, 1);
+    current_address = udm_registered_response_pool_region_.get_end_address();
+    log_debug(
+        tt::LogMetal,
+        "udm registered response pool has: {} slots, each slot is: {} bytes",
+        udm_registered_response_num_slots_,
+        udm_registered_response_slot_size_);
 
     memory_map_end_address_ = current_address;
 
@@ -724,15 +743,16 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     auto channel_type = tt::tt_fabric::ChannelTypes::RELAY_TO_MUX_CHANNEL;
 
     std::vector<uint32_t> ct_args = {
-        status_region_.get_address(),                                            // 0: status_address
-        termination_signal_region_.get_address(),                                // 1: termination_signal_address
-        router_to_relay_channel_stream_id,                                       // 2: channel_stream_id
-        num_iters_between_teardown_checks_,                                      // 3: NUM_ITERS_BETWEEN_TEARDOWN_CHECKS
-        mux_config->get_num_buffers(channel_type),                               // 4: mux_num_buffers
+        static_cast<uint32_t>(status_region_.get_address()),                     // 0: status_address
+        static_cast<uint32_t>(termination_signal_region_.get_address()),         // 1: termination_signal_address
+        static_cast<uint32_t>(router_to_relay_channel_stream_id),                // 2: channel_stream_id
+        static_cast<uint32_t>(num_iters_between_teardown_checks_),               // 3: NUM_ITERS_BETWEEN_TEARDOWN_CHECKS
+        static_cast<uint32_t>(mux_config->get_num_buffers(channel_type)),        // 4: mux_num_buffers
         static_cast<uint32_t>(mux_config->get_buffer_size_bytes(channel_type)),  // 5: mux_buffer_size_bytes
-        local_fabric_router_status_region_.get_address(),  // 6: downstream_mux_status_readback_address
-        NUM_MUX_CONNECTIONS,                               // 7: NUM_MUX_CONNECTIONS
-        num_channel_types                                  // 8: number of channel types
+        static_cast<uint32_t>(
+            local_fabric_router_status_region_.get_address()),  // 6: downstream_mux_status_readback_address
+        NUM_MUX_CONNECTIONS,                                    // 7: NUM_MUX_CONNECTIONS
+        num_channel_types                                       // 8: number of channel types
     };
 
     constexpr uint32_t base_channel_id = 0;
@@ -817,6 +837,12 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_slot_size_));  // 46: udm_memory_pool_slot_size
     ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_num_slots_));  // 47: udm_memory_pool_num_slots
     ct_args.push_back(static_cast<uint32_t>(direction));                   // 48: direction
+
+    // Response pool args
+    ct_args.push_back(
+        udm_registered_response_pool_region_.get_address());  // 49: udm_registered_response_pool_base_address
+    ct_args.push_back(
+        static_cast<uint32_t>(udm_registered_response_num_slots_));  // 50: udm_registered_response_pool_num_slots
 
     // Note: router NOC coords and sync address will be added by the builder
     return ct_args;
@@ -937,6 +963,9 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
             // Router channels: topology-based fabric router stream IDs (only in Legacy MUX mode)
             const auto topology = fabric_context.get_fabric_topology();
             switch (topology) {
+                case tt::tt_fabric::Topology::NeighborExchange:
+                    TT_THROW("NeighborExchange topology has not been tested in MUX mode");
+                    break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
                     fabric_stream_ids = {tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};

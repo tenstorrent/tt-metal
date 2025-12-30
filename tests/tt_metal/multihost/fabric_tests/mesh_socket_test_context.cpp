@@ -16,7 +16,7 @@
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
-    config_(config), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
+    config_(config), mesh_device_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestContext created with {} tests", config_.tests.size());
 }
 
@@ -147,6 +147,7 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     distributed_context_->barrier();
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshSocketTestContext::setup_fabric_configuration() {
     log_info(tt::LogTest, "Setting up fabric configuration...");
 

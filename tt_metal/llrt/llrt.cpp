@@ -54,10 +54,14 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 }
 }  // namespace
 
-namespace tt {
+namespace tt::tt_metal {
+
+void on_dispatch_timeout_detected();
+
+}  // namespace tt::tt_metal
 
 // llrt = lower-level runtime
-namespace llrt {
+namespace tt::llrt {
 
 using std::uint16_t;
 using std::uint32_t;
@@ -122,10 +126,8 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
-        is_active_eth_core =
-            active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
-        is_inactive_eth_core =
-            inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != inactive_eth_cores.end();
+        is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
+        is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
         // we should not be operating on any reserved cores here.
         TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
     }
@@ -143,11 +145,13 @@ void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
     auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
     reset_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
-    cluster.write_core_immediate(reset_msg.data(), reset_msg.size(), {chip, virtual_core}, go_signal_adrr);
+    cluster.write_core_immediate(
+        reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_adrr);
     cluster.l1_barrier(chip);
     uint32_t go_message_index_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
-    cluster.write_core_immediate(&zero, sizeof(uint32_t), {chip, virtual_core}, go_message_index_addr);
+    cluster.write_core_immediate(
+        &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
 }
 
 void write_launch_msg_to_core(
@@ -165,10 +169,10 @@ void write_launch_msg_to_core(
     uint64_t launch_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
     uint64_t go_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    cluster.write_core_immediate(msg.data(), msg.size(), {chip, core}, launch_addr);
+    cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        cluster.write_core_immediate(go_msg.data(), go_msg.size(), {chip, core}, go_addr);
+        cluster.write_core_immediate(go_msg.data(), go_msg.size(), {static_cast<size_t>(chip), core}, go_addr);
     }
 }
 
@@ -238,7 +242,7 @@ namespace internal_ {
 bool is_active_eth_core(tt::ChipId chip_id, const CoreCoord& core) {
     auto active_eth_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
-    return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
+    return active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, core));
 }
 
 namespace {
@@ -253,7 +257,7 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            core_status.data(), core_status.size(), {chip_id, core}, go_msg_addr & ~0x3);
+            core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             fprintf(
@@ -282,8 +286,14 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
+    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
+    // timeout means: use the configured timeout for operations.
     if (is_simulator) {
         timeout_ms = 0;
+    } else if (timeout_ms == 0) {
+        timeout_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
+                .count();
     }
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -296,6 +306,9 @@ void wait_until_cores_done(
                     }
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+
+                tt::tt_metal::on_dispatch_timeout_detected();
+
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
                     device_id,
@@ -317,7 +330,6 @@ void wait_until_cores_done(
             const auto &phys_core = *it;
 
             bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
-
             if (is_done) {
                 log_debug(tt::LogMetal, "Device {}: Phys cores just done: {}", device_id, phys_core.str());
                 it = not_done_phys_cores.erase(it);
@@ -412,7 +424,7 @@ void send_msg_to_eth_mailbox(
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
-    tt_cxy_pair target{device_id, virtual_core};
+    tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {
@@ -444,7 +456,7 @@ void return_to_base_firmware_and_wait_for_heartbeat(
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
-    tt_cxy_pair target{device_id, virtual_core};
+    tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
 
     uint32_t heartbeat_val = 0;
@@ -499,6 +511,4 @@ void set_metal_eth_fw_run_flag(tt::ChipId device_id, const CoreCoord& virtual_co
 
 }  // namespace internal_
 
-}  // namespace llrt
-
-}  // namespace tt
+}  // namespace tt::llrt

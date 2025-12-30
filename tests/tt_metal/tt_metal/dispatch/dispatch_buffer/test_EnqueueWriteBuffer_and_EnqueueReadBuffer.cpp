@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <stdlib.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
@@ -50,11 +50,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

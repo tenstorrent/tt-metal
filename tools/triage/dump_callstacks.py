@@ -17,6 +17,9 @@ Description:
 
     Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
     with TT_TRIAGE_COLOR environment variable (0=disable, 1=enable).
+
+Owner:
+    tt-vjovanovic
 """
 
 from triage import ScriptConfig, log_check_risc, run_script
@@ -24,7 +27,6 @@ from callstack_provider import run as get_callstack_provider, CallstackProvider,
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from utils import ORANGE, RST
 
 script_config = ScriptConfig(
     depends=["run_checks", "callstack_provider"],
@@ -40,7 +42,7 @@ def dump_callstacks(
     try:
         # Skip DONE cores unless --all-cores is specified
         if not show_all_cores:
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
         return callstack_provider.get_callstacks(location, risc_name)
@@ -49,25 +51,16 @@ def dump_callstacks(
             risc_name,
             location,
             False,
-            f"{ORANGE}Failed to dump callstacks: {e}{RST}",
+            f"[warning]Failed to dump callstacks: {e}[/]",
         )
         return None
 
 
 def run(args, context: Context):
-    from triage import set_verbose_level
-
     show_all_cores: bool = args["--all-cores"]
-
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
-
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
-
     return run_checks.run_per_core_check(
         lambda location, risc_name: dump_callstacks(
             location,

@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 // #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
@@ -61,8 +61,8 @@ using namespace tt::test_utils::df;
 
 // Taken from ccl_common... some dependency annoyance to deal with so just copying it here for now... resolve before
 // merging
-namespace ttnn {
-namespace ccl {
+
+namespace ttnn::ccl {
 void set_edm_runtime_args(
     tt_metal::Program& program,
     tt_metal::KernelHandle edm_kernel_handle,
@@ -79,12 +79,11 @@ void set_edm_runtime_args(
     log_info(tt::LogOp, "{}", ss.str());
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
@@ -116,7 +115,7 @@ public:
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct BankedConfig {

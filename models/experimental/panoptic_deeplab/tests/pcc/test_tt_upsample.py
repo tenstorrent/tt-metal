@@ -5,10 +5,12 @@ import torch
 import pytest
 import ttnn
 
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ...tt.tt_upsample import BilinearUpsampleMatmulTTNN
 from ...tt.tt_upsample import BilinearUpsampleTorch
 from ...tt.common import PDL_L1_SMALL_SIZE
+from ...tests.pcc.common import skip_if_not_blackhole_110_cores, skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize(
@@ -65,6 +67,14 @@ def test_bilinear_upsample_matmul_vs_torch(b, h, w, c, scale, input_channels_fir
 
 
 @pytest.mark.parametrize(
+    "pcc_threshold, skip_check",
+    [
+        (0.99, skip_if_not_blackhole_20_cores),
+        (0.99, skip_if_not_blackhole_110_cores),
+    ],
+    ids=["20_cores", "110_cores"],
+)
+@pytest.mark.parametrize(
     "b, h, w, c, scale, input_channels_first, output_channels_first, memory_config",
     # fmt: off
     [
@@ -89,8 +99,22 @@ def test_bilinear_upsample_matmul_vs_torch(b, h, w, c, scale, input_channels_fir
 )
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
-    device, b, h, w, c, scale, input_channels_first, output_channels_first, memory_config, output_dtype
+    device,
+    pcc_threshold,
+    skip_check,
+    b,
+    h,
+    w,
+    c,
+    scale,
+    input_channels_first,
+    output_channels_first,
+    memory_config,
+    output_dtype,
 ):
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
     torch.manual_seed(0)
 
     img_torch_nchw = torch.rand(b, c, h, w, dtype=torch.bfloat16)
@@ -134,13 +158,21 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
         expected_shape = (b, h * scale, w * scale, c)
 
     # Compare matmul implementation with PyTorch reference
-    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_matmul_torch, pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_matmul_torch, pcc=pcc_threshold)
     assert pcc_passed, f"Matmul implementation differs from PyTorch: {pcc_message}"
 
     # Verify output shapes
     assert output_matmul_torch.shape == expected_shape
 
 
+@pytest.mark.parametrize(
+    "pcc_threshold, skip_check",
+    [
+        (0.99, skip_if_not_blackhole_20_cores),
+        (0.99, skip_if_not_blackhole_110_cores),
+    ],
+    ids=["20_cores", "110_cores"],
+)
 @pytest.mark.parametrize(
     "b, h, w, c, scale, input_channels_first, output_channels_first, memory_config, output_dtype",
     # fmt: off
@@ -153,6 +185,8 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
     device,
+    pcc_threshold,
+    skip_check,
     b,
     h,
     w,
@@ -164,6 +198,9 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
     output_dtype,
     output_memory_config,
 ):
+    # Skip test if device doesn't match the expected grid configuration
+    skip_check(device)
+
     torch.manual_seed(0)
 
     img_torch_nchw = torch.rand(b, c, h, w, dtype=torch.bfloat16)
@@ -176,42 +213,14 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=memory_config,
     )
-
-    # First config
-    config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(5, 4),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=4,
-        out_block_w=2,
-        per_core_M=4,
-        per_core_N=2,
-        fuse_batch=False,
-        fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
-        num_global_cb_receivers=0,
-        untilize_out=False,
+    # Create centralized configuration
+    model_configs = ModelOptimisations(
+        device=device,
+        conv_act_dtype=ttnn.bfloat8_b,
+        conv_w_dtype=ttnn.bfloat8_b,
     )
-
-    # Second config
-    config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(5, 4),
-        in0_block_w=2,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=16,
-        out_block_w=2,
-        per_core_M=16,
-        per_core_N=2,
-        fuse_batch=False,
-        fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
-        num_global_cb_receivers=0,
-        untilize_out=False,
-    )
+    config1 = model_configs.get_matmul_config("final_upsample_mm_config1")
+    config2 = model_configs.get_matmul_config("final_upsample_mm_config2")
 
     # Method 1: Custom matrix multiplication implementation
     upsampler = BilinearUpsampleMatmulTTNN(
@@ -244,7 +253,7 @@ def test_bilinear_upsample_l1_ttnn_matmul_vs_ttnn_upsample(
         expected_shape = (b, h * scale, w * scale, c)
 
     # Compare matmul implementation with PyTorch reference
-    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_matmul_torch, pcc=0.99)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_matmul_torch, pcc=pcc_threshold)
     assert pcc_passed, f"Matmul implementation differs from PyTorch: {pcc_message}"
 
     # Verify output shapes
