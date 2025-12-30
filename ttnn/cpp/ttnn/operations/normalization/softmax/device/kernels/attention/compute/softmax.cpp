@@ -57,7 +57,7 @@ void calc_numeric_stable(
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            pack_tile(wt8, cb_out);     // reuse the exps buffer again, this time in a circular manner
+            pack_tile(wt8, cb_out);  // reuse the exps buffer again, this time in a circular manner
         }
         tile_regs_release();
         cb_push_back(cb_out, ndst);
@@ -123,7 +123,7 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                pack_tile(wt8, cb_scale_mask);                                // reuse exps buffer
+                pack_tile(wt8, cb_scale_mask);  // reuse exps buffer
             }
             tile_regs_release();
             cb_push_back(cb_scale_mask, ndst);
@@ -259,7 +259,7 @@ void MAIN {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    pack_tile(wt8, cb_exps);    // DST[0]->cb_id[wt]
+                    pack_tile(wt8, cb_exps);  // DST[0]->cb_id[wt]
                 }
                 tile_regs_release();
                 cb_push_back(cb_exps, ndst);
@@ -285,8 +285,8 @@ void MAIN {
                 /*idst0=*/dst0);
         }
         reduce_uninit();
-        recip_tile_init();
-        recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
+        recip_tile_init<false>();
+        recip_tile<false>(dst0);  // DST[0] = 1/sum(exp(x))
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, cb_recipsumexps);
