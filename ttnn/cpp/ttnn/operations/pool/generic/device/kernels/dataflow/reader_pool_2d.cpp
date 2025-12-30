@@ -4,13 +4,13 @@
 #include <sys/types.h>
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
@@ -519,18 +519,6 @@ void kernel_main() {
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
     bool first_row_value = reader_id == 0 || !use_split_reader;
 
-    uint32_t reader_indices_on_core = 0;
-
-    if (use_split_reader) {
-        if (reader_id == 0) {
-            reader_indices_on_core = (reader_nindices + 1) / 2;
-        } else {
-            reader_indices_on_core = reader_nindices / 2;
-        }
-    } else {
-        reader_indices_on_core = reader_nindices;
-    }
-
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
@@ -551,7 +539,6 @@ void kernel_main() {
                     use_split_reader,
                     multi_buffering_factor>(scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
-            reader_indices_on_core--;
             read_kernel_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,

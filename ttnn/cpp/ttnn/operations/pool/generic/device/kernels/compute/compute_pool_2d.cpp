@@ -15,9 +15,9 @@
 #define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint_tensix.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
+#include "api/debug/dprint_tensix.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #endif
 
@@ -224,7 +224,7 @@ void MAIN {
                     // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
                     // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
                     // smaller than 9 as the excess sticks are just filled with padding values
-                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
                     max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
                         data_dst_idx, index_dst_idx);
                 } else {
@@ -275,14 +275,7 @@ void MAIN {
                         cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
-                        // Workaround until #27504 is not closed
-                        // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
-                        // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
-                        // to unpack_A_hw_configure.
-                        tensix_sync();
-                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
-                            pre_tilize_cb_id)));
-                        tensix_sync();
+                        unpack_tilizeA_B_uninit(curr_in_cb_id);
                         pack_reconfig_data_format(out_cb_id);
 
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
@@ -305,7 +298,7 @@ void MAIN {
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE
                         // need this on BH to set swizzle bit before pack untilize dest
-                        MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+                        MATH((llk_math_reconfig_remap(true)));
 #endif
                         PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                             pre_tilize_cb_id, 1, num_faces_in_output_tile)));

@@ -4,9 +4,10 @@
 
 #include "rmsnorm_bw_device_operation.hpp"
 
-#include "rmsnorm_bw_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
+
+#include "rmsnorm_bw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
@@ -134,8 +135,11 @@ ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<RMSNormBackwardDeviceOperation::operation_attributes_t, RMSNormBackwardDeviceOperation::tensor_args_t>
-RMSNormBackwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::rmsnorm_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
@@ -143,18 +147,19 @@ RMSNormBackwardDeviceOperation::invoke(
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_da,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components) {
-    return {
-        operation_attributes_t{
-            .epsilon = epsilon,
-        },
-        tensor_args_t{
-            .input = input_tensor,
-            .gamma = gamma_tensor,
-            .rms = rms_tensor,
-            .dL_dout = dL_dout_tensor,
-            .preallocated_da = preallocated_da,
-            .preallocated_dgamma_components = preallocated_dgamma_components,
-        }};
+    using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{.epsilon = epsilon};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .gamma = gamma_tensor,
+        .rms = rms_tensor,
+        .dL_dout = dL_dout_tensor,
+        .preallocated_da = preallocated_da,
+        .preallocated_dgamma_components = preallocated_dgamma_components,
+    };
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::rmsnorm_bw::device
+}  // namespace ttnn::prim

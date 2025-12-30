@@ -1952,22 +1952,26 @@ void bind_logical_inplace_operation(
 
 template <typename binary_operation_t>
 void bind_binary_inplace_operation(
-    nb::module_& mod, const binary_operation_t& operation, const std::string& description) {
+    nb::module_& mod, const binary_operation_t& operation, const std::string& description, const std::string& math) {
     auto doc = fmt::format(
         R"doc(
             {2}
 
-            {3}
+            {4}
+
+            .. math::
+                {3}
 
             Args:
                 * :attr:`input_a` (ttnn.Tensor)
                 * :attr:`input_b` (ttnn.Tensor or Number)
             Keyword args:
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+                * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
+        math,
         BINARY_BROADCAST_DOC);
 
     bind_registered_operation(
@@ -2197,8 +2201,8 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::add_,
-        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
-        .. math:: \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
+        R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2211,8 +2215,8 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::subtract_,
-        R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
-        .. math:: \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
+        R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2225,8 +2229,8 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_inplace_operation(
         mod,
         ttnn::multiply_,
-        R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
-        .. math:: \mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
+        R"doc(\mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2362,7 +2366,7 @@ void py_module(nb::module_& mod) {
         R"doc(Subtracts :attr:`input_tensor_a` from :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i - \mathrm{{input\_tensor\_a}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32,BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         mod,
@@ -2419,13 +2423,6 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
         R"doc(INT32, UINT32)doc");
-
-    auto prim_module = mod.def_submodule("prim", "Primitive binary operations");
-
-    detail::bind_primitive_binary_operation(
-        prim_module,
-        ttnn::prim::binary,
-        R"doc(Applied binary operation on :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         mod,
@@ -2689,7 +2686,7 @@ void py_module(nb::module_& mod) {
         ttnn::rsub_,
         R"doc(Subtracts :attr:`input_a` from :attr:`input_b` in-place and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_b}} - \mathrm{{input\_tensor\_a}})doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation(
         mod,

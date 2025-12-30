@@ -30,15 +30,13 @@ struct SendAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor&, const tt::tt_metal::distributed::MeshSocket&);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::send_async
 
 namespace ttnn::prim {
-constexpr auto send_async = ttnn::register_operation<
-    "ttnn::prim::send_async",
-    ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation>();
+
+ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation::tensor_return_value_t send_async(
+    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+
 }  // namespace ttnn::prim

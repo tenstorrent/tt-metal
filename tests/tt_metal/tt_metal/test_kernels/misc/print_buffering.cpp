@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/assert.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "api/debug/assert.h"
 #include <cstring>
 
 void kernel_main() {

@@ -5,6 +5,7 @@
 #include "rotate_half_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer::rotate_half {
 
@@ -55,9 +56,18 @@ tensor_return_value_t RotateHalfDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, tensor_args.input.device());
 }
 
-std::tuple<RotateHalfDeviceOperation::operation_attributes_t, RotateHalfDeviceOperation::tensor_args_t>
-RotateHalfDeviceOperation::invoke(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    return {operation_attributes_t{.output_mem_config = output_mem_config}, tensor_args_t{.input = input}};
+}  // namespace ttnn::operations::experimental::transformer::rotate_half
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::transformer::rotate_half::tensor_return_value_t rotate_half(
+    const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using OperationType = ttnn::operations::experimental::transformer::rotate_half::RotateHalfDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{.output_mem_config = output_mem_config};
+    auto tensor_args = OperationType::tensor_args_t{.input = input};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotate_half
+}  // namespace ttnn::prim

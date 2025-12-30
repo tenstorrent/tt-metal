@@ -201,12 +201,6 @@ CPMAddPackage(
 )
 
 ############################################################################################################################
-# pybind11 : https://github.com/pybind/pybind11
-############################################################################################################################
-
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
-
-############################################################################################################################
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
@@ -332,7 +326,7 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_FLATC ON"
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
-        "FLATBUFFERS_STRICT_MODE ON"
+        "FLATBUFFERS_STRICT_MODE OFF"
 )
 
 if(flatbuffers_ADDED)

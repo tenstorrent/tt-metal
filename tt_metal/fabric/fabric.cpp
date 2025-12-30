@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
@@ -248,7 +248,7 @@ void append_routing_plane_connection_manager_rt_args(
         auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
         if (dir_opt.has_value()) {
             TT_FATAL(
-                used_directions.find(dir_opt.value()) == used_directions.end(),
+                !used_directions.contains(dir_opt.value()),
                 "Multiple ethernet cores in the same direction ({}) are not currently supported. "
                 "This restriction will be removed in a future update when proper multi-core routing is implemented.",
                 dir_opt.value());
@@ -334,9 +334,10 @@ void SetFabricConfig(
     FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     FabricTensixConfig fabric_tensix_config,
-    FabricUDMMode fabric_udm_mode) {
+    FabricUDMMode fabric_udm_mode,
+    FabricManagerMode fabric_manager) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
+        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode, fabric_manager);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

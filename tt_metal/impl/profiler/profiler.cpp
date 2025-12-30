@@ -97,7 +97,7 @@ void populateZoneSrcLocations(
         uint16_t hash_16bit = hash16CT(zone_src_location);
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
-        if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
+        if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
             TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
         }
 
@@ -500,7 +500,7 @@ auto coalesceFabricEvents(
                     CoreCoord local_noc_write_dst_phys =
                         translateNocCoordinatesToNoc0(device_id, local_noc_write_dst_virt, local_noc_write.noc_type);
                     // NOLINTEND
-                    if (fabric_mux_markers.find(local_noc_write_dst_phys) == fabric_mux_markers.end()) {
+                    if (!fabric_mux_markers.contains(local_noc_write_dst_phys)) {
                         addFabricMuxEvents(markers, fabric_mux_markers, local_noc_write_dst_phys);
                     }
                     if (fabric_mux_markers[local_noc_write_dst_phys].empty()) {
@@ -1099,6 +1099,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
@@ -1132,6 +1133,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
@@ -1241,19 +1243,19 @@ void DeviceProfiler::readProfilerBuffer(IDevice* device) {
 }
 
 void DeviceProfiler::markTraceBegin(uint32_t trace_id) {
-    TT_ASSERT(traces_being_recorded.find(trace_id) == traces_being_recorded.end());
+    TT_ASSERT(!traces_being_recorded.contains(trace_id));
     traces_being_recorded.insert(trace_id);
 }
 
 void DeviceProfiler::markTraceEnd(uint32_t trace_id) {
-    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    TT_ASSERT(traces_being_recorded.contains(trace_id));
     traces_being_recorded.erase(trace_id);
 }
 
 void DeviceProfiler::markTraceReplay(uint32_t trace_id) { traces_replayed.push_back(trace_id); }
 
 void DeviceProfiler::addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id) {
-    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    TT_ASSERT(traces_being_recorded.contains(trace_id));
     runtime_ids_per_trace[trace_id].insert(runtime_id);
 }
 
@@ -1527,13 +1529,13 @@ std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(
     TT_ASSERT(device_trace_counter <= traces_replayed.size());
     const uint32_t trace_id = traces_replayed[device_trace_counter - 1];
 
-    if (runtime_ids_per_trace.find(trace_id) == runtime_ids_per_trace.end()) {
+    if (!runtime_ids_per_trace.contains(trace_id)) {
         return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
     }
 
     const std::unordered_set<uint32_t>& runtime_ids = runtime_ids_per_trace.at(trace_id);
     const uint32_t base_program_id = detail::DecodePerDeviceProgramID(run_host_id).base_program_id;
-    if (runtime_ids.find(base_program_id) == runtime_ids.end()) {
+    if (!runtime_ids.contains(base_program_id)) {
         return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
     }
 
@@ -1604,6 +1606,7 @@ struct DispatchMetaData {
     std::string cmd_subtype;
 };
 
+// NOLINTNEXTLINE(readability-make-member-function-const)
 void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {
     DispatchMetaData current_dispatch_meta_data;
     std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;
@@ -2147,7 +2150,7 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     const ChipId device_id = device_core.first;
     const CoreCoord worker_core = device_core.second;
 
-    if (core_sync_info.find(worker_core) == core_sync_info.end()) {
+    if (!core_sync_info.contains(worker_core)) {
         const std::string tracyTTCtxName =
             fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
 

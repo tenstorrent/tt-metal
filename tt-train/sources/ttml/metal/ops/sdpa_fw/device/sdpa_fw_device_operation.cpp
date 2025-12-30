@@ -8,6 +8,7 @@
 
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "sdpa_fw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::sdpa_fw::device {
 
@@ -225,22 +226,24 @@ ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<SDPAForwardDeviceOperation::operation_attributes_t, SDPAForwardDeviceOperation::tensor_args_t>
-SDPAForwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::sdpa_fw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_value_t ttml_sdpa_fw(
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
-    const std::optional<ttnn::Tensor>& mask,  // attention mask
-    const float dropout_probability,          // default value
+    const std::optional<ttnn::Tensor>& mask,
+    const float dropout_probability,
     const bool return_intermediates,
-    const bool fp32_dest_acc_en,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    operation_attributes_t operation_attributes{
-        .return_intermediates = return_intermediates,
-        .dropout_probability = dropout_probability,
-        .fp32_dest_acc_en = fp32_dest_acc_en};
-    tensor_args_t tensor_args{
+    using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
+    auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,
         .value = value_tensor,
@@ -249,7 +252,7 @@ SDPAForwardDeviceOperation::invoke(
         .preallocated_output = preallocated_output,
     };
 
-    return {operation_attributes, tensor_args};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::sdpa_fw::device
+}  // namespace ttnn::prim

@@ -146,9 +146,7 @@ public:
         TT_FATAL(it != connections_by_type_.end(), "No connections found with type: {}", type);
         return it->second;
     }
-    bool has_connections_of_type(const std::string& type) const {
-        return connections_by_type_.find(type) != connections_by_type_.end();
-    }
+    bool has_connections_of_type(const std::string& type) const { return connections_by_type_.contains(type); }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
         TT_FATAL(
@@ -196,18 +194,23 @@ private:
 
     // Helper methods for validation that return their own error lists
     static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_mesh_topology(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_mesh_topology(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_architecture_consistency(
-        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_switch_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_express_connections(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_switch_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_graph_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_graph_topology_and_connections(
-        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
-    static void validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_legacy_requirements(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     // Populates the MGD Graph from the proto file
     void populate();

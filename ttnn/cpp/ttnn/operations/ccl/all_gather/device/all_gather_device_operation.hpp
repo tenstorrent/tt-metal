@@ -15,7 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -46,7 +46,7 @@ struct AllGatherDeviceOperation {
         struct shared_variables_t {
             std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores;
             tt::tt_metal::GlobalSemaphore barrier_semaphore;
-            AllGatherProgramArtifacts program_artifacts;
+            ttnn::operations::ccl::AllGatherProgramArtifacts program_artifacts;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -66,7 +66,7 @@ struct AllGatherDeviceOperation {
             const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -83,22 +83,19 @@ struct AllGatherDeviceOperation {
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        uint32_t dim,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-        const ttnn::MemoryConfig& memory_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor,
-        uint32_t num_links,
-        tt::tt_fabric::Topology topology,
-        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
-constexpr auto all_gather =
-    ttnn::register_operation<"ttnn::prim::all_gather", ttnn::operations::ccl::AllGatherDeviceOperation>();
+ttnn::Tensor all_gather(
+    const ttnn::Tensor& input_tensor,
+    uint32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology,
+    const std::optional<CoreRangeSet>& sub_core_grid);
 }  // namespace ttnn::prim

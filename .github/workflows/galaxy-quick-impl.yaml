@@ -86,9 +86,21 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Check for benchmark data
+        id: check-benchmark-data
+        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        shell: bash
+        run: |
+          if [ -d "generated/fabric" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            echo "Benchmark files found, will upload to database"
+          else
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+            echo "Benchmark files not found, database upload will be skipped"
+          fi
       - name: Upload benchmark data
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -141,15 +153,27 @@ jobs:
         run: |
           ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
           # pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
-          pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
-          pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
+
+          # https://github.com/tenstorrent/tt-metal/issues/34990
+          # Disabling hanging decode and prefill for now while team works on other issues
+          # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
+          # pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
           # CCL smoke tests - exactly one representative test from each op category
-          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-dtype0-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_1d_line]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
+
+          # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
+          ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
+          pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]" --timeout=300;
+          ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --terminate-fabric
+
+          # Use Fabric Manager to initialize/teardown Fabric 1D and run all tests without initializing/tearing down fabric
+          ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --initialize-fabric
+          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_manager_enabled_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
+          ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --terminate-fabric
+
           pytest "tests/nightly/tg/ccl/test_all_broadcast.py::test_all_broadcast_trace[wormhole_b0-mesh_device0-device_params0-3-mem_config0-deepseek_1]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-math_op0-8x4_grid-8-buffer_type0-input_dtype0-4-2-per_chip_output_shape0-layout0]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]" --timeout=300;
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

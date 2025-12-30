@@ -115,7 +115,7 @@ struct ExecuteRingDistributedScaledDotProductAttention {
             std::nullopt,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        const std::optional<SDPAProgramConfig>& program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 

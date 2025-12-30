@@ -992,10 +992,10 @@ public:
             }
         } else if (this->topology_ == Topology::Mesh || this->topology_ == Topology::Torus) {
             // Generate up to 4 maps: pure E, pure W, N+spines (if N>0), S+spines (if S>0)
-            auto north_hops = hops.count(RoutingDirection::N) ? hops.at(RoutingDirection::N) : 0;
-            auto south_hops = hops.count(RoutingDirection::S) ? hops.at(RoutingDirection::S) : 0;
-            auto east_hops = hops.count(RoutingDirection::E) ? hops.at(RoutingDirection::E) : 0;
-            auto west_hops = hops.count(RoutingDirection::W) ? hops.at(RoutingDirection::W) : 0;
+            auto north_hops = hops.contains(RoutingDirection::N) ? hops.at(RoutingDirection::N) : 0;
+            auto south_hops = hops.contains(RoutingDirection::S) ? hops.at(RoutingDirection::S) : 0;
+            auto east_hops = hops.contains(RoutingDirection::E) ? hops.at(RoutingDirection::E) : 0;
+            auto west_hops = hops.contains(RoutingDirection::W) ? hops.at(RoutingDirection::W) : 0;
 
             // Pure E
             if (east_hops > 0) {
@@ -1087,7 +1087,7 @@ public:
             // for now we return the first direction that is non-zero
             // for 2D, since we use dimension order routing, lookup the directions in the order of N, S, E, W
             for (const auto& direction : FabricContext::routing_directions) {
-                if (hops.count(direction) > 0 && hops.at(direction) != 0) {
+                if (hops.contains(direction) && hops.at(direction) != 0) {
                     return direction;
                 }
             }
@@ -1660,6 +1660,19 @@ private:
         return MeshCoordinateRange(start, end);
     }
 
+    void adjust_hops_for_toroidal_links(std::unordered_map<RoutingDirection, uint32_t>& hops, uint32_t dim) const {
+        RoutingDirection forward_direction = (dim == EW_DIM) ? RoutingDirection::E : RoutingDirection::S;
+        RoutingDirection backward_direction = (dim == EW_DIM) ? RoutingDirection::W : RoutingDirection::N;
+
+        if (hops[forward_direction] > mesh_shape_[dim] / 2) {
+            hops[backward_direction] = mesh_shape_[dim] - hops[forward_direction];
+            hops[forward_direction] = 0;
+        } else if (hops[backward_direction] > mesh_shape_[dim] / 2) {
+            hops[forward_direction] = mesh_shape_[dim] - hops[backward_direction];
+            hops[backward_direction] = 0;
+        }
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_hops_from_displacement(
         const MeshCoordinate& displacement) const {
         std::unordered_map<RoutingDirection, uint32_t> hops;
@@ -1680,6 +1693,24 @@ private:
             hops[RoutingDirection::N] = std::numeric_limits<uint32_t>::max() - displacement[NS_DIM] + 1;
         } else {
             hops[RoutingDirection::S] = displacement[NS_DIM];
+        }
+
+        // If toroidal wraparound connections have been enabled, we need to check whether going in an opposite direction
+        // over the wraparound link is faster
+        auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
+        // If the physical topology is a mesh, no wraparound links are present, so we can return the hops as is
+        if (fabric_type == tt::tt_fabric::FabricType::MESH) {
+            return hops;
+        }
+
+        // Wraparound links in the X dimension
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            adjust_hops_for_toroidal_links(hops, EW_DIM);
+        }
+
+        // Wraparound links in the Y dimension
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_Y || fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            adjust_hops_for_toroidal_links(hops, NS_DIM);
         }
 
         return hops;
@@ -1721,10 +1752,10 @@ private:
 
         bool has_ns = false, has_ew = false;
         bool opp_ns =
-            (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0 &&
+            (hops.contains(RoutingDirection::N) && hops.contains(RoutingDirection::S) &&
              hops.at(RoutingDirection::N) > 0 && hops.at(RoutingDirection::S) > 0);
         bool opp_ew =
-            (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0 &&
+            (hops.contains(RoutingDirection::E) && hops.contains(RoutingDirection::W) &&
              hops.at(RoutingDirection::E) > 0 && hops.at(RoutingDirection::W) > 0);
 
         if (opp_ns || opp_ew) {
@@ -1803,10 +1834,10 @@ private:
         std::unordered_set<MeshCoordinate> seen;  // For internal dedup
 
         // Check for actual non-zero hops to handle possible zero entries in map
-        bool is_grid = ((split_hops.count(RoutingDirection::N) > 0 && split_hops.at(RoutingDirection::N) > 0) ||
-                        (split_hops.count(RoutingDirection::S) > 0 && split_hops.at(RoutingDirection::S) > 0)) &&
-                       ((split_hops.count(RoutingDirection::E) > 0 && split_hops.at(RoutingDirection::E) > 0) ||
-                        (split_hops.count(RoutingDirection::W) > 0 && split_hops.at(RoutingDirection::W) > 0));
+        bool is_grid = ((split_hops.contains(RoutingDirection::N) && split_hops.at(RoutingDirection::N) > 0) ||
+                        (split_hops.contains(RoutingDirection::S) && split_hops.at(RoutingDirection::S) > 0)) &&
+                       ((split_hops.contains(RoutingDirection::E) && split_hops.at(RoutingDirection::E) > 0) ||
+                        (split_hops.contains(RoutingDirection::W) && split_hops.at(RoutingDirection::W) > 0));
 
         if (!is_grid) {
             // Find the single non-zero direction for linear sim; throw if multiple or none
@@ -1853,7 +1884,7 @@ private:
 
                 // Branch spines from this trunk position
                 for (auto spine_dir : {RoutingDirection::E, RoutingDirection::W}) {
-                    if (split_hops.count(spine_dir) == 0 || split_hops.at(spine_dir) == 0) {
+                    if (!split_hops.contains(spine_dir) || split_hops.at(spine_dir) == 0) {
                         continue;
                     }
                     uint32_t spine_count = split_hops.at(spine_dir);
@@ -1897,7 +1928,7 @@ private:
     }
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
-        if (topology_ == Topology::Ring || topology_ == Topology::Torus) {
+        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
             auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
             switch (fabric_type) {
                 case tt::tt_fabric::FabricType::TORUS_X:
@@ -1912,9 +1943,9 @@ private:
     }
 
     RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
-        if (split_hops.count(RoutingDirection::N) > 0 && split_hops.at(RoutingDirection::N) > 0) {
+        if (split_hops.contains(RoutingDirection::N) && split_hops.at(RoutingDirection::N) > 0) {
             return RoutingDirection::N;
-        } else if (split_hops.count(RoutingDirection::S) > 0 && split_hops.at(RoutingDirection::S) > 0) {
+        } else if (split_hops.contains(RoutingDirection::S) && split_hops.at(RoutingDirection::S) > 0) {
             return RoutingDirection::S;
         }
         // If no NS, assume not a grid or handle error

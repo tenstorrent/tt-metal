@@ -169,6 +169,7 @@ public:
     std::set<SenderReceiverPair> unique_links;
 
 private:
+    // NOLINTBEGIN(readability-make-member-function-const)
     std::pair<std::optional<CoreCoord>, std::shared_ptr<tt_metal::distributed::MeshBuffer>>
     assign_tensix_and_allocate_buffer(const TestParams& params, const tt_cxy_pair& logical_eth_core) {
         if (params.benchmark_type != BenchmarkType::EthEthTensixUniDir and
@@ -186,7 +187,7 @@ private:
 
         std::optional<CoreCoord> closest_phys_tensix = std::nullopt;
         for (auto phys_tensix : tensix_cores) {
-            if (assigned_phys_tensix.find(phys_tensix) != assigned_phys_tensix.end()) {
+            if (assigned_phys_tensix.contains(phys_tensix)) {
                 continue;
             }
             // TODO: uplift this for BH col harvesting when that is enabled
@@ -225,6 +226,7 @@ private:
 
         return std::make_pair(logical_tensix, std::move(buffer));
     }
+    // NOLINTEND(readability-make-member-function-const)
 
     void initialize_sender_receiver_pairs(const TestParams& params) {
         // chip id -> active eth ch on chip -> (connected chip, remote active eth ch)
@@ -246,13 +248,13 @@ private:
                 chip_q.pop();
                 visited_chips.insert(chip_id);
 
-                bool is_sender = sender_chips.find(chip_id) != sender_chips.end();
-                bool is_receiver = receiver_chips.find(chip_id) != receiver_chips.end();
+                bool is_sender = sender_chips.contains(chip_id);
+                bool is_receiver = receiver_chips.contains(chip_id);
 
                 for (ChipId connected_chip :
                      tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(chip_id)) {
-                    bool connected_chip_is_sender = sender_chips.find(connected_chip) != sender_chips.end();
-                    bool connected_chip_is_receiver = receiver_chips.find(connected_chip) != receiver_chips.end();
+                    bool connected_chip_is_sender = sender_chips.contains(connected_chip);
+                    bool connected_chip_is_receiver = receiver_chips.contains(connected_chip);
                     if (!connected_chip_is_sender and !connected_chip_is_receiver) {
                         if (is_sender) {
                             receiver_chips.insert(connected_chip);
@@ -271,7 +273,7 @@ private:
 
             // Handle other unconnected device clusters
             for (auto& device : this->devices) {
-                if (visited_chips.find(device->get_devices()[0]->id()) == visited_chips.end()) {
+                if (!visited_chips.contains(device->get_devices()[0]->id())) {
                     // This device is not connected others visited above, mark it as a sender for its connected cluster
                     chip_q.push(device->get_devices()[0]->id());
                     sender_chips.insert(device->get_devices()[0]->id());

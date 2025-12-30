@@ -4,11 +4,11 @@
 
 #include <chrono>
 #include <emmintrin.h>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
 #include <immintrin.h>
 #include <smmintrin.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>

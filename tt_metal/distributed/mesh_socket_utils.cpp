@@ -9,7 +9,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include "tt_metal/hw/inc/socket.h"
+#include "tt_metal/hw/inc/hostdev/socket.h"
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -80,7 +80,7 @@ void validate_fabric_config_for_sockets(
                                            // physical device
     };
 
-    bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;
+    bool fabric_config_supported = supported_fabrics.contains(fabric_config);
     TT_FATAL(fabric_config_supported, "Unsupported Fabric Config for Sockets specified {}", fabric_config);
 }
 

@@ -29,34 +29,30 @@ struct SDPAOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& attrs, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_q,
-        const Tensor& input_tensor_k,
-        const std::optional<Tensor>& input_tensor_v,
-        const std::optional<Tensor>& attn_mask,
-        const std::optional<Tensor>& page_table_tensor,
-        const std::optional<Tensor>& attention_sink,
-        bool is_causal,
-        std::optional<float> scale,
-        std::optional<uint32_t> sliding_window_size,
-        std::optional<int64_t> chunk_start_idx,
-        bool use_mla,
-        std::optional<uint32_t> head_dim_v,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        std::optional<SDPAProgramConfig> program_config,
-        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::transformer::sdpa
 
 namespace ttnn::prim {
-constexpr auto sdpa =
-    ttnn::register_operation<"ttnn::prim::sdpa", ttnn::operations::transformer::sdpa::SDPAOperation>();
+ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<Tensor>& input_tensor_v,
+    const std::optional<Tensor>& attn_mask,
+    const std::optional<Tensor>& page_table_tensor,
+    const std::optional<Tensor>& attention_sink,
+    bool is_causal,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    std::optional<int64_t> chunk_start_idx,
+    bool use_mla,
+    std::optional<uint32_t> head_dim_v,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 }  // namespace ttnn::prim
