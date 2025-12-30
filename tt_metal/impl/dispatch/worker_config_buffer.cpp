@@ -5,8 +5,8 @@
 #include "worker_config_buffer.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <stdint.h>
-#include <stdio.h>
+#include <cstdint>
+#include <cstdio>
 #include <algorithm>
 #include <utility>
 #include <vector>

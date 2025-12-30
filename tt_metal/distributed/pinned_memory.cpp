@@ -224,9 +224,7 @@ std::vector<ChipId> PinnedMemoryImpl::get_device_ids() const {
     return device_ids;
 }
 
-bool PinnedMemoryImpl::has_device(ChipId device_id) const {
-    return device_to_mmio_map_.find(device_id) != device_to_mmio_map_.end();
-}
+bool PinnedMemoryImpl::has_device(ChipId device_id) const { return device_to_mmio_map_.contains(device_id); }
 
 bool PinnedMemoryImpl::usable_from_noc(ChipId device_id) const {
     // Check if mapped to NOC and device is its own MMIO device (i.e., MMIO-capable)

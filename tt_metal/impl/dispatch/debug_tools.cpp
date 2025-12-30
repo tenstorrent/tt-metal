@@ -4,8 +4,8 @@
 
 #include "debug_tools.hpp"
 
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <algorithm>
 #include <iomanip>
 #include <iostream>

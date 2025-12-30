@@ -48,8 +48,14 @@ struct StridedAllGatherMinimalMatmulAsync {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
+}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::StridedAllGatherMinimalMatmulAsync::
+    tensor_return_value_t
+    strided_all_gather_minimal_matmul_async(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -62,19 +68,11 @@ struct StridedAllGatherMinimalMatmulAsync {
         std::optional<uint32_t> cluster_axis,
         const std::optional<const Tensor>& bias,
         const std::optional<MemoryConfig>& memory_config_mm,
-        std::optional<operations::unary::UnaryWithParam> fused_activation,
-        std::optional<const minimal_matmul::MinimalMatmulConfig> config,
+        std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+        std::optional<const ttnn::operations::experimental::minimal_matmul::MinimalMatmulConfig> config,
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<bool> read_local_slice_from_input);
-};
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
-
-namespace ttnn::prim {
-
-constexpr auto strided_all_gather_minimal_matmul_async = ttnn::register_operation<
-    "ttnn::prim::strided_all_gather_minimal_matmul_async",
-    ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::StridedAllGatherMinimalMatmulAsync>();
 
 }  // namespace ttnn::prim

@@ -99,6 +99,8 @@ private:
 
     void begin_function_process(const Tensor& tensor);
 
+    void begin_function_process(const std::reference_wrapper<const Tensor>& tensor_ref);
+
     template <typename T>
     void begin_function_process(const std::optional<T>& tensor_opt);
 
