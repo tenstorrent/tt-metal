@@ -10,9 +10,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -20,6 +17,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -38,7 +36,8 @@ void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
     constexpr uint32_t do_beta = get_compile_time_arg_val(4);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(6) == 1;
+    // Note: get_compile_time_arg_val(6) is FLOAT32_REDUCTION - unused after library migration
+    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
 
     constexpr uint32_t onetile = 1;
@@ -51,14 +50,14 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_6;    // [E(x**2), E(x)]
+    // Note: cb_stats_reduced (c_6) unused after library migration - reduce outputs directly to cb_var
     constexpr uint32_t cb_var_eps = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
     constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
     constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
     constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
     constexpr uint32_t cb_norm_x_input = cb_inp;
-    constexpr uint32_t stats_tile_stride = 1;
+    // Note: stats_tile_stride unused after library migration - library handles contiguous access
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
@@ -67,7 +66,7 @@ void kernel_main() {
         cb_times_gamma_out = tt::CBIndex::c_13;
     }
 
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
+    binary_op_init_common(cb_inp, cb_inp, cb_var);
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
@@ -76,36 +75,14 @@ void kernel_main() {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
-        reconfig_data_format(cb_stats, cb_reduce);
-        pack_reconfig_data_format(cb_stats_reduced);
-
         /*
          * Reduce stats input.
-         * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
-         * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
+         * cb_stats = [sum(x0**2), sum(x1**2), ...]
+         * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
+         * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
-        cb_wait_front(cb_stats, stats_tiles_cols);
-        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
-        cb_reserve_back(cb_var, 1);
-        ACQ();
-        // Reduce sum(x**2) first
-        for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
-        }
-        pack_tile(0, cb_stats_reduced);
-
-        pack_tile(0, cb_var);
-
-        REL();
-        cb_push_back(cb_stats_reduced, stats_tile_stride);
-        cb_pop_front(cb_stats, stats_tiles_cols);
-        cb_push_back(cb_var, 1);
-
-        reduce_uninit();
-
-        // free up CBs
-        cb_pop_front(cb_stats_reduced, stats_tile_stride);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_stats, cb_reduce, cb_var, compute_kernel_lib::TileShape::row(stats_tiles_cols));
 
         /*
          * 1/sqrt(var + eps)
