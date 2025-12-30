@@ -14,6 +14,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
+#include <bitset>
 #include <optional>
 
 /**
@@ -141,6 +142,32 @@ struct ProgramDescriptor {
     CBDescriptors cbs;
     std::optional<ttsl::hash::hash_t> custom_program_hash;
 };
+
+inline std::optional<uint32_t> find_available_semaphore_id(
+    const ProgramDescriptor& desc, const CoreCoord& core, CoreType core_type) {
+    constexpr uint32_t NUM_SEMAPHORES = 16;  // from tt_metal/impl/buffers/semaphore.hpp
+    std::bitset<NUM_SEMAPHORES> used_semaphores;
+
+    // check existing semaphores
+    for (const auto& sem_desc : desc.semaphores) {
+        if (sem_desc.core_type == core_type) {
+            for (const auto& core_range : sem_desc.core_ranges.ranges()) {
+                if (core_range.contains(core)) {
+                    used_semaphores.set(sem_desc.id);
+                    break;
+                }
+            }
+        }
+    }
+
+    // find first available semaphore ID
+    for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
+        if (!used_semaphores.test(i)) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
 
 }  // namespace tt::tt_metal
 

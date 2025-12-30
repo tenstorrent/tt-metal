@@ -17,8 +17,6 @@ namespace ttnn::operations::generic {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-namespace {
-
 std::vector<FabricConnectionDescriptor> generate_fabric_connections_from_topology(
     const FabricTopologyDescriptor& topo_desc,
     const Tensor& reference_tensor,
@@ -58,65 +56,6 @@ std::vector<FabricConnectionDescriptor> generate_fabric_connections_from_topolog
     return connections;
 }
 
-void apply_fabric_connection(
-    Program& program,
-    const FabricConnectionDescriptor& connection,
-    distributed::MeshDevice* mesh_device,
-    std::vector<uint32_t>& args_vec) {
-    auto src_fabric_node_id = mesh_device->get_fabric_node_id(connection.src_coord);
-    auto dst_fabric_node_id = mesh_device->get_fabric_node_id(connection.dst_coord);
-
-    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-    uint32_t selected_link =
-        (link_indices.empty() || connection.link_idx < link_indices.size()) ? connection.link_idx : link_indices[0];
-
-    // The last arg is expected to be the direction flag (is_forward / forward_flag).
-    // FabricConnectionManager::build_from_args expects: forward_flag, [forward_args], backward_flag, [backward_args]
-    // Since we're only setting up one direction (src -> dst), we add:
-    // - forward_fabric_args (if the direction flag was forward/true)
-    // - backward_flag = 0 (or 1 if direction was backward, then no forward args were added)
-
-    // Determine if this is a forward or backward connection by checking the direction flag
-    // (assumed to be the last element before we append fabric args)
-    bool is_forward = !args_vec.empty() && args_vec.back() != 0;
-
-    // For backward direction, we need to add backward_flag=1 before fabric args
-    if (!is_forward) {
-        args_vec.push_back(1);  // backward_flag = 1
-    }
-
-    // Append fabric connection args
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        selected_link,
-        program,
-        connection.worker_core,
-        args_vec,
-        connection.core_type);
-
-    // For forward direction, we need to add backward_flag=0 after fabric args
-    if (is_forward) {
-        args_vec.push_back(0);  // backward_flag = 0
-    }
-
-    SetRuntimeArgs(program, connection.kernel_index, connection.worker_core, args_vec);
-}
-
-// Find the ProgramDescriptor that covers the given coordinate
-const ProgramDescriptor* find_program_descriptor_for_coord(
-    const std::unordered_map<ttnn::MeshCoordinateRange, ProgramDescriptor>& mesh_programs,
-    const ttnn::MeshCoordinate& coord) {
-    for (const auto& [range, desc] : mesh_programs) {
-        if (range.contains(coord)) {
-            return &desc;
-        }
-    }
-    return nullptr;
-}
-
-}  // namespace
-
 GenericOpDeviceOperation::GenericMeshProgram::cached_mesh_workload_t
 GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -152,67 +91,82 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
         fabric_connections = operation_attributes.fabric_connections;
     }
 
-    // Build a map of which kernels on which coords have fabric connections
-    // These kernels should NOT have their runtime args set during Program construction
-    // because we need to append fabric connection args first
-    std::unordered_map<ttnn::MeshCoordinate, std::unordered_set<size_t>> kernels_with_fabric;
-    for (const auto& connection : fabric_connections) {
-        kernels_with_fabric[connection.src_coord].insert(connection.kernel_index);
-    }
-
+    // Process each coord and create programs directly
     std::unordered_map<ttnn::MeshCoordinate, Program> programs_by_coord;
     std::unordered_map<ttnn::MeshCoordinate, shared_variables_t> shared_vars_by_coord;
-    // Store original runtime args for kernels with fabric connections
-    std::unordered_map<ttnn::MeshCoordinate, std::unordered_map<size_t, KernelDescriptor::RuntimeArgs>>
-        original_runtime_args;
 
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
         for (const auto& coord : mesh_coord_range) {
-            // Check if this coord has any fabric connections
-            auto fabric_it = kernels_with_fabric.find(coord);
-            if (fabric_it != kernels_with_fabric.end()) {
-                // Create a modified descriptor without runtime args for fabric kernels
-                ProgramDescriptor modified_desc = program_descriptor;
-                for (size_t kernel_idx : fabric_it->second) {
-                    if (kernel_idx < modified_desc.kernels.size()) {
-                        // Save original runtime args
-                        original_runtime_args[coord][kernel_idx] = modified_desc.kernels[kernel_idx].runtime_args;
-                        // Clear runtime args so Program constructor doesn't set them
-                        modified_desc.kernels[kernel_idx].runtime_args.clear();
-                    }
+            // Filter connections for this coord
+            std::vector<const FabricConnectionDescriptor*> coord_connections;
+            for (const auto& connection : fabric_connections) {
+                if (connection.src_coord == coord) {
+                    coord_connections.push_back(&connection);
                 }
-                auto cached_program = create_at(modified_desc, tensor_args, tensor_return_value);
-                programs_by_coord[coord] = std::move(cached_program.program);
-                shared_vars_by_coord[coord] = std::move(cached_program.shared_variables);
-            } else {
+            }
+
+            if (coord_connections.empty()) {
+                // No fabric connections - use original descriptor directly
                 auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
                 programs_by_coord[coord] = std::move(cached_program.program);
                 shared_vars_by_coord[coord] = std::move(cached_program.shared_variables);
+                continue;
             }
-        }
-    }
 
-    // Apply fabric connections to programs
-    // This builds the full runtime args (original + fabric args) and sets them
-    for (const auto& connection : fabric_connections) {
-        auto it = programs_by_coord.find(connection.src_coord);
-        if (it != programs_by_coord.end()) {
-            // Get original runtime args for this kernel
-            std::vector<uint32_t> args_vec;
-            auto orig_it = original_runtime_args.find(connection.src_coord);
-            if (orig_it != original_runtime_args.end()) {
-                auto kernel_it = orig_it->second.find(connection.kernel_index);
-                if (kernel_it != orig_it->second.end()) {
-                    // Find the runtime args for the specific worker core
-                    for (const auto& [core, args] : kernel_it->second) {
-                        if (core == connection.worker_core) {
-                            args_vec = args;
-                            break;
-                        }
-                    }
+            // Has fabric connections - create modified descriptor
+            ProgramDescriptor modified_desc = program_descriptor;
+            auto src_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+
+            for (const auto* connection : coord_connections) {
+                if (connection->kernel_index >= modified_desc.kernels.size()) {
+                    continue;
+                }
+
+                auto& kernel_desc = modified_desc.kernels[connection->kernel_index];
+
+                // Find runtime args for this core
+                auto args_it = std::find_if(
+                    kernel_desc.runtime_args.begin(), kernel_desc.runtime_args.end(), [&connection](const auto& pair) {
+                        return pair.first == connection->worker_core;
+                    });
+
+                TT_FATAL(
+                    args_it != kernel_desc.runtime_args.end(),
+                    "Core {} has fabric connections but no base runtime args for kernel {}",
+                    connection->worker_core.str(),
+                    connection->kernel_index);
+
+                auto& args_vec = args_it->second;
+                auto dst_fabric_node_id = mesh_device->get_fabric_node_id(connection->dst_coord);
+
+                auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+                uint32_t selected_link =
+                    link_indices.empty()
+                        ? 0
+                        : (connection->link_idx >= link_indices.size() ? link_indices[0] : connection->link_idx);
+
+                bool is_forward = !args_vec.empty() && args_vec.back() != 0;
+                if (!is_forward) {
+                    args_vec.push_back(1);  // backward_flag = 1
+                }
+
+                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                    src_fabric_node_id,
+                    dst_fabric_node_id,
+                    selected_link,
+                    modified_desc,
+                    connection->worker_core,
+                    args_vec);
+
+                if (is_forward) {
+                    args_vec.push_back(0);  // backward_flag = 0
                 }
             }
-            apply_fabric_connection(it->second, connection, mesh_device, args_vec);
+
+            // Create program with modified descriptor
+            auto cached_program = create_at(modified_desc, tensor_args, tensor_return_value);
+            programs_by_coord[coord] = std::move(cached_program.program);
+            shared_vars_by_coord[coord] = std::move(cached_program.shared_variables);
         }
     }
 
@@ -241,6 +195,17 @@ GenericOpDeviceOperation::GenericMeshProgram::cached_program_t GenericOpDeviceOp
     shared_vars.num_kernel_handles = program_descriptor.kernels.size();
 
     return {std::move(program), std::move(shared_vars)};
+}
+
+const ProgramDescriptor* find_program_descriptor_for_coord(
+    const std::unordered_map<ttnn::MeshCoordinateRange, ProgramDescriptor>& mesh_programs,
+    const ttnn::MeshCoordinate& coord) {
+    for (const auto& [range, desc] : mesh_programs) {
+        if (range.contains(coord)) {
+            return &desc;
+        }
+    }
+    return nullptr;
 }
 
 void override_program_runtime_arguments(

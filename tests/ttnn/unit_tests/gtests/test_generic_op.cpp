@@ -1037,6 +1037,8 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
     // Get sender's data for verification - this is device 0's unique shard
     auto input_shards = ttnn::distributed::get_device_tensors(input_tensor);
     auto sender_data = input_shards[0].cpu();
+    auto original_receiver_data = input_shards[1].cpu();
+    log_info(tt::LogTest, "Original shard data at receiver: {}", ttnn::to_string(original_receiver_data));
 
     // Create output tensor (same spec as input, allocated on mesh)
     Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(input_tensor.tensor_spec(), mesh_device.get());

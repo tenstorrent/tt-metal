@@ -18,6 +18,7 @@
 
 namespace tt::tt_metal {
 class Program;
+struct ProgramDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -40,15 +41,18 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // It is advised to call the API once all the other run-time args for the prgram are
 // determined/pushed to keep things clean and avoid any extra arg management.
 //
+// Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
+// it adds SemaphoreDescriptors instead of creating semaphores (only WORKER core_type supported).
+//
 // Inputs:
 // src_chip_id: physical chip id/device id of the sender chip
 // dst_chip_id: physical chip id/device id of the receiver chip
 // link_idx: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
 //                instance we can have upto 4 active links b/w two chips
-// worker_program: program handle
+// worker_program_or_desc: program handle or program descriptor
 // worker_core: worker core logical coordinates
 // worker_args: list of existing run-time args to which the connection args will be appended
-// core_type: core type which the worker will be running on
+// core_type: core type which the worker will be running on (defaults to WORKER)
 //
 // Constraints:
 // 1. Currently the sender and receiver chip should be physically adjacent (for 1D)
@@ -56,11 +60,12 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // 3. When connecting with 1D fabric routers, users are responsible for setting up the
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
+template <typename ProgramOrDescriptor = tt::tt_metal::Program>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
