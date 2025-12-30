@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -131,8 +128,9 @@ void kernel_main() {
 
 #ifndef RMSNORM
         // E[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
-            cb_x, cb_scaler, cb_ex, W, Wt, blk);
+        numeric::
+            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
+                cb_x, cb_scaler, cb_ex, W, Wt, blk);
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
@@ -180,8 +178,9 @@ void kernel_main() {
 #endif
 
         // Var[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_xmm2, cb_scaler, cb_ex2, W, Wt, blk);
+        numeric::
+            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
+                cb_xmm2, cb_scaler, cb_ex2, W, Wt, blk);
 
         // Var[x] + eps
         cb_wait_front(cb_ex2, 1);
