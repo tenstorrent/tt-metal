@@ -20,6 +20,11 @@ struct Fold {
         uint32_t stride_w{};
         bool is_sharded{};
         bool is_dram_interleaved = false;
+        // Padding: [pad_top, pad_bottom, pad_left, pad_right]
+        uint32_t pad_top = 0;
+        uint32_t pad_bottom = 0;
+        uint32_t pad_left = 0;
+        uint32_t pad_right = 0;
     };
 
     struct tensor_args_t {
@@ -106,7 +111,11 @@ struct Fold {
         const std::optional<const ttnn::Shape>& output_shape,
         uint32_t pad_c,
         uint32_t pad_h,
-        uint32_t pad_w);
+        uint32_t pad_w,
+        uint32_t pad_top,
+        uint32_t pad_bottom,
+        uint32_t pad_left,
+        uint32_t pad_right);
 };
 
 }  // namespace ttnn::operations::data_movement
