@@ -80,8 +80,10 @@ FillRMDeviceOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<FillRMDeviceOperation::operation_attributes_t, FillRMDeviceOperation::tensor_args_t>
-FillRMDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement::fill_rm
+
+namespace ttnn::prim {
+ttnn::Tensor fill_rm(
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -92,8 +94,9 @@ FillRMDeviceOperation::invoke(
     float val_hi,
     float val_lo,
     const MemoryConfig& output_memory_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::fill_rm::FillRMDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .N = N,
             .C = C,
             .H = H,
@@ -104,7 +107,6 @@ FillRMDeviceOperation::invoke(
             .val_lo = val_lo,
             .output_mem_config = output_memory_config,
         },
-        tensor_args_t{.input = input}};
+        OperationType::tensor_args_t{.input = input});
 }
-
-}  // namespace ttnn::operations::data_movement::fill_rm
+}  // namespace ttnn::prim

@@ -10,6 +10,9 @@ Usage:
 Description:
     Provides dispatcher data noc locations on devices.
     Data include firmware path, kernel path, kernel offset, etc.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass

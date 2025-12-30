@@ -4,10 +4,10 @@
 
 #include <cstring>
 #include <exception>
-#include <errno.h>
+#include <cerrno>
 #include <filesystem>
 #include <map>
-#include <stdint.h>
+#include <cstdint>
 #include <string>
 #include <sys/types.h>
 #include <unordered_map>
@@ -95,7 +95,7 @@ KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, b
 
     KernelCacheStatus kernel_cache_status;
     for (const auto& [kernel_name, hash_str] : post_compile_kernel_to_hash_str) {
-        if (pre_compile_kernel_to_hash_str.find(kernel_name) == pre_compile_kernel_to_hash_str.end()) {
+        if (!pre_compile_kernel_to_hash_str.contains(kernel_name)) {
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, false});
         } else {
             const auto& prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);

@@ -73,29 +73,39 @@ DeepseekGroupedGateDeviceOperation::tensor_return_value_t DeepseekGroupedGateDev
         create_device_tensor(specs[1], tensor_args.scores.device())};
 }
 
-std::
-    tuple<DeepseekGroupedGateDeviceOperation::operation_attributes_t, DeepseekGroupedGateDeviceOperation::tensor_args_t>
-    DeepseekGroupedGateDeviceOperation::invoke(
-        const Tensor& scores,
-        const Tensor& bias,
-        uint32_t n_groups,
-        uint32_t summed_experts_per_group,
-        uint32_t topk_groups,
-        uint32_t n_activated_experts,
-        float route_scale,
-        float epsilon,
-        const std::optional<MemoryConfig>& output_mem_config) {
-    return {
-        operation_attributes_t{
-            n_groups,
-            summed_experts_per_group,
-            topk_groups,
-            n_activated_experts,
-            route_scale,
-            epsilon,
-            output_mem_config.value_or(scores.memory_config())},
-        tensor_args_t{scores, bias}};
+}  // namespace ttnn::operations::experimental::reduction
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::reduction::DeepseekGroupedGateDeviceOperation::tensor_return_value_t
+deepseek_grouped_gate(
+    const Tensor& scores,
+    const Tensor& bias,
+    uint32_t n_groups,
+    uint32_t summed_experts_per_group,
+    uint32_t topk_groups,
+    uint32_t n_activated_experts,
+    float route_scale,
+    float epsilon,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    using OperationType = ttnn::operations::experimental::reduction::DeepseekGroupedGateDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        n_groups,
+        summed_experts_per_group,
+        topk_groups,
+        n_activated_experts,
+        route_scale,
+        epsilon,
+        output_mem_config.value_or(scores.memory_config())};
+    auto tensor_args = OperationType::tensor_args_t{scores, bias};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
+
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::experimental::reduction {
 
 DeepseekGroupedGateDeviceOperation::program_factory_t DeepseekGroupedGateDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {

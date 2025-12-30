@@ -41,8 +41,8 @@ void bind_padded_slice(nb::module_& mod) {
                 [1, 1, 32, 32]
                 )doc";
 
-    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
-    // a vector with a fixed size default value
+    // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
+    // than a vector with a fixed size default value
     using OperationType = decltype(ttnn::experimental::padded_slice);
     ttnn::bind_registered_operation(
         mod,

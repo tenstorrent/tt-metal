@@ -65,7 +65,10 @@ Result conv_transpose2d_L1(
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
 
     // Compute all transposed conv2d dimension transformations using the consolidated helper
     // This is the single source of truth for dimension calculations
@@ -224,6 +227,7 @@ Result conv_transpose2d_L1(
             output_parallel_config,
             groups_for_prep,  // Use 1 if groups > 1 since grouped conversion is already done
             opt_conv_op_block_config.act_block_h_ntiles,
+            input_height,
             input_width,
             mm_conv && auto_shard,
             out_channels,  // explicit out_channels for grouped convolutions
@@ -430,7 +434,10 @@ Result conv_transpose2d_DRAM(
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
 
     // Compute all transposed conv2d dimension transformations using the consolidated helper
     // This is the single source of truth for dimension calculations
@@ -544,7 +551,7 @@ Result conv_transpose2d_DRAM(
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config_);
 
-    if (conv_config.deallocate_activation) {
+    if (conv_config.deallocate_activation && !input_tensor_on_device.memory_config().is_dram()) {
         input_tensor_on_device.deallocate(true);
     }
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());

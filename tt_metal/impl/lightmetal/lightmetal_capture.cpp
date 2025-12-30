@@ -73,7 +73,7 @@ void LightMetalCaptureContext::reset() {
 ////////////////////////////////////////////
 
 bool LightMetalCaptureContext::is_in_map(const Buffer* obj) {
-    return buffer_id_to_global_id_map_.find(obj->unique_id()) != buffer_id_to_global_id_map_.end();
+    return buffer_id_to_global_id_map_.contains(obj->unique_id());
 }
 
 uint32_t LightMetalCaptureContext::add_to_map(const Buffer* obj) {
@@ -102,7 +102,7 @@ uint32_t LightMetalCaptureContext::get_global_id(const Buffer* obj) {
 }
 
 bool LightMetalCaptureContext::is_in_map(const Program* obj) {
-    return program_id_to_global_id_map_.find(obj->impl().get_id()) != program_id_to_global_id_map_.end();
+    return program_id_to_global_id_map_.contains(obj->impl().get_id());
 }
 
 uint32_t LightMetalCaptureContext::add_to_map(const Program* obj) {
@@ -130,9 +130,7 @@ uint32_t LightMetalCaptureContext::get_global_id(const Program* obj) {
     }
 }
 
-bool LightMetalCaptureContext::is_in_map(const Kernel* obj) {
-    return kernel_to_global_id_map_.find(obj) != kernel_to_global_id_map_.end();
-}
+bool LightMetalCaptureContext::is_in_map(const Kernel* obj) { return kernel_to_global_id_map_.contains(obj); }
 
 uint32_t LightMetalCaptureContext::add_to_map(const Kernel* obj) {
     if (is_in_map(obj)) {
@@ -159,9 +157,7 @@ uint32_t LightMetalCaptureContext::get_global_id(const Kernel* obj) {
     }
 }
 
-bool LightMetalCaptureContext::is_in_map(const CBHandle handle) {
-    return cb_handle_to_global_id_map_.find(handle) != cb_handle_to_global_id_map_.end();
-}
+bool LightMetalCaptureContext::is_in_map(const CBHandle handle) { return cb_handle_to_global_id_map_.contains(handle); }
 
 uint32_t LightMetalCaptureContext::add_to_map(const CBHandle handle) {
     if (is_in_map(handle)) {

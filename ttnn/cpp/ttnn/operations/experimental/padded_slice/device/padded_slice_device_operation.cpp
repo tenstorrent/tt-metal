@@ -121,21 +121,27 @@ tt::stl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<PaddedSliceDeviceOperation::operation_attributes_t, PaddedSliceDeviceOperation::tensor_args_t>
-PaddedSliceDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::padded_slice
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation::tensor_return_value_t padded_slice(
     const Tensor& input,
     const ttnn::Shape& padded_slice_start,
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .padded_slice_start = padded_slice_start,
-            .padded_slice_end = padded_slice_end,
-            .step = step,
-            .output_mem_config = output_mem_config},
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+    using OperationType = ttnn::operations::experimental::padded_slice::PaddedSliceDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .padded_slice_start = padded_slice_start,
+        .padded_slice_end = padded_slice_end,
+        .step = step,
+        .output_mem_config = output_mem_config};
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::padded_slice
+}  // namespace ttnn::prim

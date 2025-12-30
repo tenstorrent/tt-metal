@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 #include <nlohmann/json.hpp>
 
 #include "ttnn/graph/graph_processor.hpp"

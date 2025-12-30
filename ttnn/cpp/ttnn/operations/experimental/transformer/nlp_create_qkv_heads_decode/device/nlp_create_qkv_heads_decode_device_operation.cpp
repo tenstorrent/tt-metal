@@ -4,6 +4,7 @@
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode {
 
@@ -193,10 +194,11 @@ std::vector<Tensor> NLPCreateQKVHeadsDecodeDeviceOperation::create_output_tensor
         create_device_tensor(output_specs[2], input_tensor.device())};
 }
 
-std::tuple<
-    NLPCreateQKVHeadsDecodeDeviceOperation::operation_attributes_t,
-    NLPCreateQKVHeadsDecodeDeviceOperation::tensor_args_t>
-NLPCreateQKVHeadsDecodeDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode
+
+namespace ttnn::prim {
+
+std::vector<Tensor> nlp_create_qkv_heads_decode(
     const Tensor& input_tensor,
     uint32_t num_q_heads,
     uint32_t num_kv_heads,
@@ -206,16 +208,20 @@ NLPCreateQKVHeadsDecodeDeviceOperation::invoke(
     const std::optional<const Tensor>& batch_offset,
     std::optional<uint32_t> slice_size,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    return {
-        operation_attributes_t{
-            .num_q_heads = num_q_heads,
-            .num_kv_heads = num_kv_heads,
-            .head_dim = head_dim,
-            .overlap_qk_coregrid = overlap_qk_coregrid,
-            .input_on_subcoregrids = input_on_subcoregrids,
-            .slice_size = slice_size,
-            .output_mem_config = output_mem_config},
-        tensor_args_t{.input_tensor = input_tensor, .batch_offset = batch_offset}};
+    using OperationType =
+        ttnn::operations::experimental::nlp_create_qkv_heads_decode::NLPCreateQKVHeadsDecodeDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_q_heads = num_q_heads,
+        .num_kv_heads = num_kv_heads,
+        .head_dim = head_dim,
+        .overlap_qk_coregrid = overlap_qk_coregrid,
+        .input_on_subcoregrids = input_on_subcoregrids,
+        .slice_size = slice_size,
+        .output_mem_config = output_mem_config};
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .batch_offset = batch_offset};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode
+}  // namespace ttnn::prim

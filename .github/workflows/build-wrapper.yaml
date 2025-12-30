@@ -19,10 +19,6 @@ jobs:
         config:
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-            build-type: "Release"
-            nanobind: true
-          - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Debug"
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
@@ -40,7 +36,6 @@ jobs:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
-      nanobind: ${{ matrix.config.nanobind || false }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true

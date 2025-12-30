@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rand_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <memory>
 
 namespace ttnn::operations::rand {
@@ -56,18 +57,21 @@ tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
-std::tuple<RandDeviceOperation::operation_attributes_t, RandDeviceOperation::tensor_args_t> RandDeviceOperation::invoke(
+}  // namespace ttnn::operations::rand
+
+namespace ttnn::prim {
+ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     const ttnn::Shape& shape,
-    const DataType dtype,
-    const Layout layout,
+    DataType dtype,
+    Layout layout,
     const MemoryConfig& memory_config,
     MeshDevice& device,
-    const float from,
-    const float to,
-    const uint32_t seed) {
-    return {
-        operation_attributes_t{shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
-        tensor_args_t{}};
+    float from,
+    float to,
+    uint32_t seed) {
+    using OperationType = ttnn::operations::rand::RandDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
+        OperationType::tensor_args_t{});
 }
-
-}  // namespace ttnn::operations::rand
+}  // namespace ttnn::prim

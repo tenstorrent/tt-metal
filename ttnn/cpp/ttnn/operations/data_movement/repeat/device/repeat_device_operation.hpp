@@ -37,16 +37,13 @@ struct RepeatDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        uint32_t m_num_repeats,
-        bool m_is_last_dim,
-        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 }  // namespace ttnn::operations::data_movement::repeat
 
 namespace ttnn::prim {
-constexpr auto repeat =
-    ttnn::register_operation<"ttnn::prim::repeat", ttnn::operations::data_movement::repeat::RepeatDeviceOperation>();
+ttnn::operations::data_movement::repeat::RepeatDeviceOperation::tensor_return_value_t repeat(
+    const Tensor& input,
+    uint32_t m_num_repeats,
+    bool m_is_last_dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim
