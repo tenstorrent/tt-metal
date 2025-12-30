@@ -1,17 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-namespace py = pybind11;
+#include <ttnn-nanobind/nanobind_fwd.hpp>
 
 namespace tt::operations::primary {
-
-inline void py_module(py::module& m_primary) {}
+namespace nb = nanobind;
+inline void py_module(nb::module_& mod) {}
 
 }  // namespace tt::operations::primary
    // primary

@@ -99,23 +99,23 @@ Step 1: Add Python binding
 
 In order to add a python binding for the operation, follow the directory structure shown below:
 
-`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_pybind.hpp`
-`ttnn/python/ttnn/operations/<category>/<category>_pybind.hpp`
+`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_nanobind.hpp`
+`ttnn/python/ttnn/operations/<category>/<category>_nanobind.hpp`
 
 A concrete example:
 
-.. literalinclude::  examples/example/example_pybind.hpp
+.. literalinclude::  examples/example/example_nanobind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/example/example_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/example/example_nanobind.hpp
 
 
-.. literalinclude::  examples/examples_pybind.hpp
+.. literalinclude::  examples/examples_nanobind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/examples_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/examples_nanobind.hpp
 
-Finally, call the module defined in `examples/example/example_pybind.hpp` wherever you want it to be added.
+Finally, call the module defined in `examples/example/example_nanobind.hpp` wherever you want it to be added.
 
 
 
