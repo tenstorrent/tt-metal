@@ -181,7 +181,7 @@ all_gather_matmul_async(
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
-        all_gather_async::AllGatherAsyncDeviceOperation::invoke(
+        ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation::invoke(
             input_tensor,
             persistent_output_buffer,
             dim,
@@ -202,8 +202,9 @@ all_gather_matmul_async(
             /*optional_mesh_device=*/nullptr);
 
     // Create the all gather output tensor used as input (activation) to the matmul
-    ttnn::Tensor all_gather_out_tensor = all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
-        all_gather_async_operation_attributes, all_gather_async_tensor_args);
+    ttnn::Tensor all_gather_out_tensor =
+        ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
+            all_gather_async_operation_attributes, all_gather_async_tensor_args);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
