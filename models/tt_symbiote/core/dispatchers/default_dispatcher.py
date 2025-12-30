@@ -1181,7 +1181,7 @@ func_to_ttnn_compatible = {
     "aten::mul.Scalar": handle_mul,
     "aten::sub.Scalar": handle_sub,
     "aten::add.Scalar": handle_add,
-    "aten::add_.Tensor": handle_add_inplace,
+    # "aten::add_.Tensor": handle_add_inplace,
     "aten::bmm": handle_bmm,
     "aten::_softmax": handle_softmax,
     "aten::pow.Tensor_Scalar": handle_power,
@@ -1215,7 +1215,7 @@ func_to_ttnn_compatible = {
     "aten::_safe_softmax": handle_softmax,
     "aten::mm": handle_bmm,
     "aten::silu": handle_silu,
-    "aten::scatter_.value": handle_scatter_value_inplace,
+    # "aten::scatter_.value": handle_scatter_value_inplace,
     "aten::bitwise_not": handle_bitwise_not,
     "aten::gather": handle_gather,
 }

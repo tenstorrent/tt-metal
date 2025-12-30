@@ -10,10 +10,13 @@ from models.tt_symbiote.modules.activation import TTNNReLU
 from models.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
 
 
-def fold_batch_norm2d_into_conv2d(weight, scale, shift, running_mean, running_var, eps):
+def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
     weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None, None]
-    bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
-    bias = torch.reshape(bias, (-1,))
+    if bias is not None:
+        bias = (bias - running_mean) * (scale / torch.sqrt(running_var + eps)) + shift
+    else:
+        bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
+
     return weight, bias
 
 
@@ -202,6 +205,7 @@ class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
     def _preprocess_weights_local(self):
         torch_weight, torch_bias = fold_batch_norm2d_into_conv2d(
             self.torch_layer.conv.weight,
+            self.torch_layer.conv.bias,
             self.torch_layer.bn.weight,
             self.torch_layer.bn.bias,
             self.torch_layer.bn.running_mean,
@@ -248,7 +252,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
             groups=conv.groups,
             slice_config=slice_config,
         )
-        new_conv._fallback_torch_layer = NHWCConvBNActivationPytorch(conv, bn, activation)
+        new_conv._fallback_torch_layer = NHWCConvBNActivationPytorch(conv, bn, nn.ReLU())
         assert isinstance(activation, nn.ReLU), "Only ReLU activation is supported in TTNNConv2dBNActivationNHWC."
         return new_conv
 
@@ -356,7 +360,7 @@ class TTNNBottleneck(TTNNModule):
                 identity = ttnn.to_device(identity.to_ttnn, out.to_ttnn.device())
 
             identity = self.permute(identity, perm=[0, 2, 3, 1])
-        out += identity
+        out = out + identity
         out = self.relu(out)
         out = self.permute(out, perm=[0, 3, 1, 2])
         return out
