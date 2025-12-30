@@ -124,12 +124,17 @@ class PatchEmbeddingTorch:
         return x
 
 
+def nearest_32(x: int) -> int:
+    """Round up to nearest multiple of 32 for TTNN tile alignment."""
+    return ((x + 31) // 32) * 32
+
+
 class PatchEmbeddingTTNN:
     """
-    Convert image patches to embeddings using hybrid approach.
+    Convert image patches to embeddings using Unfold + TTNN linear.
 
-    Uses PyTorch conv2d for patch extraction, then converts to TTNN.
-    This hybrid approach is more reliable than pure TTNN fold for non-standard patch sizes.
+    OPTIMIZED: Uses torch.nn.Unfold for patch extraction, then TTNN linear.
+    This approach (from Gemma3) uses optimized TTNN linear instead of PyTorch conv2d.
     """
 
     def __init__(
@@ -139,11 +144,11 @@ class PatchEmbeddingTTNN:
         device: "ttnn.Device",
     ):
         """
-        Initialize patch embedding.
+        Initialize patch embedding with TTNN weights.
 
         Args:
             config: SigLIP configuration
-            weights: PyTorch weights for conv2d
+            weights: PyTorch weights for conv2d (will be converted to linear format)
             device: TTNN device
         """
         if not TTNN_AVAILABLE:
@@ -151,6 +156,11 @@ class PatchEmbeddingTTNN:
 
         self.config = config
         self.device = device
+        self.patch_size = config.patch_size
+        self.hidden_size = config.hidden_size
+
+        # Create unfold operation (runs on host, very fast)
+        self._unfold = torch.nn.Unfold(kernel_size=self.patch_size, stride=self.patch_size)
 
         # Handle both formats: vision_model.embeddings.patch_embedding (checkpoint) and patch_embedding (legacy)
         conv_weight = weights.get("patch_embedding.weight") or weights.get(
@@ -158,45 +168,87 @@ class PatchEmbeddingTTNN:
         )
         conv_bias = weights.get("patch_embedding.bias") or weights.get("vision_model.embeddings.patch_embedding.bias")
 
-        # Store PyTorch weights for hybrid conv2d approach
-        self._torch_weight = conv_weight
-        self._torch_bias = conv_bias
+        # Convert conv2d weight to linear format
+        # Conv weight: (out_channels, in_channels, kernel_h, kernel_w) = (hidden_size, 3, patch_size, patch_size)
+        # Linear weight: (in_features, out_features) where in_features = 3 * patch_size * patch_size
+        out_channels = conv_weight.shape[0]  # hidden_size
+        in_features = conv_weight.shape[1] * conv_weight.shape[2] * conv_weight.shape[3]  # 3 * 14 * 14 = 588
+
+        # Reshape: (out, in, h, w) -> (out, in*h*w) -> transpose -> (in*h*w, out)
+        linear_weight = conv_weight.view(out_channels, -1)  # (hidden_size, 588)
+
+        # Pad input dimension to tile-aligned (588 -> 608)
+        self.in_features_padded = nearest_32(in_features)
+        pad_len = self.in_features_padded - in_features
+
+        if pad_len > 0:
+            padding = torch.zeros(out_channels, pad_len, dtype=linear_weight.dtype)
+            linear_weight = torch.cat([linear_weight, padding], dim=-1)
+
+        # Transpose for TTNN linear: (hidden_size, padded_in) -> (padded_in, hidden_size)
+        linear_weight = linear_weight.T.contiguous()
+
+        # Store as TTNN tensor on device
+        self._linear_weight = ttnn.from_torch(
+            linear_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Bias (if present)
+        if conv_bias is not None:
+            self._linear_bias = ttnn.from_torch(
+                conv_bias.unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self._linear_bias = None
+
+        # Compute kernel config
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def forward(self, pixel_values) -> "ttnn.Tensor":
         """
-        Extract patch embeddings - use PyTorch for convolution, then convert to TTNN.
-
-        Hybrid approach for reliability (PyTorch conv → TTNN tensor).
+        OPTIMIZED: Extract patch embeddings using Unfold + TTNN linear.
 
         Args:
-            pixel_values: PyTorch or TTNN tensor (batch_size, channels, height, width)
+            pixel_values: PyTorch tensor (batch_size, channels, height, width)
 
         Returns:
             TTNN tensor (batch_size, num_patches, hidden_size)
         """
-        # Convert to PyTorch if needed
+        # Convert to PyTorch if needed (shouldn't happen in normal flow)
         if isinstance(pixel_values, ttnn.Tensor):
             pixel_values = ttnn.to_torch(pixel_values)
 
         batch_size = pixel_values.shape[0]
-        patch_size = self.config.patch_size
 
-        # Use PyTorch convolution for reliable patch extraction
-        conv_weight = self._torch_weight.to(pixel_values.dtype)
-        conv_bias = self._torch_bias.to(pixel_values.dtype) if self._torch_bias is not None else None
+        # Step 1: Unfold on host (very fast - just memory reorganization)
+        # Input: (B, C, H, W) -> Output: (B, C*patch_size*patch_size, num_patches)
+        x = self._unfold(pixel_values)
 
-        # Apply convolution
-        x = torch.nn.functional.conv2d(
-            pixel_values,
-            conv_weight,
-            conv_bias,
-            stride=patch_size,
-        )
+        # Step 2: Permute to (B, num_patches, C*patch_size*patch_size)
+        x = x.permute(0, 2, 1)
 
-        # Reshape: (B, C, H_out, W_out) -> (B, num_patches, hidden_size)
-        x = x.flatten(2).transpose(1, 2)
+        # Step 3: Pad to tile-aligned dimension
+        in_features = x.shape[-1]
+        pad_len = self.in_features_padded - in_features
 
-        # Convert to TTNN
+        if pad_len > 0:
+            padding = torch.zeros((batch_size, x.shape[1], pad_len), dtype=x.dtype, device=x.device)
+            x = torch.cat([x, padding], dim=-1)
+
+        # Step 4: Transfer to device
         x_ttnn = ttnn.from_torch(
             x,
             dtype=ttnn.bfloat16,
@@ -205,7 +257,19 @@ class PatchEmbeddingTTNN:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        return x_ttnn
+        # Step 5: TTNN linear (optimized on device)
+        out = ttnn.linear(
+            x_ttnn,
+            self._linear_weight,
+            bias=self._linear_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        ttnn.deallocate(x_ttnn)
+
+        return out
 
 
 # ============================================================================
