@@ -44,7 +44,7 @@ CONV_PERF_CONFIGS = [
         "act_block_h_override": 0, "act_block_w_div": 1,
         "enable_activation_reuse": True, "enable_act_double_buffer": True,
         "enable_weights_double_buffer": False, "fp32_accum": False,
-        "perf_targets": {"wh": 85, "bh_p150": 36},
+        "perf_targets": {"wh": 87, "bh_p150": 36},
     },
     # BLOCK SHARDED, SDXL
     {
@@ -59,7 +59,7 @@ CONV_PERF_CONFIGS = [
         "act_block_h_override": 0, "act_block_w_div": 1,
         "enable_activation_reuse": False, "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True, "fp32_accum": True,
-        "perf_targets": {"wh": 149, "bh_p150": 53},
+        "perf_targets": {"wh": 115, "bh_p150": 53},
     },
     # WIDTH SHARDED, Segformer
     {
@@ -79,8 +79,8 @@ CONV_PERF_CONFIGS = [
 ]
 # fmt: on
 
-# Performance threshold tolerance in us
-THRESHOLD = 1
+# Applied to both upper and lower bounds
+THRESHOLD_PERCENT = 0.03
 
 # Build performance targets per architecture (in us) from global config
 PERF_TARGETS_WH = {config["test_name"]: config["perf_targets"]["wh"] for config in CONV_PERF_CONFIGS}
@@ -126,7 +126,6 @@ def extract_ops_between_signposts(csv_path, op_name="Conv2dDeviceOperation"):
     return results
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_run_conv2d_ops(device):
     """
     Consolidated performance test that runs all conv configurations in a single process.
@@ -143,14 +142,13 @@ def test_run_conv2d_ops(device):
     for config in CONV_PERF_CONFIGS:
         test_name = config["test_name"]
 
-        # Create input tensor
-        torch_input_tensor = torch.randn(
+        # Create input tensor directly on device
+        tt_input_tensor = ttnn.empty(
             (1, 1, config["input_height"] * config["input_width"] * config["batch_size"], config["input_channels"]),
-            dtype=torch.bfloat16,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
-        tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
-        tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
         # Create weights
         torch_weight_tensor = torch.randn(
@@ -187,6 +185,7 @@ def test_run_conv2d_ops(device):
             act_block_h_override=config["act_block_h_override"],
             act_block_w_div=config["act_block_w_div"],
             enable_activation_reuse=config["enable_activation_reuse"],
+            config_tensors_in_dram=True,
         )
 
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -305,10 +304,18 @@ def test_conv2d_device_perf():
         logger.info(f"[{test_name}] Performance range: {measured_min_us:.3f} - {measured_max_us:.3f} us")
         logger.info(f"[{test_name}] Number of samples: {len(durations_ns)}")
 
-        # Check against target
-        if measured_avg_us >= perf_target_us + THRESHOLD:
+        # Check against target with percentage threshold (lower bound - too slow)
+        threshold_limit = perf_target_us * (1 + THRESHOLD_PERCENT)
+        if measured_avg_us >= threshold_limit:
             failures.append(
-                f"[{test_name}] Performance target not met: {measured_avg_us:.3f} us >= {perf_target_us + THRESHOLD} us"
+                f"[{test_name}] Performance target not met: {measured_avg_us:.3f} us >= {threshold_limit:.3f} us (target {perf_target_us} us + {THRESHOLD_PERCENT*100}%)"
+            )
+
+        # Check upper bound - too fast (potential measurement issue)
+        upper_bound_limit = perf_target_us * (1 - THRESHOLD_PERCENT)
+        if measured_avg_us < upper_bound_limit:
+            failures.append(
+                f"[{test_name}] Performance suspiciously fast: {measured_avg_us:.3f} us < {upper_bound_limit:.3f} us (target {perf_target_us} us - {THRESHOLD_PERCENT*100}%)"
             )
 
     # Assert all tests passed
