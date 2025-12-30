@@ -1151,8 +1151,10 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
 
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
-    std::size_t optim_worker_slice_len_tiles =
-        ceil(total_num_tiles / num_workers);  // Ceil so that the remainder worker will have a smaller slice
+    // Cast to double before division to ensure ceil() rounds up properly.
+    // Example: 10 tiles / 3 workers: was ceil(3)=3, now ceil(3.33)=4 tiles per worker.
+    std::size_t optim_worker_slice_len_tiles = static_cast<std::size_t>(
+        ceil(static_cast<double>(total_num_tiles) / num_workers));  // Ceil so that the remainder worker will have a smaller slice
 
     if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) {  // Each worker will have a full slice
         for (uint32_t w = 0; w < num_workers; ++w) {

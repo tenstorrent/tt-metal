@@ -38,7 +38,8 @@ inline uint64_t ceil32(const uint64_t& number) {
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~10% to account for reserved memory
 inline uint32_t calculate_optimal_chunk_size(const Tensor& input_tensor) {
-    return ceil32(((((get_max_l1_space(input_tensor)) / 4) / 4) * 0.9) - 32);
+    uint32_t l1_per_chunk = (get_max_l1_space(input_tensor) / 4) / 4;
+    return ceil32((l1_per_chunk * 9 / 10) - 32);
 }
 
 inline CBHandle create_cb(
