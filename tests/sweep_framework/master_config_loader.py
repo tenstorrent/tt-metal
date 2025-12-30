@@ -561,6 +561,15 @@ class MasterConfigLoader:
                 return self._get_operation_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=not all_cases
                 )
+            elif self._matches_operation(
+                operation_name, "scaled_dot_product_attention"
+            ) and not self._matches_operation(operation_name, "decode"):
+                print(
+                    f"🔧 Detected scaled_dot_product_attention operation - using operation-specific extractor with is_causal and scale"
+                )
+                return self._get_scaled_dot_product_attention_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                )
             elif self._matches_operation(operation_name, "paged_update_cache"):
                 print(
                     f"🔧 Detected paged_update_cache operation (multi-input with non-consecutive tensors) - using operation-specific extractor"
@@ -2625,6 +2634,7 @@ class MasterConfigLoader:
                     tensor_config = None
                     num_heads = None
                     num_kv_heads = None
+                    transpose_k_heads = False  # Default to False
 
                     for arg in config:
                         if isinstance(arg, dict):
@@ -2654,6 +2664,14 @@ class MasterConfigLoader:
                                         )
                                     except:
                                         pass
+                            if "arg3" in arg:
+                                # arg3 is transpose_k_heads (boolean as int)
+                                transpose_k_heads_val = arg["arg3"]
+                                if isinstance(transpose_k_heads_val, (int, str)) and transpose_k_heads_val != "nullopt":
+                                    try:
+                                        transpose_k_heads = bool(int(transpose_k_heads_val))
+                                    except:
+                                        pass
 
                     if tensor_config and num_heads is not None and num_kv_heads is not None:
                         paired_config = {
@@ -2664,6 +2682,7 @@ class MasterConfigLoader:
                             "output_memory_config": tensor_config.memory_config,  # Default to input's memory config
                             "num_heads": num_heads,
                             "num_kv_heads": num_kv_heads,
+                            "transpose_k_heads": transpose_k_heads,
                             "traced_source": source or "unknown",
                             "traced_machine_info": machine_info or {},
                         }
@@ -2688,6 +2707,7 @@ class MasterConfigLoader:
             output_memory_config_list = []
             num_heads_list = []
             num_kv_heads_list = []
+            transpose_k_heads_list = []
             traced_source_list = []
             traced_machine_info_list = []
 
@@ -2699,6 +2719,7 @@ class MasterConfigLoader:
                 output_memory_config_list.append(cfg["output_memory_config"])
                 num_heads_list.append(cfg["num_heads"])
                 num_kv_heads_list.append(cfg["num_kv_heads"])
+                transpose_k_heads_list.append(cfg["transpose_k_heads"])
                 traced_source_list.append(cfg["traced_source"])
                 traced_machine_info_list.append(cfg["traced_machine_info"])
 
@@ -2719,6 +2740,7 @@ class MasterConfigLoader:
                     "output_memory_config",
                     "num_heads",
                     "num_kv_heads",
+                    "transpose_k_heads",
                     "traced_source",
                     "traced_machine_info",
                 ]
@@ -2730,6 +2752,7 @@ class MasterConfigLoader:
                     output_memory_config_list,
                     num_heads_list,
                     num_kv_heads_list,
+                    transpose_k_heads_list,
                     traced_source_list,
                     traced_machine_info_list,
                 ]
@@ -2745,6 +2768,205 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting create_qkv_heads parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_scaled_dot_product_attention_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for scaled_dot_product_attention operation with is_causal and scale parameters"""
+        try:
+            paired_configs = []
+            failed_configs = 0
+            seen_input_signatures = set() if deduplicate_inputs else None
+
+            for config_idx, (config, source, machine_info) in enumerate(configs):
+                try:
+                    # Extract Q, K, V tensor configs (first 3 args)
+                    tensor_configs = []
+                    for arg in config:
+                        tensor_config = self.extract_tensor_config(arg)
+                        if tensor_config:
+                            tensor_configs.append(tensor_config)
+                            if len(tensor_configs) >= 3:
+                                break
+
+                    if len(tensor_configs) < 3:
+                        failed_configs += 1
+                        continue
+
+                    # Extract scalar parameters: is_causal (arg4) and scale (arg5)
+                    is_causal = True  # Default
+                    scale = None  # Will be calculated if None
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            # arg4 is is_causal (boolean as int)
+                            if "arg4" in arg:
+                                is_causal_val = arg["arg4"]
+                                if isinstance(is_causal_val, (int, str)) and is_causal_val != "nullopt":
+                                    try:
+                                        is_causal = bool(int(is_causal_val))
+                                    except ValueError:
+                                        pass
+                            # arg5 is scale (float)
+                            if "arg5" in arg:
+                                scale_val = arg["arg5"]
+                                if isinstance(scale_val, (int, float, str)) and scale_val != "nullopt":
+                                    try:
+                                        scale = float(scale_val)
+                                    except ValueError:
+                                        pass
+
+                    # Parse tensor configs
+                    config_dict = {
+                        "input_shape": {
+                            "input_a": tensor_configs[0].shape,
+                            "input_b": tensor_configs[1].shape,
+                            "input_c": tensor_configs[2].shape,
+                        },
+                        "input_a_dtype": self.parse_dtype(tensor_configs[0].dtype),
+                        "input_a_layout": self.parse_layout(tensor_configs[0].layout),
+                        "input_a_memory_config": self.parse_memory_config(
+                            tensor_configs[0].memory_config, tensor_configs[0].shape
+                        ),
+                        "input_b_dtype": self.parse_dtype(tensor_configs[1].dtype),
+                        "input_b_layout": self.parse_layout(tensor_configs[1].layout),
+                        "input_b_memory_config": self.parse_memory_config(
+                            tensor_configs[1].memory_config, tensor_configs[1].shape
+                        ),
+                        "input_c_dtype": self.parse_dtype(tensor_configs[2].dtype),
+                        "input_c_layout": self.parse_layout(tensor_configs[2].layout),
+                        "input_c_memory_config": self.parse_memory_config(
+                            tensor_configs[2].memory_config, tensor_configs[2].shape
+                        ),
+                        "output_memory_config": self.parse_memory_config(
+                            tensor_configs[0].memory_config, tensor_configs[0].shape
+                        ),  # Use Q's config
+                        "is_causal": is_causal,
+                        "scale": scale,
+                        "traced_source": source,
+                        "traced_machine_info": machine_info,
+                    }
+
+                    if deduplicate_inputs:
+                        import hashlib
+
+                        input_sig = hashlib.md5(
+                            str(
+                                (
+                                    tensor_configs[0].shape,
+                                    tensor_configs[1].shape,
+                                    tensor_configs[2].shape,
+                                    config_dict["input_a_dtype"],
+                                    config_dict["input_b_dtype"],
+                                    config_dict["input_c_dtype"],
+                                    is_causal,
+                                    scale,
+                                )
+                            ).encode()
+                        ).hexdigest()
+                        if input_sig in seen_input_signatures:
+                            continue
+                        seen_input_signatures.add(input_sig)
+
+                    paired_configs.append(config_dict)
+                except Exception as e:
+                    failed_configs += 1
+                    print(f"Error processing scaled_dot_product_attention config: {e}")
+                    import traceback
+
+                    traceback.print_exc()
+                    continue
+
+            if paired_configs:
+                self.traced_configs_cache[operation_name] = paired_configs
+
+                # Build parameter lists
+                input_shapes = []
+                input_a_dtypes = []
+                input_a_layouts = []
+                input_a_memory_configs = []
+                input_b_dtypes = []
+                input_b_layouts = []
+                input_b_memory_configs = []
+                input_c_dtypes = []
+                input_c_layouts = []
+                input_c_memory_configs = []
+                output_memory_configs = []
+                is_causal_list = []
+                scale_list = []
+                traced_source_list = []
+                traced_machine_info_list = []
+
+                for cfg in paired_configs:
+                    input_shapes.append(cfg["input_shape"])
+                    input_a_dtypes.append(cfg["input_a_dtype"])
+                    input_a_layouts.append(cfg["input_a_layout"])
+                    input_a_memory_configs.append(cfg["input_a_memory_config"])
+                    input_b_dtypes.append(cfg["input_b_dtype"])
+                    input_b_layouts.append(cfg["input_b_layout"])
+                    input_b_memory_configs.append(cfg["input_b_memory_config"])
+                    input_c_dtypes.append(cfg["input_c_dtype"])
+                    input_c_layouts.append(cfg["input_c_layout"])
+                    input_c_memory_configs.append(cfg["input_c_memory_config"])
+                    output_memory_configs.append(cfg["output_memory_config"])
+                    is_causal_list.append(cfg["is_causal"])
+                    scale_list.append(cfg["scale"])
+                    traced_source_list.append(cfg["traced_source"])
+                    traced_machine_info_list.append(cfg["traced_machine_info"])
+
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "input_b_dtype",
+                    "input_b_layout",
+                    "input_b_memory_config",
+                    "input_c_dtype",
+                    "input_c_layout",
+                    "input_c_memory_config",
+                    "output_memory_config",
+                    "is_causal",
+                    "scale",
+                    "traced_source",
+                    "traced_machine_info",
+                ]
+                param_lists = [
+                    input_shapes,
+                    input_a_dtypes,
+                    input_a_layouts,
+                    input_a_memory_configs,
+                    input_b_dtypes,
+                    input_b_layouts,
+                    input_b_memory_configs,
+                    input_c_dtypes,
+                    input_c_layouts,
+                    input_c_memory_configs,
+                    output_memory_configs,
+                    is_causal_list,
+                    scale_list,
+                    traced_source_list,
+                    traced_machine_info_list,
+                ]
+
+                exact_configs = list(zip(*param_lists))
+                param_key = ",".join(param_names)
+                result = {param_key: exact_configs}
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"
+                valid_configs = len(input_shapes) if input_shapes else 0
+                print(f"   📊 Will generate {valid_configs} test vectors{dedup_msg}")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+                return result
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting scaled_dot_product_attention parameters: {e}")
             import traceback
 
             traceback.print_exc()

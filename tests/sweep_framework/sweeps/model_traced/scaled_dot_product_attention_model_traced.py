@@ -38,6 +38,8 @@ parameters = {
         "input_c_layout": [ttnn.TILE_LAYOUT],
         "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "is_causal": [True],
+        "scale": [0.125],  # 1/sqrt(64)
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
@@ -59,9 +61,12 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
+    is_causal=False,
+    scale=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -138,6 +143,10 @@ def run(
     _, num_heads_k, _, _ = shape_k
     _, num_heads_v, _, _ = shape_v
 
+    # Calculate scale if not provided (standard attention scaling)
+    if scale is None:
+        scale = 1.0 / (head_dim**0.5)
+
     # Create Q, K, V tensors
     torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_q)(shape_q)
     torch_k = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_k)(shape_k)
@@ -169,9 +178,9 @@ def run(
         ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
     )
 
-    # PyTorch reference
+    # PyTorch reference - use the is_causal parameter from traced config
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=False
+        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=is_causal, scale=scale
     )
 
     # TTNN execution
@@ -181,7 +190,7 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, is_causal=False, memory_config=output_mem_config
+        q_tensor, k_tensor, v_tensor, is_causal=is_causal, scale=scale, memory_config=output_mem_config
     )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)

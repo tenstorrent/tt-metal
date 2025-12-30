@@ -33,6 +33,7 @@ parameters = {
         "storage_type": ["StorageType::DEVICE"],
         "num_heads": [1],
         "num_kv_heads": [1],
+        "transpose_k_heads": [False],
     },
 }
 
@@ -60,6 +61,7 @@ def run(
     output_memory_config,
     num_heads,
     num_kv_heads,
+    transpose_k_heads=False,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -168,7 +170,7 @@ def run(
         input_tensor_a,
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
-        transpose_k_heads=False,
+        transpose_k_heads=transpose_k_heads,
         memory_config=actual_output_memory_config,
     )
     q = ttnn.to_torch(q)
