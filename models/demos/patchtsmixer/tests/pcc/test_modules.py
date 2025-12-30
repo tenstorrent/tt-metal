@@ -5,14 +5,18 @@ import ttnn
 from models.demos.patchtsmixer.reference.pytorch_patchtsmixer import (
     FeatureMixerBlock,
     PatchMixerBlock,
+    PatchTSMixerBlock,
     PatchTSMixerChannelFeatureMixerBlock,
+    PatchTSMixerForecastHead,
     PatchTSMixerGatedAttention,
+    PatchTSMixerLayer,
     PatchTSMixerMLP,
     PatchTSMixerNormLayer,
     PatchTSMixerPositionalEncoding,
 )
 from models.demos.patchtsmixer.tt.model_processing import (
     preprocess_feature_mixer_block,
+    preprocess_forecast_head,
     preprocess_gated_attention,
     preprocess_layernorm,
     preprocess_linear,
@@ -23,8 +27,11 @@ from models.demos.patchtsmixer.tt.patchtsmixer import (
     TtFeatureMixerBlock,
     TtPatchMixerBlock,
     TtPatchTSMixerBatchNorm,
+    TtPatchTSMixerBlock,
     TtPatchTSMixerChannelFeatureMixerBlock,
+    TtPatchTSMixerForecastHead,
     TtPatchTSMixerGatedAttention,
+    TtPatchTSMixerLayer,
     TtPatchTSMixerLayerNorm,
     TtPatchTSMixerMLP,
     TtPatchTSMixerPositionalEncoding,
@@ -381,8 +388,8 @@ def test_patchtsmixer_patch_mixer_block(device, reset_seeds, use_gated_attn):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("gated_attn", [False, True])
-def test_patchtsmixer_channel_feature_mixer_block(device, reset_seeds, gated_attn):
+@pytest.mark.parametrize("use_gated_attn", [False, True])
+def test_patchtsmixer_channel_feature_mixer_block(device, reset_seeds, use_gated_attn):
     torch.manual_seed(42)
 
     # Tile friendly shape and also C == D to avoid LN shape mismatch in the pytorch code
@@ -396,7 +403,7 @@ def test_patchtsmixer_channel_feature_mixer_block(device, reset_seeds, gated_att
         norm_type=norm_type,
         expansion=expansion,
         dropout=0.0,
-        gated_attn=gated_attn,
+        use_gated_attn=use_gated_attn,
         eps=1e-5,
     ).eval()
 
@@ -415,7 +422,7 @@ def test_patchtsmixer_channel_feature_mixer_block(device, reset_seeds, gated_att
         f"{base}.mlp.fc2.bias": sd["mlp.fc2.bias"],
     }
 
-    if gated_attn:
+    if use_gated_attn:
         state_dict[f"{base}.gate.attn_layer.weight"] = sd["gate.attn_layer.weight"]
         state_dict[f"{base}.gate.attn_layer.bias"] = sd["gate.attn_layer.bias"]
 
@@ -436,19 +443,21 @@ def test_patchtsmixer_channel_feature_mixer_block(device, reset_seeds, gated_att
     parameters[f"{base}.mlp.fc2.bias"] = b2
 
     # Gate params (optional)
-    if gated_attn:
+    if use_gated_attn:
         gw, gb = preprocess_gated_attention(state_dict, f"{base}.gate", device=device)
         parameters[f"{base}.gate.attn_layer.weight"] = gw
         parameters[f"{base}.gate.attn_layer.bias"] = gb
 
-    print(parameters.keys())
     # ---- TT block ----
     tt_block = TtPatchTSMixerChannelFeatureMixerBlock(
         device=device,
         base_address=base,
         parameters=parameters,
+        d_model=C,
+        num_channels=C,
+        expansion=expansion,
         norm_type=norm_type,
-        gated_attn=gated_attn,
+        use_gated_attn=use_gated_attn,
         eps=1e-5,
     )
 
@@ -461,3 +470,286 @@ def test_patchtsmixer_channel_feature_mixer_block(device, reset_seeds, gated_att
     tt_out_torch = ttnn.to_torch(tt_out)
 
     assert_with_pcc(torch_out, tt_out_torch, 0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("use_gated_attn", [False, True])
+@pytest.mark.parametrize("channel", ["common_channel", "mix_channel"])
+def test_patchtsmixer_layer(device, reset_seeds, use_gated_attn, channel):
+    torch.manual_seed(42)
+
+    B, C = 1, 2
+    N_p = 32
+    D = 32
+    expansion = 2
+    mode = channel
+    norm_type = "LayerNorm"
+
+    torch_layer = PatchTSMixerLayer(
+        num_patches=N_p,
+        d_model=D,
+        num_channels=C,
+        mode=mode,
+        expansion=expansion,
+        dropout=0.0,
+        use_gated_attn=use_gated_attn,
+        eps=1e-5,
+    ).eval()
+
+    base = "mixer_block.layers.0"  # this layer lives at layers.0 in the full model
+
+    sd = torch_layer.state_dict()
+
+    # ---- Build fake nested state_dict ----
+    state_dict = {
+        f"{base}.patch_mixer.norm.norm.weight": sd["patch_mixer.norm.norm.weight"],
+        f"{base}.patch_mixer.norm.norm.bias": sd["patch_mixer.norm.norm.bias"],
+        f"{base}.patch_mixer.mlp.fc1.weight": sd["patch_mixer.mlp.fc1.weight"],
+        f"{base}.patch_mixer.mlp.fc1.bias": sd["patch_mixer.mlp.fc1.bias"],
+        f"{base}.patch_mixer.mlp.fc2.weight": sd["patch_mixer.mlp.fc2.weight"],
+        f"{base}.patch_mixer.mlp.fc2.bias": sd["patch_mixer.mlp.fc2.bias"],
+        # feature_mixer keys
+        f"{base}.feature_mixer.norm.norm.weight": sd["feature_mixer.norm.norm.weight"],
+        f"{base}.feature_mixer.norm.norm.bias": sd["feature_mixer.norm.norm.bias"],
+        f"{base}.feature_mixer.mlp.fc1.weight": sd["feature_mixer.mlp.fc1.weight"],
+        f"{base}.feature_mixer.mlp.fc1.bias": sd["feature_mixer.mlp.fc1.bias"],
+        f"{base}.feature_mixer.mlp.fc2.weight": sd["feature_mixer.mlp.fc2.weight"],
+        f"{base}.feature_mixer.mlp.fc2.bias": sd["feature_mixer.mlp.fc2.bias"],
+    }
+
+    if mode == "mix_channel":
+        state_dict.update(
+            {
+                f"{base}.channel_mixer.norm.norm.weight": sd["channel_mixer.norm.norm.weight"],
+                f"{base}.channel_mixer.norm.norm.bias": sd["channel_mixer.norm.norm.bias"],
+                f"{base}.channel_mixer.mlp.fc1.weight": sd["channel_mixer.mlp.fc1.weight"],
+                f"{base}.channel_mixer.mlp.fc1.bias": sd["channel_mixer.mlp.fc1.bias"],
+                f"{base}.channel_mixer.mlp.fc2.weight": sd["channel_mixer.mlp.fc2.weight"],
+                f"{base}.channel_mixer.mlp.fc2.bias": sd["channel_mixer.mlp.fc2.bias"],
+            }
+        )
+
+        if use_gated_attn:
+            state_dict[f"{base}.channel_mixer.gate.attn_layer.weight"] = sd["channel_mixer.gate.attn_layer.weight"]
+            state_dict[f"{base}.channel_mixer.gate.attn_layer.bias"] = sd["channel_mixer.gate.attn_layer.bias"]
+
+    if use_gated_attn:
+        # patch_mixer.gate
+        state_dict[f"{base}.patch_mixer.gate.attn_layer.weight"] = sd["patch_mixer.gate.attn_layer.weight"]
+        state_dict[f"{base}.patch_mixer.gate.attn_layer.bias"] = sd["patch_mixer.gate.attn_layer.bias"]
+        # feature_mixer.gate
+        state_dict[f"{base}.feature_mixer.gate.attn_layer.weight"] = sd["feature_mixer.gate.attn_layer.weight"]
+        state_dict[f"{base}.feature_mixer.gate.attn_layer.bias"] = sd["feature_mixer.gate.attn_layer.bias"]
+
+    # ---- Preprocess to TTNN parameters dict ----
+    parameters = {}
+
+    # helper for a mixer (patch_mixer or feature_mixer)
+    def load_mixer_params(mixer_path: str):
+        gamma, beta = preprocess_layernorm(state_dict, f"{mixer_path}.norm", device=device)
+        parameters[f"{mixer_path}.norm.norm.weight"] = gamma
+        parameters[f"{mixer_path}.norm.norm.bias"] = beta
+
+        w1, b1 = preprocess_linear(state_dict, f"{mixer_path}.mlp.fc1", device=device)
+        w2, b2 = preprocess_linear(state_dict, f"{mixer_path}.mlp.fc2", device=device)
+        parameters[f"{mixer_path}.mlp.fc1.weight"] = w1
+        parameters[f"{mixer_path}.mlp.fc1.bias"] = b1
+        parameters[f"{mixer_path}.mlp.fc2.weight"] = w2
+        parameters[f"{mixer_path}.mlp.fc2.bias"] = b2
+
+        if use_gated_attn:
+            gw, gb = preprocess_gated_attention(state_dict, f"{mixer_path}.gate", device=device)
+            parameters[f"{mixer_path}.gate.attn_layer.weight"] = gw
+            parameters[f"{mixer_path}.gate.attn_layer.bias"] = gb
+
+    load_mixer_params(f"{base}.patch_mixer")
+    load_mixer_params(f"{base}.feature_mixer")
+    if mode == "mix_channel":
+        load_mixer_params(f"{base}.channel_mixer")
+
+    # ---- TT layer ----
+    tt_layer = TtPatchTSMixerLayer(
+        device=device,
+        base_address=base,
+        parameters=parameters,
+        num_patches=N_p,
+        d_model=D,
+        num_channels=C,
+        mode=mode,
+        norm_type=norm_type,
+        expansion=expansion,
+        use_gated_attn=use_gated_attn,
+        eps=1e-5,
+    )
+
+    # ---- Compare outputs ----
+    x = torch.randn(B, C, N_p, D)
+    torch_out = torch_layer(x)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out = tt_layer(tt_x)
+    tt_out_torch = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(torch_out, tt_out_torch, 0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("use_gated_attn", [False, True])
+def test_patchtsmixer_block(device, reset_seeds, use_gated_attn):
+    torch.manual_seed(42)
+
+    B, C, N_p, D = 1, 2, 32, 32
+    num_layers = 2
+    expansion = 2
+    mode = "common_channel"
+    norm_type = "LayerNorm"
+
+    layer_kwargs = dict(
+        num_patches=N_p,
+        d_model=D,
+        num_channels=C,
+        mode=mode,
+        expansion=expansion,
+        dropout=0.0,
+        use_gated_attn=use_gated_attn,
+        eps=1e-5,
+    )
+
+    torch_block = PatchTSMixerBlock(num_layers=num_layers, layer_kwargs=layer_kwargs).eval()
+
+    base = "mixer_block"  # fake full-model path
+
+    sd = torch_block.state_dict()
+
+    # ---- Fake nested torch-style state_dict ----
+    state_dict = {}
+    for i in range(num_layers):
+        # Torch ModuleList key names: layers.{i}.<submodule>...
+        prefix = f"{base}.layers.{i}"
+
+        # patch_mixer
+        state_dict[f"{prefix}.patch_mixer.norm.norm.weight"] = sd[f"layers.{i}.patch_mixer.norm.norm.weight"]
+        state_dict[f"{prefix}.patch_mixer.norm.norm.bias"] = sd[f"layers.{i}.patch_mixer.norm.norm.bias"]
+        state_dict[f"{prefix}.patch_mixer.mlp.fc1.weight"] = sd[f"layers.{i}.patch_mixer.mlp.fc1.weight"]
+        state_dict[f"{prefix}.patch_mixer.mlp.fc1.bias"] = sd[f"layers.{i}.patch_mixer.mlp.fc1.bias"]
+        state_dict[f"{prefix}.patch_mixer.mlp.fc2.weight"] = sd[f"layers.{i}.patch_mixer.mlp.fc2.weight"]
+        state_dict[f"{prefix}.patch_mixer.mlp.fc2.bias"] = sd[f"layers.{i}.patch_mixer.mlp.fc2.bias"]
+
+        # feature_mixer
+        state_dict[f"{prefix}.feature_mixer.norm.norm.weight"] = sd[f"layers.{i}.feature_mixer.norm.norm.weight"]
+        state_dict[f"{prefix}.feature_mixer.norm.norm.bias"] = sd[f"layers.{i}.feature_mixer.norm.norm.bias"]
+        state_dict[f"{prefix}.feature_mixer.mlp.fc1.weight"] = sd[f"layers.{i}.feature_mixer.mlp.fc1.weight"]
+        state_dict[f"{prefix}.feature_mixer.mlp.fc1.bias"] = sd[f"layers.{i}.feature_mixer.mlp.fc1.bias"]
+        state_dict[f"{prefix}.feature_mixer.mlp.fc2.weight"] = sd[f"layers.{i}.feature_mixer.mlp.fc2.weight"]
+        state_dict[f"{prefix}.feature_mixer.mlp.fc2.bias"] = sd[f"layers.{i}.feature_mixer.mlp.fc2.bias"]
+
+        if use_gated_attn:
+            # patch_mixer gate
+            state_dict[f"{prefix}.patch_mixer.gate.attn_layer.weight"] = sd[
+                f"layers.{i}.patch_mixer.gate.attn_layer.weight"
+            ]
+            state_dict[f"{prefix}.patch_mixer.gate.attn_layer.bias"] = sd[
+                f"layers.{i}.patch_mixer.gate.attn_layer.bias"
+            ]
+            # feature_mixer gate
+            state_dict[f"{prefix}.feature_mixer.gate.attn_layer.weight"] = sd[
+                f"layers.{i}.feature_mixer.gate.attn_layer.weight"
+            ]
+            state_dict[f"{prefix}.feature_mixer.gate.attn_layer.bias"] = sd[
+                f"layers.{i}.feature_mixer.gate.attn_layer.bias"
+            ]
+
+    # ---- Build TTNN parameters dict (TT naming!) ----
+    parameters = {}
+    for i in range(num_layers):
+        prefix = f"{base}.layers.{i}"
+
+        def load_mixer(mixer_name: str):
+            mixer_path = f"{prefix}.{mixer_name}"
+
+            # LN reads torch keys at f"{mixer_path}.norm.norm.*"
+            gamma, beta = preprocess_layernorm(state_dict, f"{mixer_path}.norm", device=device)
+
+            # TT expects: f"{mixer_path}.norm.norm.weight/bias" (matching PyTorch structure)
+            parameters[f"{mixer_path}.norm.norm.weight"] = gamma
+            parameters[f"{mixer_path}.norm.norm.bias"] = beta
+
+            w1, b1 = preprocess_linear(state_dict, f"{mixer_path}.mlp.fc1", device=device)
+            w2, b2 = preprocess_linear(state_dict, f"{mixer_path}.mlp.fc2", device=device)
+            parameters[f"{mixer_path}.mlp.fc1.weight"] = w1
+            parameters[f"{mixer_path}.mlp.fc1.bias"] = b1
+            parameters[f"{mixer_path}.mlp.fc2.weight"] = w2
+            parameters[f"{mixer_path}.mlp.fc2.bias"] = b2
+
+            if use_gated_attn:
+                gw, gb = preprocess_gated_attention(state_dict, f"{mixer_path}.gate", device=device)
+                parameters[f"{mixer_path}.gate.attn_layer.weight"] = gw
+                parameters[f"{mixer_path}.gate.attn_layer.bias"] = gb
+
+        load_mixer("patch_mixer")
+        load_mixer("feature_mixer")
+
+    # ---- TT block ----
+    tt_block = TtPatchTSMixerBlock(
+        device=device,
+        base_address=base,
+        parameters=parameters,
+        num_layers=num_layers,
+        layer_kwargs=dict(
+            num_patches=N_p,
+            d_model=D,
+            num_channels=C,
+            mode=mode,
+            expansion=expansion,
+            use_gated_attn=use_gated_attn,
+            eps=1e-5,
+        ),
+        norm_type=norm_type,
+    )
+
+    # ---- Compare outputs ----
+    x = torch.randn(B, C, N_p, D)
+    torch_out, _ = torch_block(x, output_hidden_states=False)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_out, _ = tt_block(tt_x, output_hidden_states=False)
+    tt_out_torch = ttnn.to_torch(tt_out)
+
+    assert_with_pcc(torch_out, tt_out_torch, 0.99)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_patchtsmixer_forecast_head(device, reset_seeds):
+    torch.manual_seed(42)
+
+    B, C, N_p, D = 1, 2, 32, 32
+    H = 16
+
+    torch_head = PatchTSMixerForecastHead(num_patches=N_p, d_model=D, prediction_length=H, head_dropout=0.0).eval()
+    base = "head"
+
+    sd = torch_head.state_dict()
+
+    # fake full-model-like torch state_dict
+    state_dict = {
+        f"{base}.proj.weight": sd["proj.weight"],
+        f"{base}.proj.bias": sd["proj.bias"],
+    }
+
+    # preprocess
+    w_tt, b_tt = preprocess_forecast_head(state_dict, base, device=device)
+    parameters = {
+        f"{base}.proj.weight": w_tt,
+        f"{base}.proj.bias": b_tt,
+    }
+
+    tt_head = TtPatchTSMixerForecastHead(device=device, base_address=base, parameters=parameters, prediction_length=H)
+
+    x = torch.randn(B, C, N_p, D)
+    torch_out = torch_head(x)  # (B, H, C)
+
+    tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_y = tt_head(tt_x, B=B, C=C, Np=N_p, D=D)  # (B, H, 1, C)
+    tt_out = ttnn.to_torch(tt_y).squeeze(2)  # (B, H, C)
+
+    assert_with_pcc(torch_out, tt_out, 0.99)
