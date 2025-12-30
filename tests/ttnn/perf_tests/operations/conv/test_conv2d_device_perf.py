@@ -259,7 +259,7 @@ def test_conv2d_device_perf():
     step_name = "conv_all_perf"
 
     subdir = "conv_perf"
-    command = "pytest tests/ttnn/unit_tests/operations/conv/perf/test_conv2d_device_perf.py::test_run_conv2d_ops"
+    command = "pytest tests/ttnn/perf_tests/operations/conv/test_conv2d_device_perf.py::test_run_conv2d_ops"
     op_name = "Conv2dDeviceOperation"
 
     logger.info(f"Command: {command}")
