@@ -448,7 +448,7 @@ class MLA1D(AbstractModule):
             dim=-1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        q_rope_out_reshard_config = ReshardConfig(  # TODO: do we need this?
+        q_rope_out_reshard_config = ReshardConfig(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
@@ -470,20 +470,18 @@ class MLA1D(AbstractModule):
         )
         kv_rope_permute_config = PermuteConfig(
             dims=(0, 2, 1, 3),
-            # memory_config=kv_rope_mem_cfg,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         kv_rope_out_reshard_config = ReshardConfig(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        kv_rope_slice_config = SliceConfig(
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         # KV concat
-        # kv_concat_mem_config = ttnn.create_sharded_memory_config(
-        #     shape=(USERS_PER_ROW, 576), core_grid=ttnn.CoreGrid(y=6, x=3), strategy=ttnn.ShardStrategy.WIDTH
-        # )
         kv_concat_config = ConcatConfig(
             dim=-1,
-            # memory_config=kv_concat_mem_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
@@ -636,30 +634,19 @@ class MLA1D(AbstractModule):
             topology=ttnn.Topology.Linear,
         )
 
-        # FlashMLA all-to-all
-        flash_mla_a2a_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW // mesh_shape[1], 128, 512),
-            core_grid=ttnn.CoreGrid(y=8, x=2),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-        )
         flash_mla_a2a_config = AllToAllAsyncGenericConfig(
             cluster_axis=1,
             in_dim=1,
             out_dim=2,
-            # memory_config=flash_mla_a2a_out_mem_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
 
         # WO
-        wo_ag_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(128, USERS_PER_ROW, 128), core_grid=ttnn.CoreGrid(y=1, x=4), strategy=ttnn.ShardStrategy.HEIGHT
-        )
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
             dim=1,
-            # memory_config=wo_ag_out_mem_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -669,9 +656,6 @@ class MLA1D(AbstractModule):
         )
         kv_nope_slice_config = SliceConfig(
             memory_config=kv_nope_slice_mem_config,
-        )
-        kv_rope_slice_config = SliceConfig(
-            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         return {
@@ -690,7 +674,6 @@ class MLA1D(AbstractModule):
             "wo": wo_config,
             "q_rope_permute": q_rope_permute_config,
             "q_rope_slice": q_rope_slice_config,
-            # "q_rope_reshard": q_rope_reshard_config,
             "q_rope_out_reshard": q_rope_out_reshard_config,
             "q_concat": q_concat_config,
             "kv_rope_reshard": kv_rope_reshard_config,
@@ -944,7 +927,7 @@ class MLA1D(AbstractModule):
         # 1,32,1,64 interleaved | should be: 4x8 [32,64]
         tt_kv_rope = ttnn.to_memory_config(
             tt_kv_rope, **cfg["kv_rope_reshard"]
-        )  # TODO: can permute do that? Or slice??
+        )  # Needs interleaved inputs because "HC transpose does not support sharded+tilized inputs"
         # 1,32,1,64 4x8 [32,64]
         # TODO: Use DP tensors
         # Currently, not using DP tensors because sub-tile RS is not supported
@@ -1038,7 +1021,7 @@ class MLA1D(AbstractModule):
             is_decode_mode=True,
         )
         # 32,1,16,64 width sharded 8x4 [32,64]
-        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])  # TODO: do we need this?
+        tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
         # 32,1,16,64 L1 interleaved
 
         # Concat Q Nope and Q Rope
@@ -1051,9 +1034,7 @@ class MLA1D(AbstractModule):
         ###################################
 
         # 1,32,16,576 L1 interleaved
-        tt_q = ttnn.experimental.all_to_all_async_generic(
-            tt_q, **cfg["wq_a2a_decode"]
-        )  # TODO: ceate issue for all_to_all_async_generic segfaulting if we pass in a sharded memory config
+        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
         # 1,4,128,576  L1 interleaved
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
         # 1,4,128,576 L1 height sharded 8x9 [32,576]
