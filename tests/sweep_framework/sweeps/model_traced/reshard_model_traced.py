@@ -9,7 +9,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
-from typing import Optional, Tuple
 
 TIMEOUT = 30
 
