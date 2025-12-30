@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
