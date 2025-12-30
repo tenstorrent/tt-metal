@@ -43,31 +43,6 @@ if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() 
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Invalidate test vectors with incompatible configurations.
-    The dims parameter length must match the input_shape dimensions.
-    """
-    input_shape = test_vector.get("input_shape")
-    dims = test_vector.get("dims")
-
-    if input_shape is None or dims is None:
-        return False, None
-
-    # Ensure input_shape is a tuple/list
-    if isinstance(input_shape, (tuple, list)):
-        shape_len = len(input_shape)
-    else:
-        return False, None
-
-    # Check dims length matches shape dimensions
-    if isinstance(dims, (tuple, list)):
-        if len(dims) != shape_len:
-            return True, f"Dimension mismatch: input has {shape_len} dims but permute dims has {len(dims)} values"
-
-    return False, None
-
-
 def mesh_device_fixture():
     """
     Override default device fixture for permute operation.

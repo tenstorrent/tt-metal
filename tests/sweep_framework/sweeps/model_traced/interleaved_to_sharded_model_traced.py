@@ -41,37 +41,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Invalidate test vectors with incompatible configurations.
-    interleaved_to_sharded requires output_memory_config to be sharded.
-    """
-    output_memory_config = test_vector.get("output_memory_config")
-
-    if output_memory_config is None:
-        return True, "output_memory_config is None (required)"
-
-    # Check if output memory config is sharded
-    is_sharded = False
-    try:
-        if hasattr(output_memory_config, "is_sharded") and callable(output_memory_config.is_sharded):
-            is_sharded = output_memory_config.is_sharded()
-        elif hasattr(output_memory_config, "memory_layout"):
-            is_sharded = output_memory_config.memory_layout in [
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ]
-    except:
-        # If we can't determine, let it run and fail naturally
-        return False, None
-
-    if not is_sharded:
-        return True, "Output memory config must be sharded for interleaved_to_sharded"
-
-    return False, None
-
-
 def mesh_device_fixture():
     """
     Override default device fixture for interleaved_to_sharded operation.

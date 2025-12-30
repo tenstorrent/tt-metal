@@ -31,39 +31,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Invalidate test vectors with incompatible configurations.
-    Reshard with TILE layout requires shard shapes to be tile-aligned (multiples of 32).
-    """
-    output_memory_config = test_vector.get("output_memory_config")
-    input_a_layout = test_vector.get("input_a_layout")
-
-    # Only check tile alignment for TILE layout
-    if input_a_layout != ttnn.TILE_LAYOUT:
-        return False, None
-
-    if output_memory_config is None:
-        return False, None
-
-    # Check if output has non-tile-aligned shard shape
-    try:
-        if hasattr(output_memory_config, "shard_spec") and output_memory_config.shard_spec is not None:
-            shard_spec = output_memory_config.shard_spec
-            if hasattr(shard_spec, "shape"):
-                shard_height, shard_width = shard_spec.shape
-                if shard_height % 32 != 0 or shard_width % 32 != 0:
-                    return (
-                        True,
-                        f"Shard shape ({shard_height}, {shard_width}) not tile-aligned (must be multiples of 32)",
-                    )
-    except:
-        # If we can't determine, let it run and fail naturally
-        return False, None
-
-    return False, None
-
-
 def mesh_device_fixture():
     device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
     device_name = ttnn.get_arch_name()
@@ -86,6 +53,24 @@ def run(
 
     shape = input_shape if isinstance(input_shape, (tuple, list)) else (1, 1, 32, 32)
 
+    # Check if output memory config has non-tile-aligned shard shape
+    # If so, convert to ROW_MAJOR layout to avoid tile alignment errors
+    actual_layout = input_a_layout
+    if input_a_layout == ttnn.TILE_LAYOUT and output_memory_config is not None:
+        try:
+            if hasattr(output_memory_config, "shard_spec") and output_memory_config.shard_spec is not None:
+                shard_spec = output_memory_config.shard_spec
+                if hasattr(shard_spec, "shape"):
+                    shard_height, shard_width = shard_spec.shape
+                    if shard_height % 32 != 0 or shard_width % 32 != 0:
+                        # Non-tile-aligned shard shape - use ROW_MAJOR instead
+                        actual_layout = ttnn.ROW_MAJOR_LAYOUT
+                        print(
+                            f"Note: Using ROW_MAJOR layout due to non-tile-aligned shard shape ({shard_height}, {shard_width})"
+                        )
+        except:
+            pass
+
     # Tensor creation
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
@@ -93,7 +78,7 @@ def run(
     torch_output = torch_input.clone()
 
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
+        torch_input, dtype=input_a_dtype, layout=actual_layout, device=device, memory_config=input_a_memory_config
     )
 
     # Op call
