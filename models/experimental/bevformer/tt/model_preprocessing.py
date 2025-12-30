@@ -470,3 +470,228 @@ def create_temporal_self_attention_parameters(
         weights_mesh_mapper=weights_mesh_mapper,
         cache_file_name=cache_file_name,
     )
+
+
+def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=None, layout=None, weights_mesh_mapper=None):
+    """Process LayerNorm parameters for TTNN."""
+    if dtype is None:
+        dtype = DEFAULT_DTYPE
+    if layout is None:
+        layout = DEFAULT_LAYOUT
+
+    layer_params = {}
+
+    # Weight (gamma)
+    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
+    if device is not None:
+        layer_params["weight"] = ttnn.from_torch(layer_norm.weight, **kwargs)
+        if layer_norm.bias is not None:
+            layer_params["bias"] = ttnn.from_torch(layer_norm.bias, **kwargs)
+        else:
+            layer_params["bias"] = None
+    else:
+        # For testing with None device
+        layer_params["weight"] = layer_norm.weight.clone().detach()
+        if layer_norm.bias is not None:
+            layer_params["bias"] = layer_norm.bias.clone().detach()
+        else:
+            layer_params["bias"] = None
+
+    return layer_params
+
+
+def preprocess_bevformer_layer_parameters(
+    torch_layer,
+    *,
+    device,
+    dtype=None,
+    layout=None,
+    weights_mesh_mapper=None,
+    cache_file_name: Optional[str] = None,
+):
+    """
+    Preprocesses BEVFormer layer parameters from PyTorch to ttnn format.
+
+    Args:
+        torch_layer: PyTorch BEVFormerLayer instance
+        device: ttnn device
+        dtype: Target data type for ttnn tensors
+        layout: Target layout for ttnn tensors
+        weights_mesh_mapper: Optional mesh mapper for distributed weights
+        cache_file_name: Optional cache file name for parameter caching
+
+    Returns:
+        ParameterDict containing preprocessed ttnn tensors
+    """
+
+    # Try to load from cache first
+    cached_params = _manage_cache_load(cache_file_name, device)
+    if cached_params is not None:
+        return convert_parameterdict_to_object(cached_params)
+
+    print("Preprocessing BEVFormer layer parameters...")
+    parameters = {}
+
+    # Process temporal self-attention if present
+    if hasattr(torch_layer, "temporal_self_attention") and torch_layer.temporal_self_attention is not None:
+        parameters["temporal_self_attention"] = preprocess_temporal_self_attention_parameters(
+            torch_layer.temporal_self_attention,
+            device=device,
+            dtype=dtype,
+            layout=layout,
+            weights_mesh_mapper=weights_mesh_mapper,
+        )
+
+    # Process spatial cross-attention if present
+    if hasattr(torch_layer, "spatial_cross_attention") and torch_layer.spatial_cross_attention is not None:
+        parameters["spatial_cross_attention"] = preprocess_spatial_cross_attention_parameters(
+            torch_layer.spatial_cross_attention,
+            device=device,
+            dtype=dtype,
+            layout=layout,
+            weights_mesh_mapper=weights_mesh_mapper,
+        )
+
+    # Process layer norms
+    if hasattr(torch_layer, "norm1") and torch_layer.norm1 is not None:
+        parameters["norm1"] = preprocess_layer_norm_parameters(
+            torch_layer.norm1, device=device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
+        )
+
+    if hasattr(torch_layer, "norm2") and torch_layer.norm2 is not None:
+        parameters["norm2"] = preprocess_layer_norm_parameters(
+            torch_layer.norm2, device=device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
+        )
+
+    if hasattr(torch_layer, "norm3") and torch_layer.norm3 is not None:
+        parameters["norm3"] = preprocess_layer_norm_parameters(
+            torch_layer.norm3, device=device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
+        )
+
+    # Process FFN
+    if hasattr(torch_layer, "ffn") and torch_layer.ffn is not None:
+        ffn_params = {}
+
+        # FFN is typically nn.Sequential with Linear layers
+        # Extract individual layers from the sequential
+        for i, ffn_layer in enumerate(torch_layer.ffn):
+            if isinstance(ffn_layer, torch.nn.Linear):
+                if i == 0:  # First linear layer
+                    ffn_params["linear1"] = _process_linear_layer(
+                        ffn_layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
+                    )
+                elif i == 2:  # Second linear layer (index 3 due to ReLU and Dropout in between)
+                    ffn_params["linear2"] = _process_linear_layer(
+                        ffn_layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
+                    )
+
+        parameters["ffn"] = ffn_params
+
+    # Convert to object structure
+    params_obj = convert_parameterdict_to_object(parameters)
+
+    # Save to cache and return
+    _manage_cache_save(parameters, cache_file_name, device, "BEVFormer layer ")
+    print("BEVFormer layer parameter preprocessing completed.")
+    return params_obj
+
+
+def preprocess_bevformer_encoder_parameters(
+    torch_encoder,
+    *,
+    device,
+    dtype=None,
+    layout=None,
+    weights_mesh_mapper=None,
+    cache_file_name: Optional[str] = None,
+):
+    """
+    Preprocesses BEVFormer encoder parameters from PyTorch to ttnn format.
+
+    Args:
+        torch_encoder: PyTorch BEVFormerEncoder instance
+        device: ttnn device
+        dtype: Target data type for ttnn tensors
+        layout: Target layout for ttnn tensors
+        weights_mesh_mapper: Optional mesh mapper for distributed weights
+        cache_file_name: Optional cache file name for parameter caching
+
+    Returns:
+        ParameterDict containing preprocessed ttnn tensors
+    """
+
+    # Try to load from cache first
+    cached_params = _manage_cache_load(cache_file_name, device)
+    if cached_params is not None:
+        return convert_parameterdict_to_object(cached_params)
+
+    print("Preprocessing BEVFormer encoder parameters...")
+    parameters = {}
+
+    # Process each layer
+    if hasattr(torch_encoder, "layers") and torch_encoder.layers is not None:
+        for layer_idx, layer in enumerate(torch_encoder.layers):
+            layer_cache_name = f"{cache_file_name}_layer_{layer_idx}" if cache_file_name else None
+            parameters[f"layer_{layer_idx}"] = preprocess_bevformer_layer_parameters(
+                layer,
+                device=device,
+                dtype=dtype,
+                layout=layout,
+                weights_mesh_mapper=weights_mesh_mapper,
+                cache_file_name=layer_cache_name,
+            )
+
+    # Convert to object structure
+    params_obj = convert_parameterdict_to_object(parameters)
+
+    # Save to cache and return
+    _manage_cache_save(parameters, cache_file_name, device, "BEVFormer encoder ")
+    print("BEVFormer encoder parameter preprocessing completed.")
+    return params_obj
+
+
+def create_bevformer_encoder_parameters(
+    torch_model_path: Optional[str] = None,
+    torch_model: Optional[torch.nn.Module] = None,
+    *,
+    device,
+    dtype=None,
+    layout=None,
+    weights_mesh_mapper=None,
+    cache_file_name: Optional[str] = None,
+):
+    """
+    Creates preprocessed parameters for BEVFormer encoder model.
+
+    Args:
+        torch_model_path: Path to saved PyTorch model (optional)
+        torch_model: PyTorch BEVFormerEncoder instance (optional)
+        device: ttnn device
+        dtype: Target data type for ttnn tensors
+        layout: Target layout for ttnn tensors
+        weights_mesh_mapper: Optional mesh mapper for distributed weights
+        cache_file_name: Optional cache file name for parameter caching
+
+    Returns:
+        ParameterDict containing preprocessed ttnn tensors
+    """
+
+    # Get the PyTorch model
+    if torch_model is None:
+        if torch_model_path is None:
+            raise ValueError("Either torch_model or torch_model_path must be provided for BEVFormer encoder")
+        torch_model = torch.load(torch_model_path, map_location="cpu")
+        print(f"Loaded PyTorch BEVFormer encoder from {torch_model_path}")
+    else:
+        print("Using provided PyTorch BEVFormer encoder model")
+
+    torch_model.eval()
+
+    return preprocess_bevformer_encoder_parameters(
+        torch_model,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        weights_mesh_mapper=weights_mesh_mapper,
+        cache_file_name=cache_file_name,
+    )

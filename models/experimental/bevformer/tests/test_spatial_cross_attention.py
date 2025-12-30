@@ -92,7 +92,6 @@ def test_spatial_cross_attention_forward(
     ref_model = SpatialCrossAttention(
         embed_dims=embed_dims,
         num_cams=num_cams,
-        dropout=0.0,  # No dropout for testing
         batch_first=True,
         deformable_attention={"embed_dims": embed_dims, "num_levels": 4, "num_points": 8, "num_heads": 4},
     )
@@ -111,7 +110,6 @@ def test_spatial_cross_attention_forward(
         params=tt_parameters,
         embed_dims=embed_dims,
         num_cams=num_cams,
-        dropout=0.0,
         batch_first=True,
         deformable_attention={"embed_dims": embed_dims, "num_levels": 4, "num_points": 8, "num_heads": 4},
     )
