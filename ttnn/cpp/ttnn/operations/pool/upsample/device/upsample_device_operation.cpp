@@ -170,7 +170,7 @@ ttnn::Tensor upsample(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
     using OperationType = ttnn::operations::pool::upsample::UpsampleOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale_factor_h = scale_factor_h,
             .scale_factor_w = scale_factor_w,

@@ -270,7 +270,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads_boltz(
         .input_tensor_kv = input_tensor_kv,
         .optional_output_tensors = optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

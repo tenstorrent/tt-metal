@@ -30,8 +30,7 @@ struct WhereOperation {
         if constexpr (std::is_same_v<T, Tensor> and std::is_same_v<U, Tensor>) {
             auto [operation_attributes, tensor_args] = WhereDeviceOperation::invoke(
                 condition, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
-            return ttnn::device_operation::detail::launch_on_device<WhereDeviceOperation>(
-                operation_attributes, tensor_args);
+            return ttnn::device_operation::launch<WhereDeviceOperation>(operation_attributes, tensor_args);
 
         } else {
             TT_FATAL((!std::is_same_v<T, Tensor> || !std::is_same_v<U, Tensor>), "Scalar values are not supported!");

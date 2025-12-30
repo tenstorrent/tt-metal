@@ -124,7 +124,7 @@ ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_
     const std::optional<Tensor>& preallocated_output,
     bool backwards) {
     using OperationType = ttnn::operations::data_movement::copy::CopyDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{output_mem_config, output_dtype, backwards},
         OperationType::tensor_args_t{input, preallocated_output});
 }
