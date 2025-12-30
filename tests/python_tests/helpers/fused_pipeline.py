@@ -16,18 +16,23 @@ from helpers.fused_math import (
 from helpers.fused_operand import OperandRegistry
 from helpers.fused_operation import FusedOperation
 from helpers.fused_packer import Packer
-from helpers.fused_unpacker import MatmulUnpacker, UnpackerAB, UnpackerTilizeA
+from helpers.fused_unpacker import (
+    MatmulUnpacker,
+    UnpackerA,
+    UnpackerAB,
+    UnpackerTilizeA,
+)
 from helpers.llk_params import (
     ApproximationMode,
     DestSync,
     MathOperation,
+    Transpose,
 )
 
 from .llk_params import DestAccumulation, MathFidelity
 
 
 def create_fuse_pipeline() -> List[FusedOperation]:
-    math_fidelity = MathFidelity.LoFi
     dest_acc = DestAccumulation.Yes
     input_A_dimensions = [64, 64]
     input_B_dimensions = [64, 64]
@@ -35,6 +40,26 @@ def create_fuse_pipeline() -> List[FusedOperation]:
     operands = OperandRegistry()
 
     pipeline = [
+        FusedOperation(
+            operand_mapping=operands.create_mapping(
+                src_a="input_B",
+                src_b="input_A",
+                output="datacopy_output0",
+                src_a_dims=input_A_dimensions,
+                src_b_dims=input_B_dimensions,
+                input_format=DataFormat.Float16_b,
+                output_format=DataFormat.Float16_b,
+            ),
+            unpacker=UnpackerA,
+            math=Math(
+                DatacopyFpu(),
+            ),
+            packer=Packer,
+            dest_acc=dest_acc,
+            math_fidelity=MathFidelity.LoFi,
+            unpack_transpose_within_face=Transpose.Yes,
+            unpack_transpose_faces=Transpose.No,
+        ),
         FusedOperation(
             operand_mapping=operands.create_mapping(
                 src_a="input_A",
@@ -71,7 +96,7 @@ def create_fuse_pipeline() -> List[FusedOperation]:
             ),
             packer=Packer,
             dest_acc=dest_acc,
-            math_fidelity=math_fidelity,
+            math_fidelity=MathFidelity.LoFi,
         ),
         FusedOperation(
             operand_mapping=operands.create_mapping(
@@ -96,8 +121,10 @@ def create_fuse_pipeline() -> List[FusedOperation]:
             ),
             packer=Packer,
             dest_acc=dest_acc,
-            math_fidelity=math_fidelity,
+            math_fidelity=MathFidelity.HiFi3,
             dest_sync=DestSync.Full,
+            unpack_transpose_within_face=Transpose.Yes,
+            unpack_transpose_faces=Transpose.Yes,
         ),
         FusedOperation(
             operand_mapping=operands.create_mapping(
@@ -113,7 +140,7 @@ def create_fuse_pipeline() -> List[FusedOperation]:
             math=Math(MatmulFpu()),
             packer=Packer,
             dest_acc=dest_acc,
-            math_fidelity=math_fidelity,
+            math_fidelity=MathFidelity.HiFi2,
         ),
         FusedOperation(
             operand_mapping=operands.create_mapping(
@@ -150,7 +177,9 @@ def create_fuse_pipeline() -> List[FusedOperation]:
             ),
             packer=Packer,
             dest_acc=dest_acc,
-            math_fidelity=math_fidelity,
+            math_fidelity=MathFidelity.LoFi,
+            unpack_transpose_within_face=Transpose.Yes,
+            unpack_transpose_faces=Transpose.Yes,
         ),
     ]
 
