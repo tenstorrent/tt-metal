@@ -194,6 +194,16 @@ quasi-full-duplex operation.
 ### Data Flow
 Typical pattern: NoC0 → Unpacker → FPU/SFPU → Packer → NoC1
 
+### Kernel Helper Library
+
+`ttnn/cpp/ttnn/kernel_lib/` provides header-only helpers for compute kernels:
+- **tilize_helpers.hpp**: Unified `tilize()` - handles simple/activation/fast/DT patterns
+- **untilize_helpers.hpp**: Unified `untilize()` - auto-dispatches pack_untilize vs standard based on width/datatype
+- **reduce_helpers.hpp**: Unified `reduce()` - handles ROW/COL/SCALAR with streaming or preloaded input
+- **dest_helpers.hpp**: Auto-detects DEST register limits (4-16 tiles based on sync/accum mode)
+
+All functions use templates for zero runtime overhead. Include via `#include "ttnn/cpp/ttnn/kernel_lib/<helper>.hpp"`. Requires `compute_kernel_hw_startup()` first.
+
 ## Common Pitfalls
 
 1. **Fast vs Slow Dispatch**: Always use fast dispatch (default) for production. Slow dispatch is debugging-only.
