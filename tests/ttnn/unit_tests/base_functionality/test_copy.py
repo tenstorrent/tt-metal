@@ -209,5 +209,7 @@ def test_copy_height_sharded(device, layout, shape, shard_scheme, dtype):
     ttnn.copy(input_tensor, output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
+    input_tensor = update_for_unsigned_single(input_tensor)
+    outout_tensor = update_for_unsigned_single(outout_tensor)
     assert_with_pcc(input_tensor, outout_tensor, 1)
     assert_equal(input_tensor, outout_tensor)

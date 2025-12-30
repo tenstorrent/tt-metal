@@ -95,6 +95,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     golden_tensor = golden_tensor.int()
 
     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = update_for_unsigned_single(output_tensor)
 
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
