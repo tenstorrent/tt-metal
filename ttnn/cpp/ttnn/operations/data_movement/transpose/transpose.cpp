@@ -26,6 +26,8 @@ inline Tensor transpose_(
     ttnn::prim::TransposeOpDim transpose_dim,
     const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
+    std::cout << "Doing transpose for [" << a.logical_shape()[0] << ", " << a.logical_shape()[1] << ", "
+              << a.logical_shape()[2] << ", " << a.logical_shape()[3] << "]" << std::endl;
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2];
     auto* device = a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
@@ -71,7 +73,7 @@ inline Tensor transpose_(
         return ttnn::prim::permute(input, dims, output_mem_constructed, std::nullopt, pad_value);
     };
 
-    bool interleaved_rm = !a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
+    bool interleaved_rm = false;  //! a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
     switch (transpose_dim) {
         case ttnn::prim::TransposeOpDim::HC:
             if (interleaved_rm) {

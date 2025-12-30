@@ -12,7 +12,7 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 def random_torch_tensor(dtype, shape):
@@ -811,6 +811,7 @@ def test_transpose_3D(dtype, shape, layout, dims, device):
 )
 def test_transpose_4d_wh_rm(shape, device):
     torch.manual_seed(2005)
+    print(shape)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(-1, -2)
 
@@ -906,6 +907,7 @@ def test_transpose_former_failures(config, memory_config, device):
     )
     tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
     tt_output = ttnn.to_torch(tt_output)
+    print(config[0], config[1][0], config[1][1], config[2], memory_config)
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
@@ -1460,3 +1462,625 @@ def test_transpose_sharded(device, dim0, dim1, layout, input_sharding, output_sh
         layout=layout,
         input_dtype=dtype,
     )
+
+
+@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize(
+    "input_shape, input_memory_config, output_memory_config, layout",
+    [
+        (
+            [1, 4, 128, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        (
+            [1, 32, 16, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        (
+            [1, 16, 32, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(4, 1))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+        (
+            [1, 4, 128, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (512, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (512, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 32, 16, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 16, 32, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (128, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+                    (1024, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+                    (512, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(4, 1))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 32, 32, 32],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 32, 32, 32],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+                    (128, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),
+    ],
+    ids=[
+        "wkv_pre_rm",
+        "wkv_post_rm",
+        "q_pre_rm",
+        "q_post_rm",
+        "wkv_post_rm_extra_shard",
+        "wkv_post_rr_mix_shard",
+        "wkv_pre_tile",
+        "wkv_post_tile",
+        "q_pre_tile",
+        "q_post_tile",
+        "wkv_post_tile_extra_shard",
+        "wkv_post_tyle_mix_shard",
+        "dummy_tyle",
+        "dummy_rr",
+    ],
+)
+def test_transpose_mla(device, input_shape, input_memory_config, output_memory_config, layout, num_iters):
+    """
+    Test transpose operation.
+    TODO: Add input shapes and sharding configuration
+    """
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, memory_config=input_memory_config, device=device)
+
+    torch_output = torch_input_tensor.transpose(1, 2)  # Example transpose, adjust dimensions as needed
+    for i in range(num_iters):
+        output_tensor = ttnn.transpose(input_tensor, dim1=1, dim2=2, memory_config=output_memory_config)
+
+    assert output_tensor.shape == torch_output.shape
+    assert_equal(output_tensor.to_torch(), torch_output)
+
+
+@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize(
+    "input_shape, input_memory_config, output_memory_config, layout",
+    [
+        (
+            [1, 32, 16, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 16, 32, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (64, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+                    (128, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 4, 128, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+                    (32, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 3))}),
+                    (352, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 3))}),
+                    (352, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+    ],
+    ids=["q_pre", "q_post", "wkv_pre", "wkv_post"],
+)
+def test_transpose_final_mla(
+    device, input_shape, input_memory_config, output_memory_config, layout, num_iters, use_interleaved=False
+):
+    """
+    Test transpose operation.
+    TODO: Add input shapes and sharding configuration
+    """
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    if use_interleaved:
+        input_memory_config = ttnn.L1_MEMORY_CONFIG
+        output_memory_config = ttnn.L1_MEMORY_CONFIG
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, memory_config=input_memory_config, device=device)
+
+    torch_output = torch_input_tensor.transpose(1, 2)  # Example transpose, adjust dimensions as needed
+    for i in range(num_iters):
+        output_tensor = ttnn.transpose(input_tensor, dim1=1, dim2=2, memory_config=output_memory_config)
+
+    assert output_tensor.shape == torch_output.shape
+    assert_equal(output_tensor.to_torch(), torch_output)
+
+
+@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize(
+    "input_shape, input_memory_config, output_memory_config, layout",
+    [
+        (
+            [1, 32, 16, 128],
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 7), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(7, 7), ttnn.CoreCoord(7, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 1), ttnn.CoreCoord(4, 1)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 7), ttnn.CoreCoord(4, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 6), ttnn.CoreCoord(4, 6)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 2)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 5), ttnn.CoreCoord(4, 5)),
+                        }
+                    ),
+                    [64, 128],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 16, 32, 512],
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 7), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(7, 7), ttnn.CoreCoord(7, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 1), ttnn.CoreCoord(4, 1)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 7), ttnn.CoreCoord(4, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 6), ttnn.CoreCoord(4, 6)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 2)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 5), ttnn.CoreCoord(4, 5)),
+                        }
+                    ),
+                    [64, 512],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 4, 128, 512],
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+                    (32, 512),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 7), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(7, 7), ttnn.CoreCoord(7, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 1), ttnn.CoreCoord(4, 1)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 7), ttnn.CoreCoord(4, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 6), ttnn.CoreCoord(4, 6)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 2)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 5), ttnn.CoreCoord(4, 5)),
+                        }
+                    ),
+                    [352, 512],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [1, 128, 4, 128],
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 7), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(7, 7), ttnn.CoreCoord(7, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 1), ttnn.CoreCoord(4, 1)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 7), ttnn.CoreCoord(4, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 6), ttnn.CoreCoord(4, 6)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(4, 2)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 4), ttnn.CoreCoord(4, 4)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 5), ttnn.CoreCoord(4, 5)),
+                        }
+                    ),
+                    [352, 128],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+                    (128, 128),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+    ],
+    ids=["q_pre", "q_post", "wkv_pre", "wkv_post"],
+)
+def test_transpose_real_final_mla(
+    device, input_shape, input_memory_config, output_memory_config, layout, num_iters, use_interleaved=False
+):
+    """
+    Test transpose operation.
+    TODO: Add input shapes and sharding configuration
+    """
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    if use_interleaved:
+        input_memory_config = ttnn.L1_MEMORY_CONFIG
+        output_memory_config = ttnn.L1_MEMORY_CONFIG
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, memory_config=input_memory_config, device=device)
+
+    torch_output = torch_input_tensor.transpose(1, 2)  # Example transpose, adjust dimensions as needed
+    for i in range(num_iters):
+        output_tensor = ttnn.transpose(input_tensor, dim1=1, dim2=2, memory_config=output_memory_config)
+
+    assert output_tensor.shape == torch_output.shape
+    assert_equal(output_tensor.to_torch(), torch_output)

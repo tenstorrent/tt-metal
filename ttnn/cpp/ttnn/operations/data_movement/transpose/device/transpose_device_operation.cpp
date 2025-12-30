@@ -55,8 +55,11 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
             return TransposeWHProgramFactory{};
 
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
-            if (use_sharded_hc) {
+            if (false) {
                 return TransposeHCShardedProgramFactory{};
+            }
+            if (true) {
+                return TransposeHCShardedTiledProgramFactory{};
             }
             if (is_row_major) {
                 return TransposeHCRMProgramFactory{};

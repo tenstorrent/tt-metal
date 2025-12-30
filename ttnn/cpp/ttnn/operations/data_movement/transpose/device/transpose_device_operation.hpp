@@ -7,6 +7,7 @@
 #include "transpose_cn_program_factory.hpp"
 #include "transpose_hc_rm_program_factory.hpp"
 #include "transpose_hc_sharded_program_factory.hpp"
+#include "transpose_hc_sharded_tile_program_factory.hpp"
 #include "transpose_hc_tiled_interleaved_program_factory.hpp"
 #include "transpose_hc_tiled_program_factory.hpp"
 #include "transpose_wh_program_factory.hpp"
@@ -34,6 +35,7 @@ struct TransposeDeviceOperation {
         TransposeHCTiledProgramFactory,
         TransposeHCRMProgramFactory,
         TransposeHCShardedProgramFactory,
+        TransposeHCShardedTiledProgramFactory,
         TransposeCNProgramFactory>;
 
     static program_factory_t select_program_factory(
