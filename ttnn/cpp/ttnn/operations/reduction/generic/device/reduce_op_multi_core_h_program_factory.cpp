@@ -125,8 +125,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
-
     if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
         std::map<std::string, std::string> reader_defines;
@@ -138,15 +136,21 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        // Reader auto-detects chunk_size via DEST_AUTO_LIMIT (row_chunk parameter removed)
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, packed_scaler_value};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+
+        // Pass DEST config as defines so reader can compute DEST_AUTO_LIMIT
+        std::map<std::string, std::string> reader_defines;
+        reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+        reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
@@ -177,7 +181,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
         1,                          // NC
-        chunk_size,                 // Column Chunk Size
     };
 
     tt_metal::CreateKernel(
@@ -187,6 +190,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .compile_args = compute_kernel_args_group_1,
             .defines = reduce_defines});
 
@@ -195,7 +199,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             Ht,                         // Ht
             num_cols_per_core_group_2,  // Wt
             1,                          // NC
-            chunk_size,                 // Column Chunk Size
         };
 
         tt_metal::CreateKernel(
@@ -205,6 +208,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = reduce_defines});
     }

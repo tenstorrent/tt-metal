@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP (PoolType::MAX)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
@@ -14,7 +11,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 /******************************************************************************
  *                                                                             *
@@ -53,6 +50,9 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
 
 /**
  * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
+ * Fully migrated to use reduce_helper library with PRELOADED mode.
+ *
+ * Uses inline lambda with conditional logic for optional eltwise max operation.
  */
 template <
     PoolType pool_type,
@@ -67,31 +67,28 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     // If do_eltwise_max == true, prev_cb has `rows` produced.
     // Postcondition: out_cb has `rows` produced.
 
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
+    if (do_eltwise_max) {
+        max_tile_init();
+    }
 
-    max_tile_init();
+    uint32_t row_idx = 0;
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
-    for (uint32_t r = 0; r < rows; ++r) {
-        acquire_dst();
-        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-        for (uint32_t c = 0; c < cols; ++c) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
-        }
-        reduce_uninit();
-        if (do_eltwise_max) {
-            copy_tile_to_dst_init_short(prev_cb);
-            copy_tile(prev_cb, r, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
-        }
-        pack_tile(reduce_dst_idx, out_cb);
-        release_dst();
-    }
-    cb_push_back(out_cb, rows);
+    compute_kernel_lib::reduce<
+        pool_type,
+        reduce_dim,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols), {}, [&]() {
+            if (do_eltwise_max) {
+                // At this point, DST[0] contains the reduced value for the current row
+                copy_tile_to_dst_init_short(prev_cb);
+                copy_tile(prev_cb, row_idx, prev_max_dst_idx);
+                max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
+            }
+            row_idx++;
+        });
 }
 
 #ifdef TRISC_MATH
