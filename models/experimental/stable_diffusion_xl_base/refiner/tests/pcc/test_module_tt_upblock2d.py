@@ -64,7 +64,6 @@ def test_upblock(
         f"up_blocks.{block_id}",
         model_config=model_config,
         debug_mode=debug_mode,
-        dram_groupnorm=(block_id == 3),
         has_upsample=(block_id == 0),
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
