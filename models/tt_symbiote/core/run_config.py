@@ -1,7 +1,8 @@
 import contextlib
 import os
+import time
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Dict, Iterator
 
 import torch
 from torch.utils._pytree import tree_map
@@ -97,31 +98,73 @@ def wrap_from_torch(e):
     return TorchTTNNTensor(e) if isinstance(e, torch.Tensor) else e
 
 
-def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
-    from models.tt_symbiote.core.dispatcher import dispatch_to_ttnn
+class DispatchManager:
+    timings: Dict[str, Any] = {}
 
-    if get_tensor_run_implementation().verbose:
-        print(f"Dispatching {func.name()} to TTNN backend.")
-    res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
-    if get_tensor_run_implementation().verbose:
-        print(f"Finished {func.name()} on TTNN backend.")
-    return res
+    @staticmethod
+    def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
+        from models.tt_symbiote.core.dispatcher import dispatch_to_ttnn
 
+        if get_tensor_run_implementation().verbose:
+            print(f"Dispatching {func.name()} to TTNN backend.")
+        begin = time.time()
+        res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
+        end = time.time()
+        DispatchManager.record_timing("TTNN", "", func.name(), {}, end - begin)
+        if get_tensor_run_implementation().verbose:
+            print(f"Finished {func.name()} on TTNN backend.")
+        return res
 
-def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
-    from models.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
+    @staticmethod
+    def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
+        from models.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
 
-    # no_dispatch is only needed if you use enable_python_mode.
-    # It prevents infinite recursion.
-    with no_dispatch():
-        func_args = tree_map(unwrap_to_torch(func), torch_args)
-        func_kwargs = tree_map(unwrap_to_torch(func), torch_kwargs)
-        if can_dispatch_to_torch(func.name(), func_args, func_kwargs):
-            func_res = dispatch_to_torch(func.name(), func_args, func_kwargs)
-        else:
-            func_res = func(*func_args, **func_kwargs)
-        rs = tree_map(wrap_from_torch, func_res)
-    return rs
+        # no_dispatch is only needed if you use enable_python_mode.
+        # It prevents infinite recursion.
+        with no_dispatch():
+            func_args = tree_map(unwrap_to_torch(func), torch_args)
+            func_kwargs = tree_map(unwrap_to_torch(func), torch_kwargs)
+            begin = time.time()
+            if can_dispatch_to_torch(func.name(), func_args, func_kwargs):
+                func_res = dispatch_to_torch(func.name(), func_args, func_kwargs)
+            else:
+                func_res = func(*func_args, **func_kwargs)
+            end = time.time()
+            DispatchManager.record_timing("Torch", "", func.name(), {}, end - begin)
+            rs = tree_map(wrap_from_torch, func_res)
+        return rs
+
+    @staticmethod
+    def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
+        if backend not in DispatchManager.timings:
+            DispatchManager.timings[backend] = {}
+        if "TimingEntries" not in DispatchManager.timings:
+            DispatchManager.timings["TimingEntries"] = []
+        DispatchManager.timings["TimingEntries"].append(
+            {
+                "attrs": attrs,
+                "module_name": module_name,
+                "func_name": func_name,
+                "duration": duration,
+                "backend": backend,
+            }
+        )
+
+    @staticmethod
+    def get_timing_entries_stats():
+        # convert DispatchManager.timings to a dataframe so users can turn into csv
+        import pandas as pd
+
+        df = pd.DataFrame(DispatchManager.timings.get("TimingEntries", []))
+        return df
+
+    @staticmethod
+    def save_stats_to_file(file_name: str):
+        assert isinstance(file_name, str), "file_name must be a string"
+        assert file_name.endswith(".csv"), "file_name must end with .csv"
+        df = DispatchManager.get_timing_entries_stats()
+        df.to_csv(file_name, index=True)
+        print(f"Saved timing stats to {os.path.abspath(file_name)}")
 
 
 def wrap_to_torch_ttnn_tensor(e):
@@ -249,9 +292,9 @@ class NormalRun:
         from models.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
 
         if can_dispatch_to_ttnn(func.name(), args, kwargs):
-            rs = dispatch_to_ttnn_wrapper(func, args, kwargs)
+            rs = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
         else:
-            rs = dispatch_to_torch_wrapper(func, args, kwargs)
+            rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
         return rs
 
     @staticmethod
@@ -309,9 +352,22 @@ class NormalRun:
         transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
         func_kwargs = tree_map(transform, kwds)
+        begin = time.time()
         self.preprocess_weights()
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
+        )
+        begin = time.time()
         self.move_weights_to_device()
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
+        )
+        begin = time.time()
         result = self.forward(*func_args, **func_kwargs)
+        end = time.time()
+        DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         result = tree_map(wrap_to_torch_ttnn_tensor, result)
         return result
 
@@ -324,12 +380,12 @@ class NormalRunWithFallback(NormalRun):
 
         try:
             if can_dispatch_to_ttnn(func.name(), args, kwargs):
-                rs = dispatch_to_ttnn_wrapper(func, args, kwargs)
+                rs = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
             else:
-                rs = dispatch_to_torch_wrapper(func, args, kwargs)
+                rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
         except Exception as e:
             print(f"Error {e} in dispatching {func.name()}, falling back to torch")
-            rs = dispatch_to_torch_wrapper(func, args, kwargs)
+            rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
         return rs
 
     @staticmethod
@@ -369,9 +425,9 @@ class SELRun(NormalRun):
 
         copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
+        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
         if can_dispatch_to_ttnn(func.name(), args, kwargs):
-            ttnn_output = dispatch_to_ttnn_wrapper(func, args, kwargs)
+            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
             # Compare inputs
             compare_fn_outputs(copied_torch_tensors_args, args, func.name())
             # Compare outputs
@@ -413,9 +469,9 @@ class DPLRun(NormalRun):
 
         copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
+        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
         if can_dispatch_to_ttnn(func.name(), args, kwargs):
-            ttnn_output = dispatch_to_ttnn_wrapper(func, args, kwargs)
+            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
             # Compare inputs
             compare_fn_outputs(copied_torch_tensors_args, args, func.name())
             # Compare outputs
@@ -459,11 +515,13 @@ class DPLRunNoErrorProp(NormalRun):
 
         copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
+        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
         ttnn_no_error_prop_args = tree_map(copy_to_ttnn(func), args)
         ttnn_no_error_prop_kwargs = tree_map(copy_to_ttnn(func), kwargs)
         if can_dispatch_to_ttnn(func.name(), ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs):
-            ttnn_output = dispatch_to_ttnn_wrapper(func, ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs)
+            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(
+                func, ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs
+            )
             # Compare inputs
             compare_fn_outputs(copied_torch_tensors_args, ttnn_no_error_prop_args, func.name())
             # Compare outputs
@@ -510,7 +568,7 @@ class CPU(NormalRun):
     def torch_dispatch(cls, func, types, args=(), kwargs=None):
         """Dispatch torch operations to CPU."""
         print(f"Executing {func.name()} on CPU")
-        rs = dispatch_to_torch_wrapper(func, args, kwargs)
+        rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
         return rs
 
     @staticmethod
