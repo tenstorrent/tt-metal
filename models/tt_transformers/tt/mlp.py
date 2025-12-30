@@ -204,13 +204,28 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
+        # Handle activation: relu2 needs special treatment, other activations use ttnn.mul
+        if self.activation_type == "relu2" or str(self.activation_type).lower() == "relu2":
+            # relu2(x) = relu(x)^2
+            # Compute: relu2(w1_out) * w3_out
+            w1_relu = ttnn.relu(w1_out)
+            w1_relu2 = ttnn.mul(
+                w1_relu, w1_relu, dtype=activation_dtype or ttnn.bfloat8_b, memory_config=w1_out.memory_config()
+            )
+            ttnn.deallocate(w1_relu)
+            w2_in = ttnn.mul(
+                w1_relu2, w3_out, dtype=activation_dtype or ttnn.bfloat8_b, memory_config=w1_out.memory_config()
+            )
+            ttnn.deallocate(w1_relu2)
+        else:
+            # Standard activation: apply activation to w1_out and multiply with w3_out
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
 
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match

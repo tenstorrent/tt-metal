@@ -1581,9 +1581,9 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
 
-        # ARCEE FIX: Set padded_vocab_size to match lm_head padding for consistency with tt_penalties
-        # Both lm_head and tt_penalties need to use the same padded_vocab_size
-        if "AFM" in self.model_name or "arcee" in self.model_name.lower():
+        # For non-Galaxy models, set padded_vocab_size to tile-aligned vocab_size
+        # This ensures consistency with tt_penalties and lm_head padding
+        if not self.is_galaxy and self.padded_vocab_size is None:
             self.padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
 
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
@@ -2036,6 +2036,9 @@ class ModelArgs:
                         break
                 if actual_vocab and actual_vocab != self.vocab_size:
                     self.vocab_size = actual_vocab
+                    # Recompute padded_vocab_size to maintain consistency
+                    if not self.is_galaxy:
+                        self.padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
             except Exception as e:
                 logger.debug(f"Failed to infer vocab_size from checkpoint weights: {e}")
 

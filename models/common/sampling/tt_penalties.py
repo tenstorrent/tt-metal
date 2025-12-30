@@ -89,20 +89,13 @@ class TTPenalties(LightweightModule):
         self.num_devices = num_devices
         self.needs_padding = False
 
-        # ARCEE FIX: Ensure vocab_size is tile-aligned PER DEVICE for arcee models
-        # Even if padded_vocab_size is set, it might not be tile-aligned per device after sharding
-        is_arcee = "AFM" in args.model_name or "arcee" in args.model_name.lower()
-        if is_arcee:
-            tile_width = 32
-            per_device_size = self.vocab_size // num_devices
-            if per_device_size % tile_width != 0:
-                padding = tile_width - (per_device_size % tile_width)
-                self.vocab_size += padding * num_devices
-                self.needs_padding = True
-        elif self.vocab_size == args.vocab_size:
-            # Original logic for non-arcee models
-            tile_width = 32
-            padding = tile_width - ((self.vocab_size // num_devices) % tile_width)
+        # Ensure vocab_size is tile-aligned PER DEVICE after sharding
+        # Check if per-device vocab size is tile-aligned, regardless of model type
+        tile_width = 32
+        per_device_size = self.vocab_size // num_devices
+        if per_device_size % tile_width != 0:
+            # Per-device size is not tile-aligned, need padding
+            padding = tile_width - (per_device_size % tile_width)
             self.vocab_size += padding * num_devices
             self.needs_padding = True
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
@@ -131,9 +124,9 @@ class TTPenalties(LightweightModule):
             [[31] * num_devices, [(n + 1) * (self.vocab_size // num_devices) - 1 for n in range(num_devices)]],
             dtype=torch.int32,
         )
-        # ARCEE FIX: Arcee needs row 1 (vocab end indices), other models use row 0
-        is_arcee = "AFM" in args.model_name or "arcee" in args.model_name.lower()
-        end_tensor = end_tensor_2d[1, :] if is_arcee else end_tensor_2d[0, :]
+        # If padding was needed (per-device vocab not tile-aligned), use row 1 (actual vocab end indices per device)
+        # Otherwise use row 0 (fixed tile boundary 31)
+        end_tensor = end_tensor_2d[1, :] if self.needs_padding else end_tensor_2d[0, :]
         self.slice_end = ttnn.from_torch(
             end_tensor,
             device=self.mesh_device,

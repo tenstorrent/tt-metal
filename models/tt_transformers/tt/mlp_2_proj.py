@@ -141,7 +141,45 @@ class MLP2Proj(LightweightModule):
         )
         ttnn.deallocate(x)
 
-        # Apply activation function
+        # For TG, handle reduce/gather operations before/after activation properly
+        input_mem_cfg = None
+        if TG and (self.dim == 8192 or mode == "prefill"):
+            # Save memory config before reduce_scatter
+            input_mem_cfg = w3_out.memory_config()
+
+            cluster_axis = 1
+            w3_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
+                w3_out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=1,
+                cluster_axis=cluster_axis,
+                memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            ttnn.deallocate(w3_out)
+            w3_out = w3_out_reduced
+        elif TG:
+            w3_out_reduced = tt_all_reduce(
+                w3_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                num_all_gather_links=2,
+                sharded=True if mode == "decode" else False,
+                topology=self.args.ccl_topology(),
+                memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+            )
+            ttnn.deallocate(w3_out)
+            w3_out = w3_out_reduced
+
+        # Apply activation function AFTER reduce/gather for correct TG behavior
         if self.activation_type == "relu2" or str(self.activation_type).lower() == "relu2":
             relu_out = ttnn.relu(w3_out)
             act_out = ttnn.mul(
@@ -150,38 +188,6 @@ class MLP2Proj(LightweightModule):
             ttnn.deallocate(relu_out)
         else:
             act_out = ttnn.unary(w3_out, self.activation_type)
-
-        if TG:
-            if self.dim == 8192 or mode == "prefill":
-                input_mem_cfg = w3_out.memory_config()
-
-                cluster_axis = 1
-                w3_out = ttnn.experimental.reduce_scatter_minimal_async(
-                    w3_out,
-                    persistent_output_buffers=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=1,
-                    cluster_axis=cluster_axis,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
-            else:
-                w3_out = tt_all_reduce(
-                    w3_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
-                )
 
         # For 2-projection MLP, w2_in is just the activated w3_out
         w2_in = act_out

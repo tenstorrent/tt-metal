@@ -13,6 +13,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.mlp import MLP
+from models.tt_transformers.tt.mlp_2_proj import MLP2Proj
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -112,3 +113,105 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         logger.warning("MLP Failed!")
 
     assert passing, f"MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "seq_len",
+    (64 * 1024, 32 * 1024, 512, 32),
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_mlp_2_proj_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
+    """Test 2-projection MLP (without gate projection w1) used by models like AFM"""
+    dtype = ttnn.bfloat8_b
+    mode = "decode" if seq_len <= 32 else "prefill"
+
+    # Use a model with 2-projection MLP structure (e.g., AFM)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
+    model_args.n_layers = 1
+
+    # Force 2-projection MLP structure for testing
+    model_args.mlp_structure = "2_projection"
+
+    state_dict = model_args.load_state_dict()
+
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = model_args.get_state_dict_prefix("MLP2Proj", 0)
+    partial_state_dict = {
+        k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+
+    reference_model = model_args.reference_mlp()
+    reference_model.load_state_dict(partial_state_dict)
+    if model_args.is_90b:
+        reference_model.to(torch.float32)
+
+    tt_ccl = TT_CCL(mesh_device)
+    tt_model = MLP2Proj(
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        args=model_args,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        layer_num=0,
+        dtype=dtype,
+        model_config=model_args.get_model_config(),
+    )
+
+    torch_input = torch.randn(
+        1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+    )
+    reference_output = reference_model(torch_input)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+        ),
+        dtype=ttnn.bfloat8_b,
+        memory_config=(
+            (
+                tt_model.model_config["MLP_ACT_MEMCFG"]
+                if model_args.is_galaxy
+                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+            )
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG
+        ),
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    logger.info("Run MLP2Proj")
+    tt_output = tt_model(tt_input, mode)
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
+
+    tt_output_torch = tt_output_torch[:, :1, :, :]
+
+    pcc_required = 0.99
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"PCC: {pcc_message}")
+    if passing:
+        logger.info("MLP2Proj Passed!")
+    else:
+        logger.warning("MLP2Proj Failed!")
+
+    assert passing, f"MLP2Proj output does not meet PCC requirement {pcc_required}: {pcc_message}."
