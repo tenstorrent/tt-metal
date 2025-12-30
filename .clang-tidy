@@ -102,7 +102,6 @@ Checks: >
   -modernize-use-integer-sign-comparison,
   -modernize-use-nodiscard,
   -modernize-use-ranges,
-  -modernize-use-std-numbers,
   -modernize-use-trailing-return-type,
   -modernize-use-transparent-functors,
   -performance-avoid-endl,
