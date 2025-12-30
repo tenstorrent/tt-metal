@@ -6,7 +6,7 @@
 
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
 #include <atomic>

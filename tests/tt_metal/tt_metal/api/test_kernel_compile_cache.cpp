@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <type_traits>

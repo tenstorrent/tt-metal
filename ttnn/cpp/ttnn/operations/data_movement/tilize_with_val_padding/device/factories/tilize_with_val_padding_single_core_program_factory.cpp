@@ -4,7 +4,7 @@
 
 #include "tilize_with_val_padding_single_core_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>

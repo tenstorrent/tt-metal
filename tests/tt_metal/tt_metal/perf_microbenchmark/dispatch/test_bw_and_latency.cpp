@@ -5,7 +5,7 @@
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>

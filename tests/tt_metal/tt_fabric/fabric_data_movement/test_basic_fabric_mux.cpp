@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <vector>
 #include <algorithm>
 #include <unordered_map>

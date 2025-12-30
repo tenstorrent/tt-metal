@@ -5,8 +5,8 @@
 #include "rtoptions.hpp"
 
 #include <algorithm>
-#include <ctype.h>
-#include <stdio.h>
+#include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>

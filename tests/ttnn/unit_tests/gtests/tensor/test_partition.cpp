@@ -21,8 +21,8 @@
 #include <vector>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <signal.h>
-#include <setjmp.h>
+#include <csignal>
+#include <csetjmp>
 
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
