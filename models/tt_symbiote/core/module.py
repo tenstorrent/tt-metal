@@ -47,15 +47,9 @@ class TTNNModule:
             return
         self.move_weights_to_device_impl()
 
-    def move_weights_to_host(self):
-        """Move weights back to host."""
-        self.move_weights_to_host_impl()
-        self._weights_on_device = False
-
     def deallocate_weights(self):
         """Deallocate weights from device."""
         self.deallocate_weights_impl()
-        self._preprocessed_weight = False
         self._weights_on_device = False
 
     def preprocess_weights_impl(self):
@@ -64,13 +58,6 @@ class TTNNModule:
         for child in self.__dict__.values():
             if isinstance(child, TTNNModule):
                 child.preprocess_weights()
-        return self
-
-    def move_weights_to_host_impl(self):
-        """Override to implement weight movement to host."""
-        for child in self.__dict__.values():
-            if isinstance(child, TTNNModule):
-                child.move_weights_to_host()
         return self
 
     def move_weights_to_device_impl(self):
@@ -148,6 +135,20 @@ class TTNNModule:
     def forward(self, *args, **kwargs):
         """Forward pass - must be implemented by subclasses."""
         raise NotImplementedError("Forward method must be implemented by subclasses.")
+
+    def named_modules(self, memo=None, prefix="", remove_duplicate=True):
+        """Iterator over all modules in the network, yielding both the name of the module as well as the module itself."""
+        if memo is None:
+            memo = set()
+        if remove_duplicate:
+            if self in memo:
+                return
+            memo.add(self)
+        yield prefix, self
+        for name, child in self.__dict__.items():
+            if isinstance(child, (torch.nn.Module, TTNNModule)):
+                child_prefix = prefix + ("." if prefix else "") + name
+                yield from child.named_modules(memo, child_prefix, remove_duplicate)
 
 
 def deallocate_weights_after(func):
