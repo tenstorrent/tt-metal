@@ -411,8 +411,8 @@ def run_test_forward_pass_mla2d(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, USERS_PER_ROW),
-        # ("prefill", 128, 1),
-        # ("prefill", 2048, 1),
+        ("prefill", 128, 1),
+        ("prefill", 2048, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -426,17 +426,11 @@ def run_test_forward_pass_mla2d(
 )
 @pytest.mark.parametrize(
     "module_path",
-    [
-        # None,
-        "model.layers.0.self_attn"
-    ],
+    [None, "model.layers.0.self_attn"],
 )
 @pytest.mark.parametrize(
     "test_closure",
-    [
-        # run_test_forward_pass_mla1d,
-        run_test_forward_pass_mla2d
-    ],
+    [run_test_forward_pass_mla1d, run_test_forward_pass_mla2d],
 )
 def test_forward_pass(
     mode,
