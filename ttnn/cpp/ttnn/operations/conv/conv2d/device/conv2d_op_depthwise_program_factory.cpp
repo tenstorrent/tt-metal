@@ -191,7 +191,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // Weight layout uses face-based format: rows_per_stick = ceil(channels_per_core / 16)
     // Total rows = kernel_h * kernel_w * rows_per_stick, then padded to tile boundary
     const uint32_t weight_cb_id = next_cb_index++;
-    const uint32_t weight_cb_pagesize = tt::tile_size(params.data_format);
+    // Use weight tensor's data format (may differ from input, e.g., bfp8 weights with bf16 input)
+    const tt::DataFormat weight_data_format = datatype_to_dataformat_converter(b.dtype());
+    const uint32_t weight_cb_pagesize = tt::tile_size(weight_data_format);
     // Calculate weight tiles matching prepare_conv2d_weights layout
     const uint32_t weight_rows_per_stick =
         (params.in_ntiles_c * tt::constants::TILE_WIDTH + tt::constants::FACE_WIDTH - 1) / tt::constants::FACE_WIDTH;
@@ -203,7 +205,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t weight_ntiles_width = params.in_ntiles_c;
     const uint32_t weight_cb_npages = weight_ntiles_height * weight_ntiles_width;
     tt::tt_metal::create_cb(
-        weight_cb_id, program, parallel_config.grid, weight_cb_pagesize, weight_cb_npages, params.data_format);
+        weight_cb_id, program, parallel_config.grid, weight_cb_pagesize, weight_cb_npages, weight_data_format);
     log_debug(
         tt::LogOp,
         "CB {} (weight_cb) :: PS = {}, NP = {} ({}x{} tiles)",

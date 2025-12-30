@@ -2070,11 +2070,18 @@ static ttnn::Tensor prepare_conv_weights_internal(
 
         // Print raw memory BEFORE tilization - value by value
         {
-            auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
             uint32_t total = weight_tensor_.logical_shape().volume();
             std::string all_vals = "BEFORE_TILIZE: ";
-            for (uint32_t i = 0; i < std::min(total, 1032u); i++) {
-                all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
+            if (weight_tensor_.dtype() == DataType::BFLOAT16) {
+                auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
+                for (uint32_t i = 0; i < std::min(total, 1032u); i++) {
+                    all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
+                }
+            } else if (weight_tensor_.dtype() == DataType::FLOAT32) {
+                auto data_ptr = tt::tt_metal::host_buffer::get_as<float>(weight_tensor_);
+                for (uint32_t i = 0; i < std::min(total, 1032u); i++) {
+                    all_vals += fmt::format("{} ", data_ptr[i]);
+                }
             }
             log_info(tt::LogOp, "{}", all_vals);
         }
@@ -2083,11 +2090,18 @@ static ttnn::Tensor prepare_conv_weights_internal(
 
         // Print raw memory AFTER tilization - value by value
         {
-            auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
             uint32_t total = weight_tensor_.logical_shape().volume();
             std::string all_vals = "AFTER_TILIZE: ";
-            for (uint32_t i = 0; i < std::min(total, 2048u); i++) {
-                all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
+            if (weight_tensor_.dtype() == DataType::BFLOAT16) {
+                auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
+                for (uint32_t i = 0; i < std::min(total, 2048u); i++) {
+                    all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
+                }
+            } else if (weight_tensor_.dtype() == DataType::FLOAT32) {
+                auto data_ptr = tt::tt_metal::host_buffer::get_as<float>(weight_tensor_);
+                for (uint32_t i = 0; i < std::min(total, 2048u); i++) {
+                    all_vals += fmt::format("{} ", data_ptr[i]);
+                }
             }
             log_info(tt::LogOp, "{}", all_vals);
         }
