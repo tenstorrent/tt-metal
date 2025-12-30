@@ -110,7 +110,7 @@ void kernel_main() {
          * compute E[(x)^2]
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_x2, cb_scaler, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_x2, Wt);
         // cb_wait_front(cb_xmm, Wt);

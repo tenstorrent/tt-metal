@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -143,15 +140,22 @@ void kernel_main() {
 
 #ifndef RMSNORM
     // E[x],
-    compute_kernel_lib::
-        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
-            cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, 0, block_w);
+    compute_kernel_lib::reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+        cb_in,
+        cb_scaler,
+        cb_ex_partial,
+        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h, 1),
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -159,7 +163,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
                     cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
             }
@@ -247,31 +251,21 @@ void kernel_main() {
     cb_wait_front(cb_xmm2, num_tiles_per_block);
 
 // Var(x)
-#ifdef RMSNORM
-    cb_wait_front(cb_scaler, 1);
-#endif
-    cb_reserve_back(cb_ex_partial2, block_h);
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex_partial2);
-    index_h_offset = 0;
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
+    compute_kernel_lib::reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+        cb_xmm2,
+        cb_scaler,
+        cb_ex_partial2,
+        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h, 1),
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
     cb_pop_front(cb_xmm2, num_tiles_per_block);
-    cb_push_back(cb_ex_partial2, block_h);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -280,7 +274,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
                     cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external2, 1);
             }

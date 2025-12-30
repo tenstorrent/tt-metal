@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/debug/dprint_pages.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -26,12 +27,11 @@ void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(4);
     constexpr uint32_t block_size = get_compile_time_arg_val(5);
-    constexpr bool use_float32_reduction = get_compile_time_arg_val(6) == 1;
+    // Note: get_compile_time_arg_val(6) is use_float32_reduction - unused after library migration
+    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
 
     uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
     constexpr uint32_t onetile = 1;
-
-    cb_wait_front(reduce_scalar_cb, onetile);  // comes from the reader
 
     binary_op_init_common(input_cb, input_cb, intermediate_cb);
 
@@ -78,25 +78,8 @@ void kernel_main() {
         /*
          * sum(x**2)
          */
-        reconfig_data_format(intermediate_cb, reduce_scalar_cb);
-        pack_reconfig_data_format(output_cb);
-        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, output_cb);
-        cb_wait_front(intermediate_cb, onetile);
-        cb_reserve_back(output_cb, onetile);
-
-        tile_regs_acquire();
-        reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, 0, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, output_cb);
-        tile_regs_release();
-
-        /*NOTE: for some reason, outputs are sometimes incorrect if you uninit with the use_float32_reduction flag!*/
-        reduce_uninit<false>();
-
-        cb_push_back(output_cb, onetile);
-        cb_pop_front(intermediate_cb, onetile);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            intermediate_cb, reduce_scalar_cb, output_cb, compute_kernel_lib::TileShape::single());
     }
     cb_pop_front(reduce_scalar_cb, onetile);
 }

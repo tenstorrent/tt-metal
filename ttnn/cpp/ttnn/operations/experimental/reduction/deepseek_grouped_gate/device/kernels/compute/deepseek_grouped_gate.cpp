@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM  // wtf why do we need to define this here?
-#define REDUCE_DIM ReduceDim::REDUCE_COL
-
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
@@ -273,16 +270,10 @@ void normalize_scores(
     const uint32_t cb_reciprocal_sums,
     const uint32_t cb_epsilon_scalar,
     const uint32_t cb_normalized_scores) {
-    reconfig_data_format(cb_gathered_sigmoid, cb_reduce_ones_scalar);
-    pack_reconfig_data_format(cb_normalized_scores);
-
-    cb_wait_front(cb_gathered_sigmoid, 1);
-    cb_wait_front(cb_reduce_ones_scalar, 1);
-
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    // Use PRELOADED mode to keep cb_gathered_sigmoid in CB for later broadcast multiply
-    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate, 1, 1, 1);
+    // PERSISTENT mode: waits for tile internally, no pop (tile persists for broadcast multiply)
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate, compute_kernel_lib::TileShape::single());
 
     // 2. Add epsilon to intermediate results
     tile_regs_acquire();

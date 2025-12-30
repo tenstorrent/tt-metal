@@ -46,8 +46,8 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
-                    reduce_init(cb_input, cb_scaler, cb_accum_dst);
-                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_input, cb_scaler, cb_accum_dst);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                     reduce_uninit();
 
                     cb_pop_front(cb_input, onetile);
@@ -103,8 +103,8 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            reduce_init(cb_input, cb_scaler, cb_out);
-            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            reduce_init<REDUCE_OP, REDUCE_DIM>(cb_input, cb_scaler, cb_out);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             reduce_uninit();
             tile_regs_commit();
 

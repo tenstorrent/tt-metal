@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -120,16 +117,16 @@ void kernel_main() {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 #endif
     // E[x],
-    compute_kernel_lib::
-        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
-            cb_in,
-            cb_scaler,
-            cb_ex_partial2,
-            block_h,
-            num_reduce_tiles_per_block_h,  // Wt
-            1,                             // num_batches
-            0,                             // row_chunk (default)
-            block_w);                      // input_stride
+    compute_kernel_lib::reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+        cb_in,
+        cb_scaler,
+        cb_ex_partial2,
+        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -162,25 +159,18 @@ void kernel_main() {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in, cb_x2);
-    reconfig_data_format_srcb(cb_in, cb_scaler);
-
     cb_wait_front(cb_x2, num_tiles_per_block);
 #ifdef RMSNORM
     cb_wait_front(cb_scaler, 1);
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::
-        reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true, FLOAT32_REDUCTION>(
-            cb_x2,
-            cb_scaler,
-            cb_ex_partial2,
-            block_h,
-            num_reduce_tiles_per_block_h,  // Wt
-            1,                             // num_batches
-            0,                             // row_chunk (default)
-            block_w);                      // input_stride
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+        cb_x2,
+        cb_scaler,
+        cb_ex_partial2,
+        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
@@ -188,7 +178,7 @@ void kernel_main() {
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -196,7 +186,7 @@ void kernel_main() {
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile(
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                     cb_ex_external2,
                     cb_scaler_global,
                     0,
