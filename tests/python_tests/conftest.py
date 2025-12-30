@@ -195,14 +195,14 @@ def pytest_runtest_makereport(item, call):
 
                 test_file_and_func = report.nodeid.split("[")[0]
 
-                # if exc_type == AssertionError:
-                #     # Handle assertion failures
-                #     exc_msg = str(call.excinfo.value) if call.excinfo.value.args else ""
-                #     error_message = (
-                #         f"⨯ {test_file_and_func}{report.test_params} {exc_msg}"
-                #     )
-                #     print(error_message, file=sys.stderr)
-                #     report.longrepr = error_message
+                if exc_type == AssertionError:
+                    # Handle assertion failures
+                    exc_msg = str(call.excinfo.value) if call.excinfo.value.args else ""
+                    error_message = (
+                        f"⨯ {test_file_and_func}{report.test_params} {exc_msg}"
+                    )
+                    print(error_message, file=sys.stderr)
+                    report.longrepr = error_message
 
     return report
 

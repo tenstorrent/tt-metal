@@ -768,12 +768,15 @@ class TestConfig:
     BRISC_ELF_LOADED: ClassVar[bool] = False
 
     def run_elf_files(self, location="0,0") -> list:
-        if self.boot_mode == BootMode.DEFAULT:
-            self.boot_mode = CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
+        boot_mode = (
+            CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
+            if self.boot_mode == BootMode.DEFAULT
+            else self.boot_mode
+        )
 
         if (
             TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
-            and self.boot_mode != BootMode.TRISC
+            and boot_mode != BootMode.TRISC
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
@@ -821,7 +824,7 @@ class TestConfig:
             location, TestConfig.TRISC_PROFILER_BARRIER_ADDRESS, [0, 0, 0]
         )
 
-        match self.boot_mode:
+        match boot_mode:
             case BootMode.BRISC:
                 if not TestConfig.BRISC_ELF_LOADED:
                     TestConfig.BRISC_ELF_LOADED = True
