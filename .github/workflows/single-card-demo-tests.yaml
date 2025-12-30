@@ -45,3 +45,4 @@ jobs:
       # when we're not using workflow_dispatch and can't possibly have an input anyway
       run-perf-tests: ${{ inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 5 * * 1,3,6') }}
       enable-ops-recording: ${{ inputs.enable-ops-recording || false }}
+      mlperf-read-only: false
