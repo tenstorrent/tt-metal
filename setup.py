@@ -407,11 +407,17 @@ class CMakeBuild(build_ext):
         env = os.environ.copy()
         # Add the library path so _ttnn.so can be found
         existing_path = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{lib_dir}:{self.build_lib}:{existing_path}"
+        pythonpath_entries = [str(lib_dir), str(self.build_lib)]
+        if existing_path:
+            pythonpath_entries.append(existing_path)
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
 
         # Also need LD_LIBRARY_PATH for shared libs
         existing_ld = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing_ld}"
+        ld_entries = [str(lib_dir)]
+        if existing_ld:
+            ld_entries.append(existing_ld)
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(ld_entries)
 
         cmd = [
             sys.executable,
