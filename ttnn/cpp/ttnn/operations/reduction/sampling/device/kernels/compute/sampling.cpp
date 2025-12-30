@@ -19,6 +19,7 @@
 #include "api/compute/pack.h"
 #include "ckernel_sfpu.h"
 #include "api/compute/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
@@ -161,30 +162,12 @@ void reduce_c() {
     // Postcondition: in0_cb has rows*cols produced
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
-    reconfig_data_format(in0_cb, scale_cb);
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
-
-    constexpr uint32_t reduce_dst_idx = 0;
-
-    for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        }
-
-        cb_reserve_back(out_cb, 1);
-        pack_reconfig_data_format(out_cb);
-        pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
-    }
-
-    reduce_uninit();
+    compute_kernel_lib::reduce<
+        pool_type,
+        reduce_dim,
+        compute_kernel_lib::ReduceInputMode::PERSISTENT,
+        compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
+        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 

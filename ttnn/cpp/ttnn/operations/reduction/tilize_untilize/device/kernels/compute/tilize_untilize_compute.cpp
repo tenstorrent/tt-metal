@@ -6,13 +6,6 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-
-// Provide default REDUCE_OP/REDUCE_DIM so reduce_helpers.hpp always compiles.
-// For IDENTITY operations, these are never used (guarded by if constexpr).
-#ifndef REDUCE_OP
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-#endif
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 /**
@@ -89,12 +82,10 @@ void MAIN {
             // - reduce_tile loop
             // - pack_tile to output CB
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                cb_tiled,           // input: num_tiles_per_row tiled tiles
-                cb_scaler,          // scaler tile
-                cb_reduced,         // output: 1 reduced tile
-                1,                  // Ht = 1 (one tile row per block)
-                num_tiles_per_row,  // Wt
-                1);                 // NC = 1 (one batch per block)
+                cb_tiled,                                                // input: num_tiles_per_row tiled tiles
+                cb_scaler,                                               // scaler tile
+                cb_reduced,                                              // output: 1 reduced tile
+                compute_kernel_lib::TileShape::row(num_tiles_per_row));  // one tile row per block
         }
 
         // ========== Phase 3: Untilize ==========

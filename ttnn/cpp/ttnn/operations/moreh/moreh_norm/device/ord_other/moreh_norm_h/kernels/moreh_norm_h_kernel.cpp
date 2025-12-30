@@ -136,7 +136,7 @@ void kernel_main() {
         cb_reserve_back(cb_reduce, onetile);
 
         reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_reduce, cb_cal, cb_one);
-        reduce_tile(cb_cal, cb_one, 0, 0, dst0);
+        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_cal, cb_one, 0, 0, dst0);
         reduce_uninit();
         tile_regs_commit();
 

@@ -17,6 +17,7 @@
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 #include "api/debug/assert.h"
 
@@ -246,46 +247,33 @@ void reduce_cb(
     uint32_t cb_out,
     bool use_prev_reduce,
     uint32_t cb_length_t) {
-    // Requirements:
-    //   blk is a divisor of cb_length_t reconfig_data_format(cb_in, cb_scaler);
-    //   len(Data) fed into cb_in, does not need all at once== cb_length_t
-    //   len(cb_out) == 1
+    // Single reduce call with lambda that conditionally accumulates
+    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
+        cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(cb_length_t), {},
+        // PostReduceOp: conditionally accumulate with previous result
+        [cb_prev_out, use_prev_reduce]() {
+            if (use_prev_reduce) {
+                // At this point, DST[0] contains the current reduce result
+                // Load previous result into DST[1] and accumulate
+                cb_wait_front(cb_prev_out, 1);
+                reconfig_data_format_srca(cb_prev_out);
+                copy_tile_init(cb_prev_out);
+                copy_tile(cb_prev_out, 0, 1);
 
-    reconfig_data_format(cb_in, cb_scaler);
-    pack_reconfig_data_format(cb_out);
-    reduce_init<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, cb_out);
-    tile_regs_acquire();
-    cb_reserve_back(cb_out, 1);
-    for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
-        cb_wait_front(cb_in, 1);
-        reduce_tile<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, 0, 0, 0);
-        cb_pop_front(cb_in, 1);
-    }
+                // Accumulate based on reduce type
+                if constexpr (reduce_type == PoolType::MAX) {
+                    binary_max_tile_init();
+                    binary_max_tile(0, 1, 0);  // max(DST[0], DST[1]) -> DST[0]
+                } else {
+                    // SUM reduction
+                    add_binary_tile_init();
+                    add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
+                }
 
-    if (use_prev_reduce) {
-        reconfig_data_format_srca(cb_prev_out);
-        cb_wait_front(cb_prev_out, 1);
-        copy_tile_init(cb_prev_out);
-        copy_tile(cb_prev_out, 0, 1);
-        if (reduce_type == PoolType::MAX) {
-            // path if we are doing a max redudce
-            binary_max_tile_init();
-            // garbage data will be in data outside the first collumn, but since we broadcast this column it shouldnt
-            // matter
-            binary_max_tile(0, 1, 0);
-        } else {
-            // path if we are doing a sum redudce
-            add_binary_tile_init();
-            add_binary_tile(0, 1, 0);
-        }
-        cb_pop_front(cb_prev_out, 1);
-    }
-    tile_regs_wait();
-    tile_regs_commit();
-    pack_tile(0, cb_out);
-    cb_push_back(cb_out, 1);
-    tile_regs_release();
-    reduce_uninit();
+                cb_pop_front(cb_prev_out, 1);
+            }
+            // If !use_prev_reduce, lambda is no-op (compiles away)
+        });
 }
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     reconfig_data_format(cb_in, cb_recip);

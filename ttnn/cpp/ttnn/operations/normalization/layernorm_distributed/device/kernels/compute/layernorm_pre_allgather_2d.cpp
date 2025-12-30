@@ -16,6 +16,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -25,7 +26,8 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t num_cores_y = get_compile_time_arg_val(3);
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(4) == 1;
+    // Note: get_compile_time_arg_val(4) is FLOAT32_REDUCTION - unused after library migration
+    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
     bool is_merge_core = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t onetile = 1;
@@ -38,13 +40,9 @@ void kernel_main() {
     constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
     constexpr uint32_t cb_zero = tt::CBIndex::c_13;
 
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-
     binary_op_init_common(cb_inp, cb_reduce, cb_x2);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int dst0 = 0;
-
         /*
          * x**2
          */
@@ -70,28 +68,10 @@ void kernel_main() {
         /*
          * sum(x**2)
          */
-
-        reconfig_data_format(cb_x2, cb_reduce);
-        pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
-
-        cb_wait_front(cb_x2, Wt);
-
-        cb_reserve_back(cb_out, onetile);
-        ACQ();
-
-        for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
-        }
-        pack_tile(dst0, cb_out, 0);
-        REL();
-
-        cb_push_back(cb_out, onetile);
-
-        cb_pop_front(cb_x2, Wt);
-
-        reduce_uninit();
-
+        // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::TileShape::row(Wt));
         cb_pop_front(cb_inp, Wt);
         cb_pop_front(cb_reduce, 1);
     }
