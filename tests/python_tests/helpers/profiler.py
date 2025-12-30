@@ -364,6 +364,23 @@ class ProfilerConfig(TestConfig):
         return metadata
 
     @staticmethod
+    def _get_marker_id(
+        metadata: dict, marker_name: str, file_suffix: str, line: int
+    ) -> int:
+        """Look up marker ID from metadata by marker name, file suffix, and line number.
+        This provides stable marker ID lookup regardless of build environment paths."""
+        for marker in metadata.values():
+            if (
+                marker.marker == marker_name
+                and marker.file.endswith(file_suffix)
+                and marker.line == line
+            ):
+                return marker.id
+        raise ValueError(
+            f"Marker '{marker_name}' not found in metadata (file ending with '{file_suffix}', line {line})"
+        )
+
+    @staticmethod
     def _dataframe(rows: list[dict] | None = None) -> pd.DataFrame:
         # Define the schema
         schema = {

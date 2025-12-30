@@ -119,14 +119,13 @@ void run_kernel(const volatile struct RuntimeParams*)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     buffer_descriptor_u bd_val = {0};
+    bd_val.f.l1_addr_16B       = buffer_Res[0] / 16;
+    bd_val.f.format            = static_cast<uint8_t>(formats.pack_dst);
+    bd_val.f.x_dim             = TEST_FACE_C_DIM;
+    bd_val.f.y_dim             = TEST_FACE_R_DIM;
+    bd_val.f.z_dim             = num_faces;
+
     tdma_descriptor_t tdma_desc;
-
-    bd_val.f.l1_addr_16B = buffer_Res[0] / 16;
-    bd_val.f.format      = static_cast<uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = num_faces;
-
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);

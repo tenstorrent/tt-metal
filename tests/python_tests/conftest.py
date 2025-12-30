@@ -124,6 +124,9 @@ def pytest_configure(config):
         Path(os.environ["LLK_HOME"]), with_coverage, detailed_artefacts
     )
 
+    # Create directories from all processes - lock in create_directories handles race
+    TestConfig.create_build_directories()
+
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):
         check_hardware_headers()

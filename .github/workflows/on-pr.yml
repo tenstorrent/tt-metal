@@ -169,6 +169,18 @@ jobs:
       test_splits: 4
       pytest_markers: "not perf and not nightly and not quasar"
 
+  build-quasar:
+    name: "🌟 Build Quasar tests"
+    uses: ./.github/workflows/build-quasar.yml
+    needs: [build-images, detect-changes]
+    if: ${{ github.event_name != 'push' &&
+            needs.detect-changes.outputs.quasar == 'true' }}
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: ubuntu-latest
+      test_splits: 8
+      pytest_markers: "quasar"
+
   perf-tests:
     name: "⚡ Performance tests (${{ matrix.target }})"
     uses: ./.github/workflows/setup-and-test.yml
@@ -198,6 +210,7 @@ jobs:
       - build-images
       - setup-and-test-wormhole
       - setup-and-test-blackhole
+      - build-quasar
       - perf-tests
     runs-on: ubuntu-latest
     steps:
@@ -205,4 +218,4 @@ jobs:
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
-          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole, perf-tests
+          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole, build-quasar, perf-tests
