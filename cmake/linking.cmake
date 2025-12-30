@@ -196,6 +196,11 @@ else()
 endif()
 
 #===============================================================================
+# LINKER MISC CONFIGURATION
+#===============================================================================
+add_link_options($<$<CONFIG:Debug,RelWithDebInfo>:-Wl,--gdb-index>)
+
+#===============================================================================
 # LTO (LINK TIME OPTIMIZATION) CONFIGURATION
 #===============================================================================
 
@@ -264,7 +269,7 @@ if(TT_ENABLE_LTO)
         # Limit LTO cache size to the least of 3GB, 10% disk space, or 10000 files
         # Default pruning happens every 20 minutes
         add_link_options(
-            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=3g:cache_size=10%:cache_size_files=10000>
+            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=10000>
         )
 
         # Mozilla recommendation for non-PGO builds (default is 100)
