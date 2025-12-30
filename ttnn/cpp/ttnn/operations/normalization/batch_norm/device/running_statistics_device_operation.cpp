@@ -128,6 +128,6 @@ ttnn::operations::normalization::RunningStatistics::tensor_return_value_t runnin
         batch_mean.dtype()};
     OperationType::tensor_args_t tensor_args{batch_mean, batch_var, std::move(running_mean), std::move(running_var)};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -109,7 +109,7 @@ paged_fill_cache(
         .batch_idx_tensor_opt = batch_idx_tensor,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

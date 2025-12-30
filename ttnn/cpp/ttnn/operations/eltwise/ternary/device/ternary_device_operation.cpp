@@ -535,7 +535,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_tensor_c = input_c,
         .optional_output_tensor = optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
+    return ttnn::device_operation::launch<OperationType>(attributes, args);
 }
 
 ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
@@ -579,7 +579,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_tensor_c = input_c,
         .optional_output_tensor = optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
+    return ttnn::device_operation::launch<OperationType>(attributes, args);
 }
 
 ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
@@ -615,7 +615,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_tensor_c = std::nullopt,
         .optional_output_tensor = optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
+    return ttnn::device_operation::launch<OperationType>(attributes, args);
 }
 
 ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
@@ -650,7 +650,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .input_tensor_c = input_c,
         .optional_output_tensor = optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(attributes, args);
+    return ttnn::device_operation::launch<OperationType>(attributes, args);
 }
 
 }  // namespace ttnn::prim

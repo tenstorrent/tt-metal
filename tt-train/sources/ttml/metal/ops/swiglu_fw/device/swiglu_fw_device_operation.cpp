@@ -139,7 +139,7 @@ ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor, .w1 = m1, .w2 = m2, .w3 = m3, .preallocated_swiglu = preallocated_swiglu};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

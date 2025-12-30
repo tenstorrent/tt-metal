@@ -190,15 +190,13 @@ ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update
     const ttnn::operations::kv_cache::UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::kv_cache::UpdateKVCacheOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
             .compute_kernel_config = compute_kernel_config},
-        OperationType::tensor_args_t{
-            .cache = cache,
-            .input = input});
+        OperationType::tensor_args_t{.cache = cache, .input = input});
 }
 }  // namespace ttnn::prim

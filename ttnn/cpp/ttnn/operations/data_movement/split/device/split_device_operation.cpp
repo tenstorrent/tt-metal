@@ -88,7 +88,8 @@ namespace ttnn::prim {
 std::vector<ttnn::Tensor> split(
     const Tensor& input_tensor, int num_splits, int dim, const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::data_movement::split::SplitDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
-        OperationType::operation_attributes_t{num_splits, dim, output_mem_config}, OperationType::tensor_args_t{input_tensor});
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{num_splits, dim, output_mem_config},
+        OperationType::tensor_args_t{input_tensor});
 }
 }  // namespace ttnn::prim

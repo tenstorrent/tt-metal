@@ -107,7 +107,7 @@ ttnn::operations::moreh::moreh_arange::MorehArangeOperation::tensor_return_value
         OperationType::operation_attributes_t{start, end, step, untilize_out, mesh_device, dtype, memory_config};
     auto tensor_args = OperationType::tensor_args_t{output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

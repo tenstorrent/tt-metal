@@ -288,7 +288,7 @@ ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_valu
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::data_movement::slice::SliceDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},
         OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});

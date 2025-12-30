@@ -127,6 +127,6 @@ ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t mor
         momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
         init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

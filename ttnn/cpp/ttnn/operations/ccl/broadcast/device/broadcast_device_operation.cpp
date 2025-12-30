@@ -130,7 +130,7 @@ ttnn::operations::ccl::broadcast::BroadcastDeviceOperation::tensor_return_value_
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t(
             sender_coord,
             num_links,

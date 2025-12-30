@@ -70,8 +70,9 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     float to,
     uint32_t seed) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
-        OperationType::operation_attributes_t{shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
         OperationType::tensor_args_t{});
 }
 }  // namespace ttnn::prim

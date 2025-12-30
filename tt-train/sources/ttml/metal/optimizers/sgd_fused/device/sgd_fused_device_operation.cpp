@@ -134,7 +134,7 @@ ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation::tensor_retu
         .momentum_buffer = momentum_buffer,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

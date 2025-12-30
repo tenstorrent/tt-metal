@@ -209,7 +209,7 @@ ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceSc
         .persistent_intermediate = persistent_intermediate_buffer,
         .persistent_output = persistent_output_buffer};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

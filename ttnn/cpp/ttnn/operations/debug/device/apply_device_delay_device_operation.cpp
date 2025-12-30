@@ -121,7 +121,7 @@ ttnn::operations::debug::ApplyDeviceDelayDeviceOperation::tensor_return_value_t 
         .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
     auto tensor_args = OperationType::tensor_args_t{};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

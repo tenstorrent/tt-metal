@@ -374,7 +374,7 @@ ring_joint_scaled_dot_product_attention(
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

@@ -70,6 +70,6 @@ moreh_clip_grad_norm_step2(
     auto operation_attributes = OperationType::operation_attributes_t{
         norm_type, memory_config.value_or(tmp_pow_sum.memory_config()), compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{tmp_pow_sum, total_norm};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

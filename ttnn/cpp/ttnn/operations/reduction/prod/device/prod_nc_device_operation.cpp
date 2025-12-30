@@ -65,7 +65,7 @@ ProdNcDeviceOperation::tensor_return_value_t ProdNcDeviceOperation::create_outpu
 namespace ttnn::prim {
 ttnn::Tensor prod_nc(const ttnn::Tensor& input, const ttnn::Tensor& output, int64_t dim) {
     using OperationType = ttnn::operations::reduction::prod_nc::ProdNcDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.dim = dim},
         OperationType::tensor_args_t{.input = input, .output = output});
 }
