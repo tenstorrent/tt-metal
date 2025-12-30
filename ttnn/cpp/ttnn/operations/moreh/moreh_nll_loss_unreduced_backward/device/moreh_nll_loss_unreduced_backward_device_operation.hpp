@@ -66,8 +66,14 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreducedBackwardDeviceOperation::
+    tensor_return_value_t
+    moreh_nll_loss_unreduced_backward(
         const Tensor& target_tensor,
         const Tensor& output_grad_tensor,
         const std::optional<Tensor>& weight_tensor,
@@ -75,12 +81,4 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
         int32_t ignore_index,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
-};
-
-}  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
-
-namespace ttnn::prim {
-constexpr auto moreh_nll_loss_unreduced_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_nll_loss_unreduced_backward",
-    ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreducedBackwardDeviceOperation>();
 }  // namespace ttnn::prim

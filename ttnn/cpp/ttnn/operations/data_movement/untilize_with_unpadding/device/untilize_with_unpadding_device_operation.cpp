@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_unpadding_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -200,11 +201,10 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
+}  // namespace ttnn::operations::data_movement::untilize_with_unpadding
 
-std::tuple<
-    UntilizeWithUnpaddingDeviceOperation::operation_attributes_t,
-    UntilizeWithUnpaddingDeviceOperation::tensor_args_t>
-UntilizeWithUnpaddingDeviceOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t untilize_with_unpadding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_tensor_end,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
@@ -214,19 +214,17 @@ UntilizeWithUnpaddingDeviceOperation::invoke(
     bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    operation_attributes_t operation_attributes{
-        .output_tensor_end = output_tensor_end,
-        .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-        .use_multicore = use_multicore,
-        .use_pack_untilize = use_pack_untilize,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .enough_space_width = enough_space_width,
-        .enough_space_height = enough_space_height,
-        .sub_core_grids = sub_core_grids};
-
-    tensor_args_t tensor_args{.input_tensor = input_tensor};
-
-    return std::make_tuple(operation_attributes, tensor_args);
+    using OperationType = ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_tensor_end = output_tensor_end,
+            .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
+            .use_multicore = use_multicore,
+            .use_pack_untilize = use_pack_untilize,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .enough_space_width = enough_space_width,
+            .enough_space_height = enough_space_height,
+            .sub_core_grids = sub_core_grids},
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding
+}  // namespace ttnn::prim

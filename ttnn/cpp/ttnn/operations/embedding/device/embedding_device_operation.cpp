@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -95,28 +96,31 @@ tensor_return_value_t EmbeddingsDeviceOperation::create_output_tensors(
 }
 
 
-std::tuple<EmbeddingsDeviceOperation::operation_attributes_t, EmbeddingsDeviceOperation::tensor_args_t>
-EmbeddingsDeviceOperation::invoke(
+}  // namespace ttnn::operations::embedding
+
+namespace ttnn::prim {
+ttnn::operations::embedding::EmbeddingsDeviceOperation::tensor_return_value_t embedding(
     const Tensor& input_tensor_arg,
     const Tensor& weight_arg,
     bool tilized,
-    EmbeddingsType embeddings_type,
+    ttnn::operations::embedding::EmbeddingsType embeddings_type,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<uint32_t>& pad_token,
     const std::optional<Tensor>& optional_output_tensor) {
+    using OperationType = ttnn::operations::embedding::EmbeddingsDeviceOperation;
     auto memory_config = output_mem_config.value_or(input_tensor_arg.memory_config());
-    return {
-        operation_attributes_t{
-            .output_mem_config = memory_config,
-            .tilized = tilized,
-            .embeddings_type = embeddings_type,
-            .pad_token = pad_token,
-        },
-        tensor_args_t{
-            .input_tensor_arg = input_tensor_arg,
-            .weight_arg = weight_arg,
-            .optional_output_tensor = optional_output_tensor,
-        }};
-}
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_mem_config = memory_config,
+        .tilized = tilized,
+        .embeddings_type = embeddings_type,
+        .pad_token = pad_token,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor_arg = input_tensor_arg,
+        .weight_arg = weight_arg,
+        .optional_output_tensor = optional_output_tensor,
+    };
 
-}  // namespace ttnn::operations::embedding
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

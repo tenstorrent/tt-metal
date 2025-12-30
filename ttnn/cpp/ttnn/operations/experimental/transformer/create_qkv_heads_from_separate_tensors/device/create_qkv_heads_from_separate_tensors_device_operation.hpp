@@ -36,22 +36,18 @@ struct CreateQKVHeadsSeparateTensorsDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const Tensor& input_tensor_kv,
-        uint32_t num_q_heads,
-        uint32_t num_kv_heads,
-        uint32_t head_dim,
-        bool transpose_k_heads,
-        const MemoryConfig& output_mem_config,
-        const std::optional<std::array<Tensor, 3>>& optional_output_tensors);
 };
 
 }  // namespace ttnn::operations::experimental::transformer
 
 namespace ttnn::prim {
-constexpr auto create_qkv_heads_from_separate_tensors = ttnn::register_operation<
-    "ttnn::prim::create_qkv_heads_from_separate_tensors",
-    ttnn::operations::experimental::transformer::CreateQKVHeadsSeparateTensorsDeviceOperation>();
+std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_from_separate_tensors(
+    const Tensor& input_tensor,
+    const Tensor& input_tensor_kv,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k_heads,
+    const MemoryConfig& output_mem_config,
+    const std::optional<std::array<Tensor, 3>>& optional_output_tensors);
 }  // namespace ttnn::prim

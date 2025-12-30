@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
@@ -357,9 +357,9 @@ static std::string generate_golden_output(
                 golden_output += "blobs_y_start: " + std::to_string(val) + "\n";
                 continue;
             }
-            if (format_fields.find(field_names[i]) != format_fields.end()) {
+            if (format_fields.contains(field_names[i])) {
                 golden_output += field_names[i] + ": " + data_format_to_string(values[i]) + "\n";
-            } else if (decimal_fields.find(field_names[i]) != format_fields.end()) {
+            } else if (decimal_fields.contains(field_names[i])) {
                 golden_output += field_names[i] + ": " + std::to_string(values[i]) + "\n";
             } else {
                 golden_output += field_names[i] + ": 0x" + int_to_hex(values[i]) + "\n";

@@ -55,21 +55,18 @@ struct MorehArangeOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        float start,
-        float end,
-        float step,
-        ttnn::MeshDevice* mesh_device,
-        const std::optional<Tensor>& output,
-        bool untilize_out,
-        const DataType& dtype,
-        const MemoryConfig& memory_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_arange
 
 namespace ttnn::prim {
-constexpr auto moreh_arange =
-    ttnn::register_operation<"ttnn::prim::moreh_arange", ttnn::operations::moreh::moreh_arange::MorehArangeOperation>();
-}
+ttnn::operations::moreh::moreh_arange::MorehArangeOperation::tensor_return_value_t moreh_arange(
+    float start,
+    float end,
+    float step,
+    ttnn::MeshDevice* mesh_device,
+    const std::optional<Tensor>& output,
+    bool untilize_out,
+    const DataType& dtype,
+    const MemoryConfig& memory_config);
+}  // namespace ttnn::prim

@@ -138,26 +138,31 @@ tt::stl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_
         intermediate_memory_config);
 }
 
-std::tuple<
-    LlamaAllGatherMatmulAsyncDeviceOperation::operation_attributes_t,
-    LlamaAllGatherMatmulAsyncDeviceOperation::tensor_args_t>
-LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
-    const Tensor& input0,
-    const Tensor& input1,
-    const Tensor& intermediate_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
-    const GlobalSemaphore& global_semaphore,
-    const std::optional<tt::tt_metal::MemoryConfig>& ag_memory_config,
-    const std::optional<tt::tt_metal::MemoryConfig>& mm_memory_config,
-    const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const DataType> dtype,
-    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGatherMatmulAsyncDeviceOperation::
+    tensor_return_value_t
+    llama_all_gather_matmul_async(
+        const Tensor& input0,
+        const Tensor& input1,
+        const Tensor& intermediate_tensor,
+        int32_t dim,
+        uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        ttnn::ccl::Topology topology,
+        const GlobalSemaphore& global_semaphore,
+        const std::optional<tt::tt_metal::MemoryConfig>& ag_memory_config,
+        const std::optional<tt::tt_metal::MemoryConfig>& mm_memory_config,
+        std::optional<size_t> num_preferred_links,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        std::optional<const DataType> dtype,
+        const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
+    using OperationType =
+        ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGatherMatmulAsyncDeviceOperation;
     tt::tt_fabric::Topology usable_topology = ttnn::ccl::get_usable_topology(input0, topology, cluster_axis);
 
     const auto& mesh_view = mesh_device.get_view();
@@ -197,19 +202,21 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
             /*output_tile=*/std::nullopt,
             /*global_cb=*/global_cb});
 
-    return {
-        operation_attributes_t(
-            matmul_struct,
-            devices,
-            gather_dim,
-            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-            num_devices,
-            ag_memory_config.value_or(input0.memory_config()),
-            usable_topology,
-            global_semaphore,
-            sub_device_id,
-            cluster_axis),
-        tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t(
+        matmul_struct,
+        devices,
+        gather_dim,
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        num_devices,
+        ag_memory_config.value_or(input0.memory_config()),
+        usable_topology,
+        global_semaphore,
+        sub_device_id,
+        cluster_axis);
+    auto tensor_args =
+        OperationType::tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+}  // namespace ttnn::prim
