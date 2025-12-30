@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <numeric>
 
 #include "ttnn/operations/cb_utils.hpp"

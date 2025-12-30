@@ -5,7 +5,7 @@
 #include <allocator.hpp>
 #include <device.hpp>
 #include <memory_reporter.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>

@@ -4,7 +4,7 @@
 
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>

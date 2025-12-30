@@ -4,7 +4,7 @@
 
 #include <enchantum/enchantum.hpp>
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>

@@ -6,7 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
-#include <stdint.h>
+#include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
 #include <filesystem>

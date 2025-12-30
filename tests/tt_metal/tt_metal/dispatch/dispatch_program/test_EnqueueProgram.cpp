@@ -10,9 +10,9 @@
 #include <memory>
 #include <random>
 #include <set>
-#include <stdlib.h>
+#include <cstdlib>
 #include <string>
-#include <string.h>
+#include <cstring>
 #include <unordered_set>
 #include <utility>
 #include <variant>

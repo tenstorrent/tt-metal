@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <limits.h>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <cmath>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
