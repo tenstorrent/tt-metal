@@ -174,7 +174,7 @@ ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t create_q
     auto tensor_args =
         OperationType::tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

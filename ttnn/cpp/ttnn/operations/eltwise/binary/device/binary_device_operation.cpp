@@ -486,7 +486,7 @@ ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
         std::nullopt};
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
@@ -518,7 +518,7 @@ ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
         std::nullopt};
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

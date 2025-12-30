@@ -219,7 +219,7 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
     const std::optional<Tensor>& optional_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     using OperationType = ttnn::operations::ccl::ReduceToRootOp;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             root_coord,
             scale_fp32,

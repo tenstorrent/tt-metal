@@ -58,7 +58,7 @@ ttnn::Tensor index_fill(
     const std::variant<float, int> value,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::index_fill::IndexFillOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, value, memory_config.value_or(input.memory_config())},
         OperationType::tensor_args_t{input, index});
 }

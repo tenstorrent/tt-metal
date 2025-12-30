@@ -341,7 +341,7 @@ ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t 
     bool enough_space_height,
     uint32_t pf_type) {
     using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = std::move(output_mem_config),
             .use_multicore = use_multicore,

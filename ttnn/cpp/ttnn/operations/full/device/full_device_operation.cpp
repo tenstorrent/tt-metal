@@ -84,6 +84,6 @@ ttnn::operations::full::FullOperation::tensor_return_value_t full(
     };
     auto tensor_args = OperationType::tensor_args_t{};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

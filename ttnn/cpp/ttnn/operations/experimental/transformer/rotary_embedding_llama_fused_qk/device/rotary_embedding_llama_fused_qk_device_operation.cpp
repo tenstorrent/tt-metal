@@ -180,7 +180,7 @@ rotary_embedding_llama_fused_qk(
         .trans_mat = trans_mat,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

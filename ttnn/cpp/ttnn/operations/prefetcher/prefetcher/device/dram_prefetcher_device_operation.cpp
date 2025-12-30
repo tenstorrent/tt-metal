@@ -110,6 +110,6 @@ ttnn::operations::dram_prefetcher::DramPrefetcherOperation::tensor_return_value_
     };
     auto tensor_args = OperationType::tensor_args_t{.input_tensors = tensors};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

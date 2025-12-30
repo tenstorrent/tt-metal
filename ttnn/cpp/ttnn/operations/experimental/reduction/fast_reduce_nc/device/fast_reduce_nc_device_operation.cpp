@@ -81,7 +81,7 @@ ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation::
         .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

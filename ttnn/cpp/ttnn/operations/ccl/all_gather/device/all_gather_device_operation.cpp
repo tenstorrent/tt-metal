@@ -178,7 +178,7 @@ ttnn::Tensor all_gather(
     tt::tt_fabric::Topology topology,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     using OperationType = ttnn::operations::ccl::AllGatherDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .memory_config = memory_config,
             .dim = dim,

@@ -290,6 +290,6 @@ ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_re
         .negative_mask = std::move(negative_mask),
         .reciprocals = std::move(reciprocals)};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

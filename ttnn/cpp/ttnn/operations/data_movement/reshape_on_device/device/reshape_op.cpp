@@ -110,7 +110,7 @@ ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation::tens
     const tt::tt_metal::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
         OperationType::tensor_args_t{input_tensor});
 }
