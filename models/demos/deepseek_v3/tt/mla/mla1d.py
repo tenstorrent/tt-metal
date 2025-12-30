@@ -134,7 +134,7 @@ class MLA1D(AbstractModule):
             },
             "wkv_b2": {
                 "input_tensor_b": cls._convert_weight(
-                    output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, -3), mesh_device
+                    output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, None), mesh_device
                 ),
             },
         }
@@ -906,7 +906,6 @@ class MLA1D(AbstractModule):
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
-        breakpoint()
         # 1,32,16,64 height sharded 8x4 [32,64]
 
         # wkv_b1
@@ -942,9 +941,7 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.experimental.all_to_all_async_generic(
             tt_q, **cfg["wq_a2a_decode"]
         )  # TODO: ceate issue for all_to_all_async_generic segfaulting if we pass in a sharded memory config
-        # 1,4,128,576  L1 interleaved | should be: height sharded 8x8 [32,576]
-
-        # tt_q = ttnn.to_memory_config(tt_q, **cfg["wq_a2a_reshard_decode"])
+        # 1,4,128,576  L1 interleaved
 
         # KVPE Stuff
         # 1,1,32,896, width sharded 7x4 [32,32]
@@ -967,11 +964,11 @@ class MLA1D(AbstractModule):
         tt_kv_nope = ttnn.slice(
             tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank], **cfg["kv_nope_slice"]
         )  # TODO: file issue that Number of shards along width 18 must not exceed number of cores 16 assert uses input shape instead of output shape!
-        # 1,1,32,512 L1 interleaved | should be: width sharded 8x2 [32,32]
+        # 1,1,32,512 L1 interleaved
         tt_kv_rope = ttnn.slice(
             tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim], **cfg["kv_rope_slice"]
         )
-        # 1,1,32,64 L1 interleaved | TODO: use 1x2 here?
+        # 1,1,32,64 L1 interleaved
         ttnn.deallocate(tt_kv)
 
         # 1,1,32,512 L1 interleaved
@@ -1004,7 +1001,6 @@ class MLA1D(AbstractModule):
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
         # 1,32,1,64 L1 interleaved
 
-        # tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_out_reshard"])  # [1, 1, bsz, qk_rope_head_dim]
         tt_kv_rope = ttnn.permute(tt_kv_rope, **cfg["kv_rope_permute"])  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
 
@@ -1012,23 +1008,23 @@ class MLA1D(AbstractModule):
         # # 1,1,32,512 L1 interleaved
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
-        # 1,1,32,576 L1 interleaved | should be: width sharded 6x3 [32,32]
+        # 1,1,32,576 L1 interleaved
 
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         # TODO: Can we use all_to_all_async_generic instead?
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # TODO: do we need this?
-        # 1,32,32,576 L1 interleaved | should be: width sharded 6x3 [1024,32]
+        # 1,32,32,576 L1 interleaved
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
 
-        # 1,32,32,576 L1 interleaved | should be: width sharded 6x3 [1024,32]
+        # 1,32,32,576 L1 interleaved
         tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
             tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
         )
-        # 1,4,32,576 L1 interleaved | should be:  height sharded 1x4 [32,576]
+        # 1,4,32,576 L1 interleaved
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
-        # 1,4,1,576 L1 interleaved | should be: height sharded 1x4 [32,576]
+        # 1,4,1,576 L1 interleaved
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
-        # 1,4,32,576 L1 interleaved | should be: height sharded 1x4 [32,576]
+        # 1,4,32,576 L1 interleaved
 
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         # 1,4,32,576 height sharded 1x4 [32,576]
@@ -1047,7 +1043,7 @@ class MLA1D(AbstractModule):
         # FlashMLA
         # 1,4,128,576 L1 interleaved
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
-        # 1,4,128,576 L1 height sharded 8x9 [32,576]
+        # 1,4,128,576 L1 height sharded 8x9 [32,576] # TODO: try 8x10
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
@@ -1060,31 +1056,26 @@ class MLA1D(AbstractModule):
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
         # 1,4,128,512 L1 interleaved
 
-        attn_out = ttnn.experimental.all_to_all_async_generic(attn_out, **cfg["flash_mla_a2a_decode"])
-
-        # 1,32,16,512 L1 interleaved | should be:height sharded 8x2 [32,512]
+        # DP WKVB_2
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
-        # 1,16,32,512 L1 interleaved | should be: height sharded 8x2 [32,512]
+        # 1,128,4,512 L1 interleaved | should be: height sharded 8x2 [32,512]
+
         v_out = ttnn.linear(
             attn_out, **cfg["wkv_b2"]
-        )  # [1, num_heads_local, bsz, v_head_dim] # TODO: file issue for "Number of shards along height 16 must not exceed number of cores 1" when passsing in memory_config=height_sharded_memory_config
-        # 1,32,16,128 L1 interleaved | should be: height sharded 8x2 [32,128]
+        )  # TODO: file issue for "Number of shards along height 16 must not exceed number of cores 1" when passsing in memory_config=height_sharded_memory_config
+        # 1,128,4,128 L1 interleaved = [1, num_heads_local, bsz, v_head_dim]
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))
+        # 1,4,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
 
         # wo
-        v_out = ttnn.experimental.all_gather_async(
-            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
-        )  # [1, num_heads, bsz, v_head_dim]
-        # 1,32,128,128 L1 interleaved | should be:  height sharded 1x4 [4096,32]
-        v_out = ttnn.permute(
-            v_out, (0, 2, 1, 3)
-        )  # [1, bsz, num_heads, v_head_dim] # TODO: move one up, does that work?
-        # 1,128,32,128 L1 interleaved | should be: height sharded 1x4 [4096,32]
+        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
+        # 1,32,128,128 L1 interleaved = [1, bsz, num_heads, v_head_dim]
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
-        # 1,1,32,16384 L1 interleaved | should be: height sharded 1x4 [32,4096]
+        # 1,1,32,16384 L1 interleaved
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
-        # 1,1,32,896 L1 interleaved | should be: width sharded 7x4 [32,32] # TODO: output sharded
+        # 1,1,32,896 width sharded 7x4 [32,32]
 
         return out
 
