@@ -151,7 +151,7 @@ std::map<std::string, std::string> get_defines(
     }
 
     if (input_dtype.has_value() && output_dtype.has_value() && is_typecast(*input_dtype, *output_dtype)) {
-        TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0, "SFPU_OP_CHAIN_0 already defined");
+        TT_ASSERT(!defines.contains("SFPU_OP_CHAIN_0"), "SFPU_OP_CHAIN_0 already defined");
 
         auto in_dataformat = static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype.value()));
         auto out_dataformat = static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype.value()));
@@ -242,7 +242,7 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::RSUB:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
-                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int32_tile_init();")});
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
                 op_name = "rsub_int32_tile";
             } else {
                 new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});

@@ -104,7 +104,7 @@ bool CircularBuffer::is_on_logical_core(const CoreCoord& logical_core) const {
 }
 
 bool CircularBuffer::uses_buffer_index(uint32_t buffer_index) const {
-    return this->buffer_indices().find(buffer_index) != this->buffer_indices().end();
+    return this->buffer_indices().contains(buffer_index);
 }
 
 uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {

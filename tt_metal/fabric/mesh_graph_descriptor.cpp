@@ -1020,18 +1020,18 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
 void MeshGraphDescriptor::pre_populate_connections_lookups() {
     for (const auto& [instance_id, instance] : instances_) {
     // Add empty vectors for the instance's type, instance id, and source device id
-    if (connections_by_type_.find(instance.type) == connections_by_type_.end()) {
-            connections_by_type_.emplace(instance.type, std::vector<ConnectionId>());
-        }
-        if (connections_by_instance_id_.find(instance_id) == connections_by_instance_id_.end()) {
-            connections_by_instance_id_.emplace(instance.global_id, std::vector<ConnectionId>());
-        }
-        if (connections_by_source_device_id_.find(instance_id) == connections_by_source_device_id_.end()) {
-            connections_by_source_device_id_.emplace(instance.global_id, std::vector<ConnectionId>());
-        }
+    if (!connections_by_type_.contains(instance.type)) {
+        connections_by_type_.emplace(instance.type, std::vector<ConnectionId>());
+    }
+    if (!connections_by_instance_id_.contains(instance_id)) {
+        connections_by_instance_id_.emplace(instance.global_id, std::vector<ConnectionId>());
+    }
+    if (!connections_by_source_device_id_.contains(instance_id)) {
+        connections_by_source_device_id_.emplace(instance.global_id, std::vector<ConnectionId>());
+    }
     }
 
-    if (connections_by_type_.find("FABRIC") == connections_by_type_.end()) {
+    if (!connections_by_type_.contains("FABRIC")) {
         connections_by_type_.emplace("FABRIC", std::vector<ConnectionId>());
     }
 }
