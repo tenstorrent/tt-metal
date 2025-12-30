@@ -81,7 +81,8 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
     }
     output_shape[3] = num_tiles_w * TILE_WIDTH;
 
-    return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+    auto output_dtype = args.dtype.value_or(input_tensor.dtype());
+    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
 LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGatherDeviceOperation::create_output_tensors(
@@ -95,7 +96,7 @@ std::tuple<
 LayerNormPreAllGatherDeviceOperation::invoke(
     const Tensor& input,
     LayerNormDistributedType norm_type,
-    tt::tt_metal::DataType dtype,
+    const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {

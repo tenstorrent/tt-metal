@@ -36,7 +36,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
             LayerNormType::RMSNORM,
             DistributedLayerNormStage::PRE_ALL_GATHER);
     } else {
-        return ttnn::prim::layer_norm_pre_all_gather(
+        return layer_norm_pre_all_gather(
             input_tensor,
             LayerNormDistributedType::RMSNORM,
             dtype,

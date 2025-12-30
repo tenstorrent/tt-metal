@@ -91,7 +91,7 @@ std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
 LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgramFactory::create(
     const LayerNormPreAllGatherOperationAttributes& operation_attributes,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
-    LayerNormPreAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input;
@@ -299,7 +299,7 @@ void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const LayerNormPreAllGatherOperationAttributes& operation_attributes,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
-    LayerNormPreAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -331,7 +331,7 @@ void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
 LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DProgramFactory::create(
     const LayerNormPreAllGatherOperationAttributes& operation_attributes,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
-    LayerNormPreAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input;
@@ -546,7 +546,7 @@ void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const LayerNormPreAllGatherOperationAttributes& operation_attributes,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
-    LayerNormPreAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -576,7 +576,7 @@ void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
 LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGatherWelfordProgramFactory::create(
     const LayerNormPreAllGatherOperationAttributes& operation_attributes,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
-    LayerNormPreAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input;
@@ -760,7 +760,7 @@ void LayerNormPreAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const LayerNormPreAllGatherOperationAttributes& operation_attributes,
     const LayerNormPreAllGatherTensorArgs& tensor_args,
-    LayerNormPreAllGatherTensorReturnValue& output) {
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
