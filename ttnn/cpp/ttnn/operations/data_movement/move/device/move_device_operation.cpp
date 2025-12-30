@@ -76,7 +76,7 @@ ttnn::operations::data_movement::move::MoveDeviceOperation::tensor_return_value_
         const bool ranges_overlap = (src_base < dst_base + copy_size_bytes) && (dst_base < src_base + copy_size_bytes);
         backwards = src_and_dst_in_l1 && ranges_overlap && (dst_base > src_base);
     }
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .move_op_parallelization_strategy = move_op_parallelization_strategy,

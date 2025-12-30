@@ -124,7 +124,7 @@ ttnn::Tensor reduce(
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::reduction::generic::ReduceDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             reduce_math,
             reduce_dim,

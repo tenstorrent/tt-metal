@@ -268,7 +268,7 @@ std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_from_separate_tensors(
         .input_tensor_kv = input_tensor_kv,
         .optional_output_tensors = optional_output_tensors};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
