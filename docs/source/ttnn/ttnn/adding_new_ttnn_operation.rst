@@ -18,9 +18,9 @@ A TT-NN operation is a function that takes in one or more input tensors and prod
 
 What steps are needed to add TT-NN operation in C++?
 ----------------------------------------------------
-1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
-   a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
-   b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
+1. There are 2 options for writing a new operation. Option ``a`` is to write a device operation and option ``b`` is to write an operation that calls other operations
+   a. Implement device operation in C++. Device operation is a struct that satisfies `DeviceOperationConcept` and specifies how to create output tensors and a program to run on the device.
+   b. Implement an operation in C++ that calls other operations. This type of operation simply defines an ``invoke()`` method that calls other operations.
 2. Register the struct using `ttnn::register_operation`.
 
 What steps are needed to add TT-NN operation in Python?
