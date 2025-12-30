@@ -9,7 +9,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 // Type alias for cleaner access to 2D mesh routing constants
-using LowLatencyMeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
+using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 
 FORCE_INLINE uint32_t recompute_path(
     PACKET_HEADER_TYPE* packet_header,

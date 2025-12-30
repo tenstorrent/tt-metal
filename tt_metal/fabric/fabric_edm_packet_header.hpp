@@ -15,7 +15,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "internal/risc_attribs.h"
 #else
 #include <tt_stl/assert.hpp>
 #endif
@@ -968,9 +967,6 @@ static_assert(
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 64, "sizeof(PacketHeader) is not equal to 64B");
-static_assert(
-    sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader),
-    "sizeof(LowLatencyPacketHeader) is expected to be 64B after expanding routing fields storage");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)

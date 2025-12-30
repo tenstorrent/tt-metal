@@ -352,10 +352,12 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() co
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     defines["ROUTING_MODE"] = std::to_string(control_plane.get_routing_mode());
 
-    // Add UDM mode define
+    // Add UDM mode define - only define it when enabled (not "0"), since header checks with #ifdef
     bool udm_enabled =
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
-    defines["UDM_MODE"] = udm_enabled ? "1" : "0";
+    if (udm_enabled) {
+        defines["UDM_MODE"] = "1";
+    }
 
     // Add dynamic packet header sizing defines based on topology
     if (is_2D_routing_enabled_) {
