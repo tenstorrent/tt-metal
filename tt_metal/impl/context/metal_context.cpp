@@ -633,7 +633,6 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
-        log_critical(tt::LogMetal, "Initializing control plane");
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
