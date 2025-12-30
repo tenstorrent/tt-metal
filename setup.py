@@ -439,7 +439,13 @@ class CMakeBuild(build_ext):
                 print(f"  ✓ Generated stubs in {stub_output_dir}")
             else:
                 # Non-fatal: stubs are nice-to-have, not required for functionality
-                print(f"  ⚠ Stub generation failed (non-fatal): {result.stderr}")
+                print("  ⚠ Stub generation failed (non-fatal). See stubgen output below:")
+                if result.stdout:
+                    print("    ├─ stdout:")
+                    print(result.stdout)
+                if result.stderr:
+                    print("    ├─ stderr:")
+                    print(result.stderr)
         except Exception as e:
             print(f"  ⚠ Stub generation skipped: {e}")
 
