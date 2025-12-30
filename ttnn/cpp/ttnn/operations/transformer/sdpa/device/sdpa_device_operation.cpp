@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -457,7 +458,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
     return result;
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> SDPAOperation::invoke(
+}  // namespace ttnn::operations::transformer::sdpa
+
+namespace ttnn::prim {
+ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<Tensor>& input_tensor_v,
@@ -471,10 +475,11 @@ std::tuple<operation_attributes_t, tensor_args_t> SDPAOperation::invoke(
     bool use_mla,
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<SDPAProgramConfig> program_config,
-    DeviceComputeKernelConfig compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    using OperationType = ttnn::operations::transformer::sdpa::SDPAOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .scale = scale,
             .output_mem_config = output_mem_config,
             .program_config = std::move(program_config),
@@ -485,14 +490,13 @@ std::tuple<operation_attributes_t, tensor_args_t> SDPAOperation::invoke(
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .q = input_tensor_q,
             .k = input_tensor_k,
             .v = input_tensor_v,
             .attn_mask = attn_mask,
             .page_table = page_table_tensor,
             .attention_sink = attention_sink,
-        }};
+        });
 }
-
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::prim

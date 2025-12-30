@@ -204,3 +204,35 @@ cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
 }
 
 }  // namespace ttnn::operations::ccl
+
+namespace ttnn::prim {
+ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
+    const Tensor& input_tensor_l,
+    const Tensor& input_tensor_s,
+    const Tensor& input_tensor_m,
+    const tt::tt_fabric::Topology& topology,
+    const MeshCoordinate& root_coord,
+    float scale_fp32,
+    const std::optional<Tensor>& optional_output_tensor_l,
+    const std::optional<Tensor>& optional_output_tensor_s,
+    const std::optional<Tensor>& optional_output_tensor_m,
+    const std::optional<Tensor>& optional_intermediate_tensor,
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
+    using OperationType = ttnn::operations::ccl::ReduceToRootOp;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
+            root_coord,
+            scale_fp32,
+            topology,
+            input_mux_cores,
+            {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
+        OperationType::tensor_args_t{
+            input_tensor_l,
+            input_tensor_s,
+            input_tensor_m,
+            optional_output_tensor_l,
+            optional_output_tensor_s,
+            optional_output_tensor_m,
+            optional_intermediate_tensor});
+}
+}  // namespace ttnn::prim

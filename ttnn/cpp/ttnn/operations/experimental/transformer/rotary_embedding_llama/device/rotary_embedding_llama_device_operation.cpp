@@ -186,10 +186,11 @@ tt::stl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(
         operation_attributes, tensor_args);
 }
 
-std::tuple<
-    RotaryEmbeddingLlamaDeviceOperation::operation_attributes_t,
-    RotaryEmbeddingLlamaDeviceOperation::tensor_args_t>
-RotaryEmbeddingLlamaDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama
+
+namespace ttnn::prim {
+
+tt::tt_metal::Tensor rotary_embedding_llama(
     const tt::tt_metal::Tensor& input_tensor,
     const tt::tt_metal::Tensor& cos_cache,
     const tt::tt_metal::Tensor& sin_cache,
@@ -197,6 +198,9 @@ RotaryEmbeddingLlamaDeviceOperation::invoke(
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    using OperationType =
+        ttnn::operations::experimental::transformer::rotary_embedding_llama::RotaryEmbeddingLlamaDeviceOperation;
+
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
@@ -207,13 +211,14 @@ RotaryEmbeddingLlamaDeviceOperation::invoke(
         default_memory_config = input_tensor.memory_config();
     }
 
-    return {
-        operation_attributes_t{
-            .is_decode_mode = is_decode_mode,
-            .output_mem_config = memory_config.value_or(default_memory_config),
-            .compute_kernel_config = kernel_config_val},
-        tensor_args_t{
-            .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .is_decode_mode = is_decode_mode,
+        .output_mem_config = memory_config.value_or(default_memory_config),
+        .compute_kernel_config = kernel_config_val};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama
+}  // namespace ttnn::prim

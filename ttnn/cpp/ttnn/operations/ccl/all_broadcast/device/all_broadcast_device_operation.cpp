@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -104,13 +105,17 @@ tt::stl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
         input_memory_config);
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> AllBroadcastDeviceOperation::invoke(
+}  // namespace ttnn::operations::ccl::all_broadcast
+
+namespace ttnn::prim {
+std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology) {
+    using OperationType = ttnn::operations::ccl::all_broadcast::AllBroadcastDeviceOperation;
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -131,15 +136,14 @@ std::tuple<operation_attributes_t, tensor_args_t> AllBroadcastDeviceOperation::i
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .num_links = num_links,
             .ring_size = num_devices,
             .output_mem_config = output_mem_config,
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
             .topology = topology},
-        tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::ccl::all_broadcast
+}  // namespace ttnn::prim

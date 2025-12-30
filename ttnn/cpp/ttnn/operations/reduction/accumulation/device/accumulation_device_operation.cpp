@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <enchantum/enchantum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -110,16 +111,20 @@ operation::Hash AccumulationDeviceOperation::compute_program_hash(
         tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().dtype() : DataType{});
 }
 
-AccumulationDeviceOperation::invocation_result_t AccumulationDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::accumulation
+
+namespace ttnn::prim {
+ttnn::Tensor accumulation(
     const Tensor& input_tensor,
     const int32_t& dim,
     const std::optional<DataType>& dtype,
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    AccumulationOp op) {
-    return {
-        operation_attributes_t{
+    ttnn::operations::reduction::accumulation::AccumulationOp op) {
+    using OperationType = ttnn::operations::reduction::accumulation::AccumulationDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             (dim < 0) ? (dim + input_tensor.logical_shape().rank()) : dim,
             dtype.has_value() ? dtype.value()
                               : (optional_out.has_value() ? optional_out->dtype() : input_tensor.dtype()),
@@ -128,7 +133,6 @@ AccumulationDeviceOperation::invocation_result_t AccumulationDeviceOperation::in
                 : (optional_out.has_value() ? optional_out->memory_config() : input_tensor.memory_config()),
             reverse_order,
             op},
-        tensor_args_t{input_tensor, std::move(optional_out)}};
+        OperationType::tensor_args_t{input_tensor, std::move(optional_out)});
 }
-
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn::prim

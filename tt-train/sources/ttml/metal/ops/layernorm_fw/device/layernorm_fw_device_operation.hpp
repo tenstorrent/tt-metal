@@ -29,22 +29,20 @@ struct LayerNormForwardDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& gamma_tensor,
-        const ttnn::Tensor& beta_tensor,
-        float epsilon = 1e-5F,
-        bool return_mean_rstd = false,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_mean = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_rstd = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::layernorm_fw::device
 
 namespace ttnn::prim {
-constexpr auto ttml_layernorm_fw = ttnn::register_operation<
-    "ttnn::prim::ttml_layernorm_fw",
-    ttml::metal::ops::layernorm_fw::device::LayerNormForwardDeviceOperation>();
-}
+
+ttml::metal::ops::layernorm_fw::device::LayerNormForwardDeviceOperation::tensor_return_value_t ttml_layernorm_fw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
+    const ttnn::Tensor& beta_tensor,
+    float epsilon = 1e-5F,
+    bool return_mean_rstd = false,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_mean = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_rstd = std::nullopt);
+
+}  // namespace ttnn::prim

@@ -30,26 +30,25 @@ struct AllReduceAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        Tensor& buffer_tensor,
-        uint32_t cluster_axis,
-        MeshDevice& mesh_device,
-        ttnn::ccl::Topology topology,
-        const GlobalSemaphore& multi_device_global_semaphore,
-        std::optional<DataType> dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<size_t> num_preferred_links,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-        bool use_noc1_only,
-        bool use_optimal_ccl_for_llama);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::all_reduce_async
 
 namespace ttnn::prim {
-constexpr auto all_reduce_async = ttnn::register_operation<
-    "ttnn::prim::all_reduce_async",
-    ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation>();
+
+ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation::tensor_return_value_t
+all_reduce_async(
+    const Tensor& input_tensor,
+    Tensor& buffer_tensor,
+    uint32_t cluster_axis,
+    MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    std::optional<DataType> dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama);
+
 }  // namespace ttnn::prim

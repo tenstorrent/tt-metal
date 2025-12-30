@@ -27,17 +27,14 @@ struct DramPrefetcherOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        std::vector<ttnn::Tensor>& tensors,
-        uint32_t num_layers,
-        const std::optional<const GlobalCircularBuffer>& global_cb,
-        bool enable_performance_mode);
 };
 
 }  // namespace ttnn::operations::dram_prefetcher
 
 namespace ttnn::prim {
-constexpr auto dram_prefetcher = ttnn::
-    register_operation<"ttnn::prim::dram_prefetcher", ttnn::operations::dram_prefetcher::DramPrefetcherOperation>();
+ttnn::operations::dram_prefetcher::DramPrefetcherOperation::tensor_return_value_t dram_prefetcher(
+    std::vector<ttnn::Tensor>& tensors,
+    uint32_t num_layers,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    bool enable_performance_mode);
 }  // namespace ttnn::prim

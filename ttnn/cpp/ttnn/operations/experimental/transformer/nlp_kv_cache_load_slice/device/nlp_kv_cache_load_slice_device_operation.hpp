@@ -29,19 +29,15 @@ struct NlpKVCacheLoadSliceDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        uint32_t seq_len_start,
-        uint32_t seq_len_end,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& preallocated_output);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
 
 namespace ttnn::prim {
-constexpr auto nlp_kv_cache_load_slice = ttnn::register_operation<
-    "ttnn::prim::nlp_kv_cache_load_slice",
-    ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::NlpKVCacheLoadSliceDeviceOperation>();
+ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::tensor_return_value_t nlp_kv_cache_load_slice(
+    const Tensor& input_tensor,
+    uint32_t seq_len_start,
+    uint32_t seq_len_end,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& preallocated_output);
 }  // namespace ttnn::prim

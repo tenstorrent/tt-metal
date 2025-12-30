@@ -36,20 +36,16 @@ struct AllBroadcastDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        const ttnn::MemoryConfig& output_mem_config,
-        uint32_t num_links,
-        tt::tt_fabric::Topology topology);
 };
 
 }  // namespace ttnn::operations::ccl::all_broadcast
 
 namespace ttnn::prim {
-constexpr auto all_broadcast = ttnn::register_operation<
-    "ttnn::prim::all_broadcast",
-    ttnn::operations::ccl::all_broadcast::AllBroadcastDeviceOperation>();
+std::vector<ttnn::Tensor> all_broadcast(
+    const ttnn::Tensor& input_tensor,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const ttnn::MemoryConfig& output_mem_config,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology);
 }  // namespace ttnn::prim

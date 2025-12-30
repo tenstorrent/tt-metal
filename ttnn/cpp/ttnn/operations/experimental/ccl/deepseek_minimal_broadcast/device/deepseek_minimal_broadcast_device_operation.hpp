@@ -36,8 +36,15 @@ struct DeepseekMinimalBroadcastDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimalBroadcastDeviceOperation::
+    tensor_return_value_t
+    deepseek_minimal_broadcast(
         const ttnn::Tensor& input_tensor,
         const MeshCoordinate& sender_coord,
         uint32_t num_links,
@@ -45,12 +52,5 @@ struct DeepseekMinimalBroadcastDeviceOperation {
         tt::tt_fabric::Topology topology,
         std::optional<uint32_t> cluster_axis,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
-};
 
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast
-
-namespace ttnn::prim {
-constexpr auto deepseek_minimal_broadcast = ttnn::register_operation<
-    "ttnn::prim::deepseek_minimal_broadcast",
-    ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::DeepseekMinimalBroadcastDeviceOperation>();
 }  // namespace ttnn::prim

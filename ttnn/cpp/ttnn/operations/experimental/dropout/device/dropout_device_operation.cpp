@@ -128,8 +128,11 @@ tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<DropoutDeviceOperation::operation_attributes_t, DropoutDeviceOperation::tensor_args_t>
-DropoutDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::dropout
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_value_t dropout(
     const Tensor& input,
     float prob,
     float scale,
@@ -138,16 +141,19 @@ DropoutDeviceOperation::invoke(
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .output_dtype = output_dtype,
-            .output_memory_config = output_memory_config,
-            .seed = seed,
-            .use_per_device_seed = use_per_device_seed,
-            .prob = prob,
-            .scale = scale,
-        },
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+    using OperationType = ttnn::operations::experimental::dropout::DropoutDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_dtype = output_dtype,
+        .output_memory_config = output_memory_config,
+        .seed = seed,
+        .use_per_device_seed = use_per_device_seed,
+        .prob = prob,
+        .scale = scale,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::dropout
+}  // namespace ttnn::prim

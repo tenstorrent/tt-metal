@@ -30,18 +30,14 @@ struct ShardedToInterleavedDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output_tensor) const;
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const tt::tt_metal::DataType& output_dtype,
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto sharded_to_interleaved = ttnn::register_operation<
-    "ttnn::prim::sharded_to_interleaved",
-    ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation>();
+ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 }  // namespace ttnn::prim

@@ -291,7 +291,6 @@ Pointwise Binary
    ttnn.outer
    ttnn.polyval
    ttnn.pow
-   ttnn.prim.binary
    ttnn.remainder
    ttnn.rpow
    ttnn.rsub

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "plusone_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::plusone {
 
@@ -56,12 +57,19 @@ tensor_return_value_t PlusOneDeviceOperation::create_output_tensors(
     return tensor_args.input;
 }
 
-std::tuple<PlusOneDeviceOperation::operation_attributes_t, PlusOneDeviceOperation::tensor_args_t>
-PlusOneDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::plusone
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::plusone::tensor_return_value_t plus_one(
     const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids, bool skip_negative_entries) {
-    return {
-        operation_attributes_t{.sub_core_grids = sub_core_grids, .skip_negative_entries = skip_negative_entries},
-        tensor_args_t{.input = input_tensor}};
+    using OperationType = ttnn::operations::experimental::plusone::PlusOneDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .sub_core_grids = sub_core_grids, .skip_negative_entries = skip_negative_entries};
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::plusone
+}  // namespace ttnn::prim

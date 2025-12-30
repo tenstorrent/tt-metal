@@ -106,17 +106,22 @@ void ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::override_run
     // No runtime arguments to override for this operation since delay cycles are compile-time
 }
 
-std::tuple<ApplyDeviceDelayDeviceOperation::operation_attributes_t, ApplyDeviceDelayDeviceOperation::tensor_args_t>
-ApplyDeviceDelayDeviceOperation::invoke(
+}  // namespace ttnn::operations::debug
+
+namespace ttnn::prim {
+
+ttnn::operations::debug::ApplyDeviceDelayDeviceOperation::tensor_return_value_t apply_device_delay(
     ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
     const CoreRangeSet& subdevice_core_range_set) {
-    log_info(tt::LogAlways, "Initializing delay op structs");
-    operation_attributes_t operation_attributes{
-        .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
+    using OperationType = ttnn::operations::debug::ApplyDeviceDelayDeviceOperation;
 
-    log_info(tt::LogAlways, "Returning delay op structs");
-    return {operation_attributes, tensor_args_t{}};
+    log_info(tt::LogAlways, "Initializing delay op structs");
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
+    auto tensor_args = OperationType::tensor_args_t{};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::debug
+}  // namespace ttnn::prim

@@ -51,19 +51,17 @@ struct PadDeviceOperation {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const ttnn::Shape& output_logical_shape,
-        const ttnn::Shape& output_padded_shape,
-        const ttnn::Shape& input_tensor_start,
-        float pad_value,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        bool use_multicore,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 }  // namespace ttnn::operations::data_movement::pad
 
 namespace ttnn::prim {
-constexpr auto pad =
-    ttnn::register_operation<"ttnn::prim::pad", ttnn::operations::data_movement::pad::PadDeviceOperation>();
+ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t pad(
+    const Tensor& input,
+    const ttnn::Shape& output_logical_shape,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
+    float pad_value,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool use_multicore,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 }  // namespace ttnn::prim

@@ -112,20 +112,29 @@ BcastToOperation::tensor_return_value_t BcastToOperation::create_output_tensors(
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
+}  // namespace ttnn::operations::experimental::broadcast_to
 
-std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_args_t> BcastToOperation::invoke(
+namespace ttnn::prim {
+
+ttnn::operations::experimental::broadcast_to::BcastToOperation::tensor_return_value_t bcast_to(
     const Tensor& input,
-    const Shape& output_shape,
+    const ttnn::Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto subtile_broadcast_type = get_subtile_broadcast_type(
+    using OperationType = ttnn::operations::experimental::broadcast_to::BcastToOperation;
+
+    auto subtile_broadcast_type = ttnn::operations::experimental::broadcast_to::get_subtile_broadcast_type(
         input.logical_shape()[-2],
         input.logical_shape()[-1],
         output_shape[output_shape.size() - 2],
         output_shape[output_shape.size() - 1]);
     log_debug(tt::LogOp, "get_subtile_broadcast_type: {}\n", subtile_broadcast_type);
-    return {
-        operation_attributes_t{output_shape, memory_config.value_or(input.memory_config()), subtile_broadcast_type},
-        tensor_args_t{input, output}};
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        output_shape, memory_config.value_or(input.memory_config()), subtile_broadcast_type};
+    auto tensor_args = OperationType::tensor_args_t{input, output};
+
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::experimental::broadcast_to
+
+}  // namespace ttnn::prim

@@ -84,21 +84,16 @@ struct MoeExpertTokenRemapDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& topk_tensor,
-        const ttnn::Tensor& mapping_tensor,
-        const ttnn::Tensor& metadata_tensor,
-        const std::optional<ttnn::MemoryConfig>& output_mem_config,
-        const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
-        const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
-        uint32_t reduction_size = REDUCTION_SIZE);
 };
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto moe_expert_token_remap = ttnn::register_operation<
-    "ttnn::prim::moe_expert_token_remap",
-    ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation>();
+ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation::tensor_return_value_t moe_expert_token_remap(
+    const ttnn::Tensor& topk_tensor,
+    const ttnn::Tensor& mapping_tensor,
+    const ttnn::Tensor& metadata_tensor,
+    const std::optional<ttnn::MemoryConfig>& output_mem_config,
+    const std::optional<ttnn::Tensor>& optional_output_mapping_tensor,
+    const std::optional<ttnn::Tensor>& optional_output_reduced_tensor,
+    uint32_t reduction_size = ttnn::operations::data_movement::MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE);
 }  // namespace ttnn::prim

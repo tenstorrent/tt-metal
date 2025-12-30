@@ -36,20 +36,15 @@ struct SplitFusedQKVAndSplitHeadsDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config,
-        uint32_t num_heads,
-        const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads
 
 namespace ttnn::prim {
-constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation<
-    "ttnn::prim::split_query_key_value_and_split_heads",
-    ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::
-        SplitFusedQKVAndSplitHeadsDeviceOperation>();
+std::vector<Tensor> split_query_key_value_and_split_heads(
+    const Tensor& input_tensor,
+    const CoreCoord& compute_with_storage_grid_size,
+    const std::optional<MemoryConfig>& memory_config,
+    uint32_t num_heads,
+    const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors);
 }  // namespace ttnn::prim

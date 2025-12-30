@@ -18,7 +18,7 @@ struct ConcatenateHeadsOperation {
         const Tensor& input_tensor,
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return ttnn::prim::concatenate_heads(
             input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
     }

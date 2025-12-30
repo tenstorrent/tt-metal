@@ -185,6 +185,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         make_process<std::vector<Tensor>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<const Tensor>>, &GraphProcessor::begin_function_process>(),
+        make_process<std::vector<std::reference_wrapper<const Tensor>>, &GraphProcessor::begin_function_process>(),
         make_process<Tensor, &GraphProcessor::begin_function_process>(),
         make_process<const Tensor, &GraphProcessor::begin_function_process>(),
         make_process<std::optional<Tensor>, &GraphProcessor::begin_function_process>(),
@@ -383,6 +384,10 @@ void GraphProcessor::begin_function_process(const Tensor& tensor) {
     node_id tensor_node_id = add_tensor(tensor);
     graph[tensor_node_id].connections.push_back(current_op_id.top());
     current_input_tensors.push_back(tensor_node_id);
+}
+
+void GraphProcessor::begin_function_process(const std::reference_wrapper<const Tensor>& tensor_ref) {
+    begin_function_process(tensor_ref.get());
 }
 
 template <typename T>
