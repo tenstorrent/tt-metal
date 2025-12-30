@@ -122,12 +122,7 @@ python scripts/build_scripts/create_stubs.py
 cmake --build build --target ttnn_stubs
 ```
 
-Then configure VSCode (copy the example or add manually):
-```bash
-cp .vscode/settings.json.example .vscode/settings.json
-```
-
-Or add to `.vscode/settings.json`:
+Then configure VSCode by adding the following to `.vscode/settings.json`:
 ```json
 {
     "python.analysis.stubPath": "${workspaceFolder}/ttnn/ttnn",
