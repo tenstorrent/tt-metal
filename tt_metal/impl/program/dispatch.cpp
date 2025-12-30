@@ -5,8 +5,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
-#include <stddef.h>
-#include <string.h>
+#include <cstddef>
+#include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>

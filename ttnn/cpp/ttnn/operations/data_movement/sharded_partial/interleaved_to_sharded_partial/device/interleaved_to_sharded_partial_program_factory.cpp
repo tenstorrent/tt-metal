@@ -4,7 +4,7 @@
 
 #include "interleaved_to_sharded_partial_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>

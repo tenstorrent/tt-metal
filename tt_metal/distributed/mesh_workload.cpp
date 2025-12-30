@@ -5,7 +5,7 @@
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include <algorithm>
 #include <cstddef>

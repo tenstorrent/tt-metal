@@ -3,7 +3,7 @@
 
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/span.hpp>

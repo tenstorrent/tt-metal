@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>

@@ -6,7 +6,7 @@
 #include <cstring>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/event.hpp>
 #include <cmath>

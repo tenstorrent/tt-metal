@@ -4,10 +4,10 @@
 
 #include <cstring>
 #include <exception>
-#include <errno.h>
+#include <cerrno>
 #include <filesystem>
 #include <map>
-#include <stdint.h>
+#include <cstdint>
 #include <string>
 #include <sys/types.h>
 #include <unordered_map>

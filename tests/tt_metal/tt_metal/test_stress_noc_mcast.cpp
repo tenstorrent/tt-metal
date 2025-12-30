@@ -9,7 +9,7 @@
 //  - does not verify correct transactions, just runs til termination
 
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_metal.hpp>
