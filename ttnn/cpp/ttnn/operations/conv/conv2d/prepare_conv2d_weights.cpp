@@ -2058,17 +2058,26 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 shard_layout = params.input_parallel_config->shard_scheme;
             }
 
-            if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-                uint32_t num_cores = params.input_parallel_config->grid.num_cores();
-                log_info(tt::LogOp, "Using WIDTH_SHARDED depthwise weight prep with {} cores", num_cores);
+            if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                // For WIDTH_SHARDED: all cores process different channels (use total cores)
+                // For BLOCK_SHARDED: only columns process different channels (use num_cores_c)
+                uint32_t num_channel_shards =
+                    get_num_cores_channels_from_parallel_config(params.input_parallel_config.value());
                 log_info(
                     tt::LogOp,
-                    "WIDTH_SHARDED depthwise blocks: block_h_ntiles={}, block_w_ntiles={}, enable_activation_reuse={}",
+                    "Using {} depthwise weight prep with {} channel shards",
+                    shard_layout == TensorMemoryLayout::BLOCK_SHARDED ? "BLOCK_SHARDED" : "WIDTH_SHARDED",
+                    num_channel_shards);
+                log_info(
+                    tt::LogOp,
+                    "{} depthwise blocks: block_h_ntiles={}, block_w_ntiles={}, enable_activation_reuse={}",
+                    shard_layout == TensorMemoryLayout::BLOCK_SHARDED ? "BLOCK_SHARDED" : "WIDTH_SHARDED",
                     params.weight_block_h_ntiles,
                     params.weight_block_w_ntiles,
                     params.enable_activation_reuse);
                 weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
-                    weight_tensor_, num_cores, weight_tensor_.dtype());
+                    weight_tensor_, num_channel_shards, weight_tensor_.dtype());
                 is_2d_depthwise_width_sharded = true;
             } else {
                 log_info(tt::LogOp, "Using HEIGHT_SHARDED 2D depthwise layout");

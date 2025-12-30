@@ -671,9 +671,137 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
             log_info(tt::LogOp, "WIDTH_SHARDED: {} cores each reading own weight shard", num_cores);
 
+        } else if (is_block_sharded) {
+            // ============================================================
+            // BLOCK_SHARDED: 2D multicast pattern
+            // - First row cores (row 0) read from DRAM and multicast to their column
+            // - Other row cores receive weights via multicast from their column's sender
+            // ============================================================
+
+            // Get grid dimensions for block sharding
+            uint32_t num_cores_c = parallelization_config.num_cores_c_in;  // Number of columns (channel shards)
+            uint32_t num_cores_r = num_cores / num_cores_c;                // Number of rows (spatial shards)
+
+            // Calculate per-column weight shard size (same as WIDTH_SHARDED but per column)
+            uint32_t padded_ch_per_column = tt::round_up(in_c_per_shard_ceil, tt::constants::TILE_WIDTH);
+            uint32_t padded_kernel_pos = tt::round_up(kernel_h * kernel_w, tt::constants::TILE_WIDTH);
+            uint32_t shard_ntiles =
+                (padded_ch_per_column / tt::constants::TILE_WIDTH) * (padded_kernel_pos / tt::constants::TILE_WIDTH);
+            uint32_t weight_tile_nbytes = tt::tile_size(params.data_format);
+            uint32_t shard_size_bytes = shard_ntiles * weight_tile_nbytes;
+
+            log_info(
+                tt::LogOp,
+                "BLOCK_SHARDED weights: {}x{} grid ({}r x {}c), ch_per_col={}, shard_ntiles={}, shard_bytes={}",
+                num_cores_r,
+                num_cores_c,
+                num_cores_r,
+                num_cores_c,
+                in_c_per_shard_ceil,
+                shard_ntiles,
+                shard_size_bytes);
+
+            // Set up each core based on its position in the 2D grid
+            for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
+                CoreCoord core = all_cores[core_idx];
+
+                // Determine row and column in the grid (row-major ordering)
+                uint32_t col_idx = core_idx % num_cores_c;
+                uint32_t row_idx = core_idx / num_cores_c;
+
+                bool is_sender = (row_idx == 0);  // First row cores are senders
+
+                if (is_sender) {
+                    // ============================================================
+                    // SENDER: Read from DRAM and multicast to column
+                    // ============================================================
+
+                    // Calculate starting tile_id for this column's channel slice
+                    uint32_t start_tile_id = col_idx * shard_ntiles;
+
+                    // Get physical coordinates for multicast destination (entire column)
+                    // Multicast from row 0 to row (num_cores_r - 1) in this column
+                    CoreCoord col_start_logical(col_idx, 0);
+                    CoreCoord col_end_logical(col_idx, num_cores_r - 1);
+                    CoreCoord col_start_physical = device->worker_core_from_logical_core(col_start_logical);
+                    CoreCoord col_end_physical = device->worker_core_from_logical_core(col_end_logical);
+
+                    // Number of receivers = all rows in this column except sender (row 0)
+                    uint32_t num_dests = num_cores_r - 1;
+                    uint32_t num_mcast_cores = num_cores_r - 1;
+
+                    std::vector<uint32_t> sender_args = {
+                        static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr (SAME base for all senders)
+                        1,                                          // 1: is_sender = true
+                        col_start_physical.x,                       // 2: weights_mcast_dest_noc_start_x
+                        col_start_physical.y,                       // 3: weights_mcast_dest_noc_start_y
+                        col_end_physical.x,                         // 4: weights_mcast_dest_noc_end_x
+                        col_end_physical.y,                         // 5: weights_mcast_dest_noc_end_y
+                        num_dests,                                  // 6: weights_mcast_num_dests
+                        num_mcast_cores,                            // 7: weights_mcast_num_cores
+                        weights_mcast_sender_semaphore_id,          // 8: sender semaphore
+                        weights_mcast_receiver_semaphore_id,        // 9: receiver semaphore
+                        start_tile_id                               // 10: starting tile_id for this column
+                    };
+                    SetRuntimeArgs(program, reader0_kernel, core, sender_args);
+
+                    log_info(
+                        tt::LogOp,
+                        "BLOCK_SHARDED Sender[{}] ({},{}) col={}: tile_id={}, mcast phys ({},{}) to ({},{}), {} "
+                        "receivers",
+                        core_idx,
+                        core.x,
+                        core.y,
+                        col_idx,
+                        start_tile_id,
+                        col_start_physical.x,
+                        col_start_physical.y,
+                        col_end_physical.x,
+                        col_end_physical.y,
+                        num_dests);
+
+                } else {
+                    // ============================================================
+                    // RECEIVER: Wait for multicast from column's sender (row 0)
+                    // ============================================================
+
+                    // Find the sender for this column (row 0, same column)
+                    CoreCoord sender_logical(col_idx, 0);
+                    CoreCoord sender_physical = device->worker_core_from_logical_core(sender_logical);
+
+                    std::vector<uint32_t> receiver_args = {
+                        static_cast<uint32_t>(weight_buffer_addr),  // 0: weight_addr (unused but consistent)
+                        0,                                          // 1: is_sender = false
+                        sender_physical.x,                          // 2: weights_mcast_sender_noc_x
+                        sender_physical.y,                          // 3: weights_mcast_sender_noc_y
+                        weights_mcast_sender_semaphore_id,          // 4: sender semaphore
+                        weights_mcast_receiver_semaphore_id         // 5: receiver semaphore
+                    };
+                    SetRuntimeArgs(program, reader0_kernel, core, receiver_args);
+
+                    log_info(
+                        tt::LogOp,
+                        "BLOCK_SHARDED Receiver[{}] ({},{}) col={} row={}: waiting for sender at phys ({},{})",
+                        core_idx,
+                        core.x,
+                        core.y,
+                        col_idx,
+                        row_idx,
+                        sender_physical.x,
+                        sender_physical.y);
+                }
+            }
+
+            log_info(
+                tt::LogOp,
+                "BLOCK_SHARDED: {} senders (row 0), {} receivers per column, {} columns",
+                num_cores_c,
+                num_cores_r - 1,
+                num_cores_c);
+
         } else {
             // ============================================================
-            // HEIGHT_SHARDED/BLOCK_SHARDED: Sender multicasts to receivers
+            // HEIGHT_SHARDED: Sender multicasts to receivers
             // ============================================================
 
             // First core is the sender
@@ -723,7 +851,8 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                 num_dests,                                  // 6: weights_mcast_num_dests
                 num_mcast_cores,                            // 7: weights_mcast_num_cores
                 weights_mcast_sender_semaphore_id,          // 8: weights_mcast_sender_semaphore_id
-                weights_mcast_receiver_semaphore_id         // 9: weights_mcast_receiver_semaphore_id
+                weights_mcast_receiver_semaphore_id,        // 9: weights_mcast_receiver_semaphore_id
+                0                                           // 10: start_tile_id = 0 (all cores use same weights)
             };
             SetRuntimeArgs(program, reader0_kernel, sender_core, sender_args);
 

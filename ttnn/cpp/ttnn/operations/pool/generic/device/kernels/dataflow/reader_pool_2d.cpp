@@ -525,8 +525,11 @@ void kernel_main() {
             uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(8));
             uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(9));
 
-            // For WIDTH_SHARDED (num_dests=0), get starting tile_id from arg 10
-            uint32_t start_tile_id = (weights_mcast_num_dests == 0) ? get_arg_val<uint32_t>(10) : 0;
+            // Get starting tile_id from arg 10 (always provided by all sharding modes)
+            // - HEIGHT_SHARDED: start_tile_id = 0 (all cores use same weights)
+            // - WIDTH_SHARDED: start_tile_id = core_idx * shard_ntiles (each core different channels)
+            // - BLOCK_SHARDED: start_tile_id = col_idx * shard_ntiles (each column different channels)
+            uint32_t start_tile_id = get_arg_val<uint32_t>(10);
 
             // Set up semaphore pointers
             volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
