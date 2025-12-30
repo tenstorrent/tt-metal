@@ -71,24 +71,6 @@ def run(
     else:
         shape = input_shape
 
-    # Check if traced config requires sharding that exceeds device capabilities
-    if hasattr(input_a_memory_config, "shard_spec") and input_a_memory_config.shard_spec is not None:
-        shard_spec = input_a_memory_config.shard_spec
-        if hasattr(shard_spec, "grid"):
-            grid = shard_spec.grid
-            if hasattr(grid, "ranges"):
-                for core_range in grid.ranges():
-                    end_coord = core_range.end  # CoreRange uses .end not .end_coord
-                    required_x = end_coord.x + 1
-                    required_y = end_coord.y + 1
-                    if required_x > device.core_grid.x or required_y > device.core_grid.y:
-                        import pytest
-
-                        pytest.skip(
-                            f"Insufficient device cores: requires {required_x}x{required_y}, "
-                            f"but device has {device.core_grid.x}x{device.core_grid.y}"
-                        )
-
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)

@@ -13,6 +13,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from typing import Optional, Tuple
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -40,6 +41,31 @@ parameters = {
 # Note: dims is now included in the tuple format, so no need to add defaults
 if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors with incompatible configurations.
+    The dims parameter length must match the input_shape dimensions.
+    """
+    input_shape = test_vector.get("input_shape")
+    dims = test_vector.get("dims")
+
+    if input_shape is None or dims is None:
+        return False, None
+
+    # Ensure input_shape is a tuple/list
+    if isinstance(input_shape, (tuple, list)):
+        shape_len = len(input_shape)
+    else:
+        return False, None
+
+    # Check dims length matches shape dimensions
+    if isinstance(dims, (tuple, list)):
+        if len(dims) != shape_len:
+            return True, f"Dimension mismatch: input has {shape_len} dims but permute dims has {len(dims)} values"
+
+    return False, None
 
 
 def mesh_device_fixture():
@@ -72,12 +98,6 @@ def run(
         shape = tuple(input_shape)
     else:
         shape = input_shape
-
-    # Validate that dims length matches shape dimensions
-    if len(dims) != len(shape):
-        import pytest
-
-        pytest.skip(f"Dimension mismatch: input shape has {len(shape)} dims but permute dims has {len(dims)} values")
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

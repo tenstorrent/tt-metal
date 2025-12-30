@@ -13,6 +13,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from typing import Optional, Tuple
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 60
@@ -44,6 +45,34 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors with incompatible configurations.
+    Very large tensors can cause timeouts or memory issues.
+    """
+    input_shape = test_vector.get("input_shape")
+
+    if input_shape is None:
+        return False, None
+
+    # Handle dict input_shape (multi-input)
+    if isinstance(input_shape, dict):
+        shape_q = input_shape.get("input_a", input_shape.get("self"))
+        if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) == 4:
+            batch, heads, seq_len, head_dim = shape_q
+            total_elements = batch * heads * seq_len * head_dim
+            # Skip very large tensors that may cause timeouts
+            if total_elements > 50_000_000:
+                return True, f"Tensor too large ({total_elements} elements, seq_len={seq_len}) - may cause timeout"
+    elif isinstance(input_shape, (list, tuple)) and len(input_shape) == 4:
+        batch, heads, seq_len, head_dim = input_shape
+        total_elements = batch * heads * seq_len * head_dim
+        if total_elements > 50_000_000:
+            return True, f"Tensor too large ({total_elements} elements, seq_len={seq_len}) - may cause timeout"
+
+    return False, None
 
 
 def run(
@@ -136,14 +165,6 @@ def run(
     batch_size, num_heads_q, seq_len, head_dim = shape_q
     _, num_heads_k, _, _ = shape_k
     _, num_heads_v, _, _ = shape_v
-
-    # Skip configurations that might cause hangs/timeouts
-    # Very large sequence lengths with certain memory configs can cause hangs
-    total_elements = batch_size * num_heads_q * seq_len * head_dim
-    if total_elements > 50_000_000:  # Skip very large tensors
-        import pytest
-
-        pytest.skip(f"Tensor too large ({total_elements} elements) - may cause timeout")
 
     # Create Q, K, V tensors
     torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_q)(shape_q)

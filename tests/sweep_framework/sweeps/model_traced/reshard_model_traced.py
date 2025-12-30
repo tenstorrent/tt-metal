@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from typing import Optional, Tuple
 
 TIMEOUT = 30
 
@@ -28,6 +29,39 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors with incompatible configurations.
+    Reshard with TILE layout requires shard shapes to be tile-aligned (multiples of 32).
+    """
+    output_memory_config = test_vector.get("output_memory_config")
+    input_a_layout = test_vector.get("input_a_layout")
+
+    # Only check tile alignment for TILE layout
+    if input_a_layout != ttnn.TILE_LAYOUT:
+        return False, None
+
+    if output_memory_config is None:
+        return False, None
+
+    # Check if output has non-tile-aligned shard shape
+    try:
+        if hasattr(output_memory_config, "shard_spec") and output_memory_config.shard_spec is not None:
+            shard_spec = output_memory_config.shard_spec
+            if hasattr(shard_spec, "shape"):
+                shard_height, shard_width = shard_spec.shape
+                if shard_height % 32 != 0 or shard_width % 32 != 0:
+                    return (
+                        True,
+                        f"Shard shape ({shard_height}, {shard_width}) not tile-aligned (must be multiples of 32)",
+                    )
+    except:
+        # If we can't determine, let it run and fail naturally
+        return False, None
+
+    return False, None
 
 
 def mesh_device_fixture():
@@ -61,18 +95,6 @@ def run(
     input_tensor = ttnn.from_torch(
         torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
     )
-
-    # Check if output_memory_config has non-tile-aligned shard shape (would cause TT_FATAL)
-    if hasattr(output_memory_config, "shard_spec") and output_memory_config.shard_spec is not None:
-        shard_spec = output_memory_config.shard_spec
-        if hasattr(shard_spec, "shape"):
-            shard_height, shard_width = shard_spec.shape
-            if shard_height % 32 != 0 or shard_width % 32 != 0:
-                import pytest
-
-                pytest.skip(
-                    f"Output shard shape ({shard_height}, {shard_width}) is not tile-aligned (must be multiples of 32)"
-                )
 
     # Op call
     start_time = start_measuring_time()
