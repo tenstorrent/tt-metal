@@ -44,7 +44,6 @@ sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
  */
 template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
-    sfpi::vFloat y = sfpi::vConst0;
     // Intermediary values can overflow if abs(val) is above 88.5f, which leads to output increasing again instead
     // of staying at 0 (or becoming finite on large inputs). This overflow happens when `| log2(e) * val | > 127.0f`,
     // which correspond to `|val| > 88.5f`
@@ -75,21 +74,22 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     constexpr float POLY_D1 = 0.40196114e-7f;
     constexpr int POLY_D2 = 0xf94ee7;
     constexpr int POLY_D3 = 0x560e;
+    constexpr float POLY_D1_MUL_POLY_D2 = POLY_D1 * static_cast<float>(POLY_D2);
 
     // Compute polynomial through Horner's method
-    sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + fractional_part, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + fractional_part, 0);
-    d2 = d1 * d2;
+    // Unrolled d1(d2 + f)(d3 + f) to (d1*d2 + d1*f)(d3 + f) to use MAD
+    sfpi::vFloat p1 =
+        sfpi::vFloat(POLY_D1) * sfpi::int32_to_float(fractional_part, 0) + sfpi::vFloat(POLY_D1_MUL_POLY_D2);
+    sfpi::vFloat p2 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + fractional_part, 0);
 
     // Compute 2**(adjusted fractional part) through float -> int conversion
-    fractional_part = _float_to_int32_exp21f_(d2 * d3);
+    fractional_part = _float_to_int32_exp21f_(p1 * p2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     exponential_part = sfpi::reinterpret<sfpi::vInt>(
         sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(fractional_part), exponential_part));  // restore exponent
 
-    y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
+    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
