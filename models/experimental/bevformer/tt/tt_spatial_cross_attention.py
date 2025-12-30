@@ -45,7 +45,6 @@ class TTSpatialCrossAttention:
         params: Parameter dict containing weights and biases
         embed_dims (int): The embedding dimension.
         num_cams (int): Number of cameras.
-        dropout (float): Dropout rate.
         batch_first (bool): Whether the first dimension of input is batch_size.
         deformable_attention (dict): Config for MSDeformableAttention3D.
         **kwargs: Additional arguments.
@@ -57,7 +56,6 @@ class TTSpatialCrossAttention:
         params,
         embed_dims: int = 256,
         num_cams: int = 6,
-        dropout: float = 0.1,
         batch_first: bool = True,
         deformable_attention: Optional[dict] = None,
         **kwargs,

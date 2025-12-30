@@ -35,7 +35,6 @@ class SpatialCrossAttention(nn.Module):
     Args:
         embed_dims (int): The embedding dimension.
         num_cams (int): Number of cameras.
-        dropout (float): Dropout rate.
         init_cfg (dict, optional): Initialization config dict.
         batch_first (bool): Whether the first dimension of input is batch_size.
         deformable_attention (dict): Config for MSDeformableAttention3D.
@@ -46,7 +45,6 @@ class SpatialCrossAttention(nn.Module):
         self,
         embed_dims: int = 256,
         num_cams: int = 6,
-        dropout: float = 0.1,
         init_cfg: Optional[dict] = None,
         batch_first: bool = False,
         deformable_attention: Optional[dict] = None,
@@ -59,7 +57,6 @@ class SpatialCrossAttention(nn.Module):
                 type="MSDeformableAttention3D", embed_dims=256, num_levels=4, num_points=8, num_heads=8
             )
 
-        self.dropout = nn.Dropout(dropout)
         self.embed_dims = embed_dims
         self.num_cams = num_cams
         self.batch_first = batch_first
@@ -201,6 +198,5 @@ class SpatialCrossAttention(nn.Module):
 
         # Output projection
         slots = self.output_proj(slots)
-        slots = self.dropout(slots)
 
         return slots + inp_residual

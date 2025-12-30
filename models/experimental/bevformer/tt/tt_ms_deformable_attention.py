@@ -166,16 +166,16 @@ class TTMSDeformableAttention:
         """
         # Convert torch tensors to ttnn tensors first
         if isinstance(query, torch.Tensor):
-            query = ttnn.from_torch(query, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            query = ttnn.from_torch(query, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         if key is not None and isinstance(key, torch.Tensor):
-            key = ttnn.from_torch(key, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            key = ttnn.from_torch(key, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         if value is not None and isinstance(value, torch.Tensor):
-            value = ttnn.from_torch(value, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            value = ttnn.from_torch(value, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         if identity is not None and isinstance(identity, torch.Tensor):
-            identity = ttnn.from_torch(identity, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            identity = ttnn.from_torch(identity, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         if reference_points is not None and isinstance(reference_points, torch.Tensor):
             reference_points = ttnn.from_torch(
-                reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
             )
 
         # Handle input defaults
@@ -187,9 +187,10 @@ class TTMSDeformableAttention:
             identity = query
 
         # Add query positional encoding
+        breakpoint()
         if query_pos is not None:
             if isinstance(query_pos, torch.Tensor):
-                query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                query_pos = ttnn.from_torch(query_pos, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             query = ttnn.add(query, query_pos)
 
         if use_signpost:
@@ -252,14 +253,18 @@ class TTMSDeformableAttention:
             D = reference_points.shape[2]
 
             # Convert spatial_shapes to ttnn for operations
-            spatial_shapes_tt = ttnn.from_torch(spatial_shapes, device=self.device, dtype=ttnn.bfloat16)
+            spatial_shapes_tt = ttnn.from_torch(
+                spatial_shapes, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
 
-            # Create offset normalizer [num_levels, 2] with [width, height] order (following torch reference)
+            # Create offset normalizer [num_levels, 2] with [width, height] order
             offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
 
             # Convert reference_points to ttnn if it's not already
             if not isinstance(reference_points, ttnn.Tensor):
-                reference_points = ttnn.from_torch(reference_points, device=self.device, dtype=ttnn.bfloat16)
+                reference_points = ttnn.from_torch(
+                    reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+                )
 
             # Expand offset_normalizer for broadcasting [None, :, None, :]
             offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension

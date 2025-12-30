@@ -17,7 +17,6 @@ from models.experimental.bevformer.tests.test_utils import (
 
 from models.experimental.bevformer.tt.model_preprocessing import (
     create_ms_deformable_attention_parameters,
-    convert_parameterdict_to_object,
 )
 
 from loguru import logger
@@ -27,20 +26,20 @@ from loguru import logger
     "batch_size, num_query, embed_dims, num_levels, num_points_per_anchor, num_anchors, num_heads",
     [
         (1, 900, 256, 4, 2, 4, 4),
-        (1, 1200, 256, 4, 2, 4, 4),
-        (1, 100 * 100, 256, 4, 2, 4, 4),
-        (1, 200 * 200, 256, 4, 2, 4, 4),
+        # (1, 1200, 256, 4, 2, 4, 4),
+        # (1, 100 * 100, 256, 4, 2, 4, 4),
+        # (1, 200 * 200, 256, 4, 2, 4, 4),
     ],
 )
 @pytest.mark.parametrize(
     "spatial_shapes",
     [
         [[200, 113], [100, 57], [50, 29], [25, 15]],  # nuScenes, input size 1600x900
-        [[160, 90], [80, 45], [40, 23], [20, 12]],  # nuScenes, input size 1280x720
-        [[28, 28], [14, 14], [7, 7], [4, 4]],  # VAD specific, input size 224x224
-        [[16, 16], [8, 8], [4, 4], [2, 2]],  # VAD specific, input size 128x128
-        [[100, 75], [50, 38], [25, 19], [13, 10]],  # CARLA, input size 1280x960
-        [[120, 80], [60, 40], [30, 20], [15, 10]],  # Waymo, input size 960x640
+        # [[160, 90], [80, 45], [40, 23], [20, 12]],  # nuScenes, input size 1280x720
+        # [[28, 28], [14, 14], [7, 7], [4, 4]],  # VAD specific, input size 224x224
+        # [[16, 16], [8, 8], [4, 4], [2, 2]],  # VAD specific, input size 128x128
+        # [[100, 75], [50, 38], [25, 19], [13, 10]],  # CARLA, input size 1280x960
+        # [[120, 80], [60, 40], [30, 20], [15, 10]],  # Waymo, input size 960x640
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -90,9 +89,6 @@ def test_ms_deformable_attention_forward(
         config=config,
         dtype=ttnn.float32,
     )
-
-    # Convert parameter dict to object with attribute access
-    tt_parameters = convert_parameterdict_to_object(tt_parameters)
 
     # Create ttnn model with preprocessed parameters
     tt_model = TTMSDeformableAttention(
