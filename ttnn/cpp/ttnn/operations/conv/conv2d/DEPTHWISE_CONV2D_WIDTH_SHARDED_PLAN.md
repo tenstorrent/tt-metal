@@ -57,13 +57,13 @@ WIDTH_SHARDED memory layout support for depthwise convolution, where each core p
 
 ### Weight Preparation Details - In Depth
 
-The `convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded` function (prepare_conv2d_weights.cpp:1258-1383) creates a row-major weight layout optimized for WIDTH_SHARDED execution.
+The `convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded` function (prepare_conv2d_weights.cpp:1262-1470) creates a row-major weight layout optimized for WIDTH_SHARDED execution.
 
 #### Design Philosophy
 
 **Key Principle**: Create a SINGLE unified tensor that:
 1. Contains all channels (not per-core shards)
-2. Uses face-by-face layout for proper tile alignment
+2. Uses HEIGHT_SHARDED-style face-by-face layout within each core's tile region
 3. Can be tilized by standard pipeline
 4. Naturally splits into per-core tiles after tilization
 
@@ -81,11 +81,39 @@ The `convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded` function (
 **Output**: Row-major tensor `[padded_kernel_positions, padded_out_channels, 1, 1]`
 - Example: `[32, 64, 1, 1]` → 32 rows × 64 columns
 
+**Per-Core Channel Distribution**:
+Channels are distributed in tile-sized chunks (32 channels each), with the last core receiving remaining channels:
+```cpp
+std::vector<uint32_t> channels_per_core(num_channel_shards);
+std::vector<uint32_t> padded_channels_per_core(num_channel_shards);
+
+uint32_t remaining_channels = out_channels;
+for (uint32_t core_idx = 0; core_idx < num_channel_shards; core_idx++) {
+    if (core_idx < num_channel_shards - 1) {
+        // First cores get full tiles (32 channels)
+        channels_per_core[core_idx] = std::min(TILE_SIZE, remaining_channels);
+    } else {
+        // Last core gets remaining channels
+        channels_per_core[core_idx] = remaining_channels;
+    }
+    padded_channels_per_core[core_idx] = round_up(channels_per_core[core_idx], TILE_SIZE);
+    remaining_channels -= channels_per_core[core_idx];
+}
+```
+
+**Example for 48 channels, 2 cores**:
+- Core 0: 32 channels (padded to 32)
+- Core 1: 16 channels (padded to 32)
+- Total: 64 padded columns
+
 **Dimensions Calculation**:
 ```cpp
 uint32_t total_kernel_positions = kernel_h * kernel_w;  // 9 for 3×3
-uint32_t padded_kernel_positions = round_up(9, 32) = 32;
-uint32_t padded_out_channels = round_up(64, 32) = 64;   // Already tile-aligned
+uint32_t max_padded_channels_per_core = max(padded_channels_per_core);  // 32
+uint32_t rows_per_stick_padded = (max_padded_channels_per_core + FACE_SIZE - 1) / FACE_SIZE;  // 2
+uint32_t total_rows_needed = total_kernel_positions * rows_per_stick_padded;  // 18
+uint32_t padded_kernel_positions = round_up(total_rows_needed, TILE_SIZE);  // 32
+uint32_t padded_out_channels = sum(padded_channels_per_core);  // 64
 ```
 
 #### Face-by-Face Layout Pattern
@@ -176,31 +204,77 @@ Row 16: F0[ 0, 0, 0, 0...] F1[ 0, 0, 0, 0...] F2[ 0, 0, 0, 0...] F3[ 0, 0, 0, 0.
 
 #### Core Algorithm Implementation
 
+The algorithm processes each core's channel subset independently, using HEIGHT_SHARDED-style face-by-face layout within each core's tile region:
+
 ```cpp
-// Loop through each row and column
-for (uint32_t row = 0; row < padded_kernel_positions; row++) {
-    uint32_t row_pair = row / 2;                     // Which pair of rows (0-15)
-    uint32_t face_row_group = row / FACE_SIZE;       // 0 for rows 0-15, 1 for rows 16-31
-    uint32_t row_in_face = row_pair % 8;             // Position within face (0-7)
+// Calculate column start offsets for each core (variable channel counts)
+std::vector<uint32_t> col_start_offsets(num_channel_shards);
+std::vector<uint32_t> channel_start_offsets(num_channel_shards);
+uint32_t running_col_offset = 0;
+uint32_t running_ch_offset = 0;
+for (uint32_t i = 0; i < num_channel_shards; i++) {
+    col_start_offsets[i] = running_col_offset;
+    channel_start_offsets[i] = running_ch_offset;
+    running_col_offset += padded_channels_per_core[i];
+    running_ch_offset += channels_per_core[i];
+}
 
-    for (uint32_t col = 0; col < padded_out_channels; col++) {
-        // Determine which face this column belongs to within its tile
-        uint32_t col_in_tile = col % TILE_SIZE;      // 0-31
-        uint32_t face_in_tile = col_in_tile / FACE_SIZE;  // 0 for cols 0-15, 1 for cols 16-31
+// For each core, apply HEIGHT_SHARDED-style layout to its channel subset
+for (uint32_t core_idx = 0; core_idx < num_channel_shards; core_idx++) {
+    uint32_t current_channels_per_core = channels_per_core[core_idx];
+    uint32_t channel_start = channel_start_offsets[core_idx];
+    uint32_t col_start = col_start_offsets[core_idx];
 
-        // Calculate kernel position based on face location
-        uint32_t base_pos = face_row_group * 16;     // 0 for F0/F1, 16 for F2/F3
-        uint32_t face_offset = (face_in_tile % 2) * 8;  // 0 for F0/F2, 8 for F1/F3
-        uint32_t kernel_pos = base_pos + face_offset + row_in_face;
+    // Calculate rows needed for this core's channel count
+    uint32_t core_data_rows_per_stick = (current_channels_per_core + FACE_SIZE - 1) / FACE_SIZE;
 
-        // Get value if valid kernel position and channel
-        if (kernel_pos < total_kernel_positions && col < out_channels) {
-            uint32_t kh = kernel_pos / kernel_w;
-            uint32_t kw = kernel_pos % kernel_w;
-            value = input_buffer[col, 0, kh, kw];  // From PyTorch weights
+    // Track current absolute row within this core's tile region
+    uint32_t current_absolute_row = 0;
+
+    for (uint32_t kernel_pos = 0; kernel_pos < total_kernel_positions; kernel_pos++) {
+        uint32_t kh = kernel_pos / kernel_w;
+        uint32_t kw = kernel_pos % kernel_w;
+
+        // Place this stick's data in core_data_rows_per_stick rows
+        for (uint32_t stick_row = 0; stick_row < core_data_rows_per_stick; stick_row++) {
+            uint32_t absolute_row = current_absolute_row + stick_row;
+            uint32_t face_idx = absolute_row / FACE_SIZE;
+            uint32_t row_in_face = absolute_row % FACE_SIZE;
+
+            // Determine which tile (horizontally) this face belongs to
+            uint32_t tile_idx = face_idx / 4;
+            uint32_t face_in_tile = face_idx % 4;
+
+            // Map face_in_tile to row/col offsets within the tile
+            uint32_t face_row_offset = (face_in_tile / 2) * FACE_SIZE;
+            uint32_t face_col_offset = (face_in_tile % 2) * FACE_SIZE;
+            uint32_t target_row = face_row_offset + row_in_face;
+
+            // Place up to 16 channel values in this row
+            for (uint32_t col = 0; col < FACE_SIZE; col++) {
+                uint32_t local_ch = stick_row * FACE_SIZE + col;
+                T value = static_cast<T>(0);  // Default to zero for padding
+
+                // Fill with actual data if we have channels
+                if (local_ch < current_channels_per_core) {
+                    uint32_t global_ch = channel_start + local_ch;
+                    if (global_ch < out_channels) {
+                        auto input_idx = compute_flat_indices({global_ch, 0, kh, kw}, strides);
+                        value = input_buffer[input_idx];
+                    }
+                }
+
+                // Calculate target column within this core's tile region
+                uint32_t target_col = col_start + tile_idx * TILE_SIZE + face_col_offset + col;
+                uint32_t output_idx = target_row * output_width + target_col;
+                if (output_idx < output_buffer.size()) {
+                    output_buffer[output_idx] = value;
+                }
+            }
         }
 
-        output_buffer[row * output_width + col] = value;
+        // Move to next stick position using the maximum padding (unified stride)
+        current_absolute_row += rows_per_stick_padded;
     }
 }
 ```
@@ -236,6 +310,32 @@ Face 3 (rows 16-31, cols 16-31):
 **Tile 1 (columns 32-63)** - Channels 32-63 for Core 1:
 - Same structure as Tile 0
 - Different channel slice (32-63 instead of 0-31)
+
+#### Handling Partial Tiles (e.g., 16 channels per core)
+
+When a core has fewer than 32 channels (e.g., 16), the algorithm:
+1. Places data only in Face 0 columns (0-15)
+2. Explicitly fills Face 1 columns (16-31) with zeros for proper tilization
+
+```cpp
+// CRITICAL: For partial tiles (e.g. 16 channels), add padding in the second face
+// This ensures proper tilization by filling the unused face columns with zeros
+if (current_channels_per_core == FACE_SIZE && tile_idx == 0 && face_col_offset == 0) {
+    // For 16-channel case, fill face 1 (columns 16-31) with zeros
+    for (uint32_t col = 0; col < FACE_SIZE; col++) {
+        uint32_t target_col = col_start + FACE_SIZE + col;  // Face 1 columns
+        uint32_t output_idx = target_row * output_width + target_col;
+        if (output_idx < output_buffer.size()) {
+            output_buffer[output_idx] = static_cast<T>(0);
+        }
+    }
+}
+```
+
+**Example: 48 channels with 2 cores**:
+- Core 0: 32 channels → uses both Face 0 and Face 1 (columns 0-31)
+- Core 1: 16 channels → uses only Face 0 (columns 32-47), Face 1 (columns 48-63) is zero-padded
+- This ensures the tilizer sees proper 32-wide tile boundaries
 
 #### DRAM Storage & Per-Core Reading
 
@@ -648,11 +748,15 @@ Tensor convert_conv_weight_tensor_to_2d_depthwise_layout_width_sharded(
 ### Key Takeaways (fill after completion)
 ```
 Step 6 Takeaways:
-- Full implementation at lines 1252-1382 in prepare_conv2d_weights.cpp
+- Full implementation at lines 1262-1470 in prepare_conv2d_weights.cpp
 - Template helper function conv_2d_depthwise_weight_layout_width_sharded_helper<T>
-- Per-shard face-by-face layout: each shard independently laid out, then concatenated
-- For 64 ch / 2 shards: ch_per_shard=32, padded_ch_per_shard=32, kernel_pos=9, padded_kernel_pos=32
-- Output shape: [total_padded_channels, padded_kernel_positions, 1, 1] = [64, 32, 1, 1]
+- Per-core channel distribution using tile-sized chunks (32 channels), not equal division
+- Variable channels_per_core vector: first cores get 32 ch, last core gets remainder
+- Uses HEIGHT_SHARDED-style face-by-face layout within each core's tile region
+- Handles partial tiles (16 channels) with explicit Face 1 zero-padding
+- For 64 ch / 2 cores: ch_per_core=[32,32], padded_ch_per_core=[32,32]
+- For 48 ch / 2 cores: ch_per_core=[32,16], padded_ch_per_core=[32,32]
+- Output shape: [padded_kernel_positions, total_padded_channels, 1, 1]
 ```
 
 ---

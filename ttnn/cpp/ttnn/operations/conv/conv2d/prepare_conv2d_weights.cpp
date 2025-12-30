@@ -1272,29 +1272,62 @@ static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
     constexpr uint32_t TILE_SIZE = 32;
     constexpr uint32_t FACE_SIZE = 16;
 
-    // Per-core channel count
-    uint32_t channels_per_core = out_channels / num_channel_shards;
-    uint32_t padded_channels_per_core = ((channels_per_core + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    // Calculate per-core channel counts using tile-sized chunks
+    std::vector<uint32_t> channels_per_core(num_channel_shards);
+    std::vector<uint32_t> padded_channels_per_core(num_channel_shards);
 
-    // Total padded channels (each core's padded channels concatenated)
-    uint32_t padded_out_channels = padded_channels_per_core * num_channel_shards;
+    // Distribute channels in tile-sized chunks (32, 16, etc.)
+    uint32_t remaining_channels = out_channels;
+    uint32_t total_padded_channels = 0;
 
-    // Rows needed for kernel positions (matching HEIGHT_SHARDED logic)
-    uint32_t data_rows_per_stick = (channels_per_core + FACE_SIZE - 1) / FACE_SIZE;
-    uint32_t rows_per_stick_padded = (padded_channels_per_core + FACE_SIZE - 1) / FACE_SIZE;
+    for (uint32_t core_idx = 0; core_idx < num_channel_shards; core_idx++) {
+        // Assign full tiles first, then remaining channels to last core
+        if (core_idx < num_channel_shards - 1) {
+            // For first cores, assign full tiles (32 channels)
+            channels_per_core[core_idx] = std::min(TILE_SIZE, remaining_channels);
+        } else {
+            // Last core gets remaining channels
+            channels_per_core[core_idx] = remaining_channels;
+        }
+
+        // Pad to tile boundaries
+        padded_channels_per_core[core_idx] = ((channels_per_core[core_idx] + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+        total_padded_channels += padded_channels_per_core[core_idx];
+        remaining_channels -= channels_per_core[core_idx];
+    }
+
+    // Total padded channels (all cores' padded channels concatenated)
+    uint32_t padded_out_channels = total_padded_channels;
+
+    // Rows needed for kernel positions (use maximum across cores for unified layout)
+    uint32_t max_padded_channels_per_core =
+        *std::max_element(padded_channels_per_core.begin(), padded_channels_per_core.end());
+    uint32_t rows_per_stick_padded = (max_padded_channels_per_core + FACE_SIZE - 1) / FACE_SIZE;
     uint32_t total_rows_needed = total_kernel_positions * rows_per_stick_padded;
     uint32_t padded_kernel_positions = ((total_rows_needed + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
     // Output shape: [height=padded_kernel_positions, width=padded_out_channels]
     ttnn::Shape output_shape{padded_kernel_positions, padded_out_channels, 1, 1};
 
+    // Log per-core channel distribution
+    std::string ch_per_core_str = "";
+    std::string padded_ch_per_core_str = "";
+    for (uint32_t i = 0; i < num_channel_shards; i++) {
+        ch_per_core_str += std::to_string(channels_per_core[i]);
+        padded_ch_per_core_str += std::to_string(padded_channels_per_core[i]);
+        if (i < num_channel_shards - 1) {
+            ch_per_core_str += "+";
+            padded_ch_per_core_str += "+";
+        }
+    }
+
     log_info(
         tt::LogOp,
-        "Width sharded weight layout: channels={}, ch_per_core={}, padded_ch_per_core={}, "
+        "Width sharded weight layout: channels={}, ch_per_core=[{}], padded_ch_per_core=[{}], "
         "kernel_pos={}, rows_per_stick={}, padded_rows={}, cores={}, output_shape=[{},{}]",
         out_channels,
-        channels_per_core,
-        padded_channels_per_core,
+        ch_per_core_str,
+        padded_ch_per_core_str,
         total_kernel_positions,
         rows_per_stick_padded,
         padded_kernel_positions,
@@ -1308,10 +1341,26 @@ static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
 
         uint32_t output_width = padded_out_channels;
 
+        // Calculate column start offsets for each core
+        std::vector<uint32_t> col_start_offsets(num_channel_shards);
+        std::vector<uint32_t> channel_start_offsets(num_channel_shards);
+        uint32_t running_col_offset = 0;
+        uint32_t running_ch_offset = 0;
+        for (uint32_t i = 0; i < num_channel_shards; i++) {
+            col_start_offsets[i] = running_col_offset;
+            channel_start_offsets[i] = running_ch_offset;
+            running_col_offset += padded_channels_per_core[i];
+            running_ch_offset += channels_per_core[i];
+        }
+
         // For each core, apply HEIGHT_SHARDED-style layout to its channel subset
         for (uint32_t core_idx = 0; core_idx < num_channel_shards; core_idx++) {
-            uint32_t channel_start = core_idx * channels_per_core;
-            uint32_t col_start = core_idx * padded_channels_per_core;
+            uint32_t current_channels_per_core = channels_per_core[core_idx];
+            uint32_t channel_start = channel_start_offsets[core_idx];
+            uint32_t col_start = col_start_offsets[core_idx];
+
+            // Calculate rows needed for this core's channel count
+            uint32_t core_data_rows_per_stick = (current_channels_per_core + FACE_SIZE - 1) / FACE_SIZE;
 
             // Track current absolute row within this core's tile region
             uint32_t current_absolute_row = 0;
@@ -1320,8 +1369,8 @@ static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
                 uint32_t kh = kernel_pos / kernel_w;
                 uint32_t kw = kernel_pos % kernel_w;
 
-                // Place this stick's data in data_rows_per_stick rows
-                for (uint32_t stick_row = 0; stick_row < data_rows_per_stick; stick_row++) {
+                // Place this stick's data in core_data_rows_per_stick rows
+                for (uint32_t stick_row = 0; stick_row < core_data_rows_per_stick; stick_row++) {
                     uint32_t absolute_row = current_absolute_row + stick_row;
                     uint32_t face_idx = absolute_row / FACE_SIZE;
                     uint32_t row_in_face = absolute_row % FACE_SIZE;
@@ -1335,23 +1384,22 @@ static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
                     uint32_t face_col_offset = (face_in_tile % 2) * FACE_SIZE;
                     uint32_t target_row = face_row_offset + row_in_face;
 
-                    // Place 16 channel values in this row (matching HEIGHT_SHARDED)
+                    // Place up to 16 channel values in this row
                     for (uint32_t col = 0; col < FACE_SIZE; col++) {
                         uint32_t local_ch = stick_row * FACE_SIZE + col;
-                        if (local_ch >= channels_per_core) {
-                            break;  // No more channels for this core
-                        }
+                        T value = static_cast<T>(0);  // Default to zero for padding
 
-                        uint32_t global_ch = channel_start + local_ch;
-                        if (global_ch >= out_channels) {
-                            break;
+                        // Fill with actual data if we have channels
+                        if (local_ch < current_channels_per_core) {
+                            uint32_t global_ch = channel_start + local_ch;
+                            if (global_ch < out_channels) {
+                                // Get input value from [global_ch, 0, kh, kw]
+                                auto input_idx = tt::tt_metal::compute_flat_indices(
+                                    ttnn::SmallVector<int>{(int)global_ch, 0, (int)kh, (int)kw},
+                                    compute_strides(original_weight_shape));
+                                value = input_buffer[input_idx];
+                            }
                         }
-
-                        // Get input value from [global_ch, 0, kh, kw]
-                        auto input_idx = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{(int)global_ch, 0, (int)kh, (int)kw},
-                            compute_strides(original_weight_shape));
-                        T value = input_buffer[input_idx];
 
                         // Calculate target column within this core's tile region
                         uint32_t target_col = col_start + tile_idx * TILE_SIZE + face_col_offset + col;
@@ -1361,9 +1409,23 @@ static Tensor conv_2d_depthwise_weight_layout_width_sharded_helper(
                             output_buffer[output_idx] = value;
                         }
                     }
+
+                    // CRITICAL: For partial tiles (e.g. 16 channels), add padding in the second face
+                    // This ensures proper tilization by filling the unused face columns with zeros
+                    // Only pad when we're in face 0 (face_col_offset == 0), NOT when placing data in face 1
+                    if (current_channels_per_core == FACE_SIZE && tile_idx == 0 && face_col_offset == 0) {
+                        // For 16-channel case, fill face 1 (columns 16-31) with zeros
+                        for (uint32_t col = 0; col < FACE_SIZE; col++) {
+                            uint32_t target_col = col_start + FACE_SIZE + col;  // Face 1 columns
+                            uint32_t output_idx = target_row * output_width + target_col;
+                            if (output_idx < output_buffer.size()) {
+                                output_buffer[output_idx] = static_cast<T>(0);
+                            }
+                        }
+                    }
                 }
 
-                // Move to next stick position
+                // Move to next stick position using the maximum padding
                 current_absolute_row += rows_per_stick_padded;
             }
         }

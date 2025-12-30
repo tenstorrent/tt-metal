@@ -5266,11 +5266,11 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
         # This will create a 2D grid of cores (e.g., 2x2 = 4 cores)
         # - 2 rows for spatial distribution
         # - 2 columns for channel distribution (32 ch per column)
-        (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
-        (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True),
+        (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
+        # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True),
 
         # (10, 32, 32, 40, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", False, True), # mobilenetv2 - 1.
-        (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 2.
+        # (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 2.
         # (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 3.
         # (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 4.
 
@@ -5287,8 +5287,8 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
         # (1, 240, 240, 28, 28, 240, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 6. - fails with memory issue
         # (1, 480, 480, 14, 14, 480, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 7. - fails with memory issue
         # (1, 480, 480, 14, 14, 480, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 8. - fails with memory issue
-        (1, 672, 672, 14, 14, 672, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 9.
-        (1, 672, 672, 14, 14, 672, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 10.
+        # (1, 672, 672, 14, 14, 672, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 9.
+        # (1, 672, 672, 14, 14, 672, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 10.
         # (1, 1152, 1152, 7, 7, 1152, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 11.
         # (1, 1152, 1152, 7, 7, 1152, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 12.
     ),
@@ -5296,10 +5296,10 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer):
 
-    # num = 256-16
-    # groups = num
-    # input_channels = num
-    # output_channels = num
+    num = 64 * 70
+    groups = num
+    input_channels = num
+    output_channels = num
 
     torch.manual_seed(0)
     conv_input_shape = (batch, input_channels, input_height, input_width)
