@@ -48,15 +48,13 @@ struct IndexFillOperation {
     static void validate(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        uint32_t dim,
-        const Tensor& index,
-        std::variant<float, int> value,
-        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::index_fill
 namespace ttnn::prim {
-constexpr auto index_fill =
-    ttnn::register_operation<"ttnn::prim::index_fill", ttnn::operations::index_fill::IndexFillOperation>();
+ttnn::Tensor index_fill(
+    const Tensor& input,
+    uint32_t dim,
+    const Tensor& index,
+    std::variant<float, int> value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
 }

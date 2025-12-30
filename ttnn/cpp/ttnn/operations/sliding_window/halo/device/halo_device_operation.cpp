@@ -5,6 +5,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include <array>
 
 namespace ttnn::operations::sliding_window::halo {
@@ -116,15 +117,20 @@ HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_te
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> HaloDeviceOperation::invoke(
+}  // namespace ttnn::operations::sliding_window::halo
+
+namespace ttnn::prim {
+ttnn::operations::sliding_window::halo::HaloDeviceOperation::tensor_return_value_t halo(
     const Tensor& input_tensor,
-    const SlidingWindowConfig& config,
+    const ttnn::operations::sliding_window::SlidingWindowConfig& config,
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool config_tensors_in_dram) {
+    using OperationType = ttnn::operations::sliding_window::halo::HaloDeviceOperation;
+
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -135,23 +141,22 @@ std::tuple<operation_attributes_t, tensor_args_t> HaloDeviceOperation::invoke(
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along
     //       width)
     auto sliding_window_hash = config.get_hash();
-    if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
-        auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
-        auto shard_boundaries = sliding_window::generate_shard_boundaries(config);
-        HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.emplace(
-            sliding_window_hash, sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
+    if (!OperationType::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
+        auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(config);
+        auto shard_boundaries = ttnn::operations::sliding_window::generate_shard_boundaries(config);
+        OperationType::sliding_window_max_out_nsticks_per_core.emplace(
+            sliding_window_hash, ttnn::operations::sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
     }
 
-    uint32_t max_out_nsticks_per_core =
-        HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
+    uint32_t max_out_nsticks_per_core = OperationType::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
     uint32_t in_nsticks_per_core = input_tensor.memory_config().shard_spec()->shape[0];
-    ParallelConfig p_config;
+    ttnn::operations::sliding_window::ParallelConfig p_config;
     p_config.grid = input_tensor.shard_spec().value().grid;
     p_config.shard_scheme = input_tensor.memory_config().memory_layout();
     p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .config = config,
             .parallel_config = p_config,
             .pad_val = pad_val,
@@ -162,8 +167,8 @@ std::tuple<operation_attributes_t, tensor_args_t> HaloDeviceOperation::invoke(
             .output_memory_config = output_memory_config,
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram},
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input_tensor = input_tensor,
-        }};
+        });
 }
-}  // namespace ttnn::operations::sliding_window::halo
+}  // namespace ttnn::prim

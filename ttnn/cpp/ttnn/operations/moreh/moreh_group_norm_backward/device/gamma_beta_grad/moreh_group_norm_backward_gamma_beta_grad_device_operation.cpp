@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -146,10 +147,11 @@ MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
     return result;
 }
 
-std::tuple<
-    MorehGroupNormBackwardGammaBetaGradOperation::operation_attributes_t,
-    MorehGroupNormBackwardGammaBetaGradOperation::tensor_args_t>
-MorehGroupNormBackwardGammaBetaGradOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_group_norm_backward
+
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardGammaBetaGradOperation::tensor_return_value_t
+moreh_group_norm_backward_gamma_beta_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
@@ -161,13 +163,15 @@ MorehGroupNormBackwardGammaBetaGradOperation::invoke(
     const std::optional<MemoryConfig>& gamma_grad_memory_config,
     const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    operation_attributes_t operation_attributes{
+    using OperationType =
+        ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardGammaBetaGradOperation;
+    OperationType::operation_attributes_t operation_attributes{
         num_groups,
         are_required_outputs,
         gamma_grad_memory_config.value_or(output_grad.memory_config()),
         beta_grad_memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-    tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma_grad, beta_grad};
-    return {operation_attributes, tensor_args};
+    OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma_grad, beta_grad};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_group_norm_backward
+}  // namespace ttnn::prim

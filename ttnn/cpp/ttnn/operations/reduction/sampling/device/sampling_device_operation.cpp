@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <optional>
 
@@ -109,8 +110,10 @@ tensor_return_value_t SamplingDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_values.device());
 }
 
-std::tuple<SamplingDeviceOperation::operation_attributes_t, SamplingDeviceOperation::tensor_args_t>
-SamplingDeviceOperation::invoke(
+}  // namespace ttnn::operations::reduction::sampling
+
+namespace ttnn::prim {
+ttnn::Tensor sampling(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
     const Tensor& k,
@@ -119,15 +122,15 @@ SamplingDeviceOperation::invoke(
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output_tensor) {
-    return {
-        operation_attributes_t{.seed = seed, .sub_core_grids = sub_core_grids},
-        tensor_args_t{
+    using OperationType = ttnn::operations::reduction::sampling::SamplingDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{.seed = seed, .sub_core_grids = sub_core_grids},
+        OperationType::tensor_args_t{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,
             .k = k,
             .p = p,
             .temp = temp,
-            .preallocated_output = preallocated_output_tensor}};
+            .preallocated_output = preallocated_output_tensor});
 }
-
-}  // namespace ttnn::operations::reduction::sampling
+}  // namespace ttnn::prim

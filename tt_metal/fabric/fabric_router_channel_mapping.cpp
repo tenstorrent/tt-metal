@@ -173,14 +173,14 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
                 // Check if VC1 mappings were actually created in initialize_vc1_mappings()
                 // Count how many sender channels exist for VC1
                 LogicalSenderChannelKey test_key{vc1_index, 0};
-                if (sender_channel_map_.find(test_key) == sender_channel_map_.end()) {
+                if (!sender_channel_map_.contains(test_key)) {
                     return no_channels;  // VC1 not enabled (no mappings created)
                 }
 
                 // Count actual sender channels (3 for XY intermesh, 4 for Z intermesh)
                 uint32_t count = 0;
                 for (uint32_t i = 0; i < builder_config::num_downstream_edms_2d_vc1_with_z; ++i) {
-                    if (sender_channel_map_.find(LogicalSenderChannelKey{vc1_index, i}) != sender_channel_map_.end()) {
+                    if (sender_channel_map_.contains(LogicalSenderChannelKey{vc1_index, i})) {
                         count++;
                     } else {
                         break;  // Channels are created sequentially, so stop at first missing

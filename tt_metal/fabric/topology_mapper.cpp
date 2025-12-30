@@ -666,7 +666,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         info.fabric_node_id = fabric_node;
         info.mesh_coord = mesh_graph_.chip_to_coordinate(mesh_id, fabric_node.chip_id);
-        if (asic_id_to_mesh_rank.find(asic) != asic_id_to_mesh_rank.end()) {
+        if (asic_id_to_mesh_rank.contains(asic)) {
             info.mesh_host_rank = asic_id_to_mesh_rank.at(asic);
         }
         info.is_mapped = true;
@@ -1197,7 +1197,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         if (host_ranks.size() == 1) {
             MeshHostRankId mesh_host_rank{*host_ranks.values().front()};
             auto key = std::make_pair(mesh_id, mesh_host_rank);
-            if (mesh_host_rank_coord_ranges_.find(key) == mesh_host_rank_coord_ranges_.end()) {
+            if (!mesh_host_rank_coord_ranges_.contains(key)) {
                 // Get the full coordinate range for this mesh from the mesh graph
                 MeshCoordinateRange coord_range = mesh_graph_.get_coord_range(mesh_id);
                 mesh_host_rank_coord_ranges_.insert({key, coord_range});
@@ -1496,8 +1496,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         auto logical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph);
 
         // Extract adjacency maps for this mesh_id
-        if (logical_adjacency_matrix.find(mesh_id) == logical_adjacency_matrix.end() ||
-            physical_adjacency_matrix.find(mesh_id) == physical_adjacency_matrix.end()) {
+        if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {
             continue;
         }
 

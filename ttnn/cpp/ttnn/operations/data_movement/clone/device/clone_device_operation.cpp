@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "clone_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::clone {
@@ -85,18 +86,21 @@ CloneOperation::create_op_performance_model(
     return result;
 }
 
-std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t> CloneOperation::invoke(
+}  // namespace ttnn::operations::data_movement::clone
+
+namespace ttnn::prim {
+ttnn::Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::clone::CloneOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             dtype.value_or(input.dtype()),
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
         },
-        tensor_args_t{input},
-    };
+        OperationType::tensor_args_t{input});
 }
-}  // namespace ttnn::operations::data_movement::clone
+}  // namespace ttnn::prim

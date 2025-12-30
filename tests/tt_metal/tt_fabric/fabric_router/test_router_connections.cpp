@@ -602,10 +602,10 @@ TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
         sources.insert(conn.source_direction);
     }
     EXPECT_EQ(sources.size(), 4);
-    EXPECT_TRUE(sources.count(RoutingDirection::N) > 0);
-    EXPECT_TRUE(sources.count(RoutingDirection::E) > 0);
-    EXPECT_TRUE(sources.count(RoutingDirection::S) > 0);
-    EXPECT_TRUE(sources.count(RoutingDirection::W) > 0);
+    EXPECT_TRUE(sources.contains(RoutingDirection::N));
+    EXPECT_TRUE(sources.contains(RoutingDirection::E));
+    EXPECT_TRUE(sources.contains(RoutingDirection::S));
+    EXPECT_TRUE(sources.contains(RoutingDirection::W));
 }
 
 TEST_F(RouterConnectionsTest, Phase1_5_EdgeDevice_VariableTargetCount) {
@@ -1026,7 +1026,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_EdgeDevice_DynamicSizing) {
 
     // Only record connections for existing routers
     for (const auto& target : z_targets) {
-        if (existing_set.count(target.target_direction.value())) {
+        if (existing_set.contains(target.target_direction.value())) {
             FabricNodeId mesh_node(MeshId{0}, 0);  // Simplified for test
 
             record_test_connection(

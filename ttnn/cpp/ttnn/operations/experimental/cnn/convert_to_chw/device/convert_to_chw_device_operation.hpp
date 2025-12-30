@@ -30,16 +30,13 @@ struct ConvertToCHWDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::optional<DataType>& dtype);
 };
 
 }  // namespace ttnn::operations::experimental::cnn::to_chw
 
 namespace ttnn::prim {
-constexpr auto convert_to_chw = ttnn::register_operation<
-    "ttnn::prim::convert_to_chw",
-    ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation>();
+
+ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation::tensor_return_value_t convert_to_chw(
+    const Tensor& input, const std::optional<DataType>& dtype);
+
 }  // namespace ttnn::prim

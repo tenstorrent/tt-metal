@@ -6,7 +6,7 @@
 
 #include <iostream>
 #include <random>
-#include <stdint.h>
+#include <cstdint>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"

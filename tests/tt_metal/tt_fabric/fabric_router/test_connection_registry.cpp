@@ -944,7 +944,7 @@ TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
 
     // Only record connections for existing routers
     for (const auto& target : z_targets) {
-        if (existing_routers.count(target.target_direction.value())) {
+        if (existing_routers.contains(target.target_direction.value())) {
             RouterConnectionRecord record{
                 .source_node = z_node,
                 .source_direction = RoutingDirection::Z,

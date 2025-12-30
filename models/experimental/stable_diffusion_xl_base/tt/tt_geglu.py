@@ -27,33 +27,35 @@ class TtGEGLU(LightweightModule):
 
         self.program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split")
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
+        assert self.program_config_gelu is not None, "Program config for GELU linear is None"
+        assert (
+            self.program_config_gelu.fused_activation.op_type == ttnn.UnaryOpType.GELU
+        ), "GELU isn't fused in program config for GELU linear"
+
         self.compute_config = model_config.get_mm_compute_config(f"{module_path}.proj")
+        self.output_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.proj.split")
+        self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
-        if self.program_config is not None:
-            if input_tensor.shape[2] == 4096:
-                # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
-                # hence using L1 memory config instead
-                input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
-
+        # TODO: self.program_config is not None is used to differentiate base and refiner; remove this with refiner matmul optimizations
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
             bias=self.tt_bias_1,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.program_config is not None else None,
+            memory_config=self.output_memory_config,
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
+
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,
             bias=self.tt_bias_2,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.program_config_gelu is not None else None,
+            memory_config=self.output_memory_config_gelu,
             program_config=self.program_config_gelu,
             compute_kernel_config=self.compute_config,
         )
-        if self.program_config_gelu is None:
-            gate = ttnn.gelu(gate)
+
         ttnn.deallocate(input_tensor)
         hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False)
         return hidden_states

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_mean_backward_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -56,25 +57,25 @@ MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::cr
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), output_grad.device());
 }
+}  // namespace ttnn::operations::moreh::moreh_mean_backward
 
-std::tuple<MorehMeanBackwardOperation::operation_attributes_t, MorehMeanBackwardOperation::tensor_args_t>
-MorehMeanBackwardOperation::invoke(
+namespace ttnn::prim {
+ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor_return_value_t moreh_mean_backward(
     const Tensor& output_grad,
     const ttnn::SmallVector<int64_t>& dims,
-    const bool keepdim,
+    bool keepdim,
     const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        {dims,
-         keepdim,
-         input_grad_shape,
-         memory_config.value_or(output_grad.memory_config()),
-         init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        {
-            output_grad,
-            input_grad,
-        }};
+    using OperationType = ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        dims,
+        keepdim,
+        input_grad_shape,
+        memory_config.value_or(output_grad.memory_config()),
+        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    auto tensor_args = OperationType::tensor_args_t{output_grad, input_grad};
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_mean_backward
+}  // namespace ttnn::prim
