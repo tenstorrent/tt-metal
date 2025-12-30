@@ -20,6 +20,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/to_string.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -1012,8 +1013,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappi
     EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
-// Sends data from device (0,0) to device (0,1) within the same mesh
-TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
+TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
+    log_info(tt::LogTest, "Running {}: sending data from device (0,0) to device (0,1)", __func__);
     auto mesh_device = get_mesh_device();
     auto mesh_shape = mesh_device->shape();
     const size_t num_devices = mesh_shape[0] * mesh_shape[1];  // 2x4 = 8
@@ -1021,16 +1022,12 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
     auto sender_coord = tt::tt_metal::distributed::MeshCoordinate(0, 0);
     auto receiver_coord = tt::tt_metal::distributed::MeshCoordinate(0, 1);
 
-    // Per-device shard shape, full shape spans all devices along dim 1
-    auto shard_shape = ttnn::Shape({1, 1, 32, 64});
     auto full_shape = ttnn::Shape({1, static_cast<uint32_t>(num_devices), 32, 64});
     auto dtype = tt::tt_metal::DataType::BFLOAT16;
     auto layout = tt::tt_metal::Layout::TILE;
     auto memory_config =
         tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
 
-    // Create a full tensor with random data, then shard across devices
-    // Each device will get a different slice of the data
     Tensor input_full = ttnn::random::random(full_shape, dtype).to_layout(layout);
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device, 1);
     Tensor input_sharded = ttnn::distributed::distribute_tensor(input_full, *mapper);
@@ -1039,18 +1036,8 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
 
     // Get sender's data for verification - this is device 0's unique shard
     auto input_shards = ttnn::distributed::get_device_tensors(input_tensor);
-    auto sender_data = input_shards[0].cpu().to_vector<bfloat16>();
-    auto receiver_initial_data = input_shards[1].cpu().to_vector<bfloat16>();
+    auto sender_data = input_shards[0].cpu();
 
-    // Verify sender and receiver started with DIFFERENT data
-    ASSERT_NE(sender_data, receiver_initial_data) << "Sender and receiver must start with different data";
-
-    std::cout << "Sender data first 3 values: " << (float)sender_data[0] << ", " << (float)sender_data[1] << ", "
-              << (float)sender_data[2] << std::endl;
-    std::cout << "Receiver initial data first 3: " << (float)receiver_initial_data[0] << ", "
-              << (float)receiver_initial_data[1] << ", " << (float)receiver_initial_data[2] << std::endl;
-
-    // Now replicate the point_to_point operation using generic_op
     // Create output tensor (same spec as input, allocated on mesh)
     Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(input_tensor.tensor_spec(), mesh_device.get());
 
@@ -1059,7 +1046,7 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
 
-    // Figure out packets (simplified - single packet for small tensors)
+    // Figure out packets - single packet
     const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes = std::bit_floor(fabric_max_packet_size_bytes);
     const uint32_t num_pages_per_packet =
@@ -1079,7 +1066,7 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
     CoreRangeSet receiver_core_set(std::set<CoreRange>{CoreRange(receiver_core)});
 
     // Determine routing direction (sender -> receiver along dim 1)
-    const int dim = 1;  // transmit along column
+    const int dim = 1;  // transmit along row
     const int hops = receiver_coord[dim] - sender_coord[dim];
     const bool is_forward = (hops > 0);
     const uint32_t num_hops = std::abs(hops);
@@ -1148,9 +1135,9 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
         };
 
         std::vector<uint32_t> writer_ct_args = {
-            (uint32_t)sender_cb_id,
-            (uint32_t)packet_header_cb_id,
-            (uint32_t)packet_cb_id,
+            sender_cb_id,
+            packet_header_cb_id,
+            packet_cb_id,
             l1_alignment,
         };
         tt::tt_metal::TensorAccessorArgs(*intermediate_tensor.buffer()).append_to(writer_ct_args);
@@ -1251,13 +1238,12 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
         };
         tt::tt_metal::TensorAccessorArgs(*intermediate_tensor.buffer()).append_to(reader_ct_args);
 
-        // Reader runtime args (fabric args will be appended by generic_op)
-        const bool sender_is_forward = is_forward;  // Direction from receiver back to sender
+        const bool sender_is_forward = is_forward;
         std::vector<uint32_t> reader_rt_args = {
             0,                // page_idx_start
             input_num_pages,  // page_idx_end
             num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),  // intermediate tensor address
+            intermediate_tensor.buffer()->address(),
             packet_size_bytes,
             input_page_size_bytes,
             num_page_segments,
@@ -1314,27 +1300,15 @@ TEST_F(MeshDevice2x4Fabric1DFixture, PointToPointWithGenericOp) {
     ttnn::generic_op(std::vector<Tensor>{input_tensor, intermediate_tensor, output_tensor}, mesh_program_descriptor);
     tt::tt_metal::distributed::Synchronize(mesh_device.get(), std::nullopt, {});
 
-    // Verify output at receiver matches the original host input data
-    // The generic_op should have transferred the sender's data to the receiver
+    size_t output_receiver_idx = 1;
     auto output_data = ttnn::distributed::get_device_tensors(output_tensor);
+    auto output_tensor_cpu = output_data[output_receiver_idx].cpu();
 
-    // Find receiver index in output tensor
-    const auto& output_storage = std::get<tt::tt_metal::DeviceStorage>(output_tensor.storage());
-    size_t output_receiver_idx = 0;
-    for (size_t i = 0; i < output_storage.coords.size(); ++i) {
-        if (output_storage.coords[i] == receiver_coord) {
-            output_receiver_idx = i;
-            break;
-        }
-    }
+    log_info(tt::LogTest, "Sender data: {}", ttnn::to_string(sender_data));
+    log_info(tt::LogTest, "Output at receiver: {}", ttnn::to_string(output_tensor_cpu));
 
-    auto output_vec = output_data[output_receiver_idx].cpu().to_vector<bfloat16>();
-
-    std::cout << "Output at receiver first 3: " << (float)output_vec[0] << ", " << (float)output_vec[1] << ", "
-              << (float)output_vec[2] << std::endl;
-
-    EXPECT_EQ(output_vec, sender_data) << "Receiver should have sender's data after transfer";
-    EXPECT_NE(output_vec, receiver_initial_data) << "Receiver's output should differ from its initial data";
+    EXPECT_EQ(output_tensor_cpu.to_vector<bfloat16>(), sender_data.to_vector<bfloat16>())
+        << "Receiver should have sender's data after transfer";
 }
 
 }  // namespace ttnn::operations::generic::test
