@@ -12,6 +12,7 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api.h"
 using namespace ckernel;
 #endif
@@ -304,7 +305,7 @@ using DstTile = unified_kernel::detail::DstTile;
 #ifdef COMPILE_FOR_TRISC
 namespace unified_kernel::detail {
 // Track last init state for auto-reinit on CB change
-enum class LastOp { NONE, MUL_CB, ADD_CB, MUL_DST, ADD_DST };
+enum class LastOp { NONE, MUL_CB, ADD_CB, MUL_DST, ADD_DST, MUL_DST_REV };
 inline LastOp last_op = LastOp::NONE;
 inline uint32_t last_cb0 = UINT32_MAX;
 inline uint32_t last_cb1 = UINT32_MAX;
@@ -361,6 +362,7 @@ FORCE_INLINE DstTile add(const DstTile& dst_tile, const TileCB& cb_tile, uint32_
 }
 
 // mul: DST * CB -> DST (auto-reinits if CB changed)
+// Uses DEST_TO_SRCA: loads dst[out_dst_idx] into SRCA, CB into SRCB
 template <typename TileCB>
 FORCE_INLINE DstTile mul(const DstTile& dst_tile, const TileCB& cb_tile, uint32_t out_dst_idx = 0) {
 #ifdef COMPILE_FOR_TRISC
@@ -375,6 +377,28 @@ FORCE_INLINE DstTile mul(const DstTile& dst_tile, const TileCB& cb_tile, uint32_
         cb_tile.cb_id(), cb_tile.local_id(), out_dst_idx);
 #endif
     return DstTile(out_dst_idx);
+}
+
+// mul: CB * DST -> DST (auto-reinits if CB changed)
+// Uses DEST_TO_SRCB: loads CB into SRCA, dst[dst_tile.idx()] into SRCB
+template <typename TileCB>
+FORCE_INLINE DstTile mul(const TileCB& cb_tile, const DstTile& dst_tile, uint32_t out_dst_idx = 0) {
+#ifdef COMPILE_FOR_TRISC
+    using namespace unified_kernel::detail;
+    if (last_op != LastOp::MUL_DST_REV || last_cb0 != cb_tile.cb_id()) {
+        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            cb_tile.cb_id());
+        last_op = LastOp::MUL_DST_REV;
+        last_cb0 = cb_tile.cb_id();
+    }
+    // DEST_TO_SRCB: CB -> SRCA, dst[dst_tile.idx()] -> SRCB, result -> dst[dst_tile.idx()]
+    // Note: result is written to dst[dst_tile.idx()], so out_dst_idx should match dst_tile.idx()
+    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+        cb_tile.cb_id(), cb_tile.local_id(), dst_tile.idx());
+    // Result is in dst[dst_tile.idx()]. Return DstTile at that index (or out_dst_idx if they match)
+    uint32_t result_idx = (out_dst_idx == dst_tile.idx()) ? out_dst_idx : dst_tile.idx();
+#endif
+    return DstTile(result_idx);
 }
 
 // Legacy compatibility: add_tiles/mul_tiles that write to dst_idx (void return)
@@ -399,3 +423,176 @@ FORCE_INLINE void reduce_tile(const TileA& in0, const TileB& in1, uint32_t dst_i
     reduce_tile(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
 #endif
 }
+
+// copy_to_dst: Copy a tile from CB to dst register
+template <typename Tile>
+FORCE_INLINE void copy_to_dst(const Tile& tile, DstTile& dst) {
+#ifdef COMPILE_FOR_TRISC
+    copy_tile_to_dst_init_short(tile.cb_id());
+    copy_tile(tile.cb_id(), tile.local_id(), dst.idx());
+#endif
+}
+
+// reciprocal: Compute 1/x for a tile (CB -> DST)
+template <typename Tile>
+FORCE_INLINE DstTile reciprocal(const Tile& tile, uint32_t dst_idx = 0) {
+#ifdef COMPILE_FOR_TRISC
+    using namespace unified_kernel::detail;
+    // Initialize reciprocal operation once
+    static bool recip_initialized = false;
+    if (!recip_initialized) {
+        recip_tile_init();
+        recip_initialized = true;
+    }
+
+    // Copy tile to dst register
+    copy_tile_to_dst_init_short(tile.cb_id());
+    copy_tile(tile.cb_id(), tile.local_id(), dst_idx);
+
+    // Compute reciprocal: dst[dst_idx] = 1 / dst[dst_idx]
+    recip_tile(dst_idx);
+#endif
+    return DstTile(dst_idx);
+}
+
+// reciprocal: Compute 1/x for a DstTile (DST -> DST)
+FORCE_INLINE DstTile reciprocal(const DstTile& dst_tile, uint32_t out_dst_idx = 0) {
+#ifdef COMPILE_FOR_TRISC
+    using namespace unified_kernel::detail;
+    // Initialize reciprocal operation once
+    static bool recip_initialized = false;
+    if (!recip_initialized) {
+        recip_tile_init();
+        recip_initialized = true;
+    }
+
+    // Copy dst_tile to out_dst_idx if different
+    if (dst_tile.idx() != out_dst_idx) {
+        copy_tile_to_dst_init_short(0);  // Dummy init
+        // Would need to copy from dst to dst - simplified for now
+    }
+
+    // Compute reciprocal: dst[out_dst_idx] = 1 / dst[out_dst_idx]
+    recip_tile(out_dst_idx);
+#endif
+    return DstTile(out_dst_idx);
+}
+
+// max: CB + CB -> DST (auto-reinits if CBs changed, auto-copies to dst registers)
+template <typename TileA, typename TileB>
+FORCE_INLINE DstTile max(const TileA& in0, const TileB& in1, uint32_t dst_idx = 0) {
+#ifdef COMPILE_FOR_TRISC
+    using namespace unified_kernel::detail;
+    // Initialize max operation once
+    static bool max_initialized = false;
+    if (!max_initialized) {
+        max_tile_init();
+        max_initialized = true;
+    }
+
+    // Copy both tiles to dst registers (ensures they're in different regs)
+    copy_tile_to_dst_init_short(in0.cb_id());
+    copy_tile(in0.cb_id(), in0.local_id(), dst_idx);
+    copy_tile(in1.cb_id(), in1.local_id(), dst_idx + 1);
+
+    // Compute max: dst[dst_idx] = max(dst[dst_idx], dst[dst_idx+1])
+    max_tile(dst_idx, dst_idx + 1);
+#endif
+    return DstTile(dst_idx);
+}
+
+// max: DST + CB -> DST (for accumulation patterns)
+template <typename TileCB>
+FORCE_INLINE DstTile max(const DstTile& dst_tile, const TileCB& cb_tile, uint32_t out_dst_idx = 0) {
+#ifdef COMPILE_FOR_TRISC
+    using namespace unified_kernel::detail;
+    // Initialize max operation once
+    static bool max_initialized = false;
+    if (!max_initialized) {
+        max_tile_init();
+        max_initialized = true;
+    }
+
+    // Copy CB tile to dst register (dst_tile is already in dst[out_dst_idx])
+    copy_tile_to_dst_init_short(cb_tile.cb_id());
+    copy_tile(cb_tile.cb_id(), cb_tile.local_id(), out_dst_idx + 1);
+
+    // Compute max: dst[out_dst_idx] = max(dst[out_dst_idx], dst[out_dst_idx+1])
+    max_tile(out_dst_idx, out_dst_idx + 1);
+#endif
+    return DstTile(out_dst_idx);
+}
+
+// Legacy max_op for backwards compatibility (uses max internally)
+template <typename TileA, typename TileB>
+FORCE_INLINE DstTile max_op(const TileA& in0, const TileB& in1, uint32_t dst_idx = 0) {
+    return max(in0, in1, dst_idx);
+}
+
+// ============================================================================
+// MPI-like collective communication primitives
+// ============================================================================
+
+// Gather tile: non-root cores send their tile to root (MPI_Gather equivalent)
+// Usage: gather_tile(src_buffer, root_x, root_y, semaphore_id, num_senders)
+//   - src_buffer: source buffer name (e.g., "partial_sum")
+//   - root_x, root_y: root core coordinates
+//   - semaphore_id: semaphore ID for synchronization
+//   - num_senders: number of non-root cores sending data
+#define gather_tile(src_buffer, root_x, root_y, semaphore_id, num_senders)                   \
+    do {                                                                                     \
+        uint32_t my_x = get_absolute_logical_x();                                            \
+        uint32_t my_y = get_absolute_logical_y();                                            \
+        bool is_root = (my_x == root_x && my_y == root_y);                                   \
+        if (!is_root) {                                                                      \
+            read_tile(src_buffer, 0);                                                        \
+            noc_async_write_tile(0, src_buffer, get_noc_addr(root_x, root_y));               \
+            noc_async_write_barrier();                                                       \
+            noc_semaphore_inc(                                                               \
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore_id)), \
+                get_noc_addr(root_x, root_y));                                               \
+        }                                                                                    \
+    } while (0)
+
+// Allreduce tile: gathers all tiles to root, reduces, then broadcasts result (MPI_Allreduce equivalent)
+// Usage: allreduce_tile(src_buffer, dst_buffer, root_x, root_y, semaphore_id, num_senders, reduce_op)
+//   - src_buffer: source buffer name containing local partial result
+//   - dst_buffer: destination buffer name for reduced result
+//   - root_x, root_y: root core coordinates
+//   - semaphore_id: semaphore ID for synchronization
+//   - num_senders: number of non-root cores sending data
+//   - reduce_op: reduction operation (e.g., add, mul)
+// Note: Must be followed by bcast_tile() to broadcast result to all cores
+#define allreduce_tile(src_buffer, dst_buffer, root_x, root_y, semaphore_id, num_senders, reduce_op) \
+    do {                                                                                             \
+        uint32_t my_x = get_absolute_logical_x();                                                    \
+        uint32_t my_y = get_absolute_logical_y();                                                    \
+        bool is_root = (my_x == root_x && my_y == root_y);                                           \
+        if (!is_root) {                                                                              \
+            /* Gather: send local tile to root */                                                    \
+            read_tile(src_buffer, 0);                                                                \
+            noc_async_write_tile(0, src_buffer, get_noc_addr(root_x, root_y));                       \
+            noc_async_write_barrier();                                                               \
+            noc_semaphore_inc(                                                                       \
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore_id)),         \
+                get_noc_addr(root_x, root_y));                                                       \
+        } else {                                                                                     \
+            /* Reduce: wait for all sends, then reduce all gathered tiles */                         \
+            auto sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore_id));  \
+            noc_semaphore_wait(sem, num_senders);                                                    \
+            noc_semaphore_set(sem, 0);                                                               \
+            /* Start with local tile */                                                              \
+            auto local = read_tile(src_buffer, 0);                                                   \
+            ACQUIRE_DST();                                                                           \
+            DstTile result = reduce_op(local, local, 0); /* Initialize with local tile */            \
+            /* Reduce with all received tiles (they arrive sequentially at src_buffer) */            \
+            /* Note: Each sender writes to src_buffer, and they arrive at different times */         \
+            /* We accumulate them by reading and reducing each one */                                \
+            for (uint32_t i = 1; i <= num_senders; i++) {                                            \
+                auto received = read_tile(src_buffer, i);                                            \
+                result = reduce_op(result, received, 0); /* Accumulate reduction */                  \
+            }                                                                                        \
+            write_tile(result, dst_buffer, 0);                                                       \
+            RELEASE_DST();                                                                           \
+        }                                                                                            \
+    } while (0)

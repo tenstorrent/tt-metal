@@ -236,6 +236,37 @@ class UnifiedKernelBuilder:
         self.core_grid = core_grid
         return self
 
+    def _ensure_includes(self, kernel_source_code: str) -> str:
+        """
+        Ensure required includes are present in kernel source.
+
+        Args:
+            kernel_source_code: Kernel source code string
+
+        Returns:
+            Kernel source code with includes prepended if not already present
+        """
+        required_includes = [
+            '#include "unified_kernel/unified_kernel_api.h"',
+            '#include "unified_kernel/unified_common.h"',
+        ]
+
+        # Check if includes are already present
+        has_api_include = "unified_kernel_api.h" in kernel_source_code
+        has_common_include = "unified_common.h" in kernel_source_code
+
+        # Prepend missing includes
+        prepend_includes = []
+        if not has_api_include:
+            prepend_includes.append(required_includes[0])
+        if not has_common_include:
+            prepend_includes.append(required_includes[1])
+
+        if prepend_includes:
+            return "\n".join(prepend_includes) + "\n\n" + kernel_source_code
+
+        return kernel_source_code
+
     def build(self, device: ttnn.Device) -> ttnn.ProgramDescriptor:
         """
         Build the ProgramDescriptor.
@@ -290,6 +321,10 @@ class UnifiedKernelBuilder:
         init_parts.append(f"constexpr uint32_t grid_x = {grid_x};")
         init_parts.append(f"constexpr uint32_t grid_y = {grid_y};")
         init_parts.append(f"constexpr uint32_t num_cores = {grid_x * grid_y};")
+
+        # Auto-add core coordinates
+        init_parts.append("const uint32_t my_x = get_absolute_logical_x();")
+        init_parts.append("const uint32_t my_y = get_absolute_logical_y();")
 
         # Auto-compute n_tiles if not explicitly provided
         has_n_tiles = any(name == "n_tiles" for name, _ in self.compile_time_args_)
@@ -521,13 +556,14 @@ class UnifiedKernelBuilder:
         else:
             kernel_source_code = str(self.kernel_source)
 
+        # Ensure required includes are present
+        kernel_source_code = self._ensure_includes(kernel_source_code)
+
         # Auto-wrap kernel source with boilerplate if not already present
         # This allows user to write just the kernel body without includes/KERNEL_MAIN/INIT_ARGUMENTS
         needs_wrap = "KERNEL_MAIN" not in kernel_source_code
         if needs_wrap:
-            kernel_source_code = f"""#include "unified_common.h"
-
-KERNEL_MAIN {{
+            kernel_source_code = f"""KERNEL_MAIN {{
     INIT_ARGUMENTS
 
 {kernel_source_code}
@@ -675,6 +711,9 @@ KERNEL_MAIN {{
                 kernel_source_code = str(self.kernel_source)
         else:
             kernel_source_code = str(self.kernel_source)
+
+        # Ensure required includes are present
+        kernel_source_code = self._ensure_includes(kernel_source_code)
 
         # Generate kernels for sender and receiver roles
         for group_name, group in self.mcast_groups.items():
