@@ -17,3 +17,14 @@ jobs:
     name: "🚀 Nightly Performance Tests"
     uses: ./.github/workflows/run-perf-tests.yml
     secrets: inherit
+
+  report-failure:
+    name: "🔔 Report failure"
+    runs-on: ubuntu-latest
+    if: ${{ failure() }}
+    needs: nightly-performance-tests
+    steps:
+      - name: Report failure
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "Nightly Performance Tests"
