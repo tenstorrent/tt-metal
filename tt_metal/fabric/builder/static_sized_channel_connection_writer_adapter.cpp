@@ -239,7 +239,7 @@ void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(
     // Validate that all connected VCs have non-zero buffer counts
     // downstream_sender_channels_num_buffers is indexed by VC (receiver channel), not by sender channel
     for (size_t vc_idx = 0; vc_idx < builder_config::num_max_receiver_channels; vc_idx++) {
-        if (this->downstream_edms_connected_by_vc_set.find(vc_idx) != this->downstream_edms_connected_by_vc_set.end()) {
+        if (this->downstream_edms_connected_by_vc_set.contains(vc_idx)) {
             TT_FATAL(
                 this->downstream_sender_channels_num_buffers[vc_idx] != 0,
                 "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}",

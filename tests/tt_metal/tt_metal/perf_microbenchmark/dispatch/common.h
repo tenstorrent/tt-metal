@@ -248,9 +248,9 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
 }
 
 inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
-    if (this->all_data.find(core) != this->all_data.end()) {
+    if (this->all_data.contains(core)) {
         std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
-        if (core_data.find(bank) != core_data.end()) {
+        if (core_data.contains(bank)) {
             return true;
         }
     }
@@ -284,7 +284,7 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                     counted = true;
                 }
 
-                TT_ASSERT(this->all_data.find(core) != this->all_data.end());
+                TT_ASSERT(this->all_data.contains(core));
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
             }

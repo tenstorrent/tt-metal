@@ -167,7 +167,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
         TT_ASSERT(wi < input_shape[2], "wi: {} input_shape[2]: {} ", wi, input_shape[2]);
         TT_ASSERT(offset_i < tile_shape[0] * tile_shape[1]);
 
-        if (map_data.count(page_idx_i)) {
+        if (map_data.contains(page_idx_i)) {
             if (page_idx_i == prev_page_idx_i && offset_i - prev_offset_i == 1 && offset_o - prev_offset_o == 1) {
                 ++map_data[page_idx_i].back().num_elements;
             } else {

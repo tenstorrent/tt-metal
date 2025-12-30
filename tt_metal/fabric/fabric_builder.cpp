@@ -84,7 +84,7 @@ void FabricBuilder::create_routers() {
         const auto& neighbor_node = chip_neighbors_.at(direction);
 
         for (const auto& eth_chan : eth_channels) {
-            bool is_dispatch = dispatch_links_.count(eth_chan) > 0;
+            bool is_dispatch = dispatch_links_.contains(eth_chan);
 
             RouterLocation location{
                 .eth_chan = eth_chan,
@@ -121,8 +121,8 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
 
     // Check if we can connect two directions
     auto can_connect = [&](RoutingDirection dir1, RoutingDirection dir2) {
-        return chip_neighbors_.count(dir1) > 0 && chip_neighbors_.count(dir2) > 0 &&
-               channels_by_direction_.count(dir1) > 0 && channels_by_direction_.count(dir2) > 0;
+        return chip_neighbors_.contains(dir1) && chip_neighbors_.contains(dir2) &&
+               channels_by_direction_.contains(dir1) && channels_by_direction_.contains(dir2);
     };
 
     // Add connection pairs for two directions

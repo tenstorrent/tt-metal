@@ -45,10 +45,8 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     auto logical_to_noc_coord = [this](CoreCoord logical_core) {
         TT_ASSERT(
-            config_->worker_log_to_virtual_routing_x.find(logical_core.x) !=
-                    config_->worker_log_to_virtual_routing_x.end() and
-                config_->worker_log_to_virtual_routing_y.find(logical_core.y) !=
-                    config_->worker_log_to_virtual_routing_y.end(),
+            config_->worker_log_to_virtual_routing_x.contains(logical_core.x) and
+                config_->worker_log_to_virtual_routing_y.contains(logical_core.y),
             "Cannot find log_coord=[.y={}, .x={}] in logical to routing coord lookup tables... invalid AllocatorConfig "
             "setup",
             logical_core.y,
@@ -58,7 +56,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
             static_cast<std::size_t>(config_->worker_log_to_virtual_routing_y.at(logical_core.y)),
         });
         TT_ASSERT(
-            config_->core_type_from_noc_coord_table.find(noc_core) != config_->core_type_from_noc_coord_table.end(),
+            config_->core_type_from_noc_coord_table.contains(noc_core),
             "Cannot find noc-coord=[.y={}, .x={}] in core_type_from_noc_coord_table... invalid AllocatorConfig setup",
             noc_core.y,
             noc_core.x);

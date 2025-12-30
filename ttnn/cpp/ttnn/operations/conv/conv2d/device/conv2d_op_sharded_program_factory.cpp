@@ -1178,9 +1178,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     uint32_t reader_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
-                    } else if (
-                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
                     }
                     reader_rt_args.push_back(reader_remaining_tiles_to_push);
@@ -1289,9 +1287,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =
                             activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
-                    } else if (
-                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                     }
                     sender_rt_args.push_back(writer_remaining_tiles_to_push);
@@ -1336,9 +1332,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =
                             activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
-                    } else if (
-                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                     }
                     receiver_args.push_back(writer_remaining_tiles_to_push);

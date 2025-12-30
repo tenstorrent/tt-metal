@@ -170,7 +170,7 @@ void WatcherServer::Impl::detach_devices() {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
-            TT_ASSERT(device_id_to_reader_.count(device_id) > 0);
+            TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
             log_info(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);

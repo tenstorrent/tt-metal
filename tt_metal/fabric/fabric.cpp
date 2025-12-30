@@ -248,7 +248,7 @@ void append_routing_plane_connection_manager_rt_args(
         auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
         if (dir_opt.has_value()) {
             TT_FATAL(
-                used_directions.find(dir_opt.value()) == used_directions.end(),
+                !used_directions.contains(dir_opt.value()),
                 "Multiple ethernet cores in the same direction ({}) are not currently supported. "
                 "This restriction will be removed in a future update when proper multi-core routing is implemented.",
                 dir_opt.value());

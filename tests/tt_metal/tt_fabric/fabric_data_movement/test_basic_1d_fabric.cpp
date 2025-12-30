@@ -110,7 +110,7 @@ void get_mcast_receivers(
     RoutingDirection trunk_direction,
     RoutingDirection branch_direction) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    if (mcast_ref.find(branch_direction) != mcast_ref.end()) {
+    if (mcast_ref.contains(branch_direction)) {
         auto node_ids = mcast_ref[branch_direction];
         for (auto node : node_ids) {
             auto curr_fabric_node_id = node;
@@ -180,7 +180,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     // Compute physical IDs for mcast group chips
     std::vector<ChipId> mcast_group_phys_ids = {};
     if (spine_hops) {
-        if (mcast_group_phys_ids_per_dir.find(RoutingDirection::N) != mcast_group_phys_ids_per_dir.end()) {
+        if (mcast_group_phys_ids_per_dir.contains(RoutingDirection::N)) {
             mcast_start_phys_id = mcast_group_phys_ids_per_dir[RoutingDirection::N][0];
             mcast_start_id = mcast_group[RoutingDirection::N][0];
             mcast_group_phys_ids.insert(mcast_group_phys_ids.end(), mcast_group_phys_ids_per_dir[RoutingDirection::N].begin(), mcast_group_phys_ids_per_dir[RoutingDirection::N].end());
@@ -194,7 +194,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
             get_mcast_receivers(mcast_group, mcast_group_phys_ids, RoutingDirection::S, RoutingDirection::W);
         }
     } else if (branch_hops) {
-        if (mcast_group_phys_ids_per_dir.find(RoutingDirection::E) != mcast_group_phys_ids_per_dir.end()) {
+        if (mcast_group_phys_ids_per_dir.contains(RoutingDirection::E)) {
             mcast_start_phys_id = mcast_group_phys_ids_per_dir[RoutingDirection::E][0];
             mcast_start_id = mcast_group[RoutingDirection::E][0];
             mcast_group_phys_ids.insert(mcast_group_phys_ids.end(), mcast_group_phys_ids_per_dir[RoutingDirection::E].begin(), mcast_group_phys_ids_per_dir[RoutingDirection::E].end());
@@ -2862,7 +2862,7 @@ void Fabric2DMulticastCommon(
     for (const auto& dir_configs : connection_configs) {
         for (auto [dir, start_distance, range] : dir_configs) {
             uint32_t max_hop = start_distance + range;
-            if (fabric_hops.find(dir) == fabric_hops.end() || fabric_hops[dir] < max_hop) {
+            if (!fabric_hops.contains(dir) || fabric_hops[dir] < max_hop) {
                 fabric_hops[dir] = max_hop;
             }
         }

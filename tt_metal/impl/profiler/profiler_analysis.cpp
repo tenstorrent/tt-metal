@@ -106,8 +106,8 @@ bool experimental::ProgramAnalysisData::operator==(const experimental::ProgramAn
 }
 
 bool experimental::ProgramAnalysisData::operator<(const experimental::ProgramAnalysisData& other) const {
-    TT_ASSERT(this->program_analyses_results.find("DEVICE FW DURATION [ns]") != this->program_analyses_results.end());
-    TT_ASSERT(other.program_analyses_results.find("DEVICE FW DURATION [ns]") != other.program_analyses_results.end());
+    TT_ASSERT(this->program_analyses_results.contains("DEVICE FW DURATION [ns]"));
+    TT_ASSERT(other.program_analyses_results.contains("DEVICE FW DURATION [ns]"));
 
     const experimental::ProgramSingleAnalysisResult& this_fw_duration_analysis =
         this->program_analyses_results.at("DEVICE FW DURATION [ns]");
@@ -118,12 +118,12 @@ bool experimental::ProgramAnalysisData::operator<(const experimental::ProgramAna
 }
 
 bool matches_start_end_risc(tracy::RiscType risc_type, const AnalysisRiscTypes& config_risc_types) {
-    return config_risc_types.find(risc_type) != config_risc_types.end();
+    return config_risc_types.contains(risc_type);
 }
 
 bool matches_start_end_marker_type(
     tracy::TTDeviceMarkerType marker_type, const AnalysisMarkerTypes& config_marker_types) {
-    return config_marker_types.find(marker_type) != config_marker_types.end();
+    return config_marker_types.contains(marker_type);
 }
 
 bool matches_start_end_marker_name_keywords(
@@ -217,8 +217,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
         const tracy::TTDeviceMarker& marker = marker_ref.get();
         const experimental::ProgramExecutionUID program_execution_uid = {
             marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
-        if (program_execution_uid_to_meta_data.find(program_execution_uid) ==
-            program_execution_uid_to_meta_data.end()) {
+        if (!program_execution_uid_to_meta_data.contains(program_execution_uid)) {
             const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             const umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
             const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
@@ -308,9 +307,7 @@ ProgramsPerfResults generatePerfResultsForPrograms(
             program_execution_uid_to_perf_results[program_execution_uid];
 
         for (const AnalysisResults& analysis_result : analysis_results) {
-            TT_ASSERT(
-                analysis_result.results_per_program_execution_uid.find(program_execution_uid) !=
-                analysis_result.results_per_program_execution_uid.end());
+            TT_ASSERT(analysis_result.results_per_program_execution_uid.contains(program_execution_uid));
             const experimental::ProgramSingleAnalysisResult& single_result =
                 analysis_result.results_per_program_execution_uid.at(program_execution_uid);
             program_perf_results.analysis_results.push_back(single_result);

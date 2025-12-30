@@ -684,9 +684,9 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
         connected_mesh_id_values.insert(*mesh_id);
     }
     EXPECT_EQ(connected_mesh_id_values.size(), 3) << "Should have 3 unique connected meshes";
-    EXPECT_TRUE(connected_mesh_id_values.find(0) != connected_mesh_id_values.end());
-    EXPECT_TRUE(connected_mesh_id_values.find(1) != connected_mesh_id_values.end());
-    EXPECT_TRUE(connected_mesh_id_values.find(2) != connected_mesh_id_values.end());
+    EXPECT_TRUE(connected_mesh_id_values.contains(0));
+    EXPECT_TRUE(connected_mesh_id_values.contains(1));
+    EXPECT_TRUE(connected_mesh_id_values.contains(2));
 
     // Test is_mesh_connected_to_switch() for each connected mesh
     for (const auto& mesh_id : connected_meshes) {

@@ -735,7 +735,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 TT_ASSERT(src_local_idx == 0);
                 src_core_id = PAD_LOCAL_SENTINAL;
             }
-            if (per_core_gather_data.find({src_core_id, dst_core_id}) != per_core_gather_data.end()) {
+            if (per_core_gather_data.contains({src_core_id, dst_core_id})) {
                 auto& [src_start, dst_start, length] = per_core_gather_data[{src_core_id, dst_core_id}].back();
                 // src idx is 0 if it is a pad
                 if ((src_local_idx == (src_start + length) || is_pad_stick) && local_idx == (dst_start + length)) {

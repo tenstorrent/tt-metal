@@ -62,7 +62,7 @@ Tensor to_layout_impl(
         ttnn::TILE_LAYOUT,
     };
 
-    if (supported_layouts.find(layout) == supported_layouts.end()) {
+    if (!supported_layouts.contains(layout)) {
         TT_THROW("ttnn::to_layout: Unsupported layout conversion from {} to {}!", tensor_arg.layout(), layout);
     }
 

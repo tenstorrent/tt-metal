@@ -22,7 +22,7 @@ std::vector<ConnectionTarget> RouterConnectionMapping::get_downstream_targets(
 
 bool RouterConnectionMapping::has_targets(uint32_t vc, uint32_t receiver) const {
     ReceiverChannelKey key{vc, receiver};
-    return receiver_to_targets_.find(key) != receiver_to_targets_.end();
+    return receiver_to_targets_.contains(key);
 }
 
 std::vector<ReceiverChannelKey> RouterConnectionMapping::get_all_receiver_keys() const {

@@ -825,8 +825,7 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
     config.type = parse_scalar<std::string>(pattern_yaml["type"]);
 
     TT_FATAL(
-        detail::high_level_traffic_pattern_mapper.to_enum.find(config.type) !=
-            detail::high_level_traffic_pattern_mapper.to_enum.end(),
+        detail::high_level_traffic_pattern_mapper.to_enum.contains(config.type),
         "Unsupported pattern type: '{}'. Supported types are: {}",
         config.type,
         get_supported_high_level_patterns());

@@ -108,7 +108,7 @@ protected:
                     TT_ASSERT(target.target_direction.has_value());
                     auto target_dir = target.target_direction.value();
 
-                    if (targets.count(target_dir) == 0) {
+                    if (!targets.contains(target_dir)) {
                         continue;  // Target doesn't exist (edge device)
                     }
 
@@ -289,10 +289,10 @@ TEST_F(FabricBuilderLocalConnectionsTest, EdgeDevice_2Mesh1Z_Connections) {
         connected_dirs.insert(conn.dest_direction);
     }
 
-    EXPECT_TRUE(connected_dirs.count(RoutingDirection::N) > 0);
-    EXPECT_TRUE(connected_dirs.count(RoutingDirection::E) > 0);
-    EXPECT_FALSE(connected_dirs.count(RoutingDirection::S) > 0);
-    EXPECT_FALSE(connected_dirs.count(RoutingDirection::W) > 0);
+    EXPECT_TRUE(connected_dirs.contains(RoutingDirection::N));
+    EXPECT_TRUE(connected_dirs.contains(RoutingDirection::E));
+    EXPECT_FALSE(connected_dirs.contains(RoutingDirection::S));
+    EXPECT_FALSE(connected_dirs.contains(RoutingDirection::W));
 }
 
 TEST_F(FabricBuilderLocalConnectionsTest, EdgeDevice_3Mesh1Z_Connections) {
