@@ -201,3 +201,15 @@ jobs:
           else
             echo "📋 New PR created: ${{ steps.create-pr.outputs.pr-url }}"
           fi
+
+  check-all-green:
+    name: "✅ Check all green"
+    if: always()
+    needs:
+      - revert-commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if the required jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
