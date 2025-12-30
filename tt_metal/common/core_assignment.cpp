@@ -191,7 +191,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
         auto dram_core = dram_phy_coords[i];
         uint32_t dram_core_y;
         if (arch == ARCH::BLACKHOLE) {
-            dram_core_y = std::max(dram_core.y, 2);
+            dram_core_y = std::max(dram_core.y, 2u);
         } else if (dram_core.y == 0 || dram_core.y == 6) {
             dram_core_y = dram_core.y + 1;
         } else {
