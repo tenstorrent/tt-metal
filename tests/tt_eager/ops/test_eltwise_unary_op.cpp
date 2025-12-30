@@ -39,7 +39,7 @@ namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
 float exp(float x) { return std::exp(x); }
 float recip(float x) { return 1 / x; }
-float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::sqrt(2)))); }
+float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::numbers::sqrt2))); }
 float relu(float x) { return std::max(0.0f, x); }
 float sigmoid(float x) { return 1 / (1 + std::exp(-x)); }
 float log(float x) { return std::log(x); }
