@@ -215,7 +215,7 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
     for (auto routing_plane_id : active_routing_planes) {
         for (uint8_t dir_idx = 0; dir_idx < eth_chan_directions::COUNT; dir_idx++) {
             auto dir = static_cast<eth_chan_directions>(dir_idx);
-            if (active_plane_directions.find({routing_plane_id, dir}) == active_plane_directions.end()) {
+            if (!active_plane_directions.contains({routing_plane_id, dir})) {
                 missing_plane_dirs.insert({routing_plane_id, dir});
             }
         }
@@ -667,7 +667,7 @@ std::shared_ptr<FabricTensixDatamoverBaseConfig> FabricTensixDatamoverConfig::ge
 }
 
 bool FabricTensixDatamoverConfig::is_core_id_active(FabricTensixCoreType core_id) const {
-    return configs_.find(core_id) != configs_.end();
+    return configs_.contains(core_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(

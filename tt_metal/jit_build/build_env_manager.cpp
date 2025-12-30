@@ -176,7 +176,7 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    TT_ASSERT(device_id_to_build_env_.count(device_id) != 0, "Couldn't find build env for device {}.", device_id);
+    TT_ASSERT(device_id_to_build_env_.contains(device_id), "Couldn't find build env for device {}.", device_id);
     return device_id_to_build_env_[device_id];
 }
 

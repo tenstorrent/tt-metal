@@ -676,9 +676,7 @@ private:
     const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
     const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
     std::set<std::string> watcher_disabled_features;
-    bool watcher_feature_disabled(const std::string& name) const {
-        return watcher_disabled_features.find(name) != watcher_disabled_features.end();
-    }
+    bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };
 
 // Function declarations for operation timeout and synchronization

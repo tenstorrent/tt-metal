@@ -276,7 +276,7 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         // Get unvisited neighbors
         auto neighbors = get_neighbors(current);
         for (const auto& neighbor : neighbors) {
-            if (visited.find(neighbor) != visited.end()) {
+            if (visited.contains(neighbor)) {
                 continue;
             }
 

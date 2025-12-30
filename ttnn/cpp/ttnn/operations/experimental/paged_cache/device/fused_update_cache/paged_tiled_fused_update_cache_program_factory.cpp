@@ -550,7 +550,7 @@ PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
             // Skip this coordinate if mesh_coords is provided and this coordinate is not in the set
             if (mesh_coords_opt.has_value()) {
                 const auto& mesh_coords_set = mesh_coords_opt.value();
-                if (mesh_coords_set.find(mesh_coord) == mesh_coords_set.end()) {
+                if (!mesh_coords_set.contains(mesh_coord)) {
                     log_debug(
                         tt::LogOp, "Skipping coordinate ({}, {}) - not in mesh_coords", mesh_coord[0], mesh_coord[1]);
                     continue;  // Skip this coordinate

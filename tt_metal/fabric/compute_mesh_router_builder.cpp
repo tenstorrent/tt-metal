@@ -495,14 +495,14 @@ void ComputeMeshRouterBuilder::configure_local_connections(
             TT_FATAL(target.target_direction.has_value(), "Local connection target must have direction specified");
 
             auto target_dir = target.target_direction.value();
-            if (local_routers.count(target_dir) == 0) {
+            if (!local_routers.contains(target_dir)) {
                 // Target router doesn't exist (e.g., edge device with only 2-3 mesh routers)
                 // This is expected for Z routers on edge devices
                 continue;
             }
 
             // Establish connections to this target router (if not already done)
-            if (connected_targets.find(target_dir) == connected_targets.end()) {
+            if (!connected_targets.contains(target_dir)) {
                 auto* local_router = local_routers.at(target_dir);
                 auto* local_compute_router = dynamic_cast<ComputeMeshRouterBuilder*>(local_router);
                 TT_FATAL(local_compute_router != nullptr, "Local router must be a ComputeMeshRouterBuilder");

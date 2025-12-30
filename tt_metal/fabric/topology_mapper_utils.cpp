@@ -181,7 +181,7 @@ TopologyMappingResult map_mesh_to_physical(
                 continue;  // pin for another mesh
             }
 
-            if (log_to_idx.find(fabric_node) == log_to_idx.end()) {
+            if (!log_to_idx.contains(fabric_node)) {
                 result.success = false;
                 result.error_message =
                     fmt::format("Pinned fabric node {} not found in logical mesh {}", fabric_node, mesh_id.get());
@@ -572,7 +572,7 @@ TopologyMappingResult map_mesh_to_physical(
         }
 
         std::uint64_t key = hash_state(pos);
-        if (failed_states.find(key) != failed_states.end()) {
+        if (failed_states.contains(key)) {
             return false;
         }
 
