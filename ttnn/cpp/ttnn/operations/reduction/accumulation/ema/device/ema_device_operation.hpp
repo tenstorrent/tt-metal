@@ -27,19 +27,16 @@ struct EmaDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float alpha,
-        CoreCoord grid_size,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const DeviceComputeKernelConfig& compute_kernel_config,
-        std::optional<Tensor> optional_output_tensor);
 };
 
 }  // namespace ttnn::operations::reduction::ema
 
 namespace ttnn::prim {
-constexpr auto ema_device =
-    ttnn::register_operation<"ttnn::prim::ema_device", ttnn::operations::reduction::ema::EmaDeviceOperation>();
+ttnn::Tensor ema_device(
+    const Tensor& input,
+    float alpha,
+    CoreCoord grid_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 }  // namespace ttnn::prim

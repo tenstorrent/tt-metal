@@ -147,7 +147,7 @@ void BandwidthProfiler::trace_line_or_mesh_traffic_path(
         RoutingDirection next_direction = route_manager_.get_forwarding_direction(remaining_hops);
 
         // Check if we have any remaining hops in this direction
-        if (remaining_hops.count(next_direction) == 0 || remaining_hops[next_direction] == 0) {
+        if (!remaining_hops.contains(next_direction) || remaining_hops[next_direction] == 0) {
             // If no hops left in this direction, mark as 0 and continue
             remaining_hops[next_direction] = 0;
             continue;
@@ -251,8 +251,7 @@ void BandwidthProfiler::convert_core_cycles_to_direction_cycles(
         // Process each sender core
         for (const auto& [core, sender] : test_device.get_senders()) {
             // Get cycles for this core (if available)
-            if (device_core_cycles_.count(device_node_id) == 0 ||
-                device_core_cycles_[device_node_id].count(core) == 0) {
+            if (!device_core_cycles_.contains(device_node_id) || !device_core_cycles_[device_node_id].contains(core)) {
                 continue;
             }
 
@@ -269,7 +268,7 @@ void BandwidthProfiler::convert_core_cycles_to_direction_cycles(
             // Add cycles to each (direction, link_id) pair this core sends to
             // Only one core per device should send in each (direction, link) combination
             for (const auto& [direction, link_id] : core_direction_links) {
-                if (device_direction_cycles_[device_node_id][direction].count(link_id) > 0) {
+                if (device_direction_cycles_[device_node_id][direction].contains(link_id)) {
                     TT_THROW(
                         "Multiple cores on device {} are sending traffic in direction {} on link {}. "
                         "Only one core per device should send in each (direction, link) combination.",
@@ -351,7 +350,7 @@ void BandwidthProfiler::calculate_bandwidth(
                 }
 
                 // Get traffic count for this device and direction
-                if (outgoing_traffic_.count(device_id) > 0 && outgoing_traffic_[device_id].count(direction) > 0) {
+                if (outgoing_traffic_.contains(device_id) && outgoing_traffic_[device_id].contains(direction)) {
                     total_traffic_count = outgoing_traffic_[device_id][direction];
                 }
 

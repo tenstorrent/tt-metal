@@ -32,31 +32,29 @@ struct RMSAllGatherDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const layernorm::LayerNormProgramConfig& program_config,
-        uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
-        const GlobalSemaphore& semaphore,
-        const std::optional<ttnn::Tensor>& persistent_output_tensor,
-        std::optional<size_t> num_preferred_links,
-        ttnn::ccl::Topology topology,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-        std::optional<const DataType> dtype,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<const ttnn::Tensor>& residual_input_tensor,
-        float epsilon,
-        const std::optional<const ttnn::Tensor>& weight,
-        const std::optional<const ttnn::Tensor>& stats,
-        bool use_noc1_only);
 };
 
 }  // namespace ttnn::operations::fused::normalization
 
 namespace ttnn::prim {
-constexpr auto rms_allgather = ttnn::register_operation<
-    "ttnn::prim::rms_allgather",
-    ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation>();
+
+ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
+    const Tensor& input_tensor,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const GlobalSemaphore& semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    std::optional<size_t> num_preferred_links,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<const DataType> dtype,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<const ttnn::Tensor>& residual_input_tensor,
+    float epsilon,
+    const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<const ttnn::Tensor>& stats,
+    bool use_noc1_only);
+
 }  // namespace ttnn::prim
