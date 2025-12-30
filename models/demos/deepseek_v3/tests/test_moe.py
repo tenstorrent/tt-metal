@@ -27,7 +27,7 @@ def reference_model(hf_config):
     torch.use_deterministic_algorithms(True)
     # Note : Running Reference MoE without shared experts
     hf_config.n_shared_experts = None
-    hf_config.num_hidden_layers = 1
+    # hf_config.num_hidden_layers = 1
     return DeepseekV3MoE(hf_config).eval()
 
 
@@ -48,7 +48,7 @@ def reference_model(hf_config):
     "mode,num_tokens",
     [
         ("decode", 128),
-        # ("prefill", 2048),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(

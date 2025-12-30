@@ -383,7 +383,6 @@ class MLA1D(AbstractModule):
             core_grid=ttnn.CoreGrid(y=7, x=4),
             strategy=ttnn.ShardStrategy.WIDTH,
         )
-        # input_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -411,7 +410,6 @@ class MLA1D(AbstractModule):
 
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            # memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=None,
         )
@@ -434,16 +432,12 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        # q_rope_reshard_config = ReshardConfig(
-        #     memory_config=q_rope_mem_cfg,
-        # )
         q_rope_permute_config = PermuteConfig(
             dims=(1, 0, 2, 3),
         )
         q_rope_slice_config = SliceConfig(
             memory_config=q_rope_mem_cfg,
         )
-        # q_concat_mem_config = ttnn.create_sharded_memory_config(shape=(USERS_PER_ROW, 16, 576),core_grid=ttnn.CoreGrid(y=8, x=2),strategy=ttnn.ShardStrategy.HEIGHT)
         q_concat_config = ConcatConfig(
             dim=-1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -866,7 +860,7 @@ class MLA1D(AbstractModule):
         # wq_a
         # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-        # 1,1,32,1536 width sharded 4x6 [32,64]  # TODO: why is this not width sharded 8x6 [32,32] ??
+        # 1,1,32,1536 width sharded 4x6 [32,64]
 
         # wkv_a
         # 1,1,32,896, width sharded 7x4 [32,32]
