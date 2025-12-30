@@ -438,9 +438,11 @@ void calculate_exponential_first_column_or_row(int scale_bf16) {
     constexpr int DST_STRIDE = 1;   // calculate_col? 2 : 1;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS; d++) {
-            if (d == 2 || d == 3 || d == 4 || d == 5 || d == 6 || d == 7) {
-                sfpi::dst_reg++;
-                continue;
+            if constexpr (!calculate_col) {
+                if (d == 2 || d == 3 || d == 4 || d == 5 || d == 6 || d == 7) {
+                    sfpi::dst_reg++;
+                    continue;
+                }
             }
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = ckernel::sfpu::
@@ -452,9 +454,11 @@ void calculate_exponential_first_column_or_row(int scale_bf16) {
         }
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
-            if (d == 2 || d == 3 || d == 4 || d == 5 || d == 6 || d == 7) {
-                sfpi::dst_reg++;
-                continue;
+            if constexpr (!calculate_col) {
+                if (d == 2 || d == 3 || d == 4 || d == 5 || d == 6 || d == 7) {
+                    sfpi::dst_reg++;
+                    continue;
+                }
             }
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
@@ -506,7 +510,7 @@ void print_tile(const uint8_t cb, const uint8_t num_r, const uint8_t num_c) {
 }
 #endif
 
-template <uint32_t scale_fp32, bool calculate_col = false>
+template <uint32_t scale_fp32, bool calculate_col = true>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
