@@ -224,10 +224,10 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for dropout
     // -------------------------------------------------------------------------
-    uint32_t uscale = std::bit_cast<uint32_t>(args.scale);
+    auto uscale = std::bit_cast<uint32_t>(args.scale);
 
     // Convert probability (args.prob) to integer representation
-    uint32_t prob_int = static_cast<uint32_t>(static_cast<double>(INT_MAX) * args.prob);
+    auto prob_int = static_cast<uint32_t>(static_cast<double>(INT_MAX) * args.prob);
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {

@@ -52,8 +52,7 @@ inline std::string get_command_option(
     const std::vector<std::string>& test_args,
     const std::string& option,
     const std::optional<std::string>& default_value = std::nullopt) {
-    std::vector<std::string>::const_iterator option_pointer =
-        std::find(std::begin(test_args), std::end(test_args), option);
+    auto option_pointer = std::find(std::begin(test_args), std::end(test_args), option);
     if (option_pointer != std::end(test_args) && std::next(option_pointer) != std::end(test_args)) {
         return *std::next(option_pointer);
     }
@@ -103,8 +102,7 @@ inline double get_command_option_double(
 }
 
 inline bool has_command_option(const std::vector<std::string>& test_args, const std::string& option) {
-    std::vector<std::string>::const_iterator option_pointer =
-        std::find(std::begin(test_args), std::end(test_args), option);
+    auto option_pointer = std::find(std::begin(test_args), std::end(test_args), option);
     return option_pointer != std::end(test_args);
 }
 
@@ -113,8 +111,7 @@ inline std::tuple<std::string, std::vector<std::string>> get_command_option_and_
     const std::string& option,
     const std::optional<std::string>& default_value = std::nullopt) {
     std::vector<std::string> remaining_args = test_args;
-    std::vector<std::string>::const_iterator option_pointer =
-        std::find(std::begin(remaining_args), std::end(remaining_args), option);
+    auto option_pointer = std::find(std::begin(remaining_args), std::end(remaining_args), option);
     if (option_pointer != std::end(remaining_args) and (option_pointer + 1) != std::end(remaining_args)) {
         std::string value = *(option_pointer + 1);
         remaining_args.erase(option_pointer, option_pointer + 2);
@@ -190,8 +187,7 @@ inline std::tuple<double, std::vector<std::string>> get_command_option_double_an
 inline std::tuple<bool, std::vector<std::string>> has_command_option_and_remaining_args(
     const std::vector<std::string>& test_args, const std::string& option) {
     std::vector<std::string> remaining_args = test_args;
-    std::vector<std::string>::const_iterator option_pointer =
-        std::find(std::begin(remaining_args), std::end(remaining_args), option);
+    auto option_pointer = std::find(std::begin(remaining_args), std::end(remaining_args), option);
     bool value = option_pointer != std::end(remaining_args);
     if (value) {
         remaining_args.erase(option_pointer);

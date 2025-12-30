@@ -346,8 +346,8 @@ void gather_with_blocked_transfers_generic(
     uint32_t output_shard_height = C;
 
     // Cast to byte pointers for arithmetic
-    const uint8_t* input_bytes = static_cast<const uint8_t*>(input_data);
-    uint8_t* output_bytes = static_cast<uint8_t*>(output_data);
+    const auto* input_bytes = static_cast<const uint8_t*>(input_data);
+    auto* output_bytes = static_cast<uint8_t*>(output_data);
 
     // Process each block group
     for (const auto& group : blocked_groups) {

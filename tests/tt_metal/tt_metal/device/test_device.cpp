@@ -530,8 +530,8 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     ASSERT_TRUE(noc_addr.has_value());
     ASSERT_EQ(noc_addr.value().device_id, device->id());
 
-    uint32_t dst_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull);
-    uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
+    auto dst_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull);
+    auto dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
     uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
 
     CreateKernel(

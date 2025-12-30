@@ -471,7 +471,7 @@ inline bool DeviceData::validate_host(
 
     bool failed = false;
 
-    uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)];
+    auto* results = (uint32_t*)this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)];
 
     int fail_count = 0;
     for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
@@ -692,7 +692,7 @@ inline HostMemDeviceCommand build_packed_write_command(
     uint32_t l1_alignment,
     uint32_t packed_write_max_unicast_sub_cmds,
     bool no_stride) {
-    const uint32_t num_sub_cmds = static_cast<uint32_t>(sub_cmds.size());
+    const auto num_sub_cmds = static_cast<uint32_t>(sub_cmds.size());
     const uint32_t sub_cmds_bytes = tt::align(num_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment);
     uint32_t num_data_copies = no_stride ? 1u : static_cast<uint32_t>(num_sub_cmds);
 

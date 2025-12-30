@@ -377,7 +377,7 @@ bool RunWriteBWTest(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, tensor_size_bytes / sizeof(uint32_t));
     std::iota(inputs.begin(), inputs.end(), 0);
 
-    BankedConfig test_config = BankedConfig{
+    auto test_config = BankedConfig{
         .num_pages = num_pages_total,
         .size_bytes = tensor_size_bytes,
         .page_size_bytes = page_size,

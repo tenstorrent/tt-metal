@@ -291,11 +291,11 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     const uint32_t conv_act_size_c = ashape_with_channels_padded[3];
-    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
-    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
-    const uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
-    const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    const auto filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    const auto filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    auto pad_w = (uint32_t)sliding_window_config.get_pad_w();
+    const auto dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    const auto dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
     const uint32_t stride_h = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.first;
     const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
 

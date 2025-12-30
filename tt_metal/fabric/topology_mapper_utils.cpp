@@ -411,9 +411,9 @@ TopologyMappingResult map_mesh_to_physical(
         // Validate strict mode constraints for fast-path result
         if (strict_mode) {
             for (size_t i = 0; i < n_log; ++i) {
-                size_t phys_i = static_cast<size_t>(mapping[i]);
+                auto phys_i = static_cast<size_t>(mapping[i]);
                 for (const auto& [neigh_log_idx, log_count] : log_conn_count[i]) {
-                    size_t phys_neigh_idx = static_cast<size_t>(mapping[neigh_log_idx]);
+                    auto phys_neigh_idx = static_cast<size_t>(mapping[neigh_log_idx]);
                     auto it = phys_conn_count[phys_i].find(phys_neigh_idx);
                     if (it == phys_conn_count[phys_i].end()) {
                         result.success = false;
@@ -639,7 +639,7 @@ TopologyMappingResult map_mesh_to_physical(
                 if (pk_i == -1) {
                     continue;
                 }
-                size_t pk = static_cast<size_t>(pk_i);
+                auto pk = static_cast<size_t>(pk_i);
                 bool log_connected = std::binary_search(log_adj_idx[li].begin(), log_adj_idx[li].end(), lk);
                 bool phys_connected = std::binary_search(phys_adj_idx[j].begin(), phys_adj_idx[j].end(), pk);
                 if (log_connected && !phys_connected) {
@@ -693,7 +693,7 @@ TopologyMappingResult map_mesh_to_physical(
                         if (pk2_i == -1) {
                             continue;
                         }
-                        size_t pk2 = static_cast<size_t>(pk2_i);
+                        auto pk2 = static_cast<size_t>(pk2_i);
                         bool log_conn2 = std::binary_search(log_adj_idx[v].begin(), log_adj_idx[v].end(), lv);
                         bool phys_conn2 = std::binary_search(phys_adj_idx[pj].begin(), phys_adj_idx[pj].end(), pk2);
                         if (log_conn2 && !phys_conn2) {
@@ -889,9 +889,9 @@ TopologyMappingResult map_mesh_to_physical(
     // Final validation in strict mode
     if (strict_mode) {
         for (size_t i = 0; i < n_log; ++i) {
-            size_t phys_i = static_cast<size_t>(mapping[i]);
+            auto phys_i = static_cast<size_t>(mapping[i]);
             for (const auto& [neigh_log_idx, log_count] : log_conn_count[i]) {
-                size_t phys_neigh_idx = static_cast<size_t>(mapping[neigh_log_idx]);
+                auto phys_neigh_idx = static_cast<size_t>(mapping[neigh_log_idx]);
                 auto it = phys_conn_count[phys_i].find(phys_neigh_idx);
                 if (it == phys_conn_count[phys_i].end()) {
                     result.success = false;

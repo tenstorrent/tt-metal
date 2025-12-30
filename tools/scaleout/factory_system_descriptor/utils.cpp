@@ -171,8 +171,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         }
 
         for (const auto& asic_info : host_node["asic_info"]) {
-            uint32_t tray_id = asic_info["tray_id"].as<uint32_t>();
-            std::string gsd_board_type = asic_info["board_type"].as<std::string>();
+            auto tray_id = asic_info["tray_id"].as<uint32_t>();
+            auto gsd_board_type = asic_info["board_type"].as<std::string>();
 
             auto fsd_key = std::make_pair(hostname, tray_id);
             if (strict_validation) {
@@ -300,15 +300,15 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             const auto& first_conn = connection_pair[0];
             const auto& second_conn = connection_pair[1];
 
-            std::string hostname_1 = first_conn["host_name"].as<std::string>();
-            uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
+            auto hostname_1 = first_conn["host_name"].as<std::string>();
+            auto chan_id_1 = first_conn["chan_id"].as<uint32_t>();
+            auto tray_id_1 = first_conn["tray_id"].as<uint32_t>();
+            auto asic_location_1 = first_conn["asic_location"].as<uint32_t>();
 
-            std::string hostname_2 = second_conn["host_name"].as<std::string>();
-            uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
+            auto hostname_2 = second_conn["host_name"].as<std::string>();
+            auto chan_id_2 = second_conn["chan_id"].as<uint32_t>();
+            auto tray_id_2 = second_conn["tray_id"].as<uint32_t>();
+            auto asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
             PhysicalChannelEndpoint conn_1{
                 hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
@@ -342,15 +342,15 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             auto first_conn = connection_pair[0];
             auto second_conn = connection_pair[1];
 
-            std::string hostname_1 = first_conn["host_name"].as<std::string>();
-            uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
+            auto hostname_1 = first_conn["host_name"].as<std::string>();
+            auto chan_id_1 = first_conn["chan_id"].as<uint32_t>();
+            auto tray_id_1 = first_conn["tray_id"].as<uint32_t>();
+            auto asic_location_1 = first_conn["asic_location"].as<uint32_t>();
 
-            std::string hostname_2 = second_conn["host_name"].as<std::string>();
-            uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
+            auto hostname_2 = second_conn["host_name"].as<std::string>();
+            auto chan_id_2 = second_conn["chan_id"].as<uint32_t>();
+            auto tray_id_2 = second_conn["tray_id"].as<uint32_t>();
+            auto asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
             PhysicalChannelEndpoint conn_1{
                 hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};

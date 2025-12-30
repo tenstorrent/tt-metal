@@ -36,7 +36,7 @@ double percentile(std::vector<double> v, double p_in_0_100) {
     }
     p_in_0_100 = std::clamp(p_in_0_100, 0.0, 100.0);
     const size_t n = v.size();
-    const size_t k = static_cast<size_t>(std::round((p_in_0_100 / 100.0) * (n - 1)));
+    const auto k = static_cast<size_t>(std::round((p_in_0_100 / 100.0) * (n - 1)));
     std::nth_element(v.begin(), v.begin() + k, v.end());
     return v[k];
 }

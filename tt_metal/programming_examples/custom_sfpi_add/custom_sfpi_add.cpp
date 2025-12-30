@@ -171,7 +171,7 @@ int main() {
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
             const float expected = static_cast<float>(a_data[i]) + val_to_add;
-            const float actual = static_cast<float>(result_vec[i]);
+            const auto actual = static_cast<float>(result_vec[i]);
             if (std::abs(expected - actual) > eps) {
                 pass = false;
                 fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);

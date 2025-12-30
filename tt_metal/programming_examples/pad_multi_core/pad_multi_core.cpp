@@ -36,13 +36,13 @@ int main() {
     std::vector<uint32_t> src_vec(src_num_values_packed, 0);
     // source vector = {1, 2, 3, ... , 30, 31, 32,   2048}
     for (uint32_t i = 0; i < src_vec.size(); i++) {
-        bfloat16 bfloat_val1 = bfloat16((2 * i) + 1);
-        bfloat16 bfloat_val2 = bfloat16((2 * i) + 2);
+        auto bfloat_val1 = bfloat16((2 * i) + 1);
+        auto bfloat_val2 = bfloat16((2 * i) + 2);
         src_vec[i] = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat_val1, bfloat_val2));
     }
 
     // create pad vector
-    bfloat16 pad_value = bfloat16(2);
+    auto pad_value = bfloat16(2);
     std::vector<uint32_t> pad_vec(
         1, pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(pad_value, pad_value)));
 

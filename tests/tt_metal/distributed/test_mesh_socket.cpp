@@ -555,7 +555,7 @@ void test_single_device_socket_with_workers(
 
     EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
 
-    uint8_t* src_ptr = reinterpret_cast<uint8_t*>(src_vec.data());
+    auto* src_ptr = reinterpret_cast<uint8_t*>(src_vec.data());
     uint32_t pages_per_core = data_size / page_size;
     for (const auto& mapping : socket_core_mappings) {
         std::vector<uint32_t> output_data_readback;

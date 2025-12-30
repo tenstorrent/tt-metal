@@ -537,7 +537,7 @@ int main(int argc, char** argv) {
         log_debug(tt::LogTest, "device x : {}", num_cores_x);
         log_debug(tt::LogTest, "device y : {}", num_cores_y);
 
-        uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
+        auto num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks;  // number of DRAM banks
 
         CoreRangeSet all_dram_reader_cores;

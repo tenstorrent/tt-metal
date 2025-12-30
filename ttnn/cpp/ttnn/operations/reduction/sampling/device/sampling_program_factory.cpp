@@ -238,7 +238,7 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             input_indices_buffer->address(),
         });
 
-    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
+    auto bfloat_identity_scalar = bfloat16(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;

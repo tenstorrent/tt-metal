@@ -208,9 +208,9 @@ int main(int argc, char** argv) {
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
     size_t n = std::min((size_t)10, (size_t)tile_size * n_tiles);
-    bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
-    bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
-    bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
+    auto* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
+    auto* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
+    auto* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
     for (int i = 0; i < n; i++) {
         std::cout << "  " << static_cast<float>(a_bf16[i]) << " + " << static_cast<float>(b_bf16[i]) << " = "
                   << static_cast<float>(c_bf16[i]) << "\n";

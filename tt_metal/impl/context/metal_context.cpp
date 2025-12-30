@@ -597,7 +597,7 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
         auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
         std::vector<std::byte> init_launch_msg_data(
             dev_msgs::launch_msg_buffer_num_entries * factory.size_of<dev_msgs::launch_msg_t>(), std::byte{0});
-        dev_msgs::go_msg_t go_msg = factory.create<dev_msgs::go_msg_t>();
+        auto go_msg = factory.create<dev_msgs::go_msg_t>();
         go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
         CoreCoord virtual_eth_core =
@@ -1361,7 +1361,7 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     const metal_SocDescriptor& soc_d = cluster_->get_soc_desc(device_id);
     // Use architecture-defined supported PCIe address bounds
     auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
-    dev_msgs::core_info_msg_t buffer = factory.create<dev_msgs::core_info_msg_t>();
+    auto buffer = factory.create<dev_msgs::core_info_msg_t>();
     auto core_info = buffer.view();
     core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
     core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();

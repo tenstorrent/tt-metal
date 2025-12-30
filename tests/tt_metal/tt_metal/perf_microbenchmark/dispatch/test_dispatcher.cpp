@@ -396,7 +396,7 @@ public:
 
         uint32_t remaining_bytes = get_transfer_size_bytes();
 
-        const uint32_t num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
+        const auto num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
         const uint32_t sub_cmds_bytes =
             tt::align(num_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment);
 

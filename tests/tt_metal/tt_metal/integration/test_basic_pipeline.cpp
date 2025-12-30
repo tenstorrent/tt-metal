@@ -70,11 +70,11 @@ void create_and_run_row_pipeline(
     tt_metal::Program program = tt_metal::CreateProgram();
     distributed::MeshWorkload mesh_workload;
 
-    uint32_t num_cores = (uint32_t)test_config.num_cores;
-    uint32_t num_tiles = (uint32_t)test_config.num_tiles;
-    uint32_t block_size_tiles = (uint32_t)test_config.block_size_tiles;
-    uint32_t num_blocks_in_CB = (uint32_t)test_config.num_blocks_in_CB;
-    uint32_t num_repetitions = (uint32_t)test_config.num_repetitions;
+    auto num_cores = (uint32_t)test_config.num_cores;
+    auto num_tiles = (uint32_t)test_config.num_tiles;
+    auto block_size_tiles = (uint32_t)test_config.block_size_tiles;
+    auto num_blocks_in_CB = (uint32_t)test_config.num_blocks_in_CB;
+    auto num_repetitions = (uint32_t)test_config.num_repetitions;
 
     TT_FATAL(num_cores >= 2 && num_cores <= 12, "Error");  // grayskull
     TT_FATAL(num_tiles % block_size_tiles == 0, "Error");

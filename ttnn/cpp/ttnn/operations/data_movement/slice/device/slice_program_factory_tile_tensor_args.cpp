@@ -40,7 +40,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
     uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
@@ -222,7 +222,7 @@ SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFa
             .set_page_size(tensor_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tensor_config);
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
+    auto num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_height = tile_shape[0];

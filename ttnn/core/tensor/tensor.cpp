@@ -489,7 +489,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         tensor_spec.tensor_layout().get_memory_config());
 
     Tensor output;
-    distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+    auto* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
     output = tt::tt_metal::set_tensor_id(output);
 

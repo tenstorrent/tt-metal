@@ -156,7 +156,7 @@ int main(int /*argc*/, char** /*argv*/) {
                 return x * x * (3 - 2 * x);
             };
             const float expected = smoothstep(0.0f, 1.0f, static_cast<float>(a_data[i]));
-            const float actual = static_cast<float>(result_vec[i]);
+            const auto actual = static_cast<float>(result_vec[i]);
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;

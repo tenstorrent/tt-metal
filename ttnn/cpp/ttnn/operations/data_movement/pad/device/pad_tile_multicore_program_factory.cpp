@@ -73,7 +73,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     Buffer* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
+    auto bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;

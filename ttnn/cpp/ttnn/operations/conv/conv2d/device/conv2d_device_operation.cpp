@@ -171,12 +171,12 @@ Conv2dDeviceOperation::create_op_performance_model(
     uint32_t conv_activation_h = input_tensor_a_shape[1];
     uint32_t conv_activation_w = input_tensor_a_shape[2];
     uint32_t conv_activation_c = input_tensor_a_shape[3];
-    uint32_t filter_h = (uint32_t)args.sliding_window_config.window_hw.first;   // filter_h
-    uint32_t filter_w = (uint32_t)args.sliding_window_config.window_hw.second;  // filter_W
-    uint32_t stride_h = (uint32_t)args.sliding_window_config.stride_hw.first;
-    uint32_t stride_w = (uint32_t)args.sliding_window_config.stride_hw.second;
-    uint32_t dilation_h = (uint32_t)args.sliding_window_config.dilation_hw.first;
-    uint32_t dilation_w = (uint32_t)args.sliding_window_config.dilation_hw.second;
+    auto filter_h = (uint32_t)args.sliding_window_config.window_hw.first;   // filter_h
+    auto filter_w = (uint32_t)args.sliding_window_config.window_hw.second;  // filter_W
+    auto stride_h = (uint32_t)args.sliding_window_config.stride_hw.first;
+    auto stride_w = (uint32_t)args.sliding_window_config.stride_hw.second;
+    auto dilation_h = (uint32_t)args.sliding_window_config.dilation_hw.first;
+    auto dilation_w = (uint32_t)args.sliding_window_config.dilation_hw.second;
 
     const CoreCoord compute_grid = output_tensor.device()->compute_with_storage_grid_size();
     const int num_cores = compute_grid.x * compute_grid.y;

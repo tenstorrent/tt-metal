@@ -82,7 +82,7 @@ void split_and_form_rectangle_grids(
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size) {
     uint32_t current_position = 0;
     uint32_t max_tile_span = 0;
-    uint32_t num_groups_before_start_again_at_tile_beginning = static_cast<uint32_t>(-1);
+    auto num_groups_before_start_again_at_tile_beginning = static_cast<uint32_t>(-1);
     bool calc_num_groups_before_start_again_at_tile_beginning = true;
 
     while (current_position < W) {

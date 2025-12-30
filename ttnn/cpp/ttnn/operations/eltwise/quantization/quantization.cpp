@@ -165,7 +165,7 @@ void check_zero_point_tensor_args(
 ttnn::Tensor reshape_per_channel_vector_args(
     const ttnn::Tensor& vector, ttnn::Shape tensor_shape, const int32_t axis, const ttnn::DataType out_dtype) {
     // This function is internal use only, use asserts instead of TT_FATAL to convey intented usage
-    const int32_t rank = static_cast<int32_t>(tensor_shape.rank());
+    const auto rank = static_cast<int32_t>(tensor_shape.rank());
     assert(axis >= -rank && axis < rank);
     assert(vector.logical_shape().rank() == 1);
     assert(vector.logical_volume() == tensor_shape[axis]);

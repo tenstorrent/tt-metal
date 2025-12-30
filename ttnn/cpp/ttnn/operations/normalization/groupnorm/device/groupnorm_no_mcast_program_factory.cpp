@@ -50,7 +50,7 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     }
 
     // Mode is 0 for legacy groupnorm, 1 for welford groupnorm, 2 for groupnorm with reciprocals
-    uint32_t groupnorm_mode = static_cast<uint32_t>(
+    auto groupnorm_mode = static_cast<uint32_t>(
         reciprocals.has_value() ? GroupNormMode::WELFORD_RECIPROCALS
         : use_welford           ? GroupNormMode::WELFORD_NATIVE
                                 : GroupNormMode::LEGACY);

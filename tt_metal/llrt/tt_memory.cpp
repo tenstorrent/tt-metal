@@ -99,7 +99,7 @@ void memory::process_spans(
     const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
     uint32_t offset = 0;
     for (const auto& span : link_spans_) {
-        std::vector<uint32_t>::const_iterator cit = data_.cbegin() + offset;
+        auto cit = data_.cbegin() + offset;
         callback(cit, span.addr, span.len);
         offset += span.len;
     }
@@ -109,7 +109,7 @@ void memory::process_spans(
     const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
     uint32_t offset = 0;
     for (const auto& span : link_spans_) {
-        std::vector<uint32_t>::iterator it = data_.begin() + offset;
+        auto it = data_.begin() + offset;
         callback(it, span.addr, span.len);
         offset += span.len;
     }

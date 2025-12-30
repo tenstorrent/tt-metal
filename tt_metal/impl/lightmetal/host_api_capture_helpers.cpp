@@ -416,7 +416,7 @@ void CaptureLightMetalCompare(
 
     // Calculate num uint32_t elements in buffer, and convert golden void* to vector
     size_t golden_data_len = buffer_ptr->size() / sizeof(uint32_t);
-    const uint32_t* golden_data_uint32 = static_cast<const uint32_t*>(golden_data);
+    const auto* golden_data_uint32 = static_cast<const uint32_t*>(golden_data);
     std::vector<uint32_t> golden_data_vector(golden_data_uint32, golden_data_uint32 + golden_data_len);
 
     log_debug(

@@ -811,7 +811,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     const uint8_t stats_mask = telemetry_enabled ? risc_config.telemetry_stats_mask() : 0;
     ct_args.push_back(static_cast<uint32_t>(stats_mask));
 
-    uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
+    auto bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
     ct_args.push_back(bw_telemetry_mode);
 
     // Add telemetry buffer address (16B aligned)
@@ -820,7 +820,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
-        uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+        auto code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
         ct_args.push_back(code_profiling_enabled_timers);
 
         // Add code profiling buffer address (16B aligned)

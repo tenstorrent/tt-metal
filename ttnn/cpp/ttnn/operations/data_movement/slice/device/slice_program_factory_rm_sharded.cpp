@@ -58,7 +58,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_padded_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);

@@ -83,7 +83,7 @@ const ll_api::memory& get_risc_binary(
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
+      auto* mutable_ptr = new ll_api::memory(path, loading);
       if (update_callback) {
           update_callback(*mutable_ptr);
       }

@@ -610,7 +610,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                 if (non_contiguous_cbs) {
                                     // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
                                     // contiguous.
-                                    uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
+                                    auto first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
                                     std::string kernels_str;
                                     for (auto id : kernels) {
                                         std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);

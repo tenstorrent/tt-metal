@@ -380,7 +380,7 @@ using namespace unit_tests_common::matmul::test_matmul_X_tile;
 */
 
 TEST_F(MeshDispatchFixture, TensixMatmulSingleTile) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -411,7 +411,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulSingleTile) {
 }
 
 TEST_F(MeshDispatchFixture, TensixMatmulMultiTile) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -450,7 +450,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiTile) {
 }
 
 TEST_F(MeshDispatchFixture, TensixMatmulBlock) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -487,7 +487,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlock) {
 }
 
 TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShort) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -524,7 +524,7 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShort) {
 }
 
 TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShortWithDt) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }

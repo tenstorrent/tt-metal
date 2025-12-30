@@ -45,10 +45,10 @@ struct StochasticRoundingResult {
 
 /// @brief Get the next representable BF16 value away from zero (1 ULP)
 float bf16_next(float value) {
-    bfloat16 bf = bfloat16(value);
-    uint16_t bits = std::bit_cast<uint16_t>(bf);
+    auto bf = bfloat16(value);
+    auto bits = std::bit_cast<uint16_t>(bf);
     bits += 1;
-    bfloat16 result = std::bit_cast<bfloat16>(bits);
+    auto result = std::bit_cast<bfloat16>(bits);
     return static_cast<float>(result);
 }
 
@@ -63,8 +63,8 @@ StochasticRoundingResult run_stochastic_rounding(
     float base_value = test_config.base_value;
     float fraction = test_config.fraction;
 
-    bfloat16 base_bf16 = bfloat16(base_value);
-    float base_bf16_float = static_cast<float>(base_bf16);
+    auto base_bf16 = bfloat16(base_value);
+    auto base_bf16_float = static_cast<float>(base_bf16);
     float upper_bf16 = bf16_next(base_bf16_float);
 
     // Test value: at 'fraction' position between base and upper BF16
@@ -101,7 +101,7 @@ StochasticRoundingResult run_stochastic_rounding(
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
     std::vector<uint32_t> packed_input(num_elements);
-    uint32_t test_value_bits = std::bit_cast<uint32_t>(test_value);
+    auto test_value_bits = std::bit_cast<uint32_t>(test_value);
     std::fill(packed_input.begin(), packed_input.end(), test_value_bits);
 
     std::vector<uint32_t> compute_kernel_args = {
@@ -189,7 +189,7 @@ StochasticRoundingResult run_stochastic_rounding(
     size_t count_rounded_down = 0;
 
     for (const auto& val : output) {
-        float val_float = static_cast<float>(val);
+        auto val_float = static_cast<float>(val);
         if (val_float == base_bf16_float) {
             count_rounded_down++;
         } else if (val_float == upper_bf16) {

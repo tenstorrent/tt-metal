@@ -415,7 +415,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    uint32_t eps_bits = std::bit_cast<uint32_t>(operation_attributes.eps);
+    auto eps_bits = std::bit_cast<uint32_t>(operation_attributes.eps);
 
     // Set runtime arguments
     for (uint32_t i = 0; i < num_cores; ++i) {

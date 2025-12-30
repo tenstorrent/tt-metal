@@ -470,7 +470,7 @@ void generate_runtime_args_cmds(
             constants.packed_write_max_unicast_sub_cmds,
             no_stride);
         auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
-        uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
+        auto data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         // Watcher only: pre-fill the RTA payload region with 0xBEEF0000 | rand16
         // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand
         // This makes any unused runtime-arg slots obvious on device (equality tests likely to fail)
@@ -481,7 +481,7 @@ void generate_runtime_args_cmds(
             thread_local static std::mt19937 gen(std::random_device{}());
             std::uniform_int_distribution<int> dist(0, 65535);
             for (uint32_t count = 0; count < total_words; count++) {
-                uint16_t rnd = static_cast<uint16_t>(dist(gen));
+                auto rnd = static_cast<uint16_t>(dist(gen));
                 const uint32_t known_garbage = 0xBEEF0000 | rnd;
                 command_start_ptr[count] = known_garbage;
             }
@@ -509,7 +509,7 @@ void generate_runtime_args_cmds(
             uint32_t offset = 0;
             for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
                 auto& data = rt_args_data[i][j];
-                uint32_t* data_in_sequence =
+                auto* data_in_sequence =
                     (uint32_t*)((char*)runtime_args_command_sequences.back().data() + data_offset + offset);
                 if (data.first.get().rt_args_data == data.second.get().data()) {
                     // Update the pointer to point into the command sequence. Future RTA updates will modify the command
@@ -1145,7 +1145,7 @@ public:
                     if (not using_prefetcher_cache) {
                         uint32_t relayed_bytes =
                             tt::align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
-                        uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
+                        auto length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
                         uint32_t base_address, page_offset;
                         if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
                             const uint32_t num_banks =

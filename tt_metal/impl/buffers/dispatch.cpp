@@ -461,11 +461,11 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     HugepageDeviceCommand& command_sequence,
     Buffer& buffer,
     InterleavedBufferWriteDispatchParams& dispatch_params) {
-    const uint8_t is_dram = uint8_t(buffer.is_dram());
+    const auto is_dram = uint8_t(buffer.is_dram());
     TT_ASSERT(
         dispatch_params.dst_page_index <= CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX,
         "Page offset needs to fit within range of uint16_t, bank_base_address was computed incorrectly!");
-    const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
+    const auto start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
     const bool flush_prefetch = true;
     command_sequence.add_dispatch_write_paged(
         flush_prefetch,
@@ -529,9 +529,9 @@ void populate_sharded_buffer_write_dispatch_cmds(
         dispatch_params.address,
         data_size_bytes);
 
-    uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
+    auto* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
     // TODO: Expose getter for cmd_write_offsetB?
-    ptrdiff_t dst_offset = reinterpret_cast<ptrdiff_t>(dst - (uint8_t*)command_sequence.data());
+    auto dst_offset = reinterpret_cast<ptrdiff_t>(dst - (uint8_t*)command_sequence.data());
     TT_ASSERT(dst_offset >= 0, "Offset into command sequence is negative");
     if (dispatch_params.write_large_pages()) {
         const auto cur_host_page = *dispatch_params.core_page_mapping_it;

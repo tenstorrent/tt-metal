@@ -308,7 +308,7 @@ Notes:
     // Perf point
     const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
     const double e2e_sec = (p.trace_iters > 0) ? (e2e_sec_total / static_cast<double>(p.trace_iters)) : 0.0;
-    const uint64_t bytes = static_cast<uint64_t>(p.tensor_bytes);
+    const auto bytes = static_cast<uint64_t>(p.tensor_bytes);
     const double GB = static_cast<double>(bytes) / 1e9;          // gigabytes
     const double GB_s = (e2e_sec > 0.0) ? (GB / e2e_sec) : 0.0;  // GB per second
     const double ms = e2e_sec * 1000.0;

@@ -332,7 +332,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
         log_info(tt::LogTest, "Device {} index {}", device_helper.devices[i]->get_devices()[0]->id(), i);
     }
 
-    uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
+    auto measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
     uint32_t benchmark_type_val = enchantum::to_underlying(params.benchmark_type);
 
     // eth core ct args

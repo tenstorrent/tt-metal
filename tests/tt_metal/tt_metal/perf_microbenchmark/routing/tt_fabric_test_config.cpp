@@ -45,13 +45,13 @@ ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_pat
 
 DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
     if (node.IsScalar()) {
-        ChipId chip_id = parse_scalar<ChipId>(node);
+        auto chip_id = parse_scalar<ChipId>(node);
         return chip_id;
     } else if (node.IsSequence() && node.size() == 2) {
         MeshId mesh_id = parse_mesh_id(node[0]);
         if (node[1].IsScalar()) {
             // Format: [mesh_id, chip_id]
-            ChipId chip_id = parse_scalar<ChipId>(node[1]);
+            auto chip_id = parse_scalar<ChipId>(node[1]);
             return std::make_pair(mesh_id, chip_id);
         } else if (node[1].IsSequence()) {
             // Format: [mesh_id, [row, col]]
@@ -76,9 +76,9 @@ ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::N
         TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map.");
         std::unordered_map<RoutingDirection, uint32_t> hops_map;
         for (const auto& it : dest_yaml["hops"]) {
-            std::string dir_str = parse_scalar<std::string>(it.first);
+            auto dir_str = parse_scalar<std::string>(it.first);
             RoutingDirection dir = detail::routing_direction_mapper.from_string(dir_str, "RoutingDirection");
-            uint32_t num_hops = parse_scalar<uint32_t>(it.second);
+            auto num_hops = parse_scalar<uint32_t>(it.second);
             hops_map[dir] = num_hops;
         }
         config.hops = hops_map;
@@ -794,7 +794,7 @@ MeshCoordinate YamlConfigParser::parse_mesh_coord(const YAML::Node& node) {
 }
 
 MeshId YamlConfigParser::parse_mesh_id(const YAML::Node& yaml_node) {
-    uint32_t mesh_id = yaml_node.as<uint32_t>();
+    auto mesh_id = yaml_node.as<uint32_t>();
     return MeshId{mesh_id};
 }
 
@@ -804,7 +804,7 @@ ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const Y
     TT_FATAL(params_yaml.IsMap(), "Expected 'parametrization_params' to be a map.");
 
     for (const auto& it : params_yaml) {
-        std::string key = parse_scalar<std::string>(it.first);
+        auto key = parse_scalar<std::string>(it.first);
         const auto& node = it.second;
         TT_FATAL(node.IsSequence(), "Parametrization option '{}' must be a sequence of values.", key);
 
@@ -1002,7 +1002,7 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
             } else if (p.type == "sequential_all_to_all") {
                 // Dynamically calculate iterations for sequential_all_to_all patterns based on all device pairs
                 auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
-                uint32_t num_pairs = static_cast<uint32_t>(all_pairs.size());
+                auto num_pairs = static_cast<uint32_t>(all_pairs.size());
                 max_iterations = std::max(max_iterations, num_pairs);
                 log_info(
                     LogTest,

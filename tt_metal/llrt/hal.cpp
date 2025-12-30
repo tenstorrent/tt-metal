@@ -55,7 +55,7 @@ uint64_t Hal::get_pcie_addr_lower_bound() const { return pcie_addr_lower_bound_;
 uint64_t Hal::get_pcie_addr_upper_bound() const { return pcie_addr_upper_bound_; }
 
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
-    uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
+    auto index = static_cast<uint32_t>(programmable_core_type_index);
 
     // TODO: this assumes unused entries occur at the end
     // Assumes unused indices go at the end

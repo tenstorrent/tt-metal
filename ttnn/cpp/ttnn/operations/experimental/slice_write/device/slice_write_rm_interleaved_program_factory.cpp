@@ -48,7 +48,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     bool strided = std::any_of(stride.cbegin(), stride.cend(), [](int val) { return val != 1; });
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);

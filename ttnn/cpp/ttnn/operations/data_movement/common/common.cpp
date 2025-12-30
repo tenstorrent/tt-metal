@@ -539,8 +539,8 @@ uint16_t float_to_uint16(float f) {
     }
 
     // Handle overflow and underflow
-    const float max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
-    const float min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
+    const auto max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
+    const auto min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
     if (f >= max_uint16) {
         return std::numeric_limits<uint16_t>::max();
     }

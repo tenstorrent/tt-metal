@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
 
         int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
 
-        uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
+        auto num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -371,8 +371,8 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
         float num_1_float = rand_float() + offset;
         float num_2_float = rand_float() + offset;
 
-        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+        auto num_1_bfloat16 = bfloat16(num_1_float);
+        auto num_2_bfloat16 = bfloat16(num_2_float);
 
         // pack 2 uint16 into uint32
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));

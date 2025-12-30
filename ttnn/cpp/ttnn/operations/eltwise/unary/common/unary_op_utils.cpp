@@ -107,7 +107,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         op_type);
     // TODO don't cast T to float when precision needs to be preserved
     const T param0_raw = params[0];
-    float param0 = static_cast<float>(params[0]);
+    auto param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32) {
@@ -220,7 +220,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::SIGMOID: {
-            uint32_t param1 = (uint32_t)params[1];
+            auto param1 = (uint32_t)params[1];
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
                 "Invalid Vector mode value. Expected vector mode C (2) or RC (4) for sigmoid");

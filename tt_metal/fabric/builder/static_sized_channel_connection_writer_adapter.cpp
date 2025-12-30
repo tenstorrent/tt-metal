@@ -79,7 +79,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Store free slots stream ID
-    constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
+    constexpr auto relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
     this->relay_connection_info.free_slots_stream_id =
         tensix_config.get_channel_credits_stream_id(relay_channel_id, FabricTensixCoreType::RELAY);
 

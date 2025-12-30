@@ -438,7 +438,7 @@ bool matmul_large_block(
 }  // namespace unit_tests_common::matmul::test_matmul_large_block
 
 TEST_F(MeshDispatchFixture, TensixMatmulLargeBlock) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         };

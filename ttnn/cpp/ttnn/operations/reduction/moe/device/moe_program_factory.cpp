@@ -166,7 +166,7 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
             expert_mask_buffer->address(),
         });
 
-    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
+    auto bfloat_identity_scalar = bfloat16(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index, Ht, k, packed_identity_scalar};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);

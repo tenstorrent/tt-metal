@@ -19,8 +19,8 @@ namespace detail {
 [[noreturn]] void normalized_index_out_of_range(int32_t index, int32_t full_size, int32_t orig_size);
 
 inline int32_t normalized_index(int32_t index, size_t original_size, size_t container_size) {
-    const int32_t orig_size = static_cast<int32_t>(original_size);
-    const int32_t full_size = static_cast<int32_t>(container_size);
+    const auto orig_size = static_cast<int32_t>(original_size);
+    const auto full_size = static_cast<int32_t>(container_size);
 
     if (index < -full_size || index >= orig_size) {
         normalized_index_out_of_range(index, full_size, orig_size);

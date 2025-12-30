@@ -342,7 +342,7 @@ TopologyMapper::TopologyMapper(
     const std::size_t world_size = *global_context->size();
     if (world_size > 1) {
         // Gather mesh_id and host_rank from all ranks
-        const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
+        const auto local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
         std::vector<std::uint32_t> counts(world_size, 0);
         all_gather_with_timeout(
             global_context,
@@ -545,7 +545,7 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     }
 
     // Step 2: Gather mesh_id and host_rank from all ranks to know which mesh_ids each MPI rank participates in
-    const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
+    const auto local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
     std::vector<std::uint32_t> counts(world_size, 0);
     all_gather_with_timeout(
         global_context,
@@ -717,7 +717,7 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
             mapped_entries.push_back(&info);
         }
     }
-    std::uint32_t count = static_cast<std::uint32_t>(mapped_entries.size());
+    auto count = static_cast<std::uint32_t>(mapped_entries.size());
 
     for (std::size_t peer = 0; peer < world_size; ++peer) {
         if (peer == CONTROLLER_RANK) {
@@ -765,7 +765,7 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
             }
 
             // Send size first, then data
-            std::uint32_t record_size = static_cast<std::uint32_t>(record.size());
+            auto record_size = static_cast<std::uint32_t>(record.size());
             distributed_context.ssend(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
                 Rank{static_cast<int>(peer)},
@@ -1413,7 +1413,7 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
     for (std::uint32_t num_chips = total_number_of_chips; num_chips > 0; num_chips--) {
         // Find all divisor pairs (x, y) where x * y = num_chips
         // Only check divisors up to sqrt(num_chips) for efficiency
-        std::uint32_t sqrt_num_chips = static_cast<std::uint32_t>(std::sqrt(num_chips));
+        auto sqrt_num_chips = static_cast<std::uint32_t>(std::sqrt(num_chips));
 
         for (std::uint32_t i = sqrt_num_chips; i > 0; i--) {
             if (num_chips % i == 0) {

@@ -60,7 +60,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         input_row_size_bytes,
         input_page_size,
         output_row_size_bytes);
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);

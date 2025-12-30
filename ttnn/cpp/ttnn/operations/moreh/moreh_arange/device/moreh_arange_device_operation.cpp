@@ -64,7 +64,7 @@ MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_s
         return tensor_args.output->tensor_spec();
     }
 
-    uint32_t num_elems = static_cast<uint32_t>(
+    auto num_elems = static_cast<uint32_t>(
         std::ceil((operation_attributes.end - operation_attributes.start) / operation_attributes.step));
 
     if (operation_attributes.untilize_out) {

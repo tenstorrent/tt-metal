@@ -185,7 +185,7 @@ void read_events_from_completion_queue(
         mmio_device_id,
         channel);
 
-    CQDispatchCmd* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
+    auto* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
     uint32_t expected_padding_value = HugepageDeviceCommand::random_padding_value();
     uint16_t expected_pad1 = (device_id << 8) | cq_id;
 

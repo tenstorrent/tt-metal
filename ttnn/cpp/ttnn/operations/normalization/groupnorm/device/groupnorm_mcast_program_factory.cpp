@@ -49,7 +49,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Beta tensor must have ROW_MAJOR layout");
     }
 
-    uint32_t groupnorm_mode = static_cast<uint32_t>(
+    auto groupnorm_mode = static_cast<uint32_t>(
         reciprocals.has_value() ? GroupNormMode::WELFORD_RECIPROCALS
         : use_welford           ? GroupNormMode::WELFORD_NATIVE
                                 : GroupNormMode::LEGACY);

@@ -128,8 +128,8 @@ void verify_tiles(
         for (int i = 0; i < TILE_HEIGHT && tile_match; i++) {
             for (int j = 0; j < TILE_WIDTH; j++) {
                 int idx = tile_elem_idx(tile, i, j);
-                float received = static_cast<float>(received_tiles[idx]);
-                float golden = static_cast<float>(golden_tile[(i * TILE_WIDTH) + j]);
+                auto received = static_cast<float>(received_tiles[idx]);
+                auto golden = static_cast<float>(golden_tile[(i * TILE_WIDTH) + j]);
                 if (received != golden) {
                     tile_match = false;
                     break;

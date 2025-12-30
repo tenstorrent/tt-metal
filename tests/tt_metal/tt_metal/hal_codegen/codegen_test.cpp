@@ -39,9 +39,9 @@ void verify_equal(const ::PacketInfo& expected, types::PacketInfo::ConstView vie
 
 TEST(CodegenTest, CodegenTest) {
     auto factory = create_factory();
-    types::PacketInfo info = factory.create<types::PacketInfo>();
+    auto info = factory.create<types::PacketInfo>();
     ASSERT_EQ(info.size(), sizeof(::PacketInfo));
-    ::PacketInfo* raw_ptr = reinterpret_cast<::PacketInfo*>(info.data());
+    auto* raw_ptr = reinterpret_cast<::PacketInfo*>(info.data());
 
     std::random_device rd;
     std::mt19937 gen(rd());

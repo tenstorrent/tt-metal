@@ -141,7 +141,7 @@ void run_all_tests(
         for (uint32_t sub_grid_dimension_size = starting_sub_grid_dimension_size;
              sub_grid_dimension_size <= sub_grid_dimension_limit;
              sub_grid_dimension_size++) {
-            for (uint32_t multicast_scheme_type = static_cast<uint32_t>(starting_multicast_scheme_type);
+            for (auto multicast_scheme_type = static_cast<uint32_t>(starting_multicast_scheme_type);
                  multicast_scheme_type < static_cast<uint32_t>(MulticastSchemeType::End);
                  multicast_scheme_type++) {
                 test(

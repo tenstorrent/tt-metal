@@ -58,11 +58,11 @@ static uint32_t get_downstream_mux_channel_id(eth_chan_directions direction, eth
 
 static uint32_t get_upstream_mux_channel_id(eth_chan_directions direction, eth_chan_directions upstream_direction) {
     // Calculate channel based on upstream direction, skipping the current direction in the enum ordering
-    uint32_t upstream_idx = static_cast<uint32_t>(upstream_direction);
-    uint32_t current_idx = static_cast<uint32_t>(direction);
+    auto upstream_idx = static_cast<uint32_t>(upstream_direction);
+    auto current_idx = static_cast<uint32_t>(direction);
 
     // Base channel for inter-mux connections
-    uint32_t base_channel = static_cast<uint32_t>(UdmMuxInterMuxChannelId::EAST_OR_WEST_MUX_CHANNEL);
+    auto base_channel = static_cast<uint32_t>(UdmMuxInterMuxChannelId::EAST_OR_WEST_MUX_CHANNEL);
 
     // If upstream comes before current in enum order (E=0, W=1, N=2, S=3), use index as-is
     // Otherwise subtract 1 to account for skipping the current direction
@@ -477,7 +477,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     auto mux_infos = get_all_mux_connection_infos(fabric_node_id, routing_plane_id, direction);
 
     // Build compile time args - organized by channel type
-    uint32_t num_channel_types = static_cast<uint32_t>(channel_configs_.size());
+    auto num_channel_types = static_cast<uint32_t>(channel_configs_.size());
 
     std::vector<uint32_t> ct_args = {
         static_cast<uint32_t>(num_total_channels_),           // 0: total number of channels across all types
@@ -730,7 +730,7 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     TT_FATAL(mux_config != nullptr, "Mux config must exist for relay to connect to it");
 
     // Channel IDs and stream IDs
-    constexpr uint32_t router_to_relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
+    constexpr auto router_to_relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
     const auto router_to_relay_channel_stream_id =
         get_channel_credits_stream_id(tt::tt_fabric::ChannelTypes::ROUTER_CHANNEL, router_to_relay_channel_id);
 
@@ -738,7 +738,7 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     auto mux_infos = get_all_mux_connection_infos(fabric_node_id, routing_plane_id, direction);
 
     // Build compile time args - organized by channel type
-    uint32_t num_channel_types = static_cast<uint32_t>(channel_configs_.size());
+    auto num_channel_types = static_cast<uint32_t>(channel_configs_.size());
 
     auto channel_type = tt::tt_fabric::ChannelTypes::RELAY_TO_MUX_CHANNEL;
 
@@ -1189,7 +1189,7 @@ void FabricTensixDatamoverRelayBuilder::create_and_compile(tt::tt_metal::Program
                                                         : tt::tt_metal::DataMovementProcessor::RISCV_1;
 
     // In UDM mode, relay uses NOC selection from UdmNoCSelection enum (NOC 1 = edm_to_local_chip_noc)
-    tt::tt_metal::NOC noc = static_cast<tt::tt_metal::NOC>(UdmNoCSelection::relay_noc);
+    auto noc = static_cast<tt::tt_metal::NOC>(UdmNoCSelection::relay_noc);
 
     // Create the relay kernel
     auto relay_kernel = tt::tt_metal::CreateKernel(

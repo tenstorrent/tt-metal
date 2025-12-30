@@ -142,7 +142,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+    auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
 
     log_debug(

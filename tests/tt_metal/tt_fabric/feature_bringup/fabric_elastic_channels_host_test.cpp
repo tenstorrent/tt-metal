@@ -394,7 +394,7 @@ void run_test(
     std::vector<tt_metal::KernelHandle>& remote_sender_worker_kernels,
     const TestConfig& config) {
     auto rt_args = [&](bool send_channels_at_offset_0, DeviceTestResources& device_resources) -> std::vector<uint32_t> {
-        uint32_t base_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        auto base_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
 
         // Calculate buffer sizes and addresses
@@ -504,7 +504,7 @@ void run_test(
     //
     // Timing Stats Readback
     //
-    uint32_t handshake_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    auto handshake_addr = static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
 
     //

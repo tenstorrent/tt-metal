@@ -351,7 +351,7 @@ FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
 
     TT_FATAL(node["topology"].IsDefined(), "FabricConfig missing required 'topology' field");
 
-    std::string topology_str = node["topology"].as<std::string>();
+    auto topology_str = node["topology"].as<std::string>();
 
     auto topology = enchantum::cast<tt::tt_fabric::Topology>(topology_str, ttsl::ascii_caseless_comp);
     if (topology.has_value()) {
@@ -499,8 +499,8 @@ PatternExpansionConfig MeshSocketYamlParser::parse_pattern_expansion(const YAML:
 MeshCoordinate MeshSocketYamlParser::parse_mesh_coordinate(const YAML::Node& node) {
     TT_FATAL(node.IsSequence() && node.size() == 2, "mesh_coord must be a 2-element array [row, col]");
 
-    uint32_t row = node[0].as<uint32_t>();
-    uint32_t col = node[1].as<uint32_t>();
+    auto row = node[0].as<uint32_t>();
+    auto col = node[1].as<uint32_t>();
 
     return MeshCoordinate(row, col);
 }
@@ -508,8 +508,8 @@ MeshCoordinate MeshSocketYamlParser::parse_mesh_coordinate(const YAML::Node& nod
 CoreCoord MeshSocketYamlParser::parse_core_coordinate(const YAML::Node& node) {
     TT_FATAL(node.IsSequence() && node.size() == 2, "core_coord must be a 2-element array [x, y]");
 
-    uint32_t x = node[0].as<uint32_t>();
-    uint32_t y = node[1].as<uint32_t>();
+    auto x = node[0].as<uint32_t>();
+    auto y = node[1].as<uint32_t>();
 
     return CoreCoord(x, y);
 }

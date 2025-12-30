@@ -81,7 +81,7 @@ RouterPortDirectionsData deserialize_router_port_directions_from_bytes(const std
         std::unordered_map<RoutingDirection, std::vector<chan_id_t>> direction_map;
 
         for (const auto& direction_entry : fabric_node_map.direction_entries()) {
-            RoutingDirection direction = static_cast<RoutingDirection>(direction_entry.direction());
+            auto direction = static_cast<RoutingDirection>(direction_entry.direction());
 
             std::vector<chan_id_t> channels;
             for (const auto& channel : direction_entry.channels()) {

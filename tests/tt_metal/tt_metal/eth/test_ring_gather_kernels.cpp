@@ -551,8 +551,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsInterleavedRingGatherAllChips) {
     const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
     const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
     const size_t sem_l1_byte_address = erisc_unreserved_base_addr;
-    BankedConfig test_config =
-        BankedConfig{.num_pages = 10, .size_bytes = 10 * 2 * 32 * 32, .page_size_bytes = 2 * 32 * 32};
+    auto test_config = BankedConfig{.num_pages = 10, .size_bytes = 10 * 2 * 32 * 32, .page_size_bytes = 2 * 32 * 32};
     const auto& device_ring = get_device_ring(devices_);
     if (device_ring.empty()) {
         GTEST_SKIP();

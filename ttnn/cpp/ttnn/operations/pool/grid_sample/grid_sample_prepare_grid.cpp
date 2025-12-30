@@ -69,8 +69,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                 uint32_t y_idx = (((n * grid_h + h) * grid_w + w) * 2) + 1;  // y coordinate
 
                 // Extract normalized coordinates [-1, 1]
-                float x_coord = static_cast<float>(input_buffer[x_idx]);
-                float y_coord = static_cast<float>(input_buffer[y_idx]);
+                auto x_coord = static_cast<float>(input_buffer[x_idx]);
+                auto y_coord = static_cast<float>(input_buffer[y_idx]);
 
                 // Transform to image coordinates - use consistent formula
                 float h_coord_image = ((y_coord + 1.0f) * height_scale) + height_offset;
@@ -102,14 +102,14 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                             int16_t h_clamped = static_cast<int16_t>(std::clamp(h_nearest, -32768, 32767));
                             int16_t w_clamped = static_cast<int16_t>(std::clamp(w_nearest, -32768, 32767));
 
-                            uint16_t h_bits = static_cast<uint16_t>(h_clamped);
-                            uint16_t w_bits = static_cast<uint16_t>(w_clamped);
+                            auto h_bits = static_cast<uint16_t>(h_clamped);
+                            auto w_bits = static_cast<uint16_t>(w_clamped);
 
                             output_buffer[output_base + 0] = std::bit_cast<bfloat16>(h_bits);  // h coordinate
                             output_buffer[output_base + 1] = std::bit_cast<bfloat16>(w_bits);  // w coordinate
                         } else {
                             // Store sentinel value for invalid coordinates (use -1)
-                            uint16_t invalid_sentinel = static_cast<uint16_t>(-1);
+                            auto invalid_sentinel = static_cast<uint16_t>(-1);
                             output_buffer[output_base + 0] = std::bit_cast<bfloat16>(invalid_sentinel);  // invalid h
                             output_buffer[output_base + 1] = std::bit_cast<bfloat16>(invalid_sentinel);  // invalid w
                         }
@@ -125,8 +125,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                     }
                 } else {  // bilinear mode
                     // Get corner pixel coordinates (floor operation)
-                    int32_t h0 = static_cast<int32_t>(std::floor(h_coord_image));
-                    int32_t w0 = static_cast<int32_t>(std::floor(w_coord_image));
+                    auto h0 = static_cast<int32_t>(std::floor(h_coord_image));
+                    auto w0 = static_cast<int32_t>(std::floor(w_coord_image));
                     int32_t h1 = h0 + 1;
                     int32_t w1 = w0 + 1;
 
@@ -158,8 +158,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                     // Store results
                     if constexpr (std::is_same_v<OutputType, bfloat16>) {
                         // Reinterpret int16 bits as bfloat16 for coordinates
-                        uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
-                        uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
+                        auto h0_bits = static_cast<uint16_t>(h0_clamped);
+                        auto w0_bits = static_cast<uint16_t>(w0_clamped);
                         output_buffer[base_idx + 0] = std::bit_cast<bfloat16>(h0_bits);
                         output_buffer[base_idx + 1] = std::bit_cast<bfloat16>(w0_bits);
                         // Convert weights to bfloat16

@@ -20,7 +20,7 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
         // 0x7FC0  = 0 (sign) 11111111 (exponent) 1000000 (mantissa)
         return UINT16_C(0x7FC0);
     } else {
-        uint32_t U32 = std::bit_cast<uint32_t>(val);
+        auto U32 = std::bit_cast<uint32_t>(val);
         // Rounding bias = 0111 1111 1111 1111 (0x7FFF) if last bit of mantissa ((U32 >> 16) & 1)
         // is 0, otherwise 1000 0000 0000 0000 (0x8000).
         // This ensures that we round to the nearest even number.
@@ -32,7 +32,7 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 }  // namespace
 
 bfloat16 bfloat16::truncate(float float_num) {
-    uint32_t U32 = std::bit_cast<uint32_t>(float_num);
+    auto U32 = std::bit_cast<uint32_t>(float_num);
     return std::bit_cast<bfloat16>(static_cast<uint16_t>(U32 >> 16));
 }
 
@@ -110,8 +110,8 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bo
         float num_1_float = i * 2;
         float num_2_float = (i * 2) + 1;
 
-        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+        auto num_1_bfloat16 = bfloat16(num_1_float);
+        auto num_2_bfloat16 = bfloat16(num_2_float);
 
         if (print) {
             std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << static_cast<float>(num_1_bfloat16)
@@ -148,8 +148,8 @@ std::vector<std::uint32_t> create_random_vector_of_bfloat16(
         float num_1_float = rand_float() + offset;
         float num_2_float = rand_float() + offset;
 
-        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+        auto num_1_bfloat16 = bfloat16(num_1_float);
+        auto num_2_bfloat16 = bfloat16(num_2_float);
 
         // pack 2 uint16 into uint32
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
@@ -174,7 +174,7 @@ std::vector<std::uint32_t> create_constant_vector_of_bfloat16(size_t num_bytes, 
     const size_t num_elements_vec = std::max<size_t>(1ul, num_bytes / sizeof(std::uint32_t));  // always at least have 1
     std::vector<std::uint32_t> vec(num_elements_vec, 0);
     for (size_t i = 0; i < vec.size(); i++) {
-        bfloat16 num_1_bfloat16 = bfloat16(value);
+        auto num_1_bfloat16 = bfloat16(value);
 
         bfloat16 num_2_bfloat16 = num_elements_vec == 1 ? bfloat16(static_cast<float>(0.0)) : bfloat16(value);
 
@@ -206,8 +206,8 @@ std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, 
         num_1_float = (num_1_float > 0.5);
         num_2_float = (num_2_float > 0.5);
 
-        bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-        bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+        auto num_1_bfloat16 = bfloat16(num_1_float);
+        auto num_2_bfloat16 = bfloat16(num_2_float);
 
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
@@ -373,11 +373,11 @@ bool packed_uint32_t_vector_comparison(
         std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(vec_a.at(i));
         std::pair<bfloat16, bfloat16> bs = unpack_two_bfloat16_from_uint32(vec_b.at(i));
 
-        float a1 = static_cast<float>(as.first);
-        float b1 = static_cast<float>(bs.first);
+        auto a1 = static_cast<float>(as.first);
+        auto b1 = static_cast<float>(bs.first);
 
-        float a2 = static_cast<float>(as.second);
-        float b2 = static_cast<float>(bs.second);
+        auto a2 = static_cast<float>(as.second);
+        auto b2 = static_cast<float>(bs.second);
 
         if (not(comparison_function(a1, b1) and comparison_function(a2, b2))) {
             if (argfail) {

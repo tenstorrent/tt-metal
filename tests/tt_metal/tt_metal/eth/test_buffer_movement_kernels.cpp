@@ -116,8 +116,8 @@ bool chip_to_chip_dram_buffer_transfer(
     uint32_t MAX_BUFFER = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
-    uint32_t num_loops = (uint32_t)(byte_size / MAX_BUFFER);
-    uint32_t remaining_bytes = (uint32_t)(byte_size % MAX_BUFFER);
+    auto num_loops = (uint32_t)(byte_size / MAX_BUFFER);
+    auto remaining_bytes = (uint32_t)(byte_size % MAX_BUFFER);
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
@@ -267,8 +267,8 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
     const uint32_t max_buffer = round_down(max_transfer_size, cfg.page_size_bytes);
     uint32_t pages_per_loop = max_buffer / cfg.page_size_bytes;
-    uint32_t num_loops = (uint32_t)(cfg.size_bytes / max_buffer);
-    uint32_t remaining_bytes = (uint32_t)(cfg.size_bytes % max_buffer);
+    auto num_loops = (uint32_t)(cfg.size_bytes / max_buffer);
+    auto remaining_bytes = (uint32_t)(cfg.size_bytes % max_buffer);
     uint32_t remaining_pages = remaining_bytes / cfg.page_size_bytes;
 
     std::vector<uint32_t> sender_compile_args = {(uint32_t)input_is_dram};
@@ -587,7 +587,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         receiver_device->id(),
                         sender_eth_core.str(),
                         receiver_eth_core.str());
-                    BankedConfig test_config = BankedConfig{
+                    auto test_config = BankedConfig{
                         .num_pages = num_pages,
                         .size_bytes = num_pages * page_size,
                         .page_size_bytes = page_size,
@@ -753,7 +753,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         sender_eth_core.str(),
                         erisc_idx,
                         receiver_eth_core.str());
-                    BankedConfig test_config = BankedConfig{
+                    auto test_config = BankedConfig{
                         .num_pages = num_pages,
                         .size_bytes = num_pages * page_size,
                         .page_size_bytes = page_size,

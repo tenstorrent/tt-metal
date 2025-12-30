@@ -1033,7 +1033,7 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
     MeshDevice* device,
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_;
-    ConvT2DSliceAttr* op_slice_attr = new ConvT2DSliceAttr(
+    auto* op_slice_attr = new ConvT2DSliceAttr(
         batch_size,
         {input_height, input_width},
         in_channels,

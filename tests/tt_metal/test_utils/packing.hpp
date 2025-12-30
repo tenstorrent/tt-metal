@@ -91,7 +91,7 @@ std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
     std::for_each(values.begin(), values.end(), [&](const PackType& value) {
         PackType current_value = value;
         for (unsigned j = 0; j < num_values_to_unpack; j++) {
-            bits_type bits_of_value = static_cast<bits_type>(current_value & bitmask);
+            auto bits_of_value = static_cast<bits_type>(current_value & bitmask);
             results.push_back(std::bit_cast<ValueType>(bits_of_value));
             current_value = current_value >> (sizeof(ValueType) * CHAR_BIT);
         }

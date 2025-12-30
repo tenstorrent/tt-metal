@@ -92,7 +92,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
         grid_cb_data_format,
         is_sharded ? grid_tensor.buffer() : nullptr);
 
-    const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
+    const auto in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
     const auto [input_cb_index_0, input_cb_handle_0] = tt::tt_metal::create_cb(
         cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
@@ -115,7 +115,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
             cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
     }
 
-    const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
+    const auto out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_pages =
         is_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
@@ -211,7 +211,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
 
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
-    const uint32_t in_nblocks_c = (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
+    const auto in_nblocks_c = (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
 
     auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
         // Compute kernel compile-time arguments

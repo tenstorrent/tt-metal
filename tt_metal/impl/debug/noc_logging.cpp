@@ -57,8 +57,8 @@ void DumpCoreNocData(ChipId device_id, const umd::CoreDescriptor& logical_core, 
         uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
         auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id, virtual_core, addr, DPRINT_BUFFER_SIZE);
-        DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
-        uint32_t* data = reinterpret_cast<uint32_t*>(l->data);
+        auto* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
+        auto* data = reinterpret_cast<uint32_t*>(l->data);
 
         // Append the data for this core to existing data
         for (int idx = 0; idx < NOC_DATA_SIZE; idx++) {

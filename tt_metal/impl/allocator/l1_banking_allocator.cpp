@@ -114,7 +114,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     // There is only l1_bank_size bytes available for L1 buffers to be allocated in
     uint64_t l1_bank_size = config_->worker_l1_size - config_->l1_unreserved_base;
-    uint64_t interleaved_address_limit = static_cast<uint64_t>(config_->worker_l1_size - l1_bank_size);
+    auto interleaved_address_limit = static_cast<uint64_t>(config_->worker_l1_size - l1_bank_size);
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(config_->worker_l1_size) - config_->l1_unreserved_base - config_->l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1

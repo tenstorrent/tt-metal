@@ -713,7 +713,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
     EXPECT_EQ(*switch_ids[0], 3) << "Switch ID should be 0";
 
     SwitchId switch_id = switch_ids[0];
-    MeshId switch_mesh_id = MeshId(*switch_id);
+    auto switch_mesh_id = MeshId(*switch_id);
 
     EXPECT_EQ(*switch_id, 3) << "Switch should have a mapped mesh_id";
     // Verify switch mesh_id is unique (not used by regular meshes)

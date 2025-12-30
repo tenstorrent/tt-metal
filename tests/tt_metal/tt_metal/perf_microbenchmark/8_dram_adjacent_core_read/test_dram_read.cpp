@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
         TT_ASSERT(
             device->arch() == ARCH::WORMHOLE_B0 or device->arch() == ARCH::BLACKHOLE, "device must be wh_b0 or bh");
 
-        uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
+        auto num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks;  // number of DRAM banks
         // uint32_t num_banks_all = 12;
 

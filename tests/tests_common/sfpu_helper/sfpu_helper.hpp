@@ -61,8 +61,8 @@ inline std::vector<uint32_t> sfpu(const std::vector<uint32_t>& src, const std::f
         float exp_top = sfpu_func(top_);
         float exp_bottom = sfpu_func(bottom_);
 
-        bfloat16 bfp16_top = bfloat16(exp_top);
-        bfloat16 bfp16_bottom = bfloat16(exp_bottom);
+        auto bfp16_top = bfloat16(exp_top);
+        auto bfp16_bottom = bfloat16(exp_bottom);
 
         uint32_t new_val = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfp16_bottom, bfp16_top));
         dst.push_back(new_val);
@@ -89,8 +89,8 @@ inline std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint
         float top_plus_one = 1 + top_;
         float bottom_plus_one = 1 + bottom_;
 
-        bfloat16 bfp16_top = bfloat16(top_plus_one);
-        bfloat16 bfp16_bottom = bfloat16(bottom_plus_one);
+        auto bfp16_top = bfloat16(top_plus_one);
+        auto bfp16_bottom = bfloat16(bottom_plus_one);
 
         uint32_t new_val = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfp16_bottom, bfp16_top));
         dst.push_back(new_val);

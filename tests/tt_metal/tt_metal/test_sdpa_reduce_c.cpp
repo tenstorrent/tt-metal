@@ -88,8 +88,8 @@ static float compare_first_col_mse(
     const uint32_t rows = golden_first_col_rm.size() / 32;
     float mse = 0.0f;
     for (uint32_t r = 0; r < rows; ++r) {
-        float a = static_cast<float>(result_rm[(r * 32) + 0]);
-        float b = static_cast<float>(golden_first_col_rm[(r * 32) + 0]);
+        auto a = static_cast<float>(result_rm[(r * 32) + 0]);
+        auto b = static_cast<float>(golden_first_col_rm[(r * 32) + 0]);
         float d = a - b;
         mse += d * d;
     }

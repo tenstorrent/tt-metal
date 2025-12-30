@@ -189,7 +189,7 @@ public:
     template <typename CommandPtr, bool data = false>
     CommandPtr reserve_space(uint32_t size_to_writeB) {
         this->validate_cmd_write(size_to_writeB);
-        CommandPtr cmd = (CommandPtr)((char*)this->cmd_region + this->cmd_write_offsetB);
+        auto cmd = (CommandPtr)((char*)this->cmd_region + this->cmd_write_offsetB);
         // Only zero out cmds
         if constexpr (!data) {
             if (zero_init_enable) {

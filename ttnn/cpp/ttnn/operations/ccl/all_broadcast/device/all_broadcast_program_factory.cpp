@@ -137,7 +137,7 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
 
     uint32_t buffer_page_size = page_size;
-    uint32_t num_packets_per_page =
+    auto num_packets_per_page =
         static_cast<uint32_t>(std::ceil(static_cast<double>(buffer_page_size) / max_packet_size));
     if (!tilized) {
         if (num_width_shards > 1) {

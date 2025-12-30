@@ -138,7 +138,7 @@ std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_addr
     // returns a pair where .first holds the shard array map
     // and .second holds the size of the map
     constexpr ShardingInfoType CONSTANT_ARGS{};
-    const mapping_table_t* const map = reinterpret_cast<const mapping_table_t* const>(L1_address);
+    const auto* const map = reinterpret_cast<const mapping_table_t* const>(L1_address);
     constexpr uint32_t incrementation = ((CONSTANT_ARGS.number_of_cores - 1) / 2) + 1;
     return std::pair<const mapping_table_t* const, uint32_t>(map, incrementation);
 }

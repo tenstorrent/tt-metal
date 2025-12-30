@@ -56,7 +56,7 @@ void throttle_mm_perf(
     // bound)
     const bool mm_throttle_env_enabled = std::getenv("TT_MM_THROTTLE_PERF");
 
-    uint32_t uint_throttle_level = static_cast<uint32_t>(throttle_level);
+    auto uint_throttle_level = static_cast<uint32_t>(throttle_level);
 
     // If environment variable is set, this overrides the throttle level parameter
     if (mm_throttle_env_enabled) {

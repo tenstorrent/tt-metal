@@ -63,7 +63,7 @@ std::vector<CBInfo> get_cb_info(
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
     uint32_t input_channels_padded) {
-    const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
+    const auto num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
 

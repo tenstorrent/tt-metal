@@ -1028,8 +1028,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
                                 dev_msgs::profiler_msg_t::Field::control_vector);
     if (useFastDispatch(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
-            distributed::FDMeshCommandQueue& mesh_cq =
-                dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+            auto& mesh_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
             const distributed::DeviceMemoryAddress address = {device_coord, virtual_core, control_vector_addr};
             mesh_cq.enqueue_write_shard_to_core(
@@ -1180,8 +1179,7 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
                            dev_msgs::profiler_msg_t::Field::control_vector);
     if (useFastDispatch(device)) {
         if (auto mesh_device = device->get_mesh_device()) {
-            distributed::FDMeshCommandQueue& mesh_cq =
-                dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+            auto& mesh_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
             const distributed::DeviceMemoryAddress address = {device_coord, virtual_core, control_vector_addr};
             core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);

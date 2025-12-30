@@ -73,7 +73,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
     uint32_t input_channels_num_elems = input_padded_shape[3];
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
     std::vector<uint32_t> num_input_tiles_per_dim(num_dims);

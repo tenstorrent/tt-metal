@@ -39,7 +39,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
     uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
@@ -194,7 +194,7 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
+    auto num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
 
     // Reader compile-time args
     // Data is 32 byte aligned

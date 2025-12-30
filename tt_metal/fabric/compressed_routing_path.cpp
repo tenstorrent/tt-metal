@@ -14,7 +14,7 @@ namespace tt::tt_fabric {
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     const FabricNodeId& /*src_fabric_node_id*/, uint16_t num_chips) {
-    uint64_t* route_ptr = reinterpret_cast<uint64_t*>(&paths);
+    auto* route_ptr = reinterpret_cast<uint64_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < num_chips; ++hops) {
         const uint64_t shift_amount = static_cast<uint64_t>(hops - 1) * static_cast<uint64_t>(FIELD_WIDTH);

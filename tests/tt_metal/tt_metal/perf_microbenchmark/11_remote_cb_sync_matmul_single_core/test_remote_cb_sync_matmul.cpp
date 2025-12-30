@@ -734,7 +734,7 @@ int main(int argc, char** argv) {
         std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> in1_buffers(num_layers);
         std::shared_ptr<tt_metal::distributed::MeshBuffer> in1_l1_buffer;
         std::shared_ptr<tt_metal::distributed::MeshBuffer> output_buffer;
-        SHAPE in0_shape = SHAPE{1, 1, m, k * num_receivers};
+        auto in0_shape = SHAPE{1, 1, m, k * num_receivers};
         tt::deprecated::Tensor<bfloat16> in0_tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(
             in0_shape,
             tt::deprecated::Initialize::RANDOM,

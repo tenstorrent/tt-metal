@@ -115,7 +115,7 @@ Node build_node(
 
     // Create boards with internal connections marked (using cached boards)
     for (const auto& board_item : node_descriptor.boards().board()) {
-        TrayId tray_id = TrayId(board_item.tray_id());
+        auto tray_id = TrayId(board_item.tray_id());
         auto board_type = get_board_type_from_string(board_item.board_type());
         template_node.boards.emplace(tray_id, create_board(board_type));
     }
@@ -128,10 +128,10 @@ Node build_node(
         }
 
         for (const auto& conn : port_connections.connections()) {
-            TrayId board_a_id = TrayId(conn.port_a().tray_id());
-            PortId port_a_id = PortId(conn.port_a().port_id());
-            TrayId board_b_id = TrayId(conn.port_b().tray_id());
-            PortId port_b_id = PortId(conn.port_b().port_id());
+            auto board_a_id = TrayId(conn.port_a().tray_id());
+            auto port_a_id = PortId(conn.port_a().port_id());
+            auto board_b_id = TrayId(conn.port_b().tray_id());
+            auto port_b_id = PortId(conn.port_b().port_id());
 
             create_port_connection(
                 template_node.boards.at(board_a_id),
@@ -214,7 +214,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
                 throw std::runtime_error("Node child must have host_id mapping: " + child_name);
             }
 
-            HostId host_id = HostId(child_mapping.host_id());
+            auto host_id = HostId(child_mapping.host_id());
             const std::string& node_descriptor_name = child_def.node_ref().node_descriptor();
 
             // Validate deployment node type if deployment descriptor is provided
@@ -261,11 +261,11 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
         for (const auto& conn : port_connections.connections()) {
             const auto& path_a = conn.port_a().path();
             const auto& path_b = conn.port_b().path();
-            TrayId board_a_id = TrayId(conn.port_a().tray_id());
-            PortId port_a_id = PortId(conn.port_a().port_id());
+            auto board_a_id = TrayId(conn.port_a().tray_id());
+            auto port_a_id = PortId(conn.port_a().port_id());
 
-            TrayId board_b_id = TrayId(conn.port_b().tray_id());
-            PortId port_b_id = PortId(conn.port_b().port_id());
+            auto board_b_id = TrayId(conn.port_b().tray_id());
+            auto port_b_id = PortId(conn.port_b().port_id());
 
             // Resolve paths to HostId using proto data
             HostId host_a_id = resolve_path_from_proto(path_a, graph_instance, cluster_descriptor);
@@ -305,7 +305,7 @@ void populate_deployment_hosts_from_hostnames(
     // Store deployment hosts with just hostname and motherboard (no physical location info)
     deployment_hosts.reserve(hostnames.size());
     for (size_t i = 0; i < hostnames.size(); ++i) {
-        HostId host_id = HostId(i);
+        auto host_id = HostId(i);
         auto it = host_id_to_node.find(host_id);
         if (it == host_id_to_node.end()) {
             throw std::runtime_error("Host ID " + std::to_string(i) + " not found in cluster configuration");

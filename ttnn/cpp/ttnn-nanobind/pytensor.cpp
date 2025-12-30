@@ -460,7 +460,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
     auto shape_vec = ttnn_shape_to_ndarray(row_major_host_buffer.shape);
 
     // HostBuffer usage like this is shallow copy
-    HostBuffer* buffer = new HostBuffer{row_major_host_buffer.buffer};
+    auto* buffer = new HostBuffer{row_major_host_buffer.buffer};
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 

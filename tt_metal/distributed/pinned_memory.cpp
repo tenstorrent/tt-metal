@@ -96,7 +96,7 @@ void PinnedMemoryImpl::initialize_from_devices(
         page_size = static_cast<size_t>(sys_page);
     }
 
-    uintptr_t host_addr = reinterpret_cast<uintptr_t>(host_buffer);
+    auto host_addr = reinterpret_cast<uintptr_t>(host_buffer);
     uintptr_t aligned_base_addr = host_addr & ~(static_cast<uintptr_t>(page_size) - 1);
     host_offset_ = static_cast<size_t>(host_addr - aligned_base_addr);
     size_t mapped_size = buffer_size + host_offset_;

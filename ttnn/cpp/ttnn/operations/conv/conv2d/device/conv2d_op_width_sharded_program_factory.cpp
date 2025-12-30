@@ -24,8 +24,8 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t num_cores_nhw,
     uint32_t act_block_h_ntiles) {
-    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
-    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    auto filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    auto filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     auto output_shape = sliding_window_config.get_output_shape();
     uint32_t batch_size = output_shape[0];
     uint32_t conv_output_h = output_shape[1];
@@ -132,13 +132,13 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
 
-    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
-    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    const auto filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
+    const auto filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
-    const uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
-    const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    const auto dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    const auto dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
+    auto pad_w = (uint32_t)sliding_window_config.get_pad_w();
 
     uint32_t input_size_w = conv_act_size_w + pad_w;
     if (sliding_window_config.is_transpose) {
@@ -154,8 +154,8 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         "Activation matrix shape must have 3 dimensions but got {}",
         act_matrix_shape.size());
     TT_FATAL(act_matrix_shape[0] == 1, "Activation matrix first dimension must be 1 but got {}", act_matrix_shape[0]);
-    uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
-    uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
+    auto act_matrix_height = (uint32_t)act_matrix_shape[1];
+    auto act_matrix_width = (uint32_t)act_matrix_shape[2];
 
     // TODO: Move all these TT_FATALs/checks to validate?
 
@@ -270,7 +270,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",
         output_channels_padded_to_tile_width,
         weight_matrix_width);
-    uint32_t num_blocks_output_w =
+    auto num_blocks_output_w =
         (uint32_t)std::ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
                                            ? weight_block_w_datums

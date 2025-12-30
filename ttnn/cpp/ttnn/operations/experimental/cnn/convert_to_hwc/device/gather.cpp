@@ -456,7 +456,7 @@ std::vector<BlockedTransferGroup> group_transfers_by_output_column_blocks(
     // Compute per-core output row width (number of columns in each [C x (B*HW_per_core)] shard)
     TT_FATAL(output.is_sharded(), "Output tensor must be sharded for gather operation");
     const auto& output_shard_spec2 = output.shard_spec().value();
-    uint32_t output_shard_width =
+    auto output_shard_width =
         static_cast<uint32_t>(output_shard_spec2.shape[0]);  // columns per output core = B*HW_per_core
 
     // Call the unified implementation and return only the blocked transfers

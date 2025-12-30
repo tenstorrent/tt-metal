@@ -46,7 +46,7 @@ Shape Shape::to_rank(size_t new_rank) const {
 }
 
 uint32_t Shape::get_normalized_index(std::int64_t index) const {
-    std::int64_t rank = static_cast<std::int64_t>(this->rank());
+    auto rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
         normalized_index >= 0 and normalized_index < rank,

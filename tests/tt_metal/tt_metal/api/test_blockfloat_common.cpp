@@ -22,7 +22,7 @@ void roundtrip_test_for_mantissa_rounding_with_bfp8(
     EXPECT_EQ(output_mantissa, expected_mantissa);
 
     uint32_t uint32_output = convert_bfp_to_u32(tt::DataFormat::Bfp8_b, output_mantissa, shared_exp, false);
-    float float_output = std::bit_cast<float>(uint32_output);
+    auto float_output = std::bit_cast<float>(uint32_output);
     EXPECT_EQ(float_output, expected_float_output);
 };
 

@@ -28,7 +28,7 @@ uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
         uint32_t exp = (vec[i] & 0x7f800000) >> 23;
 
         if (is_exp_a) {
-            int32_t se = static_cast<int32_t>(exp);
+            auto se = static_cast<int32_t>(exp);
             // need to rebias from 127 to 15
             se = se - 127 + 15;
 
@@ -250,7 +250,7 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
     }
 
     if (is_exp_a) {
-        int32_t se = static_cast<int32_t>(exp);
+        auto se = static_cast<int32_t>(exp);
         // rebias
         se = se - 127 + 15;
         // check for saturation
@@ -383,7 +383,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                         } else {
                             data_index = fp32_element_index++;
                         }
-                        float float_num = static_cast<float>(input_data[data_index]);
+                        auto float_num = static_cast<float>(input_data[data_index]);
                         uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
                         single_row.push_back(uint32_num);
                     }

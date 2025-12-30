@@ -356,8 +356,8 @@ std::vector<uint32_t> generate_op_trace_metadata_bilinear(const SlidingWindowCon
             float w_offset = (0.5f * scale_w_inv) + bilinear_starting_offset;
             for (uint32_t w = 0; w < output_shape[2]; ++w) {
                 // Get top-left input coordinate (this is the "top-left index" needed for bilinear interpolation)
-                const uint32_t top_left_h = static_cast<uint32_t>(std::floor(h_offset));
-                const uint32_t top_left_w = static_cast<uint32_t>(std::floor(w_offset));
+                const auto top_left_h = static_cast<uint32_t>(std::floor(h_offset));
+                const auto top_left_w = static_cast<uint32_t>(std::floor(w_offset));
 
                 // Calculate flattened input index (top-left coordinate for bilinear interpolation)
                 const uint32_t input_idx =
@@ -1129,7 +1129,7 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
     const auto factor = sliding_window::get_repeat_factor_for_replicating_nhw_config_across_grid(parallel_config);
     if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         const auto broadcast_config_per_row = [](const std::vector<uint16_t>& config, uint32_t num_cols) {
-            const uint32_t num_rows = static_cast<uint32_t>(config.size());
+            const auto num_rows = static_cast<uint32_t>(config.size());
             std::vector<uint16_t> expanded;
             expanded.reserve(num_rows * num_cols);
             for (uint16_t val : config) {

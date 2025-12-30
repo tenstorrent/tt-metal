@@ -77,7 +77,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto& mesh_view = mesh_device->get_view();
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
+    const auto src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();

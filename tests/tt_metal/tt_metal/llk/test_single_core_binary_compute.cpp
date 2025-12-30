@@ -326,7 +326,7 @@ bool single_core_binary(
 }  // namespace unit_tests::compute::binary
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -346,7 +346,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -366,7 +366,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -386,7 +386,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -407,7 +407,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -428,7 +428,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -449,7 +449,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -469,7 +469,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -489,7 +489,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -509,7 +509,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -529,7 +529,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -549,7 +549,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -573,7 +573,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -599,7 +599,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -625,7 +625,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (auto i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }

@@ -443,7 +443,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
         auto tensix_cores_for_workers = get_tensix_cores_for_workers(first_device);
 
         uint32_t total_workers = workers_by_column.size();
-        uint32_t num_worker_channels = static_cast<uint32_t>(
+        auto num_worker_channels = static_cast<uint32_t>(
             (total_workers + tensix_cores_for_workers.size() - 1) / tensix_cores_for_workers.size());
 
         log_debug(
@@ -542,7 +542,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
-        FabricTensixCoreType core_id = static_cast<FabricTensixCoreType>(i);
+        auto core_id = static_cast<FabricTensixCoreType>(i);
         base_l1_addresses_[core_id] = l1_base + (i * space_per_risc_);
     }
 }
@@ -1065,7 +1065,7 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_connection_to_relay_channel() const {
     // This method connects to relay's channel (for router-to-relay traffic in UDM mode)
     TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
-    constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
+    constexpr auto relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
     return relay_builder_->build_connection_to_fabric_channel(relay_channel_id);
 }
 

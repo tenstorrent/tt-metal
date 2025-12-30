@@ -1463,7 +1463,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
 
     tt::tt_metal::AsicID src_asic_id = physical_system_descriptor.get_asic_id(
         reset_host, tt::tt_metal::TrayID(reset_tray_id), tt::tt_metal::ASICLocation(reset_asic_location));
-    uint8_t src_channel = static_cast<uint8_t>(reset_channel);
+    auto src_channel = static_cast<uint8_t>(reset_channel);
 
     auto [dst_asic_id, dst_channel] =
         physical_system_descriptor.get_connected_asic_and_channel(src_asic_id, src_channel);

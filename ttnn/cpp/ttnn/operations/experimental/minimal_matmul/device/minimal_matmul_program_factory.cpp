@@ -130,7 +130,7 @@ static inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32
 }
 
 static inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
-    const uint32_t last = static_cast<uint32_t>(order.size() - 1);
+    const auto last = static_cast<uint32_t>(order.size() - 1);
     return order.at(index >= last ? last : index + 1);
 }
 

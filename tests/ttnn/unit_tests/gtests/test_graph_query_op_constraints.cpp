@@ -260,7 +260,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         // Add default parameters
-        int32_t vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
+        auto vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
         bool approximateMode = false;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::sigmoid,

@@ -96,7 +96,7 @@ TilizeWithValPaddingMultiCoreInterleavedFactory::create(
      */
     uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
     // log2(TILE_WIDTH * data_format_size_in_bytes)
-    uint32_t shift_bits = static_cast<uint32_t>(std::log2(
+    auto shift_bits = static_cast<uint32_t>(std::log2(
         a.element_size() *
         TILE_HEIGHT));  // This gives log2 of bytes per tile row, so in the kernel we
                         // can shift right by this to get number of tiles.

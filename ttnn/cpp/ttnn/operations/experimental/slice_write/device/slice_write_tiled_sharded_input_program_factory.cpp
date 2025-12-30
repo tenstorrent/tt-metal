@@ -54,7 +54,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
-    std::uint32_t num_dims = static_cast<std::uint32_t>(actual_input_shape.rank());
+    auto num_dims = static_cast<std::uint32_t>(actual_input_shape.rank());
     std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
     std::vector<uint32_t> num_input_tiles_per_dim(num_dims);
 

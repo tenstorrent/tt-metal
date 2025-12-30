@@ -516,7 +516,7 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
 }
 
 DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const {
-    DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
+    auto num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     DeviceAddr pages_offset_within_bank = page_index / num_banks;
     auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);

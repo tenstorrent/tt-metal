@@ -164,7 +164,7 @@ std::optional<MeshCoordinate> MeshCoordinate::get_neighbor(
     dim = normalize_index(dim, shape.dims());
 
     const auto boundary = static_cast<int32_t>(shape[dim]);
-    const int32_t current_pos = static_cast<int32_t>(value_[dim]);
+    const auto current_pos = static_cast<int32_t>(value_[dim]);
     const int32_t new_pos = current_pos + offset;
 
     MeshCoordinate result = *this;

@@ -753,7 +753,7 @@ public:
 
     iterator erase(const_iterator CI) {
         // Just cast away constness because this is a non-const member function.
-        iterator I = const_cast<iterator>(CI);
+        auto I = const_cast<iterator>(CI);
 
         assert(this->isReferenceToStorage(CI) && "Iterator to erase is out of bounds.");
 
@@ -767,8 +767,8 @@ public:
 
     iterator erase(const_iterator CS, const_iterator CE) {
         // Just cast away constness because this is a non-const member function.
-        iterator S = const_cast<iterator>(CS);
-        iterator E = const_cast<iterator>(CE);
+        auto S = const_cast<iterator>(CS);
+        auto E = const_cast<iterator>(CE);
 
         assert(this->isRangeInStorage(S, E) && "Range to erase is out of bounds.");
 

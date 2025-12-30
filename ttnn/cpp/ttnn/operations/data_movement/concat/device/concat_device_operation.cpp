@@ -258,7 +258,7 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
 
         // Safety margin: reduce by 10% for sharded due to potential additional overhead
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
-        uint32_t safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
+        auto safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
 
         log_debug(
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);

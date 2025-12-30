@@ -94,7 +94,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         src_sharded ? a.buffer() : nullptr);
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    auto aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
     uint32_t output_cb_index;
     CBHandle cb_output;
     std::tie(output_cb_index, cb_output) = create_cb(

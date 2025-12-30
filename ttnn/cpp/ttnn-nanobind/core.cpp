@@ -91,7 +91,7 @@ void py_module(nb::module_& mod) {
                     auto cmp = [](const auto& a, const auto& b) -> bool {
                         return ttsl::ascii_caseless_comp(std::string_view(a), std::string_view(b));
                     };
-                    const std::string sci_mode_str = nb::cast<std::string>(sci_mode);
+                    const auto sci_mode_str = nb::cast<std::string>(sci_mode);
                     if (cmp(sci_mode_str, "true")) {
                         sci_mode_enum = ttnn::SciMode::Enable;
                     } else if (cmp(sci_mode_str, "false")) {

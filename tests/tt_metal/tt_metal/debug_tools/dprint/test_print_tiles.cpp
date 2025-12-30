@@ -154,7 +154,7 @@ std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_
                 *reinterpret_cast<float*>(&float_vec[(col * 32) + 24]));
         }
     } else if (data_format == tt::DataFormat::Int8) {
-        int8_t* int8_ptr = reinterpret_cast<int8_t*>(input_tile.data());
+        auto* int8_ptr = reinterpret_cast<int8_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
@@ -164,7 +164,7 @@ std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_
                 int8_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt8) {
-        uint8_t* uint8_ptr = reinterpret_cast<uint8_t*>(input_tile.data());
+        auto* uint8_ptr = reinterpret_cast<uint8_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
@@ -174,7 +174,7 @@ std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_
                 uint8_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt16) {
-        uint16_t* uint16_ptr = reinterpret_cast<uint16_t*>(input_tile.data());
+        auto* uint16_ptr = reinterpret_cast<uint16_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
@@ -184,7 +184,7 @@ std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_
                 uint16_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::Int32) {
-        int32_t* int32_ptr = reinterpret_cast<int32_t*>(input_tile.data());
+        auto* int32_ptr = reinterpret_cast<int32_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",
@@ -194,7 +194,7 @@ std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_
                 int32_ptr[(col * 32) + 24]);
         }
     } else if (data_format == tt::DataFormat::UInt32) {
-        uint32_t* uint32_ptr = reinterpret_cast<uint32_t*>(input_tile.data());
+        auto* uint32_ptr = reinterpret_cast<uint32_t*>(input_tile.data());
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
                 "\n{} {} {} {}",

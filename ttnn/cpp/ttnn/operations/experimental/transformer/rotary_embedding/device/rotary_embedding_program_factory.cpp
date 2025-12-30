@@ -207,7 +207,7 @@ RotaryEmbeddingProgramFactory::cached_program_t RotaryEmbeddingProgramFactory::c
         compute_kernel_defines["DECODE_MODE"] = "1";
     }
 
-    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
+    const auto bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     auto* src_buffer = input.buffer();
     auto* cos_buffer = cos.buffer();

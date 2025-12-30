@@ -46,7 +46,7 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
     sync_info.need_sync = false;
 
     size_t num_buffer_types = this->reservation_.size();
-    constexpr uint32_t active_eth_idx = static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH);
+    constexpr auto active_eth_idx = static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(sizes.size() == num_buffer_types);
     for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         uint32_t free_index = this->free_index_[idx];
@@ -191,7 +191,7 @@ void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
 uint32_t WorkerConfigBufferMgr::get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const {
     // TODO: support all programmable core types?
     TT_ASSERT(programmable_core_type != HalProgrammableCoreType::IDLE_ETH);
-    uint32_t index = static_cast<uint32_t>(programmable_core_type);
+    auto index = static_cast<uint32_t>(programmable_core_type);
     return this->reservation_[index].addr;
 }
 

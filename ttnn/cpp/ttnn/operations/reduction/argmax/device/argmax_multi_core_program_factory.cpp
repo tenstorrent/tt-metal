@@ -369,8 +369,8 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
              (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
     }
 
-    const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
-    const uint32_t red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
+    const auto src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
+    const auto red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
 
     for (uint32_t i = 0; i < num_cores1; ++i) {
         const CoreCoord& core = cores_coords1.at(i);

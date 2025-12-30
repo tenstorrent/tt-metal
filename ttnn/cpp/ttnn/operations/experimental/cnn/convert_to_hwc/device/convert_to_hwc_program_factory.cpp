@@ -144,7 +144,7 @@ GroupingResult group_and_coalesce_transfers(
     // This is critical because the compute kernel expects total_num_blocks blocks from each core
     const uint32_t expected_blocks_per_core = blocked_result.num_logical_blocks;
     for (size_t core_idx = 0; core_idx < per_core_blocked_gather_transfers.size(); core_idx++) {
-        uint32_t core_blocks = static_cast<uint32_t>(per_core_blocked_gather_transfers[core_idx].size());
+        auto core_blocks = static_cast<uint32_t>(per_core_blocked_gather_transfers[core_idx].size());
         TT_FATAL(
             core_blocks == expected_blocks_per_core,
             "Core {} has {} blocks but expected {} blocks per core. "

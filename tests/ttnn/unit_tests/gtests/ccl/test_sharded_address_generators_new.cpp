@@ -123,12 +123,11 @@ void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
 }
 
 TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
-    constexpr std::size_t shard_type = static_cast<std::size_t>(tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
+    constexpr auto shard_type = static_cast<std::size_t>(tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
     constexpr std::size_t number_of_cores = 8;
     constexpr std::size_t page_size_jump = 1024;
     constexpr std::size_t pages_per_tensor_row = 32;
-    constexpr std::size_t contiguity =
-        static_cast<std::size_t>(shard_addr_gen_consts::ContiguityType::L1_NO_SHARD_PADDING);
+    constexpr auto contiguity = static_cast<std::size_t>(shard_addr_gen_consts::ContiguityType::L1_NO_SHARD_PADDING);
     constexpr std::size_t pages_per_shard_width = 6;
     constexpr std::size_t rows_per_shard_height = 1;
     constexpr std::size_t tensor_address = 0x100000;
@@ -147,12 +146,11 @@ TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
 }
 
 TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
-    static constexpr std::size_t shard_type =
-        static_cast<std::size_t>(tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED);
+    static constexpr auto shard_type = static_cast<std::size_t>(tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED);
     static constexpr std::size_t number_of_cores = 4;
     static constexpr std::size_t page_size_jump = 1024;
     static constexpr std::size_t pages_per_tensor_row = 32;
-    static constexpr std::size_t contiguity =
+    static constexpr auto contiguity =
         static_cast<std::size_t>(shard_addr_gen_consts::ContiguityType::L1_NO_SHARD_PADDING);
     static constexpr std::size_t pages_per_shard_width = 1;
     static constexpr std::size_t rows_per_shard_height = 8;
@@ -172,11 +170,11 @@ TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
 }
 
 TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
-    static constexpr std::size_t shard_type = static_cast<std::size_t>(tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED);
+    static constexpr auto shard_type = static_cast<std::size_t>(tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED);
     static constexpr std::size_t number_of_cores = 16;
     static constexpr std::size_t page_size_jump = 1024;
     static constexpr std::size_t pages_per_tensor_row = 32;
-    static constexpr std::size_t contiguity =
+    static constexpr auto contiguity =
         static_cast<std::size_t>(shard_addr_gen_consts::ContiguityType::L1_NO_SHARD_PADDING);
     static constexpr std::size_t pages_per_shard_width = 8;
     static constexpr std::size_t rows_per_shard_height = 8;

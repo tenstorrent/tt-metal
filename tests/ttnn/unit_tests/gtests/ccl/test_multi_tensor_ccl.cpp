@@ -160,7 +160,7 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(mesh_devices.size());
+            auto expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
@@ -191,7 +191,7 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(mesh_devices.size());
+            auto expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }

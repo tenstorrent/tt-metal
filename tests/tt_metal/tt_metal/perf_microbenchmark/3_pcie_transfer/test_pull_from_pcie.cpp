@@ -62,7 +62,7 @@ using std::chrono::microseconds;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void* align(void* ptr, std::size_t max_alignment) {
-    const std::uintptr_t uptr = reinterpret_cast<std::uintptr_t>(ptr);
+    const auto uptr = reinterpret_cast<std::uintptr_t>(ptr);
     std::uintptr_t aligned = (uptr - 1u + max_alignment) & -max_alignment;
     // Make max alignment of ptr equal to the actual specified alignment
     // ex. if the current ptr here is 16, but we specified an alignment of 8,
@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             total_transfer_size + (2 * addr_align), 1000, std::chrono::system_clock::now().time_since_epoch().count());
 
-        uint32_t* start_ptr = (uint32_t*)align(src_vec.data(), addr_align);
+        auto* start_ptr = (uint32_t*)align(src_vec.data(), addr_align);
         std::vector<uint32_t> result_vec;
 
         const std::string copy_mode_str = copy_mode == 0 ? "memcpy" : copy_mode == 1 ? "4 byte writes" : "nt_memcpy";
@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
                 if (copy_mode == 0) {
                     memcpy(host_mem_ptr, start_ptr + src_data_offset, write_size_bytes);
                 } else if (copy_mode == 1) {
-                    uint32_t* host_mem_ptr4B = (uint32_t*)host_mem_ptr;
+                    auto* host_mem_ptr4B = (uint32_t*)host_mem_ptr;
                     uint32_t write_size_words = write_size_bytes / sizeof(uint32_t);
 
                     for (uint32_t i = 0; i < write_size_words; i++) {

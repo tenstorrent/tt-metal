@@ -984,7 +984,7 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     MeshDevice* device) {
     Conv2dConfig conv_config = conv_config_;
 
-    Conv2dSliceAttr* op_slice_attr = new Conv2dSliceAttr(
+    auto* op_slice_attr = new Conv2dSliceAttr(
         batch_size,
         {input_height, input_width},
         in_channels,

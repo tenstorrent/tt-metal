@@ -53,8 +53,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     uint32_t input_buf_size_datums = 1024 * 1024;
     uint32_t output_buf_size_datums = 1024 * 32;
     uint32_t datum_size_bytes = 2;
-    ttnn::QueueId io_cq = ttnn::QueueId(1);                 // Data reads and writes done through CQ0
-    ttnn::QueueId workload_dispatch_cq = ttnn::QueueId(0);  // Workload dispatched through CQ1
+    auto io_cq = ttnn::QueueId(1);                 // Data reads and writes done through CQ0
+    auto workload_dispatch_cq = ttnn::QueueId(0);  // Workload dispatched through CQ1
 
     ttnn::Shape input_shape({1, 1, 1024, 1024});
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[input_buf_size_datums]);
@@ -106,8 +106,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
     uint32_t buf_size_datums = 1024 * 1024;
     uint32_t datum_size_bytes = 2;
     std::vector<uint32_t> inputs = {4, 9, 16, 25, 36, 64};
-    ttnn::QueueId io_cq = ttnn::QueueId(1);
-    ttnn::QueueId workload_dispatch_cq = ttnn::QueueId(0);
+    auto io_cq = ttnn::QueueId(1);
+    auto workload_dispatch_cq = ttnn::QueueId(0);
     ttnn::Shape shape{1, 1, 1024, 1024};
 
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
@@ -120,7 +120,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
                 host_data[i] = bfloat16(static_cast<float>(input_val));
             }
             // Pre-compute expected output: neg(sqrt(input_val)) = -sqrt(input_val)
-            float expected_val = static_cast<float>(-1 * sqrt(input_val));
+            auto expected_val = static_cast<float>(-1 * sqrt(input_val));
             for (uint32_t i = 0; i < buf_size_datums; i++) {
                 expected_data[i] = bfloat16(expected_val);
             }

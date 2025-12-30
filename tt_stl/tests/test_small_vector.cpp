@@ -508,7 +508,7 @@ TEST(SmallVectorEdgeCaseTest, OverAlignedTypesAreProperlyAllocated) {
     // vector's storage.  We check the returned data pointer alignment.
     SmallVector<OverAligned, 2> vec;
     vec.emplace_back(7);
-    std::uintptr_t ptrVal = reinterpret_cast<std::uintptr_t>(vec.data());
+    auto ptrVal = reinterpret_cast<std::uintptr_t>(vec.data());
     EXPECT_EQ(ptrVal % alignof(OverAligned), 0u);
     vec.emplace_back(9);
 

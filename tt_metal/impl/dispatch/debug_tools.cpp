@@ -142,7 +142,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
         switch (cmd_id) {
             case CQ_DISPATCH_CMD_WRITE_LINEAR:
             case CQ_DISPATCH_CMD_WRITE_LINEAR_H: {
-                CQDispatchCmdLarge* cmd_large = reinterpret_cast<CQDispatchCmdLarge*>(cmd);
+                auto* cmd_large = reinterpret_cast<CQDispatchCmdLarge*>(cmd);
                 stride = sizeof(CQDispatchCmdLarge);
                 cq_file << fmt::format(
                     " (num_mcast_dests={}, noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
@@ -154,7 +154,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             } break;
             case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
                 if (cmd->write_linear_host.is_event) {
-                    uint32_t* event_ptr = (uint32_t*)(cmd + 1);
+                    auto* event_ptr = (uint32_t*)(cmd + 1);
                     cq_file << fmt::format(" (completed_event_id={})", *event_ptr);
                 } else {
                     cq_file << fmt::format(" (length={:#010x})", val(cmd->write_linear_host.length));
@@ -233,7 +233,7 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
         iq_file << fmt::format("{:#010x}: {}", cmd_addr, cmd_id);
         switch (cmd_id) {
             case CQ_PREFETCH_CMD_RELAY_LINEAR: {
-                CQPrefetchCmdLarge* cmd_large = (CQPrefetchCmdLarge*)cmd;
+                auto* cmd_large = (CQPrefetchCmdLarge*)cmd;
                 iq_file << fmt::format(
                     " (noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
                     val(cmd_large->relay_linear.noc_xy_addr),
@@ -346,7 +346,7 @@ void dump_completion_queue_entries(
             read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
 
         // Check if this page starts with a valid command id
-        CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
+        auto* cmd = (CQDispatchCmd*)read_data.data();
         if (cmd->base.cmd_id < CQ_DISPATCH_CMD_MAX_COUNT && cmd->base.cmd_id > CQ_DISPATCH_CMD_ILLEGAL) {
             if (last_span_invalid) {
                 if (page_addr == last_span_start + DispatchSettings::TRANSFER_PAGE_SIZE) {
@@ -455,7 +455,7 @@ void dump_issue_queue_entries(
         }
 
         // Check for a valid command id
-        CQPrefetchCmd* cmd = (CQPrefetchCmd*)(read_data.data() + page_offset);
+        auto* cmd = (CQPrefetchCmd*)(read_data.data() + page_offset);
         if (cmd->base.cmd_id < CQ_PREFETCH_CMD_MAX_COUNT && cmd->base.cmd_id != CQ_PREFETCH_CMD_ILLEGAL) {
             if (last_span_invalid) {
                 if (curr_addr == last_span_start + hal.get_alignment(HalMemType::HOST)) {
@@ -513,7 +513,7 @@ void dump_issue_queue_entries(
 
                     // Read the dispatch command
                     uint32_t dispatch_page_offset = dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
-                    CQDispatchCmd* dispatch_cmd = (CQDispatchCmd*)(read_data.data() + dispatch_page_offset);
+                    auto* dispatch_cmd = (CQDispatchCmd*)(read_data.data() + dispatch_page_offset);
                     if (dispatch_cmd->base.cmd_id < CQ_DISPATCH_CMD_MAX_COUNT) {
                         iq_file << "  ";
                         uint32_t dispatch_cmd_stride =

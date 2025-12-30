@@ -280,7 +280,7 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         GTEST_SKIP();
     }
 
-    uint32_t num_pages = static_cast<uint32_t>(device_tensor_size / page_size);
+    auto num_pages = static_cast<uint32_t>(device_tensor_size / page_size);
     if (uint64_t(num_pages) * page_size != device_tensor_size) {
         TT_THROW(
             "Check test parameters: shard shape:{}, page size:{} are incompatible (shard size:{}, #pages:{})",

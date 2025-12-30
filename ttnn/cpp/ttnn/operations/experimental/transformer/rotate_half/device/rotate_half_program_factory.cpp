@@ -67,7 +67,7 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
     CreateCircularBuffer(program, core_range, cb_output_config);
     const uint32_t output_no_mul_cb_index = src_no_mul_cb_index;
 
-    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
+    const auto bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();

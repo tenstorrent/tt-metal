@@ -92,7 +92,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                 it += stride_size;
             } else {
                 const auto start_core = it->value().first;
-                Stride stride = Stride{.core = {0, 0}, .data = 0};
+                auto stride = Stride{.core = {0, 0}, .data = 0};
                 if ((it + 1) == end) {
                     ret_map[output_core].push_back(PageStride{
                         .start_core = start_core,

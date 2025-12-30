@@ -2547,7 +2547,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         GTEST_SKIP() << "Not enough active devices for all-to-all test";
     }
 
-    const uint32_t num_other_devices = static_cast<uint32_t>(num_active_devices - 1);
+    const auto num_other_devices = static_cast<uint32_t>(num_active_devices - 1);
 
     // Calculate number of sender/receiver cores per device (all cores in top/bottom half)
     // Split grid into top half (senders) and bottom half (receivers)
@@ -2627,7 +2627,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         const auto& device_ptr = device_ptrs[dev_idx];
 
         // This device's index - used directly as L1 slot index (simple indexing)
-        uint32_t this_device_idx = static_cast<uint32_t>(dev_idx);
+        auto this_device_idx = static_cast<uint32_t>(dev_idx);
 
         // Sender compile time args - includes num_destinations and sender_device_idx
         std::vector<uint32_t> sender_compile_time_args = {

@@ -149,7 +149,7 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
     uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
     // Read any error codes and handle accordingly
-    tt::CBIndex cb = static_cast<tt::CBIndex>(ts->cb_id);
+    auto cb = static_cast<tt::CBIndex>(ts->cb_id);
     switch (ts->return_code) {
         case DPrintOK: break;  // Continue to print the tile slice
         case DPrintErrorBadPointer: {
@@ -159,7 +159,7 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
             return;
         }
         case DPrintErrorUnsupportedFormat: {
-            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
+            auto data_format = static_cast<tt::DataFormat>(ts->data_format);
             *stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
             return;
         }
@@ -187,22 +187,22 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
                 count_exceeded = true;
                 break;
             }
-            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
+            auto data_format = static_cast<tt::DataFormat>(ts->data_format);
             switch (data_format) {
                 case tt::DataFormat::Float16_b: {
-                    uint16_t* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
+                    auto* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
                     *stream << bfloat16_to_float(float16_b_ptr[i]);
                     break;
                 }
                 case tt::DataFormat::Float32: {
-                    float* float32_ptr = reinterpret_cast<float*>(data);
+                    auto* float32_ptr = reinterpret_cast<float*>(data);
                     *stream << float32_ptr[i];
                     break;
                 }
                 case tt::DataFormat::Bfp4_b:
                 case tt::DataFormat::Bfp8_b: {
                     // Saved the exponent and data together
-                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
+                    auto* data_ptr = reinterpret_cast<uint16_t*>(data);
                     uint8_t val = (data_ptr[i] >> 8) & 0xFF;
                     uint8_t exponent = data_ptr[i] & 0xFF;
                     uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
@@ -210,27 +210,27 @@ void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
                     break;
                 }
                 case tt::DataFormat::Int8: {
-                    int8_t* data_ptr = reinterpret_cast<int8_t*>(data);
+                    auto* data_ptr = reinterpret_cast<int8_t*>(data);
                     *stream << (int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt8: {
-                    uint8_t* data_ptr = reinterpret_cast<uint8_t*>(data);
+                    auto* data_ptr = reinterpret_cast<uint8_t*>(data);
                     *stream << (unsigned int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt16: {
-                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
+                    auto* data_ptr = reinterpret_cast<uint16_t*>(data);
                     *stream << (unsigned int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::Int32: {
-                    int32_t* data_ptr = reinterpret_cast<int32_t*>(data);
+                    auto* data_ptr = reinterpret_cast<int32_t*>(data);
                     *stream << (int)data_ptr[i];
                     break;
                 }
                 case tt::DataFormat::UInt32: {
-                    uint32_t* data_ptr = reinterpret_cast<uint32_t*>(data);
+                    auto* data_ptr = reinterpret_cast<uint32_t*>(data);
                     *stream << (unsigned int)data_ptr[i];
                     break;
                 }
@@ -878,7 +878,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
     // Device is filling the buffer and in the end waits on host to write rpos
     auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
-    DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
+    auto* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
     uint32_t rpos = l->aux.rpos;
     uint32_t wpos = l->aux.wpos;
     if (rpos < wpos) {
@@ -892,7 +892,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
         constexpr uint32_t bufsize = sizeof(DebugPrintMemLayout::data);
         // parse the input codes
         while (rpos < wpos) {
-            DPrintTypeID code = static_cast<DPrintTypeID>(l->data[rpos++]);
+            auto code = static_cast<DPrintTypeID>(l->data[rpos++]);
             TT_ASSERT(rpos <= bufsize);
             uint8_t sz = l->data[rpos++];
             TT_ASSERT(rpos <= bufsize);

@@ -71,7 +71,7 @@ static void test_sems_across_core_types(
         }
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test {} ethernet DM{}", active_eth ? "active" : "idle", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            auto dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
             const auto& eth_cores_unordered =
                 active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
@@ -167,7 +167,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             distributed::MeshWorkload workload;
             log_info(tt::LogTest, "Add ethernet DM{}", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            auto dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
             Program program = CreateProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
@@ -248,7 +248,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
     }
     for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
-        DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+        auto dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
         CoreCoord eth_core = *eth_cores.begin();
         log_info(tt::LogTest, "Adding {} ethernet DM{} {}", this->slow_dispatch_ ? "idle" : "active", erisc_idx, eth_core.str());
         distributed::MeshWorkload workload;
@@ -313,7 +313,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            auto dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
             distributed::MeshWorkload workload;
 
             auto zero_coord = distributed::MeshCoordinate(0, 0);

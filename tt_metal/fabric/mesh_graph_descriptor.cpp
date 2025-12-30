@@ -93,7 +93,7 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
     }
 
     const auto& topology_types = device_topology->dim_types();
-    const uint32_t channels_count = static_cast<uint32_t>(channels->count());
+    const auto channels_count = static_cast<uint32_t>(channels->count());
     const auto& policy = channels->policy();
 
     MeshShape mesh_shape = mesh_coord_range.shape();

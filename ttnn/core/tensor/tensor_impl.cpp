@@ -327,7 +327,7 @@ bool should_use_scientific_notation(tt::stl::Span<const T> buffer) {
         bool found_nonzero_finite = false;
 
         for (const auto& value : buffer) {
-            double val = static_cast<double>(value);
+            auto val = static_cast<double>(value);
             if (std::isfinite(val) && val != 0.0) {
                 double abs_val = std::abs(val);
                 nonzero_finite_min = std::min(nonzero_finite_min, abs_val);

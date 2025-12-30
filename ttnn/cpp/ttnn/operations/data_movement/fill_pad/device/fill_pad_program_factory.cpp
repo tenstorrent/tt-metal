@@ -52,7 +52,7 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     const bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // pack bf16 vals
-    uint32_t packed_fill_value = static_cast<std::uint32_t>(fill_value);
+    auto packed_fill_value = static_cast<std::uint32_t>(fill_value);
     if (input_tensor.dtype() == DataType::BFLOAT16) {
         packed_fill_value = pack_two_bfloat16_into_uint32({bfloat16(fill_value), bfloat16(fill_value)});
     } else if (input_tensor.dtype() == DataType::UINT16) {

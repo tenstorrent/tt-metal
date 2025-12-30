@@ -1129,7 +1129,7 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
 
         // Verify coordinate values match expected mesh coordinates
         for (size_t dim = 0; dim < expected_coord.dims(); ++dim) {
-            uint32_t actual_coord = coord_array[dim].as<uint32_t>();
+            auto actual_coord = coord_array[dim].as<uint32_t>();
             EXPECT_EQ(actual_coord, expected_coord[dim])
                 << "Physical chip " << physical_chip_id << " (logical chip " << logical_chip_id << ") coordinate["
                 << dim << "] should be " << expected_coord[dim] << ", got " << actual_coord;

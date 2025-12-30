@@ -91,7 +91,7 @@ void update_host_data(Common::DeviceData& device_data, const std::vector<uint32_
     expected_cmd.write_linear_host.pad1 = 0;
     expected_cmd.write_linear_host.pad2 = HostMemDeviceCommand::random_padding_value();
 
-    uint32_t* cmd_as_words = reinterpret_cast<uint32_t*>(&expected_cmd);
+    auto* cmd_as_words = reinterpret_cast<uint32_t*>(&expected_cmd);
     for (uint32_t i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
         device_data.push_one(device_data.get_host_core(), 0, cmd_as_words[i]);
     }
@@ -412,7 +412,7 @@ private:
         std::vector<uint8_t> exec_buf_data;
         for (uint32_t i = 0; i < num_iterations; i++) {
             for (const auto& cmd : commands_per_iteration) {
-                const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(cmd.data());
+                const auto* src_ptr = reinterpret_cast<const uint8_t*>(cmd.data());
                 const uint8_t* end_ptr = reinterpret_cast<uint8_t*>(cmd.data()) + (cmd.size_bytes());
                 exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
             }
@@ -424,7 +424,7 @@ private:
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
         wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-        const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
+        const auto* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         const uint8_t* wend = wptr + (wait_cmd.size_bytes());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wend);
 
@@ -433,7 +433,7 @@ private:
         exec_buf_end_calc.add_prefetch_exec_buf_end();
         DeviceCommand exec_terminate(exec_buf_end_calc.write_offset_bytes());
         exec_terminate.add_prefetch_exec_buf_end();
-        const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
+        const auto* src_ptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
         const uint8_t* end_ptr =
             reinterpret_cast<const uint8_t*>(exec_terminate.data()) + (exec_terminate.size_bytes());
         exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
@@ -676,7 +676,7 @@ protected:
     }
 
     void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) {
-        uint32_t* buffer = static_cast<uint32_t*>(completion_queue_buffer);
+        auto* buffer = static_cast<uint32_t*>(completion_queue_buffer);
         uint32_t size_words = size_bytes / sizeof(uint32_t);
 
         for (uint32_t i = 0; i < size_words; i++) {
@@ -920,7 +920,7 @@ public:
             uint32_t total_length = 0;
             for (uint32_t i = 0; i < n_sub_cmds; i++) {
                 // limit the length to min and max read size
-                uint32_t raw = payload_generator_->get_rand<uint32_t>(0, DEFAULT_SCRATCH_DB_SIZE - 1);
+                auto raw = payload_generator_->get_rand<uint32_t>(0, DEFAULT_SCRATCH_DB_SIZE - 1);
                 uint32_t clamped = std::min(max_read_size, std::max(MIN_READ_SIZE, raw));
                 uint32_t length = tt::align(clamped, dram_alignment);
                 total_length += length;
@@ -1130,7 +1130,7 @@ public:
             uint32_t length_words = length / sizeof(uint32_t);
 
             // Use reserve_space to properly update cmd_write_offsetB
-            CQPrefetchCmdLarge* cmd_ptr = cmd2.reserve_space<CQPrefetchCmdLarge*>(sizeof(CQPrefetchCmdLarge));
+            auto* cmd_ptr = cmd2.reserve_space<CQPrefetchCmdLarge*>(sizeof(CQPrefetchCmdLarge));
             std::memcpy(cmd_ptr, &cmd, sizeof(CQPrefetchCmdLarge));
 
             // Align the write offset for any padding needed
@@ -1164,7 +1164,7 @@ protected:
             return std::nullopt;  // nothing to read yet
         }
         // Random length (bytes), aligned to L1, capped by remaining
-        uint32_t data_size_bytes = payload_generator_->get_rand<uint32_t>(l1_alignment_, avail_bytes);
+        auto data_size_bytes = payload_generator_->get_rand<uint32_t>(l1_alignment_, avail_bytes);
         data_size_bytes = tt::align(data_size_bytes, l1_alignment_);
         data_size_bytes = std::min({data_size_bytes, avail_bytes, remaining_bytes});
         if (data_size_bytes == 0 || data_size_bytes > avail_bytes) {
@@ -1218,7 +1218,7 @@ protected:
         uint32_t max_pages = remaining_bytes / page_size;
         uint32_t max_data_limit = big_chunk_ ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
         uint32_t cmd_limit_pages = std::max(1u, max_data_limit / page_size);
-        uint32_t pages = payload_generator_->get_rand<uint32_t>(1, std::min(max_pages, cmd_limit_pages));
+        auto pages = payload_generator_->get_rand<uint32_t>(1, std::min(max_pages, cmd_limit_pages));
 
         // Randomize source DRAM location
         uint32_t total_bytes = pages * page_size;
@@ -1229,7 +1229,7 @@ protected:
             random_offset = 0;
         }
 
-        uint32_t start_page = payload_generator_->get_rand<uint32_t>(0, num_banks_ - 1);
+        auto start_page = payload_generator_->get_rand<uint32_t>(0, num_banks_ - 1);
 
         // TODO: Randomize length adjust
         uint32_t length_adjust = 0;
@@ -1271,7 +1271,7 @@ protected:
     std::optional<HostMemDeviceCommand> gen_random_inline_cmd(
         Common::DeviceData& device_data, const CoreRange& worker_range, uint32_t noc_xy, uint32_t& remaining_bytes) {
         // Randomize the dispatcher command we choose to relay
-        uint32_t random_dispatch_cmd = payload_generator_->get_rand<uint32_t>(0, 1);
+        auto random_dispatch_cmd = payload_generator_->get_rand<uint32_t>(0, 1);
 
         switch (random_dispatch_cmd) {
             case 0:
@@ -1332,7 +1332,7 @@ protected:
                     if (worker_cores.empty()) {
                         worker_cores.push_back(default_worker_start);
                     }
-                    const uint32_t num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
+                    const auto num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
                     const uint32_t sub_cmds_bytes =
                         tt::align(num_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment_);
 
@@ -1550,7 +1550,7 @@ public:
 
     // Length should always be less than max_fetch_bytes_
     void add_packed_write(const std::vector<CoreCoord>& worker_cores, uint32_t length, bool no_stride = false) {
-        const uint32_t num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
+        const auto num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
         const uint32_t sub_cmds_bytes =
             tt::align(num_sub_cmds * sizeof(CQDispatchWritePackedUnicastSubCmd), info_.l1_alignment_);
 
@@ -1914,11 +1914,11 @@ TEST_P(RandomTestFixture, RandomTest) {
 
     while (remaining_bytes > 0) {
         // Assumes terminate is the last command...
-        uint32_t cmd = payload_generator_->get_rand<uint32_t>(0, CQ_PREFETCH_CMD_TERMINATE - 1);
+        auto cmd = payload_generator_->get_rand<uint32_t>(0, CQ_PREFETCH_CMD_TERMINATE - 1);
         const uint32_t limit_x = (worker_range.end_coord.x - first_worker.x - 1);
         const uint32_t limit_y = (worker_range.end_coord.y - first_worker.y - 1);
-        uint32_t x = payload_generator_->get_rand<uint32_t>(0, limit_x);
-        uint32_t y = payload_generator_->get_rand<uint32_t>(0, limit_y);
+        auto x = payload_generator_->get_rand<uint32_t>(0, limit_x);
+        auto y = payload_generator_->get_rand<uint32_t>(0, limit_y);
 
         CoreCoord worker_core(first_worker.x + x, first_worker.y + y);
         // Compute NOC encoding once

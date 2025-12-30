@@ -62,7 +62,7 @@ void test_BufferCorePageMapping_Iterator(const std::vector<uint32_t>& page_mappi
     const auto core_page_mapping = core_page_mapping_from_page_mapping(page_mapping);
 
     auto core_it = BufferCorePageMapping::Iterator(&core_page_mapping, 0, 0);
-    uint32_t last_non_padding_idx = static_cast<uint32_t>(-1);
+    auto last_non_padding_idx = static_cast<uint32_t>(-1);
     for (uint32_t i = 0; i < page_mapping.size(); i++) {
         if (page_mapping[i] != PADDING) {
             last_non_padding_idx = i;

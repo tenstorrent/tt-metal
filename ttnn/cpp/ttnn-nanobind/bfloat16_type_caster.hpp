@@ -27,7 +27,7 @@ struct type_caster<::bfloat16> {
             this->value = bfloat16(nanobind::cast<float>(src));
             return true;
         } else if (isinstance<nanobind::int_>(src)) {
-            std::int32_t int_value = nanobind::cast<std::int32_t>(src);
+            auto int_value = nanobind::cast<std::int32_t>(src);
             this->value = ::bfloat16(int_value);
             return true;
         }

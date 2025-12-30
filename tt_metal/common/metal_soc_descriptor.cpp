@@ -117,12 +117,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->dram_view_address_offsets.clear();
 
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
-        size_t channel = dram_view["channel"].as<size_t>();
+        auto channel = dram_view["channel"].as<size_t>();
         if (channel >= get_grid_size(tt::CoreType::DRAM).x) {
             // DRAM can be harvested and we don't create unique soc desc for diff harvesting
             break;
         }
-        size_t address_offset = dram_view["address_offset"].as<size_t>();
+        auto address_offset = dram_view["address_offset"].as<size_t>();
 
         std::vector<CoreCoord> eth_dram_cores;
         std::vector<size_t> eth_endpoints;

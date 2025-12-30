@@ -230,7 +230,7 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 core,
                 static_cast<int>(key.direction),
                 key.link_idx);
-            uint8_t channel_id = static_cast<uint8_t>(channel_it->second);
+            auto channel_id = static_cast<uint8_t>(channel_it->second);
 
             // Get the stored mux core location for this connection
             auto mux_core_it = mux_cores_.find(key);
@@ -802,7 +802,7 @@ void TestDevice::create_sync_kernel() {
     }
 
     // Local sync args
-    uint32_t local_sync_val = static_cast<uint32_t>(senders_.size() + 1);  // Expected sync value
+    auto local_sync_val = static_cast<uint32_t>(senders_.size() + 1);  // Expected sync value
     local_args.push_back(sender_memory_map_->get_local_sync_address());
     local_args.push_back(local_sync_val);
 
@@ -895,7 +895,7 @@ void TestDevice::create_sender_kernels() {
         // Add local sync args FIRST (parsed first by kernel)
         if (global_sync_) {
             // Add local sync configuration args (same as sync core, but no global sync)
-            uint32_t local_sync_val =
+            auto local_sync_val =
                 static_cast<uint32_t>(senders_.size() + 1);  // Expected sync value (all senders + sync core)
             local_args.push_back(sender_memory_map_->get_local_sync_address());
             local_args.push_back(local_sync_val);

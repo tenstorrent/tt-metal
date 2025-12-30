@@ -73,7 +73,7 @@ void ProfilerModule(nb::module_& mod) {
         .def("__eq__", &ttm::ProgramAnalysisData::operator==)
         .def("__lt__", &ttm::ProgramAnalysisData::operator<)
         .def("__repr__", [](const ttm::ProgramAnalysisData& data) {
-            const std::string uid_repr = nb::cast<std::string>(nb::repr(nb::cast(data.program_execution_uid)));
+            const auto uid_repr = nb::cast<std::string>(nb::repr(nb::cast(data.program_execution_uid)));
             return fmt::format(
                 "ProgramAnalysisData(program_execution_uid={}, program_analyses_results_size={}, core_count={}, "
                 "num_available_cores={})",

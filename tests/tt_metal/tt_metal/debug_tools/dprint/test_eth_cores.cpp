@@ -115,7 +115,7 @@ TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            auto dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
             this->RunTestOnDevice(
                 [=](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                     CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, true, dm_processor);
@@ -140,7 +140,7 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test idle ethernet DM{}", erisc_idx);
-            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            auto dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
             this->RunTestOnDevice(
                 [=](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

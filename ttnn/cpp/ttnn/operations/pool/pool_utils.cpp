@@ -133,11 +133,11 @@ FactoryParameters get_factory_parameters(
     // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
     uint32_t num_tilized_rows =
         kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
+    auto in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
     // For TILE_LAYOUT output, we need to align to TILE_WIDTH instead of FACE_WIDTH
     uint32_t effective_tile_width_for_output =
         (output_layout == Layout::TILE) ? tt::constants::TILE_WIDTH : tt::constants::FACE_WIDTH;
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / effective_tile_width_for_output);
+    auto out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / effective_tile_width_for_output);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool last_tile_is_partial =
