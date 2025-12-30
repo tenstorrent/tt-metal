@@ -164,7 +164,14 @@ class DispatchManager:
         assert file_name.endswith(".csv"), "file_name must end with .csv"
         df = DispatchManager.get_timing_entries_stats()
         df.to_csv(file_name, index=True)
+        pivot_table = df.pivot_table(
+            index="func_name", columns="backend", values="duration", aggfunc="sum", fill_value=0
+        )
+
+        # Display or save
+        pivot_table.to_csv(file_name.replace(".csv", "_pivot.csv"))
         print(f"Saved timing stats to {os.path.abspath(file_name)}")
+        print(f"Saved pivot table to {os.path.abspath(file_name.replace('.csv', '_pivot.csv'))}")
 
 
 def wrap_to_torch_ttnn_tensor(e):
@@ -300,6 +307,7 @@ class NormalRun:
     @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
+        begin = time.time()
 
         def _to_torch(self):
             is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
@@ -317,12 +325,17 @@ class NormalRun:
         if result.device.type == "meta" and self.ttnn_tensor is not None:
             result = _to_torch(self)
         self.elem = result if self.elem is None else self.elem
+        end = time.time()
+        DispatchManager.record_timing("TTNN", "", "ttnn_to_torch", {}, end - begin)
         return self.elem
 
     @staticmethod
     def to_ttnn(self):
         """Convert to TTNN tensor, creating if necessary."""
+        begin = time.time()
         if self.ttnn_tensor is not None:
+            end = time.time()
+            DispatchManager.record_timing("TTNN", "", "torch_to_ttnn", {}, end - begin)
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         # convert elem to ttnn tensor here
@@ -343,6 +356,8 @@ class NormalRun:
             mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
         )
+        end = time.time()
+        DispatchManager.record_timing("TTNN", "", "torch_to_ttnn", {}, end - begin)
         return self.ttnn_tensor
 
     @staticmethod
