@@ -487,16 +487,12 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    // This is a weird hack that must go away in the future
-    std::vector<std::any> joined_params;
+    std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&joined_params](const Tensor& tensor) { joined_params.push_back(std::cref(tensor)); }, tensor_args);
+        [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
-    tt::stl::reflection::Attributes attributes = tt::stl::reflection::get_attributes(operation_attributes);
-    joined_params.insert(joined_params.end(), attributes.begin(), attributes.end());
-
-    auto operation_name = get_operation_name<device_operation_t>(operation_attributes);
-    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, joined_params);
+    tt::tt_metal::GraphTracker::instance().track_function_start(
+        get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (first_tensor.has_value()) [[likely]] {
