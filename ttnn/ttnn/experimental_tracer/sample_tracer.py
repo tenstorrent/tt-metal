@@ -37,6 +37,7 @@ allowed_modes = [
     "vit_so400m_patch14_siglip_224",
     "swin_transformer",
     "swin_transformer_v2",
+    "falcon7b",
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64"]
@@ -129,6 +130,14 @@ def main(args_dict):
         from ultralytics import YOLO
 
         torch_model = YOLO("yolov8s.pt").model
+
+    elif args.model == "falcon7b":
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        model_name = "tiiuae/falcon-7b"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        torch_model = AutoModelForCausalLM.from_pretrained(model_name)
+
     elif args.model == "yolov8x":
         from ultralytics import YOLO
 
@@ -225,7 +234,7 @@ def main(args_dict):
             )
 
     torch_model.eval()
-    if not args.model == "sentence_bert" and not args.disable_torch_summary:
+    if args.model not in ["sentence_bert", "falcon7b"] and not args.disable_torch_summary:
         print("Started torch summary: ")
         summary(torch_model, input_size=args.input_shape)
         print("Finished torch summary.\n\n\n")
