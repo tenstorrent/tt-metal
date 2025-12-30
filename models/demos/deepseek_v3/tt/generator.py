@@ -16,7 +16,8 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -116,14 +117,7 @@ class DeepseekGenerator:
         self.batch_size_per_row = USERS_PER_ROW
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
         self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
-        self.page_tables_tt = tuple(
-            MLA2D.create_page_table(
-                paged_config=self.paged_config,
-                mesh_device=self.mesh_device,
-                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
-            )
-            for _ in range(self.hf_config.num_hidden_layers)
-        )
+
         self.random_weights = random_weights
         self.single_layer = single_layer
 
@@ -176,23 +170,27 @@ class DeepseekGenerator:
             single_layer=self.single_layer,
         )
 
-    def _prepare_model_states(self) -> None:
+    def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:
         logger.info("Creating model states...")
         self.model_state = RowBatchedModel.create_state(
-            hf_config=self.hf_config, mesh_device=self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
+            hf_config=self.hf_config,
+            mesh_device=self.mesh_device,
+            paged_config=self.paged_config,
+            ccl=self.ccl,
+            kv_cache_override=kv_cache_override,
         )
         logger.info("Creating model shared states...")
         self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device
         )
 
-    def _prepare_run_configs(self, mode: str) -> None:
+    def _prepare_run_configs(self, mode: str, kv_cache_override: KvCacheConfig | None = None) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
             self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
-            self._prepare_model_states()
+            self._prepare_model_states(kv_cache_override=kv_cache_override)
             self.model_run_config_prefill = create_run_config(
                 self.model_prefill_cfg,
                 self.model_weight_config,
@@ -380,8 +378,31 @@ class DeepseekGenerator:
         )
         return rope_tensors, tt_positions
 
+    def _get_page_tables(self) -> tuple[ttnn.Tensor, ...]:
+        if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
+            return self.page_tables_tt
+
+        assert hasattr(self, "paged_config") and self.paged_config is not None
+        assert hasattr(self, "mesh_device") and self.mesh_device is not None
+        assert hasattr(self, "batch_size_per_row") and self.batch_size_per_row is not None
+        assert hasattr(self, "hf_config") and self.hf_config is not None
+        self.page_tables_tt = tuple(
+            MLA2D.create_page_table(
+                paged_config=self.paged_config,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
+            )
+            for _ in range(self.hf_config.num_hidden_layers)
+        )
+        return self.page_tables_tt
+
     def _decode_step(
-        self, tokens_step: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int, return_rot_idxs: bool = False
+        self,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        page_table: torch.Tensor | None = None,
+        return_rot_idxs: bool = False,
     ) -> torch.Tensor | Tuple[torch.Tensor, ttnn.Tensor]:
         """Run a single decode step and return logits on host as torch tensor [1, 1, B, V].
 
@@ -410,13 +431,17 @@ class DeepseekGenerator:
             dtype=ttnn.int32,
         )
 
+        if page_table is not None:
+            page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table)
+        else:
+            page_tables_to_use = self._get_page_tables()
         # RowBatchedModel forward
         logits_tt = RowBatchedModel.forward_decode(
             tt_tokens,
             tt_positions,
             self.model_run_config_decode,
             rope_tensors,
-            self.page_tables_tt,
+            page_tables=page_tables_to_use,
         )
         # Gather to host
         logits = ttnn.to_torch(
@@ -651,12 +676,19 @@ class DeepseekGenerator:
             out.append(1)
         return out
 
-    def _prefill(self, tokens: torch.Tensor, user_id: int) -> torch.Tensor:
+    def _prefill(
+        self,
+        tokens: torch.Tensor,
+        user_id: int,
+        page_table: torch.Tensor | None = None,
+        local_user_id: int | None = None,
+    ) -> torch.Tensor:
         """Run prefill for the full prompt sequence and return logits for the last position.
 
         Args:
             tokens: [1, 1, seq_len] padded token sequences
             user_id: user id for the prefill
+            local_user_id: local user id for page table lookup
 
         Returns:
             logits: [1, 1, seq_len, V] logits for the full sequence
@@ -689,13 +721,18 @@ class DeepseekGenerator:
             "trans_matrix": rot_mats["trans_matrix"],
         }
 
+        if page_table is not None:
+            page_tables_to_use = self._convert_vllm_page_table_for_user(page_table, user_id, local_user_id)
+        else:
+            page_tables_to_use = self._get_page_tables()
+
         # RowBatchedModel forward prefill
         logits_tt = RowBatchedModel.forward_prefill(
             x=tt_tokens,
             user_id=user_id,
             cfg=self.model_run_config_prefill,
             rope_tensors=rope_tensors,
-            page_tables=self.page_tables_tt,
+            page_tables=page_tables_to_use,
         )
 
         # Gather to host
@@ -741,6 +778,7 @@ class DeepseekGenerator:
         rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._trace_rot_idxs)
         logger.info(f"Rope tensors done")
 
+        # TODO: Fix this for vLLM
         self._trace_output = RowBatchedModel.forward_decode(
             x=self._trace_tokens,
             position_idxs=self._trace_positions,
@@ -827,6 +865,123 @@ class DeepseekGenerator:
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
         logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
+
+    def get_kv_cache(self):
+        assert self.model_state is not None, "Model state is not initialized"
+
+        kv_cache_list = []
+        for decoder_type in ["mlp_decoder_block", "moe_decoder_block"]:
+            if decoder_type in self.model_run_config_prefill:
+                decoder_blocks = self.model_run_config_prefill[decoder_type]
+                for block_cfg in decoder_blocks:
+                    if "mla" in block_cfg and "mla1d" in block_cfg["mla"] and "kvpe_cache" in block_cfg["mla"]["mla1d"]:
+                        kvpe_cache = block_cfg["mla"]["mla1d"]["kvpe_cache"]
+                        kv_cache_list.append(kvpe_cache)
+                    else:
+                        raise ValueError(f"KVPE cache not found for decoder block {decoder_type}")
+
+        return kv_cache_list
+
+    def set_kv_cache(self, kv_cache_list: list[ttnn.Tensor]) -> None:
+        """
+        Set the kvpe_cache values in block configs from the provided kv_cache_list.
+        This is the inverse operation of get_kv_cache().
+
+        Args:
+            kv_cache_list: List of TTNN tensors to set as kvpe_cache, one per decoder block
+        """
+        assert self.model_run_config_prefill is not None, "Model run config prefill is not initialized"
+        assert len(kv_cache_list) > 0, "kv_cache_list cannot be empty"
+
+        cache_idx = 0
+        for decoder_type in ["mlp_decoder_block", "moe_decoder_block"]:
+            if decoder_type in self.model_run_config_prefill:
+                decoder_blocks = self.model_run_config_prefill[decoder_type]
+                for block_cfg in decoder_blocks:
+                    if "mla" in block_cfg and "mla1d" in block_cfg["mla"] and "kvpe_cache" in block_cfg["mla"]["mla1d"]:
+                        if cache_idx >= len(kv_cache_list):
+                            raise ValueError(
+                                f"Not enough kv_cache entries. Expected at least {cache_idx + 1}, got {len(kv_cache_list)}"
+                            )
+                        block_cfg["mla"]["mla1d"]["kvpe_cache"] = kv_cache_list[cache_idx]
+                        cache_idx += 1
+                    else:
+                        raise ValueError(f"MLA structure not found for decoder block {decoder_type}")
+
+        if cache_idx < len(kv_cache_list):
+            logger.warning(
+                f"set_kv_cache: More kv_cache entries provided ({len(kv_cache_list)}) than decoder blocks ({cache_idx})"
+            )
+
+    def _convert_vllm_page_table_for_user(
+        self, page_table: torch.Tensor, user_id: int, local_user_id: int | None = None
+    ) -> tuple[ttnn.Tensor, ...]:
+        """
+        Convert vLLM's block_tables (page_table) to TTNN tensor format for a specific user.
+        Creates one page table per layer as expected by the model.
+
+        Args:
+            page_table: torch.Tensor of shape [batch_size, max_num_blocks_per_req] from vLLM
+            user_id: The user index to extract the page table for
+            local_user_id: The local user index to extract the page table for
+
+        Returns:
+            Tuple of TTNN tensors, one per layer
+        """
+        # Calculate expected shape: [batch_per_shard, blocks_per_user]
+        batch_per_shard = even_int_div(self.batch_size_per_row, self.dp_factor)
+        blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
+
+        # Extract the user's block table row
+        idx = local_user_id if local_user_id is not None else user_id
+        user_blocks = page_table[
+            idx, : min(blocks_per_user, page_table.shape[1])
+        ].clone()  # [max_num_blocks_per_req] or less
+
+        max_num_blocks = batch_per_shard * blocks_per_user
+        full_page_table = torch.randperm(max_num_blocks, dtype=torch.int32)
+        full_page_table = full_page_table.reshape(batch_per_shard, blocks_per_user)
+
+        local_user_idx = user_id % batch_per_shard
+        num_user_blocks = min(user_blocks.shape[0], blocks_per_user)
+        full_page_table[local_user_idx, :num_user_blocks] = user_blocks[:num_user_blocks]
+
+        # Convert to TTNN format using the model's helper
+        page_table_tt = MLA2D.create_page_table(
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            page_table=full_page_table,
+            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
+        )
+
+        num_layers = self.hf_config.num_hidden_layers
+        return tuple(ttnn.clone(page_table_tt) for _ in range(num_layers))
+
+    def _convert_vllm_page_table_for_batch(self, page_table: torch.Tensor) -> tuple[ttnn.Tensor, ...]:
+        """
+        Convert vLLM's block_tables (page_table) to TTNN tensor format for the entire batch.
+        Creates one page table per layer as expected by the model.
+
+        Args:
+            page_table: torch.Tensor of shape [batch_size, max_num_blocks_per_req] from vLLM
+
+        Returns:
+            Tuple of TTNN tensors, one per layer
+        """
+        # Use vLLM page table directly, but shard it across devices to match the sharded batch size
+        # in paged_update_cache.
+        # page_table shape: [batch_size, max_blocks_per_req]
+
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return tuple(page_table_tt for _ in range(self.hf_config.num_hidden_layers))
 
 
 __all__ = ["DeepseekGenerator", "SamplingParams"]
