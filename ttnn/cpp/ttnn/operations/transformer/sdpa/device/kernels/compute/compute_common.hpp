@@ -19,7 +19,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/reduce_custom.h"
-#include "tt_metal/hw/inc/api/debug/dprint_pages.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -434,16 +433,10 @@ void transpose_block(uint32_t in_cb, uint32_t num_tiles) {
  */
 template <bool SDPA_EXP_APPROX_MODE, bool calculate_col = true>
 void calculate_exponential_first_column_or_row(int scale_bf16) {
-    constexpr int ITERATIONS = 10;  // calculate_col? 4 : 2;
-    constexpr int DST_STRIDE = 1;   // calculate_col? 2 : 1;
+    constexpr int ITERATIONS = calculate_col ? 4 : 2;
+    constexpr int DST_STRIDE = calculate_col ? 2 : 1;
     if constexpr (SDPA_EXP_APPROX_MODE) {
         for (int d = 0; d < ITERATIONS; d++) {
-            if constexpr (!calculate_col) {
-                if (d == 2 || d == 3 || d == 4 || d == 5 || d == 6 || d == 7) {
-                    sfpi::dst_reg++;
-                    continue;
-                }
-            }
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result = ckernel::sfpu::
                 _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
@@ -454,12 +447,6 @@ void calculate_exponential_first_column_or_row(int scale_bf16) {
         }
     } else {
         for (int d = 0; d < ITERATIONS; d++) {
-            if constexpr (!calculate_col) {
-                if (d == 2 || d == 3 || d == 4 || d == 5 || d == 6 || d == 7) {
-                    sfpi::dst_reg++;
-                    continue;
-                }
-            }
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
             sfpi::vFloat result;
@@ -484,29 +471,8 @@ void exp_tile_first_column_or_row(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
         calculate_exponential_first_column_or_row<SDPA_EXP_APPROX_MODE, calculate_col>,
         idst,
-        (int)VectorMode::C,
+        calculate_col ? (int)VectorMode::C : (int)VectorMode::R,
         scale_bf16);
-}
-#endif
-
-#ifdef TRISC_UNPACK
-void print_tile(const uint8_t cb, const uint8_t num_r, const uint8_t num_c) {
-    for (uint8_t i = 0; i < num_r; i++) {
-        for (uint8_t j = 0; j < num_c; j++) {
-            DPRINT << "====== FACE " << (int)i << " " << (int)j << ENDL();
-            for (uint8_t r = i * 16; r < (i + 1) * 16; ++r) {
-                SliceRange sr = SliceRange{
-                    .h0 = r,
-                    .h1 = (uint8_t)(r + 1),
-                    .hs = 1,
-                    .w0 = (uint8_t)(i * 16),
-                    .w1 = uint8_t((i + 1) * 16),
-                    .ws = 1};
-                DPRINT << (uint)r << ":" << TileSlice(cb, 0, sr, true, false) << ENDL();
-            }
-            DPRINT << "++++++" << ENDL();
-        }
-    }
 }
 #endif
 
@@ -525,21 +491,11 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    /*
-#ifdef TRISC_UNPACK
-    if (num_tiles > 0) {
-        DPRINT << "IN0:" << ENDL();
-        print_tile(in0_cb, 1, 1);
-        print_tile(in1_cb, 1, 1);
-    }
-#endif
-    */
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        // exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
         MATH((exp_tile_first_column_or_row<EXP_APPROX_MODE, calculate_col>(0, scale_bf16)));
 
         pack_tile(0, out_cb);
@@ -547,14 +503,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         cb_push_back(out_cb, 1);
         release_dst();
     }
-    /*
-#ifdef TRISC_UNPACK
-    if (num_tiles > 0) {
-        DPRINT << "OUT:" << ENDL();
-        print_tile(out_cb, 1, 1);
-    }
-#endif
-    */
 }
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
