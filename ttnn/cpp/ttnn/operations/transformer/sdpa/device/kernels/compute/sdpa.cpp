@@ -247,8 +247,18 @@ void MAIN {
                          * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                          * Scale is fused into exp again since max is the max of unscaled scores.
                          */
-
+                        transpose_block<true, true>(alias_prev_max, Sq_chunk_t);
+                        transpose_block<true, true>(alias_cur_max, Sq_chunk_t);
                         sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        transpose_block<true, true>(cb_exp_max_diff, Sq_chunk_t);
+                        transpose_block<true, true>(alias_cur_max, Sq_chunk_t);
+                        /*
+#ifdef TRISC_UNPACK
+                        DPRINT << "OUT2:" << ENDL();
+                        cb_wait_front(cb_exp_max_diff, 1);
+                        print_tile(cb_exp_max_diff, 1, 1);
+#endif
+                        */
                         cb_pop_front(alias_prev_max, Sq_chunk_t);
 
                         /**
