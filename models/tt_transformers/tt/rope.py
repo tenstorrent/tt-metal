@@ -416,7 +416,7 @@ class RotarySetup(LightweightModule):
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
             1,
-            batch_size,
+            self.batch_size,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device

@@ -480,9 +480,10 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
+
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We can only enable it for batch 32 since the fused ops have certain batch size assumptions and batch 1 has not been extensively tested.
-        self.use_qk_fused = True if max_batch_size == 32 else False
+        self.use_qk_fused = True
+
         self.is_70b = False
         self.is_90b = False
         self.fuse_qkv = False
