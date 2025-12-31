@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <string>
 #include <tt_stl/assert.hpp>
 
@@ -188,19 +189,8 @@ bool validate_pooling_params_uniformity(
         input_w, output_w, params.kernel_size[1], params.stride[1], params.padding[2], params.padding[3]);
 
     // All strides should be exactly the same (since we're using fixed stride)
-    for (uint32_t stride : h_actual_strides) {
-        if (stride != params.stride[0]) {
-            return false;
-        }
-    }
-
-    for (uint32_t stride : w_actual_strides) {
-        if (stride != params.stride[1]) {
-            return false;
-        }
-    }
-
-    return true;
+    return std::ranges::all_of(h_actual_strides, [&params](uint32_t stride) { return stride == params.stride[0]; }) &&
+           std::ranges::all_of(w_actual_strides, [&params](uint32_t stride) { return stride == params.stride[1]; });
 }
 
 // Validation function to check if adaptive pooling approach is feasible
