@@ -2236,7 +2236,7 @@ class MasterConfigLoader:
                                 if isinstance(dim_val, (int, str)) and dim_val != "nullopt":
                                     try:
                                         dim = int(dim_val)
-                                    except:
+                                    except (ValueError, TypeError):
                                         pass
                             if "arg2" in arg:
                                 mem_config_data = arg["arg2"]
@@ -2263,7 +2263,7 @@ class MasterConfigLoader:
                                     try:
                                         tensor_array = json.loads(arg0_data)
                                         tensor_configs = tensor_array
-                                    except:
+                                    except (json.JSONDecodeError, ValueError):
                                         pass
 
                             # Check for UnparsedElement in arg0
@@ -2411,7 +2411,7 @@ class MasterConfigLoader:
                                 if isinstance(num_q_heads_val, (int, str)) and num_q_heads_val != "nullopt":
                                     try:
                                         num_q_heads = int(num_q_heads_val)
-                                    except:
+                                    except (ValueError, TypeError):
                                         pass
                             if "arg3" in arg:
                                 # arg3 is num_kv_heads
@@ -2419,7 +2419,7 @@ class MasterConfigLoader:
                                 if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
                                     try:
                                         num_kv_heads = int(num_kv_heads_val)
-                                    except:
+                                    except (ValueError, TypeError):
                                         pass
 
                     if not tensor_config:
@@ -2525,7 +2525,7 @@ class MasterConfigLoader:
                                 if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
                                     try:
                                         num_heads = int(num_heads_val)
-                                    except:
+                                    except (ValueError, TypeError):
                                         pass
                             if "arg2" in arg:
                                 # arg2 is num_kv_heads
@@ -2533,7 +2533,7 @@ class MasterConfigLoader:
                                 if isinstance(num_kv_heads_val, (int, str)) and num_kv_heads_val != "nullopt":
                                     try:
                                         num_kv_heads = int(num_kv_heads_val)
-                                    except:
+                                    except (ValueError, TypeError):
                                         pass
 
                     if not tensor_config:
@@ -2652,7 +2652,7 @@ class MasterConfigLoader:
                                             if isinstance(num_heads_val, str)
                                             else num_heads_val
                                         )
-                                    except:
+                                    except (ValueError, TypeError, AttributeError):
                                         pass
                             if "arg2" in arg:
                                 # arg2 is num_kv_heads
@@ -2664,7 +2664,7 @@ class MasterConfigLoader:
                                             if isinstance(num_kv_heads_val, str)
                                             else num_kv_heads_val
                                         )
-                                    except:
+                                    except (ValueError, TypeError, AttributeError):
                                         pass
                             if "arg3" in arg:
                                 # arg3 is transpose_k_heads (boolean as int)
@@ -2672,7 +2672,7 @@ class MasterConfigLoader:
                                 if isinstance(transpose_k_heads_val, (int, str)) and transpose_k_heads_val != "nullopt":
                                     try:
                                         transpose_k_heads = bool(int(transpose_k_heads_val))
-                                    except:
+                                    except (ValueError, TypeError):
                                         pass
 
                     if tensor_config and num_heads is not None and num_kv_heads is not None:
