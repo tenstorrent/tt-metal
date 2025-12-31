@@ -1012,7 +1012,7 @@ static void merge_resolved_graph_instances(
                 }
                 // Also check for port types in source that don't exist in target
                 for (const auto& [port_type, connections] : source_node.inter_board_connections) {
-                    if (!target.nodes[name].inter_board_connections.count(port_type)) {
+                    if (!target.nodes[name].inter_board_connections.contains(port_type)) {
                         throw std::runtime_error(fmt::format(
                             "Node '{}' has inter_board_connections for port type {} in {} but not in {}",
                             name,
@@ -1055,7 +1055,7 @@ static void merge_resolved_graph_instances(
     // Backward pass: Validate that target doesn't have any children that source doesn't have
     // This ensures graph_templates have identical children across all descriptor files
     for (const auto& [name, _] : target.nodes) {
-        if (!source.nodes.count(name)) {
+        if (!source.nodes.contains(name)) {
             throw std::runtime_error(fmt::format(
                 "Cannot merge graph_template '{}': node '{}' exists in {} but not in {}. "
                 "Graph templates must have identical children across all descriptor files.",
@@ -1137,7 +1137,7 @@ void CablingGenerator::merge(
         existing_hostnames.insert(host.hostname);
     }
     for (const auto& other_host : other.deployment_hosts_) {
-        if (!existing_hostnames.count(other_host.hostname)) {
+        if (!existing_hostnames.contains(other_host.hostname)) {
             deployment_hosts_.push_back(other_host);
             existing_hostnames.insert(other_host.hostname);
         }
@@ -1263,7 +1263,7 @@ static bool compare_nodes(const Node& lhs, const Node& rhs, bool check_host_id =
         return false;
     }
     for (const auto& [port_type, connections] : lhs.inter_board_connections) {
-        if (!rhs.inter_board_connections.count(port_type)) {
+        if (!rhs.inter_board_connections.contains(port_type)) {
             return false;
         }
         const auto& other_connections = rhs.inter_board_connections.at(port_type);
@@ -1303,7 +1303,7 @@ static bool compare_resolved_graph_instances(const ResolvedGraphInstance& lhs, c
         return false;
     }
     for (const auto& [name, subgraph] : lhs.subgraphs) {
-        if (!rhs.subgraphs.count(name) || !rhs.subgraphs.at(name)) {
+        if (!rhs.subgraphs.contains(name) || !rhs.subgraphs.at(name)) {
             return false;
         }
         if (!compare_resolved_graph_instances(*subgraph, *rhs.subgraphs.at(name))) {
@@ -1316,7 +1316,7 @@ static bool compare_resolved_graph_instances(const ResolvedGraphInstance& lhs, c
         return false;
     }
     for (const auto& [port_type, connections] : lhs.internal_connections) {
-        if (!rhs.internal_connections.count(port_type)) {
+        if (!rhs.internal_connections.contains(port_type)) {
             return false;
         }
         const auto& other_connections = rhs.internal_connections.at(port_type);
@@ -1512,7 +1512,7 @@ void CablingGenerator::collect_host_assignments_from_resolved_graph(
         HostId host_id = node.host_id;
         std::string full_node_path = path_prefix.empty() ? node_name : path_prefix + "/" + node_name;
 
-        if (host_to_node_path.count(host_id)) {
+        if (host_to_node_path.contains(host_id)) {
             throw std::runtime_error(fmt::format(
                 "Host ID is assigned to multiple nodes: {} - '{}' and '{}'",
                 *host_id,
@@ -1612,7 +1612,7 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
                     "Host ID {} referenced in connection but not found in cluster - invalid descriptor",
                     host_a_id.get()));
             }
-            if (!host_id_to_node_.count(host_b_id)) {
+            if (!host_id_to_node_.contains(host_b_id)) {
                 throw std::runtime_error(fmt::format(
                     "Host ID {} referenced in connection but not found in cluster - invalid descriptor",
                     host_b_id.get()));
