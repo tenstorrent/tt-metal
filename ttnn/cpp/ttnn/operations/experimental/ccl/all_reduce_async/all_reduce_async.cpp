@@ -375,7 +375,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             /*num_buffers_per_channel*/ std::nullopt,
             /*reverse_order*/ false,
             /*sub_core_grid*/ std::nullopt,
-            /*mesh_device*/ nullptr);
+            /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
             scattered_tensor,
