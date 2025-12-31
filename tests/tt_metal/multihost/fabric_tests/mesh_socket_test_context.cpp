@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <map>
+#include <ranges>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -235,12 +236,9 @@ void MeshSocketTestContext::execute_socket_test(
 }
 
 bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& test) const {
-    for (const auto& socket_config : test.sockets) {
-        if (socket_config.sender_rank == local_rank_ || socket_config.receiver_rank == local_rank_) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(test.sockets, [this](const auto& socket_config) {
+        return socket_config.sender_rank == local_rank_ || socket_config.receiver_rank == local_rank_;
+    });
 }
 
 /*
