@@ -311,13 +311,15 @@ class Generator:
             self.model.switch_mode("decode")
 
             # Setting sampling module up after switch to decode mode
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            sampling_params = format_sampling_params(
+                sampling_params, self.model_args.max_batch_size, empty_slots=empty_slots
+            )
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
             # if prompt_tokens is not None:  # Guard for warmup
             sampling_module.reset_prompt_tokens(prefill_ids)
             sampling_module.reset_output_state()
-            sampling_module.reset_seed(sampling_params.seed, empty_slots=empty_slots)
+            sampling_module.reset_seed(sampling_params.seed)  # , empty_slots=empty_slots)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,

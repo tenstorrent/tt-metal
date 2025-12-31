@@ -400,7 +400,7 @@ def clamp(value, min_value, max_value):
     return value
 
 
-def format_sampling_params(sampling_params, max_batch_size):
+def format_sampling_params(sampling_params, max_batch_size, empty_slots=None):
     """
     Format sampling parameters to a dictionary.
     """
@@ -421,12 +421,28 @@ def format_sampling_params(sampling_params, max_batch_size):
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
-    for name, tensor in zip(
-        ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
-    ):
-        current_len = len(tensor)
-        if current_len < target_len:
-            tensor.extend([default_params[name]] * (target_len - current_len))
+    # If empty_slots is not None, we need to set sampling params to empty_slots and other slots to default params
+    if empty_slots is not None:
+        for name, tensor in zip(
+            ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+        ):
+            current_len = len(tensor)
+            # create new tensor with default values for all slots
+            new_list = [default_params[name]] * target_len
+            for idx, empty_slot_idx in enumerate(empty_slots):
+                new_list[empty_slot_idx] = tensor[idx]
+            # assign new_list members to tensor members of sampling_params
+            if current_len < target_len:
+                tensor.extend([default_params[name]] * (target_len - current_len))
+            for idx, value in enumerate(new_list):
+                tensor[idx] = value
+    else:
+        for name, tensor in zip(
+            ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+        ):
+            current_len = len(tensor)
+            if current_len < target_len:
+                tensor.extend([default_params[name]] * (target_len - current_len))
 
     params = {}
     for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
@@ -446,11 +462,23 @@ def format_sampling_params(sampling_params, max_batch_size):
         seed=params["seed"],
     )
 
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
-        tensor = getattr(sampling_params, name)
-        current_len = len(tensor)
-        if current_len < target_len:
-            tensor.extend([default_params[name]] * (target_len - current_len))
+    if empty_slots is not None:
+        for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
+            tensor = getattr(sampling_params, name)
+            current_len = len(tensor)
+            new_list = [default_params[name]] * target_len
+            for idx, empty_slot_idx in enumerate(empty_slots):
+                new_list[empty_slot_idx] = tensor[idx]
+            if current_len < target_len:
+                tensor.extend([default_params[name]] * (target_len - current_len))
+            for idx, value in enumerate(new_list):
+                tensor[idx] = value
+    else:
+        for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
+            tensor = getattr(sampling_params, name)
+            current_len = len(tensor)
+            if current_len < target_len:
+                tensor.extend([default_params[name]] * (target_len - current_len))
 
     # We must clamp top-p in range [0.0, 1.0]
     # Cannot rely on external SamplingParams to be clamped
