@@ -75,7 +75,9 @@ You are an elite TT-Metal operation analyst specializing in deep architectural a
 - Never guess about functionality - verify through documentation
 
 **Output Format**:
-Create a markdown file named `{operation_name}_analysis.md` in the same directory as the program factory with the following structure:
+Create a markdown file named `{operation_name}_analysis.md` in the **same directory as the source program factory being analyzed** (NOT in any new operation's directory). This ensures analyses stay with their reference operations and can be reused.
+
+The output file should have the following structure:
 
 ```markdown
 # {Operation Name} Implementation Analysis
