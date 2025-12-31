@@ -161,7 +161,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     assert pcc_passed, pcc_message
 
 
-@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("B", [1, 2])
 @pytest.mark.parametrize("C_in", [12, 64])
 @pytest.mark.parametrize("C_out", [64])
 @pytest.mark.parametrize("T", [8, 11])
