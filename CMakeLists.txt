@@ -43,7 +43,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 
-# Defining build types is the pervue of the top-level project
+# Defining build types is the purview of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)
 endif()
