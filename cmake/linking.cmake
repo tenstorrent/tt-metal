@@ -111,6 +111,9 @@ function(print_linker_version linker_executable regex_pattern use_string_regex)
             message(STATUS "Linker version: ${version_output}")
         endif()
     endif()
+
+    # Clear the cache to prevent pollution on subsequent calls
+    unset(linker_exe CACHE)
 endfunction()
 
 #===============================================================================
