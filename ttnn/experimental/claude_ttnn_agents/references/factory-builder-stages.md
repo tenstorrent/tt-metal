@@ -6,13 +6,14 @@
 
 | Need | Grep Pattern | ~Lines |
 |------|--------------|--------|
-| TensorAccessor code snippets | `### TensorAccessor Code Snippets` | 35 |
-| Stage 4 (device op, validation) | `## Stage 4: Device Operation` | 95 |
-| Stage 5 (program factory, CBs) | `## Stage 5: Program Factory Structure` | 130 |
-| Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 200 |
-| Kernel stub templates | `### Kernel Stub Templates` | 100 |
-| Debugging guidance | `## Debugging` | 50 |
-| Execution logging template | `## Execution Logging` | 195 |
+| TensorAccessor code snippets | `### TensorAccessor Code Snippets` | 33 |
+| Official patterns reference | `## Official TTNN Patterns Reference` | 106 |
+| Stage 4 (device op, validation) | `## Stage 4: Device Operation` | 136 |
+| Stage 5 (program factory, CBs) | `## Stage 5: Program Factory Structure` | 178 |
+| Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 309 |
+| Kernel stub templates | `### Kernel Stub Templates` | 108 |
+| Debugging guidance | `## Debugging` | 28 |
+| Execution logging template | `## Execution Logging` | 192 |
 
 ---
 
@@ -45,6 +46,112 @@ const auto s = TensorAccessor(src_tensor_args, base_addr, page_size);
 noc_async_read(s.get_noc_addr(page_id), l1_write_addr, page_size);
 // Or use helper functions:
 noc_async_read_page(page_id, s, l1_write_addr);
+```
+
+---
+
+## Official TTNN Patterns Reference
+
+These patterns show the official code structures used throughout TTNN operations. Use these as templates when implementing your program factory.
+
+### Program Factory Structure
+
+**Shared Variables** (in `device/{operation_name}_program_factory.hpp`):
+```cpp
+namespace ttnn::operations::{operation_name}::detail {
+
+struct {OperationName}SharedVariables {
+    tt::tt_metal::KernelHandle reader_kernel_id;
+    tt::tt_metal::KernelHandle compute_kernel_id;
+    tt::tt_metal::KernelHandle writer_kernel_id;
+    std::vector<tt::tt_metal::CoreCoord> cores;
+};
+
+ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation_name}_single_core(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    /* operation-specific params */);
+
+}  // namespace ttnn::operations::{operation_name}::detail
+```
+
+**Program Factory** (in `device/{operation_name}_op.hpp`):
+```cpp
+struct {OperationName}DeviceOperation {
+    struct ProgramFactory {
+        using shared_variables_t = detail::{OperationName}SharedVariables;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+    using program_factory_t = std::variant<ProgramFactory>;
+};
+```
+
+### Work Distribution Pattern
+
+```cpp
+// Use split_work_to_cores for even distribution
+#include <tt-metalium/work_split.hpp>
+
+auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+uint32_t num_cores_y = compute_with_storage_grid_size.y;
+auto [num_cores, all_cores, core_group_1, core_group_2,
+      num_work_per_core_group_1, num_work_per_core_group_2] =
+    tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work_units);
+```
+
+### Circular Buffer Pattern
+
+```cpp
+// Standard CB indices
+uint32_t cb_input_idx = tt::CBIndex::c_0;    // Input CB
+uint32_t cb_output_idx = tt::CBIndex::c_2;   // Output CB
+// Additional CBs: c_1, c_3, c_4, etc.
+
+// Double-buffered CB (2 tiles)
+uint32_t num_tiles = 2;
+tt::tt_metal::CircularBufferConfig cb_config =
+    tt::tt_metal::CircularBufferConfig(
+        num_tiles * single_tile_size, {{cb_idx, cb_data_format}})
+        .set_page_size(cb_idx, single_tile_size);
+tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+```
+
+### Kernel Creation Pattern
+
+```cpp
+// Reader kernel (RISCV_0 / BRISC / NOC0)
+tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+    program,
+    "ttnn/cpp/ttnn/operations/{category}/{operation}/device/kernels/dataflow/reader_{operation}.cpp",
+    all_cores,
+    tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+// Writer kernel (RISCV_1 / NCRISC / NOC1)
+tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+    program,
+    "ttnn/cpp/ttnn/operations/{category}/{operation}/device/kernels/dataflow/writer_{operation}.cpp",
+    all_cores,
+    tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+// Compute kernel (optional)
+tt::tt_metal::CreateKernel(
+    program,
+    "ttnn/cpp/ttnn/operations/{category}/{operation}/device/kernels/compute/{operation}_compute.cpp",
+    all_cores,
+    tt::tt_metal::ComputeConfig{
+        .math_fidelity = MathFidelity::HiFi4,
+        .compile_args = compute_compile_time_args});
 ```
 
 ---
