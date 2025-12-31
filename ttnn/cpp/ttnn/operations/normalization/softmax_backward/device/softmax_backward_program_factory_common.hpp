@@ -9,11 +9,13 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
+#include <utility>  // for std::pair
+
 namespace ttnn::operations::normalization::softmax_backward {
 
 // Estimate L1 memory usage for non-streaming kernel
-// Returns true if tensor fits in L1 memory for non-streaming approach
-bool should_use_non_streaming_kernel(uint32_t num_rows, uint32_t width_tiles, uint32_t tile_size);
+// Returns: (use_non_streaming_kernel, estimated_memory_bytes)
+std::pair<bool, uint32_t> should_use_non_streaming_kernel(uint32_t width_tiles, uint32_t tile_size);
 
 // Helper function to get common tensor properties
 void get_tensor_properties(

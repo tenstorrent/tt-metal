@@ -18,9 +18,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "hostdevcommon/kernel_structs.h"
-// #include "tt-metalium/base_types.hpp"
-// #include "tt_stl/assert.hpp"
-// #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 using namespace tt;
@@ -69,7 +66,6 @@ SoftmaxBackwardStreamingFactory::cached_program_t SoftmaxBackwardStreamingFactor
         total_tiles,
         estimated_memory_kb);
 
-    // Adjustable block size - must match all kernels (reader, compute, writer)
     constexpr uint32_t tiles_per_block = 4;
 
     // Core configuration
@@ -135,12 +131,17 @@ SoftmaxBackwardStreamingFactory::cached_program_t SoftmaxBackwardStreamingFactor
         src0_cb_index,
         src1_cb_index,
         ones_cb_index,
-        width_tiles  // num_tiles_per_row
+        width_tiles,     // num_tiles_per_row
+        tiles_per_block  // block size
     };
     TensorAccessorArgs(softmax_output.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(upstream_grad.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {out_cb_index, width_tiles};
+    std::vector<uint32_t> writer_compile_time_args = {
+        out_cb_index,
+        width_tiles,     // num_tiles_per_row
+        tiles_per_block  // block size
+    };
     TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
@@ -152,7 +153,8 @@ SoftmaxBackwardStreamingFactory::cached_program_t SoftmaxBackwardStreamingFactor
         ones_cb_index,       // 5: ones vector for matmul reduction
         intermed2_cb_index,  // 6: block sum temporary
         width_tiles,         // 7: num_tiles_per_row
-        mask_w               // 8: padding mask position in last tile (0 if no padding)
+        mask_w,              // 8: padding mask position in last tile (0 if no padding)
+        tiles_per_block      // 9: block size
     };
 
     // Defines for compute kernel
@@ -206,13 +208,15 @@ SoftmaxBackwardStreamingFactory::cached_program_t SoftmaxBackwardStreamingFactor
         CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
 
         uint32_t start_tile = core_idx * tiles_per_core;
-        if (start_tile >= num_rows) {
-            continue;
-        }
-        uint32_t end_tile = std::min(start_tile + tiles_per_core, num_rows);
-        uint32_t num_tiles_this_core = end_tile - start_tile;
+        uint32_t num_tiles_this_core = 0;
 
-        // Compute runtime args: (num_tiles, width_tiles)
+        if (start_tile < num_rows) {
+            uint32_t end_tile = std::min(start_tile + tiles_per_core, num_rows);
+            num_tiles_this_core = end_tile - start_tile;
+        }
+
+        // Always set runtime args (zero for cores with no work)
+        // This prevents uninitialized values that cause catastrophic failures
         SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_this_core, width_tiles});
     }
 
@@ -225,19 +229,19 @@ void SoftmaxBackwardStreamingFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    Program& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     const Tensor& softmax_output = tensor_args.softmax_output;
     const Tensor& upstream_grad = tensor_args.upstream_grad;
 
     // Update common runtime args (shared across all cores)
-    auto& reader_common_args = GetCommonRuntimeArgs(program, reader_kernel_id);
+    RuntimeArgsData& reader_common_args = GetCommonRuntimeArgs(program, reader_kernel_id);
     reader_common_args[0] = softmax_output.buffer()->address();
     reader_common_args[1] = upstream_grad.buffer()->address();
 
-    auto& writer_common_args = GetCommonRuntimeArgs(program, writer_kernel_id);
+    RuntimeArgsData& writer_common_args = GetCommonRuntimeArgs(program, writer_kernel_id);
     writer_common_args[0] = tensor_return_value.buffer()->address();
 }
 

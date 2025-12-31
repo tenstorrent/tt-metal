@@ -12,14 +12,12 @@ void kernel_main() {
     constexpr uint32_t src1_cb_id = get_compile_time_arg_val(1);  // upstream_grad
     constexpr uint32_t ones_cb_id = get_compile_time_arg_val(2);  // ones vector for matmul reduction
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(3);
-
-    // Adjustable block size - push this many tiles at once to L1 cache
-    // Can be tuned based on L1 cache size and tile size
-    constexpr uint32_t tiles_per_block = 4;
+    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(4);  // block size - must match compute/writer kernels
 
     // Set up tensor accessors
-    constexpr auto softmax_output_args = TensorAccessorArgs<4>();
-    constexpr auto upstream_grad_args = TensorAccessorArgs<softmax_output_args.next_compile_time_args_offset()>();
+    constexpr auto softmax_output_args = TensorAccessorArgs<5>();  // Start after [src0_cb_id, src1_cb_id, ones_cb_id,
+                                                                   // num_tiles_per_row, tiles_per_block]
+    constexpr auto upstream_grad_args = TensorAccessorArgs<6>();
 
     // Common runtime args (shared across all cores)
     const uint32_t softmax_output_addr = get_common_arg_val<uint32_t>(0);
@@ -66,7 +64,7 @@ void kernel_main() {
 
         // Read entire row twice (2 passes)
         for (uint32_t pass = 0; pass < 2; ++pass) {
-            // Read row in blockes
+            // Read row in blocks
             for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
                 const uint32_t current_block_size = (block_start + tiles_per_block <= num_tiles_per_row)
                                                         ? tiles_per_block

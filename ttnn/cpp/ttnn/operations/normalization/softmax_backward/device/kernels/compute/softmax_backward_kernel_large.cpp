@@ -52,6 +52,7 @@ void MAIN {
     constexpr uint32_t block_sum_cb_id = get_compile_time_arg_val(6);    // block sum temporary
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(7);  // width in tiles
     constexpr uint32_t mask_w = get_compile_time_arg_val(8);             // padding mask position (0 = no padding)
+    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(9);  // block size - must match reader/writer kernels
 
     // Runtime args
     const uint32_t num_rows = get_arg_val<uint32_t>(0);        // Number of rows to process
@@ -67,9 +68,6 @@ void MAIN {
         constexpr uint32_t dst_accum = 1;
         constexpr uint32_t one_tile = 1;
 
-        // Adjustable block size - must match reader kernel
-        constexpr uint32_t tiles_per_block = 4;
-
         cb_wait_front(ones_cb_id, one_tile);
         cb_reserve_back(sum_reduce_cb_id, one_tile);
 
@@ -83,7 +81,7 @@ void MAIN {
         tile_regs_release();
         cb_push_back(sum_reduce_cb_id, one_tile);
 
-        // Process in blockes: compute products, then accumulate each block
+        // Process in blocks: compute products, then accumulate each block
         for (uint32_t block_start = 0; block_start < width_in_tiles; block_start += tiles_per_block) {
             const uint32_t current_block_size =
                 (block_start + tiles_per_block <= width_in_tiles) ? tiles_per_block : (width_in_tiles - block_start);
@@ -124,8 +122,13 @@ void MAIN {
 
             cb_reserve_back(block_sum_cb_id, one_tile);
             tile_regs_acquire();
+
+            // Ensure ones vector is available and initialize matmul (matching small kernel pattern)
+            // cb_wait_front(ones_cb_id, one_tile);
+            // mm_init(mul_cb_id, ones_cb_id, block_sum_cb_id, /*transpose*/ 0);
+
             for (uint32_t i = 0; i < current_block_size; ++i) {
-                cb_wait_front(mul_cb_id, i + 1);  // Ensure tile is ready
+                cb_wait_front(mul_cb_id, i + 1);  // Cumulative wait for correctness (like small kernel)
                 matmul_tiles(mul_cb_id, ones_cb_id, i, 0, dst_accum);
             }
             tile_regs_commit();

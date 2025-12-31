@@ -58,8 +58,9 @@ SoftmaxBackwardNonStreamingFactory::cached_program_t SoftmaxBackwardNonStreaming
 
     // Log kernel selection for debugging and testing verification
     const uint32_t total_tiles = num_rows * width_tiles;
-    const uint32_t estimated_memory_kb =
-        ((total_tiles * 2 * 2 + width_tiles * 2) * intermed_tile_size + 2 * intermed_tile_size) / 1024;
+    const auto [use_non_streaming_kernel_orig, estimated_memory_bytes] =
+        should_use_non_streaming_kernel(width_tiles, intermed_tile_size);
+    const uint32_t estimated_memory_kb = estimated_memory_bytes / 1024;
 
     log_info(
         tt::LogOp,

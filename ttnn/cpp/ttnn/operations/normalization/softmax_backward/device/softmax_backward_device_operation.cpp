@@ -29,14 +29,8 @@ SoftmaxBackwardDeviceOperation::program_factory_t SoftmaxBackwardDeviceOperation
         dim == rank - 1 || dim == static_cast<uint32_t>(-1),
         "Currently only supporting softmax_backward on last dimension");
 
-    const uint32_t height = shape[-2];
     const uint32_t width = shape[-1];
-    const uint32_t height_tiles = height / tt::constants::TILE_HEIGHT;
     const uint32_t width_tiles = width / tt::constants::TILE_WIDTH;
-
-    // Calculate number of tiles to process
-    const auto num_outer_dims = softmax_output.physical_volume() / height / width;
-    const uint32_t num_rows = num_outer_dims * height_tiles;
 
     // Data formats
     const tt::DataFormat intermed_data_format =
@@ -44,9 +38,10 @@ SoftmaxBackwardDeviceOperation::program_factory_t SoftmaxBackwardDeviceOperation
     const uint32_t intermed_tile_size = tt::tile_size(intermed_data_format);
 
     // Decide between non-streaming and streaming kernel
-    const bool use_non_streaming_kernel = should_use_non_streaming_kernel(num_rows, width_tiles, intermed_tile_size);
+    [[maybe_unused]] const auto [use_non_streaming_kernel, estimated_memory_bytes] =
+        should_use_non_streaming_kernel(width_tiles, intermed_tile_size);
 
-    if (use_non_streaming_kernel) {
+    if (/*use_non_streaming_kernel*/ false) {  // TODO: Needed for testing, remove in prod!!!
         return SoftmaxBackwardNonStreamingFactory{};
     } else {
         return SoftmaxBackwardStreamingFactory{};

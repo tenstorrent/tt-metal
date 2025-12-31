@@ -9,12 +9,11 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(1);
-
-    // Adjustable block size - must match compute kernel
-    constexpr uint32_t tiles_per_block = 4;
+    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(2);  // block size - must match reader/compute kernels
 
     // Set up tensor accessor
-    constexpr auto output_args = TensorAccessorArgs<2>();
+    constexpr auto output_args =
+        TensorAccessorArgs<3>();  // Start after [out_cb_id, num_tiles_per_row, tiles_per_block]
 
     // Common runtime args (shared across all cores)
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
@@ -47,11 +46,11 @@ void kernel_main() {
         return;
     }
 
-    // Write output rows in blockes
+    // Write output rows in blocks
     for (uint32_t row_idx = 0; row_idx < num_rows; ++row_idx) {
         const uint32_t row_start_tile = (start_tile + row_idx) * num_tiles_per_row;
 
-        // Process tiles in blockes within each row
+        // Process tiles in blocks within each row
         for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
             // Calculate block size (handle remainder)
             const uint32_t current_block_size = (block_start + tiles_per_block <= num_tiles_per_row)
