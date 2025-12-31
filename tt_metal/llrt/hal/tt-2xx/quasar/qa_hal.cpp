@@ -209,11 +209,11 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
-        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/tt-2xx");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
-        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
+        includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
+        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
 
@@ -223,8 +223,6 @@ public:
                     case HalProcessorClassType::COMPUTE:
                         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_api");
                         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu");
-                        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_api");
-                        includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu");
                         break;
                     case HalProcessorClassType::DM: break;
                 }

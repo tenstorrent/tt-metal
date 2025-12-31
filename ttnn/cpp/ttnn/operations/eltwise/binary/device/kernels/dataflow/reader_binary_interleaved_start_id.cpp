@@ -7,7 +7,7 @@
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat

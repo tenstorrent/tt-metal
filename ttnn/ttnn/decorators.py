@@ -385,7 +385,7 @@ class FastOperation:
         if self.function.__doc__ is None:
             return
 
-        # Delete the signature line created by pybind11
+        # Delete the signature line created by nanobind
         docstring_lines = self.function.__doc__.split("\n")
         op_name = self.python_fully_qualified_name.split(".")[-1]
         if f"{op_name}(" in docstring_lines[0]:

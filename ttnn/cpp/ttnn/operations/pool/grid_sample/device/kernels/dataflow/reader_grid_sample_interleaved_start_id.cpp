@@ -4,15 +4,15 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "compile_time_args.h"
-#include "dataflow_api.h"
+#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
 #define PRINT_AND_PROFILE 0
 #if PRINT_AND_PROFILE
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #endif
 
 void kernel_main() {

@@ -49,14 +49,15 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
-bool is_1d_conv(uint32_t kernel_width, uint32_t image_width);
+bool is_1d_conv(uint32_t kernel_height, uint32_t image_height);
 
-bool is_1d_deptwise_conv(
+bool is_1d_depthwise_conv(
     uint32_t groups,
     uint32_t input_channels,
     uint32_t output_channels,
+    uint32_t kernel_height,
     uint32_t kernel_width,
-    uint32_t image_width,
+    uint32_t image_height,
     bool has_bias);
 
 struct SkipMcast {
@@ -103,8 +104,12 @@ std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation);
 
+uint32_t get_num_cores_nhw(
+    const CoreRangeSet& cores, TensorMemoryLayout shard_layout, ShardOrientation shard_orientation);
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
+uint32_t get_num_cores_channels(
+    const CoreRangeSet& cores, TensorMemoryLayout shard_layout, ShardOrientation shard_orientation);
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
@@ -136,7 +141,8 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
     uint32_t output_width,
     bool fp32_accum,
     bool full_inner_dim,
-    bool enable_activation_reuse = false);
+    bool enable_activation_reuse = false,
+    bool is_1d_depthwise_conv = false);
 
 std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
@@ -149,7 +155,8 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
-    const CoreCoord& compute_grid);
+    const CoreCoord& compute_grid,
+    bool is_1d_depthwise_conv = false);
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     TensorMemoryLayout shard_layout,
@@ -164,7 +171,41 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
     std::optional<uint32_t> act_block_h_override = std::nullopt);
 
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
+    MeshDevice* device, DataType input_dtype, DataType weight_dtype);
+
+struct core_count_and_size {
+    uint32_t core_count{};
+    uint32_t halo_input_size{};
+    uint32_t halo_output_size{};
+    uint32_t conv_op_size{};
+    uint32_t total_size{};
+    Conv2dConfig conv_config;
+};
+
+core_count_and_size calculate_L1_usage_for_conv_op(
+    uint32_t batch_size,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t output_height,
+    uint32_t output_width,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation,
+    uint32_t groups,
+    bool enable_bias,
+    DataType input_datatype,
+    DataType output_datatype,
+    Layout input_layout,
+    CoreCoord compute_grid_size,
+    bool is_mm_conv,
+    TensorMemoryLayout shard_layout,
+    DeviceComputeKernelConfig compute_config,
+    const Conv2dConfig& conv_config_in,
+    const std::optional<ttnn::MemoryConfig>& _halo_input_memory_config = std::nullopt);
 
 Conv2dConfig determine_conv_config_for_auto_shard(
     const Conv2dConfig& conv_config_,
@@ -335,8 +376,18 @@ struct ConvDRAMParamters {
     }
 };
 
-std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
-    std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
-
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
+
+// Enum to represent the execution path for conv2d operations
+enum class Conv2dExecutionPath {
+    L1,   // Execute conv2d using L1 memory
+    DRAM  // Execute conv2d using DRAM slicing
+};
+
+// Helper function to determine which conv2d execution path to take based on
+// slice configuration and input tensor properties
+Conv2dExecutionPath determine_conv2d_execution_path(
+    const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config);
+Conv2dExecutionPath determine_conv2d_execution_path(
+    bool input_is_in_L1, const std::optional<const Conv2dSliceConfig>& slice_config);
 }  // namespace ttnn::operations::conv

@@ -4,11 +4,9 @@
 
 #include "rmsnorm_pre_all_gather.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
-
-namespace operation = tt::tt_metal::operation;
 
 namespace ttnn::operations::normalization {
 
@@ -39,15 +37,14 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
             LayerNormType::RMSNORM,
             DistributedLayerNormStage::PRE_ALL_GATHER);
     } else {
-        return operation::run(
-                   LayerNormPreAllGather{
-                       .norm_type = LayerNormDistributedType::RMSNORM,
-                       .dtype = dtype,
-                       .compute_kernel_config = kernel_config_val,
-                       .use_2d_core_grid = use_2d_core_grid,
-                       .program_config = distributed_program_config},
-                   {input_tensor})
-            .at(0);
+        return ttnn::prim::layernorm_pre_all_gather(
+            input_tensor,
+            LayerNormDistributedType::RMSNORM,
+            dtype,
+            kernel_config_val,
+            use_2d_core_grid,
+            distributed_program_config,
+            std::nullopt);
     }
 }
 

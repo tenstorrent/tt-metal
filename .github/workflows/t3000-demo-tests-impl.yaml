@@ -161,7 +161,7 @@ jobs:
               "model": "qwen25",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_qwen25_tests",
-              "timeout": 60,
+              "timeout": 90,
               "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
             },
             {
