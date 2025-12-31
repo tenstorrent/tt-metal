@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 0);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
-    constexpr uint32_t GROUP_PAGES = 4;
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
@@ -49,6 +48,9 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t max_packet_size_bytes = get_arg_val<uint32_t>(idx++);
+    const uint32_t num_cb_total_pages = get_arg_val<uint32_t>(idx++);
+
+    const uint32_t GROUP_PAGES = num_cb_total_pages / 2;
 
     // Build a fabric send adapter from the runtime args that the host packed.
     // Needed before sending over fabric: binds this core to a specific routing/link.
@@ -85,21 +87,17 @@ void kernel_main() {
             const uint32_t src_l1_addr = src_l1_addr_base + (page_in_group * PAGE_SIZE);
             const uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/page_id, /*offset=*/0, /*noc=*/0);
 
-            // tt_fabric::fabric_write_chunked<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
-            //     sender,
-            //     pkt_hdr,
-            //     dest_noc_addr,
-            //     src_l1_addr,
-            //     PAGE_SIZE,
-            //     max_packet_size_bytes);
+            tt_fabric::fabric_write_chunked<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
+                sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes);
 
-            tt_fabric::fabric_write_chunked_nonblocking<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
-                sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes, dst_dev_id, dst_mesh_id);
+            // tt_fabric::fabric_write_chunked_nonblocking<decltype(sender), PACKET_HEADER_TYPE,
+            // NocUnicastCommandHeader>(
+            //     sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes, dst_dev_id,
+            //     dst_mesh_id);
         }
+        noc_async_writes_flushed();
 
         cb_pop_front(CB_ID, group_pages);
-
-        // noc_async_writes_flushed();
 
         sent += group_pages;
     }

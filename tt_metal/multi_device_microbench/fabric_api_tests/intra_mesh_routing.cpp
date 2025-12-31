@@ -138,8 +138,11 @@ int main() {
     distributed::MeshCoordinate dst_mesh_coord = extract_coord_of_phy_id(dst_phy_id);
 
     // ------------ Setup MeshBuffer ------------
+    uint32_t fabric_max_packet_size = static_cast<uint32_t>(tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    log_info(tt::LogTest, "Max packet size byte under tt-fabric : {}B", fabric_max_packet_size);
+
     constexpr uint32_t page_size = sizeof(uint32_t) * tt::constants::TILE_HW;
-    constexpr uint32_t buffer_size = 1u << 20;  // 1MiB
+    const uint32_t buffer_size = 1u << 20;  // 1MiB
 
     distributed::DeviceLocalBufferConfig dram_local_config{
         .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM};
@@ -189,11 +192,13 @@ int main() {
     Program sender_program = CreateProgram();
     auto tx_core_range_set = CoreRange(fabric_desc.sender_core, fabric_desc.sender_core);
     auto num_pages = tt::div_up(buffer_size, page_size);
+    log_info(tt::LogTest, "Number of pages to write is {}", num_pages);
     constexpr auto CB_ID = tt::CBIndex::c_0;
 
     // CB to buffer local dram read
-    auto cb_cfg =
-        CircularBufferConfig(8 * page_size, {{CB_ID, tt::DataFormat::Float16}}).set_page_size(CB_ID, page_size);
+    uint32_t num_cb_total_pages = 16;
+    auto cb_cfg = CircularBufferConfig(num_cb_total_pages * page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, page_size);
     CreateCircularBuffer(sender_program, fabric_desc.sender_core, cb_cfg);
 
     std::vector<uint32_t> reader_cta;
@@ -211,7 +216,7 @@ int main() {
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = reader_cta});
     tt::tt_metal::SetRuntimeArgs(
-        sender_program, reader_kernel, fabric_desc.sender_core, {(uint32_t)src_buf->address()});
+        sender_program, reader_kernel, fabric_desc.sender_core, {(uint32_t)src_buf->address(), num_cb_total_pages});
 
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
@@ -234,7 +239,6 @@ int main() {
     uint32_t link_to_use = links[0];
 
     CoreCoord receiver_coord = dst_dev->worker_core_from_logical_core(fabric_desc.receiver_core);
-    uint32_t fabric_max_packet_size = static_cast<uint32_t>(tt_fabric::get_tt_fabric_max_payload_size_bytes());
     std::vector<uint32_t> writer_rta = {
         (uint32_t)dst_buf->address(),         // 0: dst_base (receiver DRAM offset)
         (uint32_t)fabric_desc.mesh_id,        // 1: dst_mesh_id (logical)
@@ -242,7 +246,8 @@ int main() {
         (uint32_t)receiver_coord.x,           // 3: receiver_noc_x
         (uint32_t)receiver_coord.y,           // 4: receiver_noc_y
         (uint32_t)cur_global_sema.address(),  // 5: receiver L1 semaphore addr
-        fabric_max_packet_size};
+        fabric_max_packet_size,
+        num_cb_total_pages};
     // Append fabric args (encapsulate routing , link identifiers for fabric traffic)
     tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node,

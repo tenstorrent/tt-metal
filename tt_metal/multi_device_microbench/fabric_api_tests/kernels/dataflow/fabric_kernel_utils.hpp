@@ -31,36 +31,6 @@ FORCE_INLINE void fabric_write_chunked(
     }
 }
 
-template <typename FabricSenderType, typename PacketHeaderType, typename NocCommandType>
-FORCE_INLINE void fabric_write_pages(
-    FabricSenderType& fabric_sender,
-    volatile PacketHeaderType* packet_header,
-    uint64_t dest_noc_addr,
-    uint32_t src_l1_addr,
-    uint32_t num_pages,
-    uint32_t page_size,
-    uint32_t max_packet_size) {
-    uint32_t max_pages_per_packet = max_packet_size / page_size;
-
-    uint32_t remaining_pages = num_pages;
-    uint32_t page_offset = 0;
-    while (page_offset < num_pages) {
-        uint32_t num_pages_to_write = std::min(remaining_pages, max_pages_per_packet);
-        uint32_t page_write_bytes = num_pages_to_write * page_size;
-        uint32_t page_offset_bytes = page_offset * page_size;
-
-        packet_header->to_noc_unicast_write(NocCommandType{dest_noc_addr + page_offset * page_size}, page_write_bytes);
-        fabric_sender.wait_for_empty_write_slot();
-        fabric_sender.send_payload_without_header_non_blocking_from_address(
-            src_l1_addr + page_offset * page_size, page_write_bytes);
-        fabric_sender.send_payload_flush_blocking_from_address(
-            reinterpret_cast<uint32_t>(packet_header), sizeof(PacketHeaderType));
-
-        page_offset += num_pages_to_write;
-        remaining_pages -= num_pages_to_write;
-    }
-}
-
 // Send data via fabric with automatic chunking for large payloads
 // Handles payloads larger than max_packet_size by splitting into chunks
 // Caller must ensure:

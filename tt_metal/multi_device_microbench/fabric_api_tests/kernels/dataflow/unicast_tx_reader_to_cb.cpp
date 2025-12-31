@@ -33,11 +33,11 @@ void kernel_main() {
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 2);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
-    // Process pages in groups of 4; CB capacity will be sized larger on the host.
-    constexpr uint32_t GROUP_PAGES = 4;
-
     const uint32_t src_base = get_arg_val<uint32_t>(0);
+    const uint32_t num_cb_total_pages = get_arg_val<uint32_t>(1);
     const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base, /*page_size=*/PAGE_SIZE);
+
+    const uint32_t GROUP_PAGES = num_cb_total_pages / 2;
 
     uint32_t sent = 0;
     while (sent < NUM_PAGES) {
