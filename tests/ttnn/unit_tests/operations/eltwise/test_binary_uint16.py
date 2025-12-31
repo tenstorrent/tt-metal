@@ -749,7 +749,6 @@ def test_binary_bitwise_left_shift(device):
 
 
 def test_binary_bitwise_right_shift(device):
-    # Corner cases: 0, 1, max uint16 (65535), values that shift to 0, shift by 0, shift by 15 (max for uint16), shift by 16+
     x_torch = torch.tensor(
         [0, 1, 2, 3, 15, 31, 255, 127, 63, 31, 15, 1, 65535, 32768, 16384, 8192, 1], dtype=torch.int32
     )
