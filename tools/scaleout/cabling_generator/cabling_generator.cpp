@@ -92,7 +92,7 @@ static std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for
 
     // Lambda to check for duplicate endpoint in connection map
     auto check_duplicate_endpoint = [&](const Node::BoardEndpoint& endpoint) {
-        if (endpoint_to_dest.count(endpoint)) {
+        if (endpoint_to_dest.contains(endpoint)) {
             throw std::runtime_error(fmt::format(
                 "Duplicate connection definition in node template '{}' for port type {} in {}: port (tray_id: {}, "
                 "port_id: {}) appears multiple times",
@@ -122,7 +122,7 @@ static std::map<Node::BoardEndpoint, Node::BoardEndpoint> build_endpoint_map_for
 
 // Validate and merge node templates from another CablingGenerator
 // Helper: Validate basic node structure (motherboard, boards)
-static void validate_node_structure(
+void validate_node_structure(
     const Node& this_template,
     const Node& other_template,
     const std::string& node_desc_name,
@@ -163,7 +163,7 @@ static void validate_node_structure(
 }
 
 // Helper: Validate inter_board_connections for conflicts
-static void validate_inter_board_connections(
+void validate_inter_board_connections(
     const Node& this_template,
     const Node& other_template,
     const std::string& node_desc_name,
@@ -186,7 +186,7 @@ static void validate_inter_board_connections(
 
         // Check for conflicts between templates for this port type
         for (const auto& [endpoint, this_dest] : this_endpoint_to_dest) {
-            if (other_endpoint_to_dest.count(endpoint)) {
+            if (other_endpoint_to_dest.contains(endpoint)) {
                 const auto& other_dest = other_endpoint_to_dest.at(endpoint);
                 if (this_dest != other_dest) {
                     throw std::runtime_error(fmt::format(
@@ -230,7 +230,7 @@ static void merge_inter_board_connections(Node& target_template, const Node& sou
 }
 
 // Helper: Build normalized set of node-level board connections
-static std::set<Node::BoardConnection> build_normalized_board_connection_set(
+std::set<Node::BoardConnection> build_normalized_board_connection_set(
     const std::vector<Node::BoardConnection>& connections) {
     std::set<Node::BoardConnection> normalized_set;
     for (const auto& conn : connections) {
@@ -249,7 +249,7 @@ static std::set<PortConnection> build_normalized_graph_connection_set(const std:
 }
 
 // Helper: Check if two nodes (by template key) are torus-compatible for merging
-static bool are_torus_compatible_for_merge(const std::string& desc_name_a, const std::string& desc_name_b) {
+bool are_torus_compatible_for_merge(const std::string& desc_name_a, const std::string& desc_name_b) {
     auto node_type_a = get_node_type_from_string(desc_name_a);
     auto node_type_b = get_node_type_from_string(desc_name_b);
 
@@ -277,7 +277,7 @@ static std::optional<std::string> find_torus_compatible_template(
 }
 
 // Helper: Try to find and merge torus-compatible template
-static bool try_merge_torus_compatible_template(
+bool try_merge_torus_compatible_template(
     std::unordered_map<std::string, Node>& this_node_desc_name_to_node,
     const std::string& missing_node_desc_name,
     const Node& missing_template,
@@ -314,7 +314,7 @@ static void validate_and_merge_node_templates(
     const std::string& new_source_file) {
     // Forward pass: validate/merge templates that exist in both
     for (const auto& [node_desc_name, other_template] : other_node_desc_name_to_node) {
-        if (this_node_desc_name_to_node.count(node_desc_name)) {
+        if (this_node_desc_name_to_node.contains(node_desc_name)) {
             // Template exists in both - validate it matches
             const auto& this_template = this_node_desc_name_to_node.at(node_desc_name);
             validate_node_structure(this_template, other_template, node_desc_name, new_source_file);
@@ -683,7 +683,7 @@ void populate_deployment_hosts(
     // Store deployment hosts
     deployment_hosts.reserve(deployment_descriptor.hosts().size());
     for (const auto& proto_host : deployment_descriptor.hosts()) {
-        if (!node_templates.count(proto_host.node_type())) {
+        if (!node_templates.contains(proto_host.node_type())) {
             throw std::runtime_error(
                 "Node type '" + proto_host.node_type() + "' from deployment descriptor host '" + proto_host.host() +
                 "' not found in cluster descriptor templates");
@@ -939,7 +939,7 @@ static void merge_resolved_graph_instances(
     // Merge nodes - if same name exists, validate host_id matches
     // (motherboard, board count, and architecture are already validated via templates in merge())
     for (const auto& [name, source_node] : source.nodes) {
-        if (target.nodes.count(name)) {
+        if (target.nodes.contains(name)) {
             // Node exists in both - validate host_id matches (instance-specific, not template)
             if (target.nodes[name].host_id != source_node.host_id) {
                 throw std::runtime_error(fmt::format(
