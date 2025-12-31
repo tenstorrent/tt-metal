@@ -252,7 +252,7 @@ AllGatherAsyncDeviceOperation::invoke(
     // 2. has input tensor and output tensor but not optional mesh device
     // 3. has all three
 
-    uint32_t num_devices = 0;
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     bool using_persistent_buffers = persistent_output_buffer.has_value();
 
     // Prioritize optional mesh device first, then check device of input_tensor
@@ -262,7 +262,6 @@ AllGatherAsyncDeviceOperation::invoke(
         TT_FATAL(
             mesh_view.is_mesh_2d(),
             "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-        num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
         int32_t rank = input_tensor.logical_shape().rank();
 
@@ -277,8 +276,6 @@ AllGatherAsyncDeviceOperation::invoke(
 
     } else {
         TT_FATAL(input_tensor.device() != nullptr, "Input tensor has no mesh device assigned.");
-
-        num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
         TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
 
