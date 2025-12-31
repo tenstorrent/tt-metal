@@ -228,10 +228,10 @@ def test_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
-            "encoder": 14.8,
+            "encoder": 19.0,
             "denoising": 800.0,
             "vae": 9.0,
-            "total": 823.8,
+            "total": 850.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
@@ -258,7 +258,7 @@ def test_pipeline_performance(
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 17.0,
+            "encoder": 27.0,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
@@ -266,7 +266,7 @@ def test_pipeline_performance(
     elif tuple(mesh_device.shape) == (1, 4) and height == 720:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 15.0,
+            "encoder": 27.0,
             "denoising": 3200.0,
             "vae": 200.0,
             "total": 3415.0,

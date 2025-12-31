@@ -71,7 +71,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRangeSet& active_sub_grids_set,
+        const MeshCoordinateRangeSet& active_grids_set,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,

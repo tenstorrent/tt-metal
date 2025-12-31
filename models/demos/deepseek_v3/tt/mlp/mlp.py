@@ -142,7 +142,6 @@ class MLP(AbstractModule):
                 per_device_out_features,
                 mesh_device.dram_grid_size(),
             ),
-            convert_meta=True,
         )
 
     @final

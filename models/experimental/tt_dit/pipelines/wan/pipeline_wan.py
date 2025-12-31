@@ -296,7 +296,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tuple(self.mesh_device.shape),
         ):
             logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer.load_state_dict(self.torch_transformer.state_dict())
+            self.transformer.load_torch_state_dict(self.torch_transformer.state_dict())
 
     def _load_transformer2(self):
         self.transformer_2 = WanTransformer3DModel(
@@ -327,7 +327,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tuple(self.mesh_device.shape),
         ):
             logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer_2.load_state_dict(self.torch_transformer_2.state_dict())
+            self.transformer_2.load_torch_state_dict(self.torch_transformer_2.state_dict())
 
     def _get_t5_prompt_embeds(
         self,
