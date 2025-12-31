@@ -29,6 +29,7 @@ jobs:
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
+            enable-lto: true
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
@@ -36,6 +37,7 @@ jobs:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
+      enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true
