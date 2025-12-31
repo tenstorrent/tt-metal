@@ -98,7 +98,7 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
 }
 
 TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
-    for (const auto& mesh_device : this->devices_) {
+    for ([[maybe_unused]] const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
