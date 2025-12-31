@@ -11,7 +11,6 @@
 
 #include "moreh_abs_pow.hpp"
 
-namespace nb = nanobind;
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 
