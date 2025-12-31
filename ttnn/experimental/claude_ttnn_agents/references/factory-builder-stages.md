@@ -8,12 +8,13 @@
 |------|--------------|--------|
 | TensorAccessor code snippets | `### TensorAccessor Code Snippets` | 33 |
 | Official patterns reference | `## Official TTNN Patterns Reference` | 106 |
-| Stage 4 (device op, validation) | `## Stage 4: Device Operation` | 136 |
-| Stage 5 (program factory, CBs) | `## Stage 5: Program Factory Structure` | 178 |
-| Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 309 |
+| Stage 4 (device op, validation) | `## Stage 4: Device Operation` | 137 |
+| Stage 5 (program factory, CBs) | `## Stage 5: Program Factory Structure` | 179 |
+| Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 310 |
+| Stage 7 (kernel correctness) | `## Stage 7: Kernel Correctness` | 240 |
 | Kernel stub templates | `### Kernel Stub Templates` | 108 |
 | Debugging guidance | `## Debugging` | 28 |
-| Execution logging template | `## Execution Logging` | 192 |
+| Execution logging template | `## Execution Logging (Optional)` | 191 |
 
 ---
 
@@ -779,6 +780,246 @@ If kernel compilation fails at runtime, check the error output for:
 - Source file paths (indicates which kernel failed)
 - Line numbers and error messages
 - Missing includes or undefined symbols
+
+---
+
+## Stage 7: Kernel Correctness
+
+### Goal
+Replace passthrough stub logic with actual computation. After Stage 7, outputs should match expected values.
+
+### Prerequisites
+- Stages 4-6 passing
+- Operation runs end-to-end with correct output shape
+
+### Step 7.1: Write Test First (RED)
+
+**Create test** `test_dev/test_stage7_kernel_correctness.py`:
+```python
+import pytest
+import torch
+import ttnn
+
+@pytest.fixture
+def device():
+    with ttnn.manage_device(device_id=0) as dev:
+        yield dev
+
+def test_kernel_correctness(device):
+    """Output VALUES should match expected, not just shape."""
+    torch.manual_seed(42)
+
+    # Create input with known values
+    input_torch = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        input_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Run operation
+    output_tensor = ttnn.{operation_name}(input_tensor{, required_params})
+    output_torch = ttnn.to_torch(output_tensor)
+
+    # Compute expected result using PyTorch
+    # Replace with actual expected computation from spec
+    expected_torch = input_torch  # REPLACE: e.g., torch.relu(input_torch)
+
+    # Compare with tolerance (bfloat16 has limited precision)
+    torch.testing.assert_close(
+        output_torch.float(), expected_torch.float(),
+        rtol=1e-2, atol=1e-2,
+        msg=f"Output mismatch: max diff = {(output_torch - expected_torch).abs().max()}"
+    )
+
+def test_correctness_various_inputs(device):
+    """Test correctness across different input patterns."""
+    torch.manual_seed(123)
+
+    test_cases = [
+        torch.randn(1, 1, 32, 32, dtype=torch.bfloat16),   # Random
+        torch.ones(1, 1, 32, 32, dtype=torch.bfloat16),    # All ones
+        torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16),   # All zeros
+        torch.randn(1, 4, 64, 64, dtype=torch.bfloat16),   # Multi-tile
+    ]
+
+    for input_torch in test_cases:
+        input_tensor = ttnn.from_torch(
+            input_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        output_tensor = ttnn.{operation_name}(input_tensor{, required_params})
+        output_torch = ttnn.to_torch(output_tensor)
+
+        expected_torch = input_torch  # REPLACE with actual computation
+        torch.testing.assert_close(
+            output_torch.float(), expected_torch.float(),
+            rtol=1e-2, atol=1e-2
+        )
+```
+
+**Run to confirm failure:**
+```bash
+pytest test_dev/test_stage7_kernel_correctness.py -v
+```
+
+Expected: Shape correct but values wrong (passthrough ≠ expected operation).
+
+### Step 7.2: Implement Actual Compute Logic (GREEN)
+
+**Priority: Check kernel_lib first** (`ttnn/cpp/ttnn/kernel_lib/`):
+- `reduce_helpers.hpp` - For reduce operations
+- `tilize_helpers.hpp` - For tilize operations
+- `untilize_helpers.hpp` - For untilize operations
+
+**If no helper exists**, implement using compute APIs.
+
+### Common Compute Patterns
+
+**Unary operation** (single input, e.g., relu, exp, sqrt):
+```cpp
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/tile_move_copy.h"
+
+namespace NAMESPACE {
+void MAIN {
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_2;
+
+    // Initialize for your operation
+    // init_sfpu_{operation}();  // e.g., init_sfpu_relu(), init_sfpu_exp()
+
+    copy_tile_to_dst_init_short();
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_wait_front(cb_in, 1);
+
+        tile_regs_acquire();
+        copy_tile(cb_in, 0, 0);          // Copy to DEST register 0
+
+        // Apply operation
+        // {operation}_tile(0);          // e.g., relu_tile(0), exp_tile(0)
+
+        tile_regs_commit();
+
+        cb_reserve_back(cb_out, 1);
+        tile_regs_wait();
+        pack_tile(0, cb_out);
+        tile_regs_release();
+
+        cb_push_back(cb_out, 1);
+        cb_pop_front(cb_in, 1);
+    }
+}
+}
+```
+
+**Binary operation** (two inputs, e.g., add, mul, sub):
+```cpp
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/eltwise_binary.h"
+
+namespace NAMESPACE {
+void MAIN {
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out = tt::CBIndex::c_2;
+
+    // init_sfpu_add();  // or init_sfpu_mul(), etc.
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_wait_front(cb_in0, 1);
+        cb_wait_front(cb_in1, 1);
+
+        tile_regs_acquire();
+
+        // Perform operation: result in DEST[0]
+        // add_tiles(cb_in0, cb_in1, 0, 0, 0);  // or mul_tiles, sub_tiles
+
+        tile_regs_commit();
+
+        cb_reserve_back(cb_out, 1);
+        tile_regs_wait();
+        pack_tile(0, cb_out);
+        tile_regs_release();
+
+        cb_push_back(cb_out, 1);
+        cb_pop_front(cb_in0, 1);
+        cb_pop_front(cb_in1, 1);
+    }
+}
+}
+```
+
+**Reduce operation** (using kernel_lib helper):
+```cpp
+#include "compute_kernel_api/common.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
+
+namespace NAMESPACE {
+void MAIN {
+    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t NC = get_compile_time_arg_val(2);
+
+    constexpr uint32_t cb_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out = tt::CBIndex::c_2;
+
+    // Using kernel_lib reduce helper
+    compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+}
+}
+```
+
+### Available Compute APIs
+
+Common unary operations:
+- `relu_tile(dst_idx)`, `exp_tile(dst_idx)`, `log_tile(dst_idx)`
+- `sqrt_tile(dst_idx)`, `rsqrt_tile(dst_idx)`, `recip_tile(dst_idx)`
+- `tanh_tile(dst_idx)`, `sigmoid_tile(dst_idx)`, `gelu_tile(dst_idx)`
+- `abs_tile(dst_idx)`, `neg_tile(dst_idx)`, `sign_tile(dst_idx)`
+
+Common binary operations:
+- `add_tiles(cb0, cb1, idx0, idx1, dst_idx)`
+- `sub_tiles(cb0, cb1, idx0, idx1, dst_idx)`
+- `mul_tiles(cb0, cb1, idx0, idx1, dst_idx)`
+
+Tile movement:
+- `copy_tile(cb, idx, dst_idx)` - Copy tile to DEST register
+- `pack_tile(dst_idx, cb)` - Pack from DEST to CB
+
+### Step 7.3: Verify Tests Pass (GREEN)
+
+```bash
+pytest test_dev/test_stage7_kernel_correctness.py -v
+```
+
+### Tolerance Guidelines
+
+| Data Type | Typical rtol | Typical atol | Notes |
+|-----------|--------------|--------------|-------|
+| bfloat16 | 1e-2 | 1e-2 | ~3 decimal digits precision |
+| float16 | 1e-3 | 1e-3 | ~3-4 decimal digits |
+| float32 | 1e-5 | 1e-5 | ~7 decimal digits |
+
+For complex operations (exp, log, etc.), may need looser tolerance due to approximations.
+
+### Debugging Stage 7
+
+**Wrong values**:
+- Verify compute API usage matches spec's operation
+- Check operation order (unpack → compute → pack)
+- Verify DEST register indices
+
+**NaN/Inf in output**:
+- Check for division by zero
+- Check for log(0) or sqrt(negative)
+- Verify input data range
+
+**Tolerance failures**:
+- Try looser tolerance first
+- Check if operation involves many steps (error accumulates)
+- Compare intermediate results if possible
 
 ---
 
