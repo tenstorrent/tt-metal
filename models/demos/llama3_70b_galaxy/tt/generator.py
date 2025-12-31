@@ -192,7 +192,6 @@ class Generator:
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
-        tt_logits_accumulated = [] if do_device_sampling else None
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -255,6 +254,26 @@ class Generator:
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:
+                # create a list of tt_logit_tensors of shape [1, 1, 128, 2048] on mesh device with dtype bfp8
+                if not do_device_sampling:
+                    self.tt_logits_accumulated = None
+                elif use_batched_prefill:
+                    self.tt_logits_accumulated = []
+                else:
+                    trace_key = f"{prefill_seq_len}_{prefill_kwargs['batch_size']}"
+                    if self.trace_id_prefill[trace_key] is None:
+                        self.tt_logits_accumulated = [
+                            ttnn.from_torch(
+                                torch.zeros(
+                                    1, 1, 1, self.model.args.padded_vocab_size // self.model_args.cluster_shape[0]
+                                ),
+                                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                                dtype=ttnn.bfloat8_b,
+                                device=self.mesh_device,
+                                layout=ttnn.TILE_LAYOUT,
+                            )
+                            for _ in range(len(empty_slots))
+                        ]
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
@@ -278,17 +297,19 @@ class Generator:
                 tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx)
                 if use_batched_prefill:
                     # Batched prefill: logits list has 32 entries ordered by slot position
-                    tt_logits_accumulated.extend(tt_logits_list)
+                    self.tt_logits_accumulated.extend(tt_logits_list)
                 else:
                     # Single user: logits list has 1 entry
-                    tt_logits_accumulated.append(ttnn.clone(tt_logits_list[0]))
+                    ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[id])
 
         # On-device sampling for prefill
-        if do_device_sampling and tt_logits_accumulated:
+        if do_device_sampling and self.tt_logits_accumulated:
             padded_batch = 32
 
             # lm_head output is a list [logits_tensor], extract the tensor
-            logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in tt_logits_accumulated]
+            logits_tensors = [
+                logits[0] if isinstance(logits, list) else logits for logits in self.tt_logits_accumulated
+            ]
 
             if use_batched_prefill:
                 # Batched prefill: logits already have 32 entries (one per slot), ordered by slot.
