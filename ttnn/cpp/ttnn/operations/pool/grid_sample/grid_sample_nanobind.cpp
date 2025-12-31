@@ -12,7 +12,6 @@
 #include "grid_sample.hpp"
 #include "grid_sample_prepare_grid.hpp"
 
-namespace nb = nanobind;
 
 namespace ttnn::operations::grid_sample {
 
