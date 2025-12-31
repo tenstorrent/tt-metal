@@ -1,0 +1,19 @@
+name: "Build TT-Metalium Evaluation Image"
+
+permissions:
+  packages: write
+
+on:
+  push:
+    branches:
+      - eval-cache-continuation
+
+jobs:
+  build-evaluation-image:
+    name: "📦 Evaluation Image"
+    uses: ./.github/workflows/build-evaluation-image.yaml
+    secrets: inherit
+    with:
+      buildkit: true
+      build-args: |
+        BUILD_METAL_ARGS=--build-type Release --build-all
