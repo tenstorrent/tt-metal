@@ -656,7 +656,7 @@ def test_RESNET_LINEAR2_4096x1152x768(device):
     per_core_N = (768 // 32) // grid_size[1]
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
-        in0_block_w=8,
+        in0_block_w=6,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         out_subblock_h=2,
@@ -712,13 +712,12 @@ def test_RESNET_LINEAR2_16384x1152x384(device):
         packer_l1_acc=True,
     )
 
-    grid_size = (6, 8)
+    grid_size = (8, 6)
     per_core_M = (16384 // 32) // grid_size[0]
     per_core_N = (384 // 32) // grid_size[1]
-
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(6, 8),
-        in0_block_w=3,
+        in0_block_w=2,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         out_subblock_h=2,
@@ -779,7 +778,7 @@ def test_RESNET_LINEAR2_16384x768x384(device):
     per_core_N = (384 // 32) // grid_size[0]
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        in0_block_w=3,
+        in0_block_w=2,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         out_subblock_h=2,

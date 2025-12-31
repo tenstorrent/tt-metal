@@ -192,7 +192,7 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv1_bias = tt_conv1_bias
 
         # TODO: To optimize
-        tracy.signpost("Resnet Linear 1 start")
+        tracy.signpost(f"Resnet Linear 1 start: {self.module_path}")
         temb = ttnn.linear(
             temb,
             self.tt_time_emb_weights,
@@ -264,7 +264,7 @@ class TtResnetBlock2D(LightweightModule):
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor
             # TODO: To optimize
-            tracy.signpost("Resnet Linear 2 start")
+            tracy.signpost(f"Resnet Linear 2 start {self.module_path}")
             input_tensor = ttnn.linear(
                 input_tensor,
                 self.tt_conv3_weights,
