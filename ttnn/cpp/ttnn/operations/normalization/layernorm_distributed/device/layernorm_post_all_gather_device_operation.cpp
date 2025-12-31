@@ -200,7 +200,7 @@ Tensor layer_norm_post_all_gather(
     const std::optional<bool>& use_2d_core_grid,
     const ttnn::operations::normalization::LayerNormProgramConfig& program_config) {
     using OperationType = ttnn::operations::normalization::LayerNormPostAllGatherDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
             .eps = eps,

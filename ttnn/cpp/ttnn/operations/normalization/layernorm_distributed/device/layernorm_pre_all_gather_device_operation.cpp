@@ -103,7 +103,7 @@ Tensor layer_norm_pre_all_gather(
     const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
             .dtype = dtype,
