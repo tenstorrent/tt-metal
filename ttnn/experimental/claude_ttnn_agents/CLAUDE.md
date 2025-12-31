@@ -86,12 +86,14 @@ The device may be occupied by a hung pytest process, leading to false conclusion
 #### 2. Reset the Device
 Reset the device before running any Python test:
 ```bash
-tt-smi -r  # Reset all devices allocated to you
+# First, list available device IDs
+tt-smi -ls
+
+# Then reset using the first available device ID
+tt-smi -r <device_id>  # Use the first PCI Dev ID from the list (e.g., tt-smi -r 0)
 ```
 
-**IMPORTANT**: Use `tt-smi -r` WITHOUT device ID arguments. The device may be in a hung state from previous runs.
-
-**NEVER use `tt-smi -r 0`** or any other device ID. The `-r` flag without arguments resets all devices allocated to you. Using `tt-smi -r 0` will fail with "Error accessing board at PCI index 0" in multi-user environments.
+**IMPORTANT**: Always check available device IDs with `tt-smi -ls` before resetting. Use the first device ID from the "PCI Dev ID" column. The device may be in a hung state from previous runs.
 
 #### 3. Run Tests with Timeout
 Run all Python tests with a timeout to detect hangs:
@@ -303,10 +305,20 @@ Proceed with analysis, or suggest different references?"
 1. Phase 1: Run `ttnn-operation-analyzer` on EACH confirmed reference
 2. Phase 2: Run `ttnn-operation-planner` with all analyzer outputs
 3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user
-   - User approves → proceed to Phase 3
+   - User approves → proceed to Phases 3-6
    - User requests changes → refine spec, re-present for approval
    - Do NOT proceed without explicit user approval
-4. Phase 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
+4. Phases 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
+5. Phase 7a: Run `ttnn-kernel-designer` to produce Kernel Design Document
+   - Maps computation phases to kernel helper functions (priority) or raw calls
+   - Creates `{operation_dir}/kernel_design.md`
+   - **USER REVIEW**: Present kernel design summary (helper vs raw decisions, CB flow)
+   - User approves → proceed to Phase 7b
+   - User requests changes → refine design, re-present
+   - Do NOT proceed to kernel writing without approval
+6. Phase 7b: Run `ttnn-kernel-writer` with the design document
+   - Implements kernels following the design's USE HELPER / NO HELPER guidance
+   - MUST NOT add raw CB operations for phases where design says USE HELPER
 ```
 
 See `.claude/subagent_breakdown.md` for detailed workflow and https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html for official docs.

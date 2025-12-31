@@ -151,8 +151,106 @@ def add_to_category_cmake(repo_root: Path, category: str, operation_name: str) -
     return False
 
 
+def add_to_category_nanobind(repo_root: Path, category: str, operation_name: str) -> bool:
+    """Add include and registration call to category's nanobind aggregation file.
+
+    Some categories (like reduction, data_movement) have their own {category}_nanobind.cpp
+    that aggregates all bind calls for that category. This function handles that pattern.
+
+    Returns True if category aggregation file exists and was updated, False otherwise.
+    """
+    category_nanobind_path = repo_root / "ttnn" / "cpp" / "ttnn" / "operations" / category / f"{category}_nanobind.cpp"
+
+    if not category_nanobind_path.exists():
+        return False  # No category aggregation file, fall back to __init__.cpp
+
+    with open(category_nanobind_path, "r") as f:
+        content = f.read()
+
+    # Include line - use full path from ttnn/operations
+    include_line = f'#include "ttnn/operations/{category}/{operation_name}/{operation_name}_nanobind.hpp"'
+
+    # Registration call - use fully qualified namespace since we're in a different namespace
+    registration_call = f"    ::ttnn::operations::{operation_name}::bind_{operation_name}_operation(mod);"
+
+    # Check if already added
+    if f"{operation_name}_nanobind.hpp" in content and f"bind_{operation_name}_operation" in content:
+        print(f"Operation already registered in {category_nanobind_path}")
+        return True
+
+    modified = False
+
+    # Add include if not present
+    if include_line not in content:
+        # Find the last include in the file (before namespace declaration)
+        include_pattern = r'#include\s+"[^"]+_nanobind\.hpp"'
+        matches = list(re.finditer(include_pattern, content))
+
+        if matches:
+            last_match = matches[-1]
+            insert_pos = last_match.end()
+            content = content[:insert_pos] + "\n" + include_line + content[insert_pos:]
+            print(f"Added include to {category_nanobind_path}")
+            modified = True
+        else:
+            # Try to find any #include line
+            any_include = list(re.finditer(r'#include\s+[<"][^">]+[">]', content))
+            if any_include:
+                last_match = any_include[-1]
+                insert_pos = last_match.end()
+                content = content[:insert_pos] + "\n" + include_line + content[insert_pos:]
+                print(f"Added include to {category_nanobind_path}")
+                modified = True
+            else:
+                print(f"Warning: Could not find include section in {category_nanobind_path}", file=sys.stderr)
+
+    # Add registration call if not present
+    if f"bind_{operation_name}_operation" not in content:
+        # Find the closing brace of py_module function - look for pattern like:
+        # void py_module(nb::module_& mod) { ... }
+        # We want to insert before the final }
+        py_module_match = re.search(r"void\s+py_module\s*\([^)]*\)\s*\{", content)
+
+        if py_module_match:
+            # Find the matching closing brace
+            start = py_module_match.end()
+            brace_count = 1
+            pos = start
+            while pos < len(content) and brace_count > 0:
+                if content[pos] == "{":
+                    brace_count += 1
+                elif content[pos] == "}":
+                    brace_count -= 1
+                pos += 1
+
+            if brace_count == 0:
+                # pos is now right after the closing }, insert before it
+                closing_brace_pos = pos - 1
+                # Find the last non-whitespace line before closing brace
+                content = content[:closing_brace_pos] + registration_call + "\n" + content[closing_brace_pos:]
+                print(f"Added registration call to {category_nanobind_path}")
+                modified = True
+        else:
+            print(f"Warning: Could not find py_module function in {category_nanobind_path}", file=sys.stderr)
+
+    if modified:
+        with open(category_nanobind_path, "w") as f:
+            f.write(content)
+
+    return True
+
+
 def add_to_nanobind_init(repo_root: Path, category: str, operation_name: str) -> bool:
-    """Add include and registration call to ttnn/cpp/ttnn-nanobind/__init__.cpp"""
+    """Add include and registration call to ttnn/cpp/ttnn-nanobind/__init__.cpp
+
+    First tries to use category aggregation file (e.g., reduction_nanobind.cpp).
+    Falls back to __init__.cpp if no aggregation file exists.
+    """
+    # First, try category-level aggregation file
+    if add_to_category_nanobind(repo_root, category, operation_name):
+        return True
+
+    # Fall back to __init__.cpp
     init_path = repo_root / "ttnn" / "cpp" / "ttnn-nanobind" / "__init__.cpp"
 
     if not init_path.exists():
@@ -165,11 +263,11 @@ def add_to_nanobind_init(repo_root: Path, category: str, operation_name: str) ->
     # Include line
     include_line = f'#include "ttnn/operations/{category}/{operation_name}/{operation_name}_nanobind.hpp"'
 
-    # Registration call
-    registration_call = f"    {operation_name}::bind_{operation_name}_operation(m_{category});"
+    # Registration call - use fully qualified namespace
+    registration_call = f"    ::ttnn::operations::{operation_name}::bind_{operation_name}_operation(m_{category});"
 
     # Check if already added
-    if include_line in content and registration_call.strip() in content:
+    if include_line in content and f"bind_{operation_name}_operation" in content:
         print(f"Operation already registered in {init_path}")
         return True
 
@@ -193,7 +291,7 @@ def add_to_nanobind_init(repo_root: Path, category: str, operation_name: str) ->
             print(f"You may need to manually add: {include_line}")
 
     # Add registration call if not present
-    if registration_call.strip() not in content:
+    if f"bind_{operation_name}_operation" not in content:
         # Find the category module initialization
         module_pattern = rf"(auto\s+m_{category}\s*=.*?;)"
         match = re.search(module_pattern, content)
@@ -206,7 +304,7 @@ def add_to_nanobind_init(repo_root: Path, category: str, operation_name: str) ->
             next_section = content[insert_pos : insert_pos + 2000]
 
             # Find where to insert (after last bind call for this module)
-            category_calls = list(re.finditer(rf"[a-z_]+::bind_[a-z_]+_operation\(m_{category}\);", next_section))
+            category_calls = list(re.finditer(rf"[a-z_:]+::bind_[a-z_]+_operation\(m_{category}\);", next_section))
 
             if category_calls:
                 last_call = category_calls[-1]
