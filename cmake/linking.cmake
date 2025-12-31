@@ -266,7 +266,7 @@ if(TT_ENABLE_LTO)
         # Single Release build results in ~250M cache, RelWithDebInfo ~1.7G
         add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache>)
 
-        # Limit LTO cache size to the least of 3GB, 10% disk space, or 10000 files
+        # Limit LTO cache size to the least of 2GB, 10% disk space, or 10000 files
         # Default pruning happens every 20 minutes
         add_link_options(
             $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=10000>
