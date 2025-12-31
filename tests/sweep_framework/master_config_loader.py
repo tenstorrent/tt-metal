@@ -199,9 +199,15 @@ class MasterConfigLoader:
 
     def parse_layout(self, layout_str: str) -> Any:
         """Convert layout string to ttnn layout"""
-        if "TILE" in layout_str:
+        # Handle case where layout is already a Layout object
+        if hasattr(layout_str, "__class__") and "Layout" in str(layout_str.__class__):
+            return layout_str
+
+        # Handle string case
+        layout_str_converted = str(layout_str)
+        if "TILE" in layout_str_converted:
             return ttnn.TILE_LAYOUT
-        elif "ROW_MAJOR" in layout_str:
+        elif "ROW_MAJOR" in layout_str_converted:
             return ttnn.ROW_MAJOR_LAYOUT
         else:
             return ttnn.TILE_LAYOUT  # Default
