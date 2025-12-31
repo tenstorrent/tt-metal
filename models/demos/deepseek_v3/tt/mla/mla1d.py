@@ -59,8 +59,15 @@ class MLA1D(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
+        print(f"[MLA1D.convert_weights] Starting weight conversion")
+        print(f"[MLA1D.convert_weights] output_path: {output_path}")
+        print(f"[MLA1D.convert_weights] mesh_device.shape: {mesh_device.shape}")
+
         num_shards = mesh_device.shape[0]
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
+        print(
+            f"[MLA1D.convert_weights] num_shards: {num_shards}, weight_block_size: ({weight_block_height}, {weight_block_width})"
+        )
 
         dim = hf_config.hidden_size
         num_heads = hf_config.num_attention_heads
@@ -70,6 +77,12 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        print(f"[MLA1D.convert_weights] dim: {dim}, num_heads: {num_heads}, kv_lora_rank: {kv_lora_rank}")
+        print(
+            f"[MLA1D.convert_weights] qk_nope_head_dim: {qk_nope_head_dim}, qk_rope_head_dim: {qk_rope_head_dim}, q_head_dim: {q_head_dim}"
+        )
+        print(f"[MLA1D.convert_weights] v_head_dim: {v_head_dim}, q_lora_rank: {q_lora_rank}")
 
         # Norm weights
         norm_weight_configs = {
@@ -121,6 +134,10 @@ class MLA1D(AbstractModule):
         )  # [num_heads, kv_lora_rank, qk_nope_head_dim]
         torch_weights_v = torch_weights[..., qk_nope_head_dim:, :]  # [num_heads, v_head_dim, kv_lora_rank]
 
+        print(f"[MLA1D.convert_weights] torch_weights_k shape: {torch_weights_k.shape}")
+        print(f"[MLA1D.convert_weights] torch_weights_v shape: {torch_weights_v.shape}")
+
+        print(f"[MLA1D.convert_weights] Weight conversion complete")
         return {
             **norm_weight_configs,
             **linear_weight_configs,
@@ -144,6 +161,7 @@ class MLA1D(AbstractModule):
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
     ) -> SavedWeight:
+        print(f"[MLA1D._convert_weight] path: {path}, torch_metaweight shape: {torch_metaweight.shape}, dims: {dims}")
         return shard_and_save(
             path,
             torch_metaweight.transpose(-2, -1),
@@ -169,8 +187,11 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for prefill mode
         """
+        print(f"[MLA1D.prefill_model_config] Starting prefill config generation")
+        print(f"[MLA1D.prefill_model_config] mesh_device.shape: {mesh_device.shape}")
 
         grid_size = mesh_device.compute_with_storage_grid_size()
+        print(f"[MLA1D.prefill_model_config] grid_size: {grid_size}")
 
         # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
@@ -181,6 +202,12 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         mscale = hf_config.rope_scaling["mscale"]
         rope_factor = hf_config.rope_scaling["factor"]
+
+        print(f"[MLA1D.prefill_model_config] num_heads: {num_heads}, kv_lora_rank: {kv_lora_rank}")
+        print(
+            f"[MLA1D.prefill_model_config] qk_nope_head_dim: {qk_nope_head_dim}, qk_rope_head_dim: {qk_rope_head_dim}, qk_head_dim: {qk_head_dim}"
+        )
+        print(f"[MLA1D.prefill_model_config] v_head_dim: {v_head_dim}, mscale: {mscale}, rope_factor: {rope_factor}")
 
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
@@ -243,6 +270,10 @@ class MLA1D(AbstractModule):
             mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
             scale = scale * mscale * mscale
 
+        print(
+            f"[MLA1D.prefill_model_config] FlashMLA scale: {scale}, q_chunk_size: {q_chunk_size}, k_chunk_size: {k_chunk_size}"
+        )
+
         flash_mla_config = {
             "head_dim_v": kv_lora_rank,
             "scale": scale,
@@ -303,7 +334,7 @@ class MLA1D(AbstractModule):
         wo_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
-            dim=1,
+            dim=2,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -348,9 +379,12 @@ class MLA1D(AbstractModule):
         Returns:
             Dict containing operator configurations for decode mode
         """
+        print(f"[MLA1D.decode_model_config] Starting decode config generation")
+        print(f"[MLA1D.decode_model_config] mesh_device.shape: {mesh_device.shape}")
 
         grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
+        print(f"[MLA1D.decode_model_config] grid_size: {grid_size}, num_cores: {num_cores}")
 
         # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
@@ -364,6 +398,14 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
         num_heads_local = even_int_div(num_heads, mesh_shape[1])
+
+        print(
+            f"[MLA1D.decode_model_config] num_heads: {num_heads}, num_heads_local: {num_heads_local}, kv_lora_rank: {kv_lora_rank}"
+        )
+        print(
+            f"[MLA1D.decode_model_config] qk_nope_head_dim: {qk_nope_head_dim}, qk_rope_head_dim: {qk_rope_head_dim}, qk_head_dim: {qk_head_dim}"
+        )
+        print(f"[MLA1D.decode_model_config] v_head_dim: {v_head_dim}, mscale: {mscale}, rope_factor: {rope_factor}")
 
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
@@ -408,6 +450,9 @@ class MLA1D(AbstractModule):
         q_rope_shard_height = nearest_y(q_rope_shape[2], ttnn.TILE_SIZE)
         q_rope_shard_width = q_rope_shape[3]
         q_rope_num_cores = q_rope_shape[1]
+        print(
+            f"[MLA1D.decode_model_config] q_rope_shape: {q_rope_shape}, q_rope_shard_height: {q_rope_shard_height}, q_rope_shard_width: {q_rope_shard_width}, q_rope_num_cores: {q_rope_num_cores}"
+        )
         q_rope_core_grid = ttnn.num_cores_to_corerangeset(q_rope_num_cores, grid_size, row_wise=True)
         q_rope_mem_cfg = ttnn.create_sharded_memory_config(
             shape=(q_rope_shard_height, q_rope_shard_width),
@@ -428,6 +473,9 @@ class MLA1D(AbstractModule):
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
         kv_rope_num_cores = kv_rope_shape[1]
+        print(
+            f"[MLA1D.decode_model_config] kv_rope_shape: {kv_rope_shape}, kv_rope_shard_height: {kv_rope_shard_height}, kv_rope_shard_width: {kv_rope_shard_width}, kv_rope_num_cores: {kv_rope_num_cores}"
+        )
         kv_rope_core_grid = ttnn.num_cores_to_corerangeset(kv_rope_num_cores, grid_size, row_wise=True)
         kv_rope_mem_cfg = ttnn.create_sharded_memory_config(
             shape=(kv_rope_shard_height, kv_rope_shard_width),
@@ -447,6 +495,9 @@ class MLA1D(AbstractModule):
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
+        print(
+            f"[MLA1D.decode_model_config] kvpe_shape: {kvpe_shape}, kvpe_shard_height: {kvpe_shard_height}, kvpe_shard_width: {kvpe_shard_width}, kvpe_num_cores: {kvpe_num_cores}"
+        )
         kvpe_core_grid = ttnn.num_cores_to_corerangeset(kvpe_num_cores, grid_size, row_wise=True)
         kvpe_mem_cfg = ttnn.create_sharded_memory_config(
             shape=(kvpe_shard_height, kvpe_shard_width),
@@ -483,6 +534,10 @@ class MLA1D(AbstractModule):
         )
         block_width = kv_lora_rank + qk_rope_head_dim
 
+        print(
+            f"[MLA1D.decode_model_config] FlashMLA q_num_cores: {q_num_cores}, block_height: {block_height}, block_width: {block_width}"
+        )
+
         q_core_grid = ttnn.num_cores_to_corerangeset(q_num_cores, grid_size, row_wise=True)
         q_mem_config = ttnn.create_sharded_memory_config(
             shape=(block_height, block_width),
@@ -501,6 +556,8 @@ class MLA1D(AbstractModule):
         if rope_factor > 1.0:
             mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
             scale = scale * mscale * mscale
+
+        print(f"[MLA1D.decode_model_config] FlashMLA scale: {scale}, k_chunk_size: {k_chunk_size}")
 
         flash_mla_reshard_config = ReshardConfig(
             memory_config=q_mem_config,
@@ -647,6 +704,9 @@ class MLA1D(AbstractModule):
         Returns:
             A PagedAttentionConfig object with valid parameters
         """
+        print(
+            f"[MLA1D.get_valid_paged_config] max_seq_len: {max_seq_len}, batch_size_per_row: {batch_size_per_row}, dp_factor: {dp_factor}, block_size: {block_size}"
+        )
         assert max_seq_len % block_size == 0, f"max_seq_len {max_seq_len} must be divisible by block_size {block_size}."
         assert (
             block_size % ttnn.TILE_SIZE == 0
@@ -656,6 +716,8 @@ class MLA1D(AbstractModule):
         max_num_blocks = even_int_div(
             max_seq_len * batch_per_shard, block_size
         )  # Such that each user will have max_seq_len available
+
+        print(f"[MLA1D.get_valid_paged_config] batch_per_shard: {batch_per_shard}, max_num_blocks: {max_num_blocks}")
 
         return PagedAttentionConfig(
             block_size=block_size,
@@ -686,13 +748,21 @@ class MLA1D(AbstractModule):
         Returns:
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
+        print(
+            f"[MLA1D.create_page_table] paged_config.max_num_blocks: {paged_config.max_num_blocks}, batch_size: {batch_size}"
+        )
+        print(f"[MLA1D.create_page_table] mesh_device.shape: {mesh_device.shape}")
         if page_table is None:
             max_num_blocks = paged_config.max_num_blocks
             _, dp_factor = mesh_device.shape
             batch_per_shard = even_int_div(batch_size, dp_factor)
+            print(
+                f"[MLA1D.create_page_table] Creating new page_table, dp_factor: {dp_factor}, batch_per_shard: {batch_per_shard}"
+            )
 
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+            print(f"[MLA1D.create_page_table] Created page_table with shape: {page_table.shape}")
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -713,8 +783,13 @@ class MLA1D(AbstractModule):
         ccl: CCL,
         caches: Sequence[torch.Tensor] | None = None,
     ) -> ModelState:
+        print(f"[MLA1D.create_state] Starting state creation")
+        print(
+            f"[MLA1D.create_state] mesh_device.shape: {mesh_device.shape}, paged_config.max_num_blocks: {paged_config.max_num_blocks}, paged_config.block_size: {paged_config.block_size}"
+        )
         kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
         cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
+        print(f"[MLA1D.create_state] kvpe_dim: {kvpe_dim}, cache_shape: {cache_shape}")
 
         assert (
             caches is None
@@ -723,6 +798,10 @@ class MLA1D(AbstractModule):
         )
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
+            print(f"[MLA1D.create_state] Created {len(caches)} zero caches")
+        else:
+            print(f"[MLA1D.create_state] Using provided caches, count: {len(caches)}")
+
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
@@ -737,19 +816,15 @@ class MLA1D(AbstractModule):
         caches: tuple[torch.Tensor, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        def to_device(
-            weight,
-            device,
-            mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
+        print(f"[MLA1D._convert_cache] Converting {len(caches)} caches, shapes: {[c.shape for c in caches]}")
+        return ttnn.as_tensor(
+            torch.concatenate(caches),
             dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        ):
-            weight = ttnn.from_torch(weight, device=device, mesh_mapper=mesh_mapper)
-            return ttnn.to_layout(weight, dtype=dtype, layout=layout, memory_config=memory_config)
-
-        caches = torch.concatenate(caches)
-        return to_device(caches, mesh_device, ttnn.ShardTensorToMesh(mesh_device, 0))
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+        )
 
     @classmethod
     def forward_decode(
@@ -773,7 +848,15 @@ class MLA1D(AbstractModule):
             Output tensor after MLA computation
 
         """
+        print(f"[MLA1D.forward_decode] Starting decode forward pass")
+        print(f"[MLA1D.forward_decode] Input x shape: {x.shape}")
+        print(
+            f"[MLA1D.forward_decode] position_idxs shape: {position_idxs.shape if hasattr(position_idxs, 'shape') else 'N/A'}"
+        )
+        print(f"[MLA1D.forward_decode] row_idx: {row_idx}")
+
         _, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
+        print(f"[MLA1D.forward_decode] mesh_shape: {mesh_shape}, mla_tp_factor: {mla_tp_factor}")
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
@@ -783,35 +866,57 @@ class MLA1D(AbstractModule):
         qk_head_dim = cfg["qk_head_dim"]
         v_head_dim = cfg["v_head_dim"]
 
+        print(
+            f"[MLA1D.forward_decode] num_heads: {num_heads}, num_heads_local: {num_heads_local}, kv_lora_rank: {kv_lora_rank}"
+        )
+        print(
+            f"[MLA1D.forward_decode] qk_nope_head_dim: {qk_nope_head_dim}, qk_rope_head_dim: {qk_rope_head_dim}, qk_head_dim: {qk_head_dim}, v_head_dim: {v_head_dim}"
+        )
+
         kvpe_cache = cfg["kvpe_cache"]
         ccl = cfg["ccl"]
 
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
+        print(f"[MLA1D.forward_decode] bsz: {bsz}, scale: {scale}")
 
         # wq_a and wq_b
+        print(f"[MLA1D.forward_decode] Applying wq_a linear")
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+        print(f"[MLA1D.forward_decode] After wq_a, tt_q shape: {tt_q.shape}")
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
         )
+        print(f"[MLA1D.forward_decode] After reduce_scatter, tt_q shape: {tt_q.shape}")
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
+        print(f"[MLA1D.forward_decode] After all_gather, tt_q shape: {tt_q.shape}")
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
+        print(f"[MLA1D.forward_decode] After q_norm, tt_q shape: {tt_q.shape}")
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+        print(f"[MLA1D.forward_decode] After wq_b, tt_q shape: {tt_q.shape}")
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
+        print(f"[MLA1D.forward_decode] After reshape, tt_q shape: {tt_q.shape}")
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
+        print(
+            f"[MLA1D.forward_decode] After slice, tt_q_nope shape: {tt_q_nope.shape}, tt_q_rope shape: {tt_q_rope.shape}"
+        )
 
         # wkv_b1
         tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
+        print(f"[MLA1D.forward_decode] After permute, tt_q_nope shape: {tt_q_nope.shape}")
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
+        print(f"[MLA1D.forward_decode] After wkv_b1, tt_q_nope shape: {tt_q_nope.shape}")
         tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
+        print(f"[MLA1D.forward_decode] After permute back, tt_q_nope shape: {tt_q_nope.shape}")
 
         # Q RoPE
         tt_q_rope = ttnn.permute(
             tt_q_rope, (1, 0, 2, 3)
         )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
+        print(f"[MLA1D.forward_decode] After permute for RoPE, tt_q_rope shape: {tt_q_rope.shape}")
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_reshard"])
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
@@ -820,33 +925,45 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
+        print(f"[MLA1D.forward_decode] After Q RoPE, tt_q_rope shape: {tt_q_rope.shape}")
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
 
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        print(f"[MLA1D.forward_decode] After concat Q, tt_q shape: {tt_q.shape}")
 
         tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"])
+        print(f"[MLA1D.forward_decode] After Q all-to-all, tt_q shape: {tt_q.shape}")
 
         # KVPE Stuff
+        print(f"[MLA1D.forward_decode] Applying wkv_a linear")
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
+        print(f"[MLA1D.forward_decode] After wkv_a, tt_kv shape: {tt_kv.shape}")
 
         # AG + Reduce b/c sub-tile RS not supported
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
         )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
+        print(f"[MLA1D.forward_decode] After KV all_gather, tt_kv shape: {tt_kv.shape}")
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_decode"]
         )  # [1, 1, bsz, kv_lora_rank + qk_rope_head_dim]
+        print(f"[MLA1D.forward_decode] After KV reduce, tt_kv shape: {tt_kv.shape}")
 
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank])
         tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim])
+        print(
+            f"[MLA1D.forward_decode] After KV slice, tt_kv_nope shape: {tt_kv_nope.shape}, tt_kv_rope shape: {tt_kv_rope.shape}"
+        )
         ttnn.deallocate(tt_kv)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_decode(tt_kv_nope, cfg["kv_norm"])
+        print(f"[MLA1D.forward_decode] After KV norm, tt_kv_nope shape: {tt_kv_nope.shape}")
 
         # KV RoPE
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, bsz, 1, qk_rope_head_dim]
+        print(f"[MLA1D.forward_decode] After permute for KV RoPE, tt_kv_rope shape: {tt_kv_rope.shape}")
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         # TODO: Use DP tensors
         # Currently, not using DP tensors because sub-tile RS is not supported
@@ -857,25 +974,33 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
+        print(f"[MLA1D.forward_decode] After KV RoPE, tt_kv_rope shape: {tt_kv_rope.shape}")
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_out_reshard"])
         tt_kv_rope = ttnn.permute(tt_kv_rope, (0, 2, 1, 3))  # [1, 1, bsz, qk_rope_head_dim]
+        print(f"[MLA1D.forward_decode] After permute back, tt_kv_rope shape: {tt_kv_rope.shape}")
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        print(f"[MLA1D.forward_decode] After concat KVPE, tt_kvpe shape: {tt_kvpe.shape}")
 
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+        print(f"[MLA1D.forward_decode] After pad, tt_kvpe shape: {tt_kvpe.shape}")
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
+        print(f"[MLA1D.forward_decode] After permute for RS, tt_kvpe shape: {tt_kvpe.shape}")
         tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
             tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
         )
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
+        print(f"[MLA1D.forward_decode] After reduce_scatter and slice, tt_kvpe shape: {tt_kvpe.shape}")
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
+        print(f"[MLA1D.forward_decode] After scaling, tt_kvpe shape: {tt_kvpe.shape}")
 
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
         # Update KVPE Cache
+        print(f"[MLA1D.forward_decode] Updating KVPE cache")
         ttnn.experimental.paged_update_cache(
             kvpe_cache,
             tt_kvpe,
@@ -886,6 +1011,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         tt_q = ttnn.to_memory_config(tt_q, **cfg["flash_mla_reshard"])
+        print(f"[MLA1D.forward_decode] Before FlashMLA, tt_q shape: {tt_q.shape}")
         attn_out = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             tt_q,
             kvpe_cache,
@@ -893,23 +1019,31 @@ class MLA1D(AbstractModule):
             cur_pos_tensor=position_idxs,
             **cfg["flash_mla"],
         )  #  [1, bsz_local, num_heads, kv_lora_rank]
+        print(f"[MLA1D.forward_decode] After FlashMLA, attn_out shape: {attn_out.shape}")
         ttnn.deallocate(tt_q)
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
 
         attn_out = ttnn.experimental.all_to_all_async_generic(attn_out, **cfg["flash_mla_a2a_decode"])
+        print(f"[MLA1D.forward_decode] After FlashMLA all-to-all, attn_out shape: {attn_out.shape}")
 
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
+        print(f"[MLA1D.forward_decode] After permute for wkv_b2, attn_out shape: {attn_out.shape}")
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
+        print(f"[MLA1D.forward_decode] After wkv_b2, v_out shape: {v_out.shape}")
 
         # wo
         v_out = ttnn.experimental.all_gather_async(
             v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
         )  # [1, num_heads, bsz, v_head_dim]
+        print(f"[MLA1D.forward_decode] After WO all_gather, v_out shape: {v_out.shape}")
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
+        print(f"[MLA1D.forward_decode] After reshape, v_out shape: {v_out.shape}")
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+        print(f"[MLA1D.forward_decode] After wo, out shape: {out.shape}")
+        print(f"[MLA1D.forward_decode] Decode forward pass complete")
 
         return out
 
@@ -936,10 +1070,15 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
+        print(f"[MLA1D.forward_prefill] Starting prefill forward pass")
+        print(f"[MLA1D.forward_prefill] Input x shape: {x.shape}")
+        print(f"[MLA1D.forward_prefill] batch_idx: {batch_idx}, row_idx: {row_idx}")
 
         mesh_shape = cfg["mesh_shape"]
+        print(f"[MLA1D.forward_prefill] mesh_shape: {mesh_shape}")
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
+        print(f"[MLA1D.forward_prefill] sdpa_dp_factor: {sdpa_dp_factor}, mla_tp_factor: {mla_tp_factor}")
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
@@ -949,30 +1088,49 @@ class MLA1D(AbstractModule):
         qk_head_dim = cfg["qk_head_dim"]
         v_head_dim = cfg["v_head_dim"]
 
+        print(
+            f"[MLA1D.forward_prefill] num_heads: {num_heads}, num_heads_local: {num_heads_local}, kv_lora_rank: {kv_lora_rank}"
+        )
+        print(
+            f"[MLA1D.forward_prefill] qk_nope_head_dim: {qk_nope_head_dim}, qk_rope_head_dim: {qk_rope_head_dim}, qk_head_dim: {qk_head_dim}, v_head_dim: {v_head_dim}"
+        )
+
         kvpe_cache = cfg["kvpe_cache"]
         ccl = cfg["ccl"]
 
         seq_len = x.shape[2]
+        print(f"[MLA1D.forward_prefill] seq_len: {seq_len}")
 
         # wq_a and wq_b
+        print(f"[MLA1D.forward_prefill] Applying wq_a linear")
         tt_q = ttnn.linear(x, **cfg["wq_a"])
+        print(f"[MLA1D.forward_prefill] After wq_a, tt_q shape: {tt_q.shape}")
 
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
         )
+        print(f"[MLA1D.forward_prefill] After reduce_scatter, tt_q shape: {tt_q.shape}")
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
+        print(f"[MLA1D.forward_prefill] After all_gather, tt_q shape: {tt_q.shape}")
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
+        print(f"[MLA1D.forward_prefill] After q_norm, tt_q shape: {tt_q.shape}")
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+        print(f"[MLA1D.forward_prefill] After wq_b, tt_q shape: {tt_q.shape}")
 
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
+        print(f"[MLA1D.forward_prefill] After reshape and permute, tt_q shape: {tt_q.shape}")
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
+        print(
+            f"[MLA1D.forward_prefill] After slice, tt_q_nope shape: {tt_q_nope.shape}, tt_q_rope shape: {tt_q_rope.shape}"
+        )
 
         # wkv_b1
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, seq_len, kv_lora_rank]
+        print(f"[MLA1D.forward_prefill] After wkv_b1, tt_q_nope shape: {tt_q_nope.shape}")
 
         # Q RoPE
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
@@ -982,26 +1140,36 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=False,
         )
+        print(f"[MLA1D.forward_prefill] After Q RoPE, tt_q_rope shape: {tt_q_rope.shape}")
 
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        print(f"[MLA1D.forward_prefill] After concat Q, tt_q shape: {tt_q.shape}")
 
         # KVPE Stuff
+        print(f"[MLA1D.forward_prefill] Applying wkv_a linear")
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
+        print(f"[MLA1D.forward_prefill] After wkv_a, tt_kv shape: {tt_kv.shape}")
 
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_prefill"])
         )  # [1, 1, seq_len / num_devices, kv_lora_rank + qk_rope_head_dim]
+        print(f"[MLA1D.forward_prefill] After KV all_gather, tt_kv shape: {tt_kv.shape}")
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_prefill"]
         )  # [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
+        print(f"[MLA1D.forward_prefill] After KV reduce, tt_kv shape: {tt_kv.shape}")
 
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len, kv_lora_rank])
         tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim])
+        print(
+            f"[MLA1D.forward_prefill] After KV slice, tt_kv_nope shape: {tt_kv_nope.shape}, tt_kv_rope shape: {tt_kv_rope.shape}"
+        )
         ttnn.deallocate(tt_kv)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
+        print(f"[MLA1D.forward_prefill] After KV norm, tt_kv_nope shape: {tt_kv_nope.shape}")
 
         # KV RoPE
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
@@ -1011,19 +1179,26 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=False,
         )
+        print(f"[MLA1D.forward_prefill] After KV RoPE, tt_kv_rope shape: {tt_kv_rope.shape}")
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        print(f"[MLA1D.forward_prefill] After concat KVPE, tt_kvpe shape: {tt_kvpe.shape}")
         # TODO: Add Norm here for KVPE
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
+        print(f"[MLA1D.forward_prefill] After typecast, tt_kvpe shape: {tt_kvpe.shape}, dtype: {tt_kvpe.dtype}")
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+        print(
+            f"[MLA1D.forward_prefill] batch_size_per_dp_shard: {batch_size_per_dp_shard}, local_batch_idx: {local_batch_idx}, col_idx: {col_idx}"
+        )
 
+        print(f"[MLA1D.forward_prefill] Filling KVPE cache")
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1033,22 +1208,68 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
+        print(f"[MLA1D.forward_prefill] Before FlashMLA, tt_q shape: {tt_q.shape}, tt_kvpe shape: {tt_kvpe.shape}")
         attn_out = ttnn.transformer.flash_mla_prefill(
             tt_q,
             tt_kvpe,
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
+        print(f"[MLA1D.forward_prefill] After FlashMLA, attn_out shape: {attn_out.shape}")
         ttnn.deallocate(tt_q)
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
-        v_out = ttnn.experimental.all_gather_async(
-            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-        )  # [1, num_heads, seq_len, v_head_dim]
+        print(f"[MLA1D.forward_prefill] After wkv_b2, v_out shape: {v_out.shape}")
 
-        # wo
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]
-        v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-        out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+        # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
+        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
+        print(f"[MLA1D.forward_prefill] After permute (before all_gather), v_out shape: {v_out.shape}")
+
+        # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
+        # Strategy: Reshape to 4D (merge chunks into batch dim), gather, then process in chunks
+        SEQ_LEN_CHUNK_SIZE = 8192
+        if seq_len > SEQ_LEN_CHUNK_SIZE:
+            print(f"[MLA1D.forward_prefill] Chunking sequence ({seq_len} > {SEQ_LEN_CHUNK_SIZE}) before all_gather")
+            num_heads_local = v_out.shape[2]
+            v_head_dim = v_out.shape[3]
+            num_chunks = even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE)
+
+            # Reshape to [num_chunks, chunk_size, num_heads_local, v_head_dim] (4D with chunks as batch)
+            v_out = ttnn.reshape(v_out, (num_chunks, SEQ_LEN_CHUNK_SIZE, num_heads_local, v_head_dim))
+            print(f"[MLA1D.forward_prefill] After chunking reshape (4D), v_out shape: {v_out.shape}")
+
+            # Now all_gather can work on dim=2 (heads dimension) with 4D tensor
+            v_out = ttnn.experimental.all_gather_async(
+                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            )  # [num_chunks, chunk_size, num_heads, v_head_dim]
+            print(f"[MLA1D.forward_prefill] After WO all_gather (chunked 4D), v_out shape: {v_out.shape}")
+
+            # Reshape for linear: [num_chunks, chunk_size, num_heads, v_head_dim] -> [num_chunks, 1, chunk_size, hidden_dim]
+            num_heads = v_out.shape[2]
+            v_head_dim = v_out.shape[3]
+            v_out = ttnn.reshape(v_out, (num_chunks, 1, SEQ_LEN_CHUNK_SIZE, num_heads * v_head_dim))
+            print(f"[MLA1D.forward_prefill] After reshape for linear, v_out shape: {v_out.shape}")
+
+            out = ttnn.linear(v_out, **cfg["wo"])  # [num_chunks, 1, chunk_size, dim]
+            print(f"[MLA1D.forward_prefill] After wo (chunked), out shape: {out.shape}")
+
+            # De-chunk: [num_chunks, 1, chunk_size, dim] -> [1, 1, seq_len, dim]
+            output_dim = out.shape[3]
+            out = ttnn.reshape(out, (1, 1, seq_len, output_dim))
+            print(f"[MLA1D.forward_prefill] After de-chunking, out shape: {out.shape}")
+        else:
+            # Non-chunked path for shorter sequences
+            v_out = ttnn.experimental.all_gather_async(
+                v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+            )  # [1, seq_len, num_heads, v_head_dim]
+            print(f"[MLA1D.forward_prefill] After WO all_gather, v_out shape: {v_out.shape}")
+
+            # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
+            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
+            print(f"[MLA1D.forward_prefill] After reshape, v_out shape: {v_out.shape}")
+            out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+            print(f"[MLA1D.forward_prefill] After wo, out shape: {out.shape}")
+
+        print(f"[MLA1D.forward_prefill] Prefill forward pass complete")
 
         return out

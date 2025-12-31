@@ -250,7 +250,7 @@ def run_demo(
 
     fabric_config = ttnn.FabricConfig.FABRIC_1D
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
-    ttnn.set_fabric_config(fabric_config)
+    ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
