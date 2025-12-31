@@ -21,6 +21,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
+    NUM_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -146,7 +147,7 @@ def transpose_dest(
     if dest_acc == DestAccumulation.Yes and formats.input_format != DataFormat.Int32:
         pytest.skip("32-bit dest tests fail for Float formats due to bit No.11 issue.")
 
-    input_dimensions = [32, 32]
+    input_dimensions = [64, 64]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -196,6 +197,7 @@ def transpose_dest(
                 else Transpose.No
             ),
             TILE_COUNT(tile_cnt_A),
+            NUM_FACES(),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
