@@ -38,53 +38,46 @@ namespace ttnn::experimental::prim {
 
 namespace detail {
 
-uint32_t strided_all_gather_async_core_count_per_link(
-    uint32_t num_workers_per_direction,
-    uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
-    return (num_workers_per_direction + num_mux_cores_per_direction_per_link) * num_directions_per_link;
-}
-
-uint32_t strided_default_workers(
-    const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    uint32_t output_data_size_bytes,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
-    auto d_id = mesh_device.get_sub_device_ids().at(0);
-    auto core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, d_id);
-    uint32_t num_cores = core_range_set.num_cores();
-    // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
-    // available cores This was determined by the sweep
-    // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-    ttnn::SmallVector<uint32_t> candidate_worker_counts;
-    // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
-    // for 2 workers. for ring, half the data is moved per link, so we divide by 2
-    double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
-                                       (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
-    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
-        candidate_worker_counts = {4, 2, 1};
-    } else {
-        candidate_worker_counts = {2, 1};
+std::tuple<CoreRangeSet, std::vector<CoreCoord>, CoreRangeSet, std::vector<CoreCoord>>
+strided_all_gather_choose_worker_cores(
+    size_t num_links,
+    size_t num_directions,
+    size_t num_workers_per_direction_per_link,
+    size_t num_mux_cores_per_direction_per_link,
+    size_t num_matmul_cores,
+    IDevice* device) {
+    CoreRangeSet sender_worker_core_range;
+    const size_t num_workers = num_workers_per_direction_per_link * num_links;
+    auto grid_size = device->compute_with_storage_grid_size();
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    if (num_matmul_cores) {
+        TT_FATAL(
+            num_workers == num_matmul_cores,
+            "Strided AGMM will only work if num workers is the same as num_matmul_cores.y");
     }
-    for (auto worker_count : candidate_worker_counts) {
-        uint32_t core_count =
-            num_links * strided_all_gather_async_core_count_per_link(
-                            worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
-        if (num_cores >= core_count) {
-            log_trace(
-                tt::LogOp,
-                "data_moved_per_link_bytes: {} and worker_count: {}",
-                data_moved_per_link_bytes,
-                worker_count);
-            return worker_count;
+    TT_FATAL(num_workers <= grid_size.y, "Not enough all gather cores.y to satisfy the desired number of AGMM workers");
+
+    for (size_t x = 0; x < num_directions; x++) {
+        for (size_t y = 0; y < num_workers; y++) {
+            sender_worker_core_range =
+                sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
         }
     }
-    TT_THROW(
-        "Not enough cores available on the subdevice or device for the requested match the number of links {}",
-        num_links);
+
+    CoreRangeSet mux_core_range;
+    const size_t mux_cores_needed = num_mux_cores_per_direction_per_link * num_links * num_directions;
+    TT_FATAL(
+        mux_cores_needed <= (grid_size.x + 1),
+        "Not enough cores in the last row to satisfy the num mux cores needed for AGMM");
+    for (size_t x = 0; x < mux_cores_needed; x++) {
+        mux_core_range =
+            mux_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, grid_size.y - 1), CoreCoord(x, grid_size.y - 1))));
+    }
+    return {
+        sender_worker_core_range,
+        corerange_to_cores(sender_worker_core_range, std::nullopt, true),
+        mux_core_range,
+        corerange_to_cores(mux_core_range, std::nullopt, false)};
 }
 
 void strided_fabric_mux_connection_ct_args(
@@ -151,24 +144,21 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program
     Tensor& output_tensor) {
     const auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
     const auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
-    const auto& all_cores = shared_variables.all_cores;
+    const auto& all_worker_cores = shared_variables.all_worker_cores;
     const auto& num_links = shared_variables.num_links;
     const auto& num_directions_per_link = shared_variables.num_directions_per_link;
     const auto& num_workers_per_direction = shared_variables.num_workers_per_direction;
-    const auto& num_mux_cores_per_direction_per_link = shared_variables.num_mux_cores_per_direction_per_link;
-    const auto& num_cores_per_link = shared_variables.num_cores_per_link;
 
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
 
     // update senders
     uint32_t core_idx = 0;
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+    for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-                CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                uint32_t worker_core_offset = link * num_workers_per_direction + worker;
+                CoreCoord core = all_worker_cores[worker_core_offset];
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
 
@@ -277,17 +267,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t num_mux_cores_per_direction_per_link = 1;
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
-    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
-    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::strided_default_workers(
-        *mesh_device,
-        topology,
-        output_data_size_bytes,
-        num_links,
-        ring_size,
-        num_directions_per_link,
-        num_mux_cores_per_direction_per_link));
-    uint32_t num_cores_per_link = detail::strided_all_gather_async_core_count_per_link(
-        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
 
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
@@ -312,8 +292,15 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
 
-    const auto [all_core_range, all_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, std::nullopt, core_grid_offset);
+    const auto [all_worker_cores_range, all_worker_cores, all_mux_cores_range, all_mux_cores] =
+        detail::strided_all_gather_choose_worker_cores(
+            num_links,
+            num_directions_per_link,
+            num_workers_per_direction,
+            num_mux_cores_per_direction_per_link,
+            mm_cores_y.value_or(0),
+            mesh_device);
+
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -321,17 +308,18 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     std::set<CoreRange> mux_backward_core_ranges;
     std::vector<CoreCoord> sender_forward_cores;
     std::vector<CoreCoord> sender_backward_cores;
-    uint32_t core_id = 0;
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            const auto& mux_core = all_cores[core_id++];
+    uint32_t worker_core_id = 0;
+    uint32_t mux_core_id = 0;
+    for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
+            const auto& mux_core = all_mux_cores[mux_core_id++];
             if (dir) {
                 mux_forward_core_ranges.insert(CoreRange(mux_core));
             } else {
                 mux_backward_core_ranges.insert(CoreRange(mux_core));
             }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                const auto& worker_core = all_cores[core_id++];
+                const auto& worker_core = all_worker_cores[worker_core_id++];
                 if (dir) {
                     sender_forward_cores.push_back(worker_core);
                     sender_forward_core_ranges.insert(CoreRange(worker_core));
@@ -439,12 +427,11 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+    for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+        for (uint32_t link = 0; link < num_links; link++) {
             // Fabrix mux kernel
-            uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-            CoreCoord mux_logical_core = all_cores[mux_core_offset];
+            uint32_t mux_core_offset = (dir * num_links + link) * num_mux_cores_per_direction_per_link;
+            CoreCoord mux_logical_core = all_mux_cores[mux_core_offset];
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
             auto num_full_size_channels = num_workers_per_direction;
             auto num_header_only_channels = 0;
@@ -484,13 +471,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                uint32_t worker_core_offset =
+                    (dir * num_links * num_workers_per_direction) + (link * num_workers_per_direction) + worker;
+                CoreCoord core = all_worker_cores[worker_core_offset];
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-                CoreCoord supplemental_core = all_cores
-                    [(link * num_cores_per_link) +
-                     ((1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction)) +
-                     num_mux_cores_per_direction_per_link + worker];
-                CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
+                uint32_t opposite_worker_core_offset =
+                    (1 - dir) * (num_links * num_workers_per_direction) + link * num_workers_per_direction + worker;
+                CoreCoord opposite_core = all_worker_cores[opposite_worker_core_offset];
+                CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(opposite_core);
 
                 uint32_t global_worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t global_worker_count = num_links * num_workers_per_direction;
@@ -562,8 +550,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
 
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
-                CoreCoord termination_master_logical_core =
-                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
+                CoreCoord termination_master_logical_core = all_worker_cores[link * num_workers_per_direction];
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
@@ -653,12 +640,10 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     return {
         reader_kernel_ids,
         writer_kernel_ids,
-        all_cores,
+        all_worker_cores,
         num_links,
         num_directions_per_link,
-        num_workers_per_direction,
-        num_mux_cores_per_direction_per_link,
-        num_cores_per_link};
+        num_workers_per_direction};
 }
 
 }  // namespace ttnn::experimental::prim
