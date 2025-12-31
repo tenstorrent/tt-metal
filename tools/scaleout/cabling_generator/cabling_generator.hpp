@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -17,12 +16,12 @@
 #include <board/board.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-namespace tt::scaleout_tools::cabling_generator::proto {
-class ClusterDescriptor;
-}  // namespace tt::scaleout_tools::cabling_generator::proto
-
 namespace tt::scaleout_tools::fsd::proto {
     class FactorySystemDescriptor;
+}
+
+namespace tt::scaleout_tools::cabling_generator::proto {
+class ClusterDescriptor;
 }
 
 namespace tt::scaleout_tools::deployment::proto {
@@ -175,6 +174,12 @@ public:
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
 private:
+    // Common initialization logic for all constructors
+    void initialize_cluster(
+        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+        std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
+            std::nullopt);
+
     // Merge another descriptor file into this CablingGenerator
     // Creates CablingGenerator internally and merges it
     // existing_sources: accumulated list of previously merged files (for error messages)

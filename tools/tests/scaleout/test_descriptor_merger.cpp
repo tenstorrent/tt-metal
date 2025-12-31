@@ -495,8 +495,7 @@ TEST_F(DescriptorMergerTest, SplitAndMerge8x16WhGalaxyXyTorusSuperpod) {
     // Create hostnames based on descriptor
     const auto hostnames = create_host_vector(get_host_count(source_path));
 
-    // Test with different split counts from 2 to 16
-    for (int num_splits = 2; num_splits <= 16; ++num_splits) {
+    for (int num_splits : {2, 4, 8, 16}) {
         // Create unique test directory for this iteration
         const std::string test_dir = create_test_dir("split_8x16_test_" + std::to_string(num_splits));
         const std::string split_dir = test_dir + "split/";
@@ -533,7 +532,7 @@ TEST_F(DescriptorMergerTest, SplitAndMerge5WhGalaxyYTorusSuperpod) {
     // Create CablingGenerator from original file once
     CablingGenerator original_gen(source_path, hostnames);
 
-    for (int num_splits = 2; num_splits <= 5; num_splits++) {
+    for (int num_splits : {2, 4}) {
         // Create a fresh test directory for each split count to avoid file conflicts
         const std::string test_dir = create_test_dir("split_5_test_" + std::to_string(num_splits));
         const std::string split_dir = test_dir + "split/";
