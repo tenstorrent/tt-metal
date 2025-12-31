@@ -12,7 +12,6 @@
 #include "fill_rm.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 
-namespace nb = nanobind;
 
 namespace ttnn::operations::data_movement {
 namespace {
