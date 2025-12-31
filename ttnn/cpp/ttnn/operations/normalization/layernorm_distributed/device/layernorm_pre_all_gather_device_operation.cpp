@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
-#include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -70,27 +69,25 @@ LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGathe
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::normalization::layernorm
-
-namespace ttnn::prim {
-ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation::tensor_return_value_t
-layernorm_pre_all_gather(
+std::tuple<
+    LayerNormPreAllGatherDeviceOperation::operation_attributes_t,
+    LayerNormPreAllGatherDeviceOperation::tensor_args_t>
+LayerNormPreAllGatherDeviceOperation::invoke(
     const Tensor& input,
-    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    LayerNormDistributedType norm_type,
     DataType dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    const ttnn::operations::normalization::LayerNormDistributedDefaultProgramConfig& program_config,
+    const LayerNormDistributedDefaultProgramConfig& program_config,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
-        .norm_type = norm_type,
-        .dtype = dtype,
-        .compute_kernel_config = compute_kernel_config,
-        .use_2d_core_grid = use_2d_core_grid,
-        .program_config = program_config};
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return {
+        operation_attributes_t{
+            .norm_type = norm_type,
+            .dtype = dtype,
+            .compute_kernel_config = compute_kernel_config,
+            .use_2d_core_grid = use_2d_core_grid,
+            .program_config = program_config},
+        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
 }
-}  // namespace ttnn::prim
+
+}  // namespace ttnn::operations::normalization::layernorm
