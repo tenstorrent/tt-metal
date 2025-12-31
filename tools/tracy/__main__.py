@@ -43,6 +43,13 @@ def main():
         default=True,
     )
     parser.add_option(
+        "--op-support-count",
+        dest="op_support_count",
+        action="store",
+        help="Maximum number of ops that can be supported by the profiler",
+        type="int",
+    )
+    parser.add_option(
         "--child-functions",
         type="string",
         help="Comma separated list of child function to have their duration included for parent OPs",
@@ -64,10 +71,17 @@ def main():
         default=False,
     )
     parser.add_option(
-        "--cpp-post-process",
-        dest="cpp_post_process",
+        "--enable-sum-profiling",
+        dest="do_sum",
         action="store_true",
-        help="Use C++ to post-process profiling data",
+        help="Enable sum profiling",
+        default=False,
+    )
+    parser.add_option(
+        "--no-runtime-analysis",
+        dest="no_runtime_analysis",
+        action="store_true",
+        help="Disable C++ post-processing of profiling data (enabled by default)",
         default=False,
     )
     parser.add_option(
@@ -198,6 +212,9 @@ def main():
     if options.profile_dispatch_cores:
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
+    if options.do_sum:
+        os.environ["TT_METAL_PROFILER_SUM"] = "1"
+
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
@@ -245,11 +262,31 @@ def main():
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
             logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
 
-    if options.cpp_post_process:
+    if not (
+        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
+    ):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+    else:
+        reasons = []
+        if options.no_runtime_analysis:
+            reasons.append("--no-runtime-analysis")
+        if options.do_sum:
+            reasons.append("--enable-sum-profiling")
+        if options.profile_dispatch_cores:
+            reasons.append("--profile-dispatch-cores")
+        if options.perf_counter_groups:
+            reasons.append("--profiler-capture-perf-counters")
+
+        reason_str = ", ".join(reasons)
+        logger.warning(
+            f"Skipping runtime analysis (C++ post-processing) due to conflicting options ({reason_str}). Falling back to legacy Python processing."
+        )
 
     if options.device_memory_profiler:
         os.environ["TT_METAL_MEM_PROFILER"] = "1"
+
+    if options.op_support_count:
+        os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
 
     if len(args) > 0:
         doReport = False
@@ -290,7 +327,7 @@ def main():
                 except ValueError as exc:
                     trySystem = True
                 if trySystem:
-                    subprocess.run(progname, shell=True, check=True)
+                    subprocess.run(" ".join(args), shell=True, check=True)
 
             if options.partial:
                 tracy_state.doPartial = True

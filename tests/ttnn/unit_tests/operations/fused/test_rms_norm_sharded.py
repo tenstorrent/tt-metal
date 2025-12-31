@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     ttnn_rms_norm_sharded,
     rms_norm_golden,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -232,3 +233,66 @@ def test_rms_norm_sharded_padded(device, h, w):
     rtol = 1.6e-2
     atol = 1e-5
     assert torch.allclose(output_ttnn, golden_output, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("h,w", [(32, 2048)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
+    """
+    Test RMS norm with width-sharded input on L1 and interleaved weight on DRAM.
+    Uses default config (no explicit program_config).
+    """
+    torch.manual_seed(0)
+
+    # For WIDTH_SHARDED: height stays full, width is sharded across all cores
+    num_cores_h, num_cores_w = 8, 8
+    num_cores_total = num_cores_h * num_cores_w  # 64
+    shard_height = h  # Full height (32)
+    shard_width = w // num_cores_total  # 2048 / 64 = 32
+
+    torch_input_tensor = generate_input_tensor(h, w, "random", dtype)
+    torch_weight = generate_input_tensor(1, w, "random", dtype)
+
+    # Create width-sharded memory config for input on L1
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    # Input tensor: width-sharded on L1
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_mem_config,
+    )
+
+    # Weight tensor: interleaved on DRAM
+    weight = ttnn.from_torch(
+        torch_weight[0],
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Uses default config (no explicit program_config)
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_output = rms_norm_golden(torch_input_tensor, weight=torch_weight[0]).to(dtype)
+
+    assert_with_pcc(golden_output, output_tensor, 0.9998)

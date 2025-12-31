@@ -8,8 +8,8 @@
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 // Function to notify receiver about incoming data (for both reads and writes)
 // Used by sender to inform receiver about incoming packets

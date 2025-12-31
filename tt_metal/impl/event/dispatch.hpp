@@ -11,20 +11,18 @@
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
 // Used so host knows data in completion queue is just an event ID
 struct ReadEventDescriptor {
     uint32_t event_id;
-    uint32_t global_offset;
+    uint32_t global_offset{0};
 
-    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
+    explicit ReadEventDescriptor(uint32_t event) : event_id(event) {}
 
     void set_global_offset(uint32_t offset) { global_offset = offset; }
     uint32_t get_global_event_id() { return global_offset + event_id; }

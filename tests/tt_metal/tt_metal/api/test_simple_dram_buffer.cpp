@@ -17,6 +17,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
@@ -27,7 +28,7 @@ bool SimpleDramLoopback(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, size_t local_address, size_t byte_size) {
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
-    uint32_t dram_channel = mesh_device->allocator()->get_dram_channel_from_bank_id(0);
+    uint32_t dram_channel = mesh_device->allocator_impl()->get_dram_channel_from_bank_id(0);
     writeDramBackdoor(mesh_device, dram_channel, local_address, inputs);
     readDramBackdoor(mesh_device, dram_channel, local_address, outputs);
     bool pass = (inputs == outputs);

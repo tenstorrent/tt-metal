@@ -596,6 +596,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
         [32, 32, 8, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n150
         [8, 16, 4, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n300
         [32, 4, 1, 4224, 128, (8, 8)],  # llama3.2 vision encoder on n300
+        [1, 64, 8, 2048, 128, (8, 8)],  # num q heads greater than 32
     ),
 )
 @pytest.mark.timeout(120)

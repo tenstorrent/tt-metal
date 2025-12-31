@@ -27,12 +27,26 @@ inline void calculate_rdiv(const uint value) {
                 recip = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(recip, 0));
             }
         }
-        sfpi::dst_reg[0] = recip * val;
+        sfpi::vFloat result = recip * val;
+
         if constexpr (rounding_mode == RoundingMode::Trunc) {
-            sfpi::dst_reg[0] = _trunc_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+            // Use hand-optimised "trunc" implementation.
+            // Input is in L0.  Output is in L1, and L2/L3 get clobbered.
+            sfpi::l_reg[sfpi::LRegs::LReg0] = result;
+            _trunc_body_();
+            result = sfpi::l_reg[sfpi::LRegs::LReg1];
+            sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+            sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
         } else if constexpr (rounding_mode == RoundingMode::Floor) {
-            sfpi::dst_reg[0] = _floor_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+            // Use hand-optimised "floor" implementation.
+            // Input is in L0.  Output is in L1, and L2/L3 get clobbered.
+            sfpi::l_reg[sfpi::LRegs::LReg0] = result;
+            _floor_body_();
+            result = sfpi::l_reg[sfpi::LRegs::LReg1];
+            sfpi::vFloat tmp2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+            sfpi::vFloat tmp3 = sfpi::l_reg[sfpi::LRegs::LReg3];
         }
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }

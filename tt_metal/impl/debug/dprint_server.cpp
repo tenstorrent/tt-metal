@@ -61,6 +61,32 @@ using namespace tt;
 
 #define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
+using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
+
+struct RiscKeyComparator {
+    bool operator()(const RiscKey& x, const RiscKey& y) const {
+        const ChipId x_device_id = get<0>(x);
+        const ChipId y_device_id = get<0>(y);
+        const uint32_t x_risc_id = get<2>(x);
+        const uint32_t y_risc_id = get<2>(y);
+        const umd::CoreDescriptor& x_core_desc = get<1>(x);
+        const umd::CoreDescriptor& y_core_desc = get<1>(y);
+
+        if (x_device_id != y_device_id) {
+            return x_device_id < y_device_id;
+        }
+
+        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
+        if (core_desc_cmp(x_core_desc, y_core_desc)) {
+            return true;
+        }
+        if (core_desc_cmp(y_core_desc, x_core_desc)) {
+            return false;
+        }
+
+        return x_risc_id < y_risc_id;
+    }
+};
 namespace {
 
 string logfile_path = "generated/dprint/";
@@ -102,33 +128,6 @@ public:
 };
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
-
-using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
-
-struct RiscKeyComparator {
-    bool operator()(const RiscKey& x, const RiscKey& y) const {
-        const ChipId x_device_id = get<0>(x);
-        const ChipId y_device_id = get<0>(y);
-        const uint32_t x_risc_id = get<2>(x);
-        const uint32_t y_risc_id = get<2>(y);
-        const umd::CoreDescriptor& x_core_desc = get<1>(x);
-        const umd::CoreDescriptor& y_core_desc = get<1>(y);
-
-        if (x_device_id != y_device_id) {
-            return x_device_id < y_device_id;
-        }
-
-        tt::tt_metal::CoreDescriptorComparator core_desc_cmp;
-        if (core_desc_cmp(x_core_desc, y_core_desc)) {
-            return true;
-        }
-        if (core_desc_cmp(y_core_desc, x_core_desc)) {
-            return false;
-        }
-
-        return x_risc_id < y_risc_id;
-    }
-};
 
 void ResetStream(ostringstream* stream) {
     stream->str("");

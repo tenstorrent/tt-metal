@@ -75,6 +75,7 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
+    ControlPlane();
     explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_file,
@@ -218,6 +219,8 @@ public:
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
+    tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
@@ -226,6 +229,8 @@ private:
         const std::string& mesh_graph_desc_file,
         std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
             logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
+
+    void init_control_plane_auto_discovery();
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
@@ -306,6 +311,12 @@ private:
         ChipId physical_chip_id,
         chan_id_t eth_channel_id) const;
 
+    // UDM-specific helper to write per-worker connection info to each worker core's L1
+    void write_udm_fabric_connections_to_tensix_cores(
+        ChipId physical_chip_id,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_worker_connections,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const;
+
     void assign_direction_to_fabric_eth_chan(
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
 
@@ -348,7 +359,6 @@ private:
     std::unordered_set<FabricNodeId> get_requested_exit_nodes(
         MeshId my_mesh_id,
         MeshId neighbor_mesh_id,
-        const RequestedIntermeshConnections& requested_intermesh_connections,
         const RequestedIntermeshPorts& requested_intermesh_ports,
         const std::vector<uint64_t>& src_exit_node_chips);
 
@@ -375,6 +385,11 @@ private:
     // Single-Host Intermesh Connectivity Helper Function:
     // Generate intermesh connections for the local host.
     AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
+
+    // Validate that the intermesh connections requested in the MGD can be mapped to physical links.
+    void validate_requested_intermesh_connections(
+        const RequestedIntermeshConnections& requested_intermesh_connections,
+        const PortDescriptorTable& port_descriptors);
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
-#include "tt_metal/hw/inc/accessor/tensor_accessor.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/tensor/tensor_accessor.h"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -135,7 +135,7 @@ FORCE_INLINE void to_noc_unicast_scatter_write(
     auto noc_address1 = addrgen_detail::get_noc_address(d, id1, offset1);
 
     pkt_hdr->to_noc_unicast_scatter_write(
-        NocUnicastScatterCommandHeader({{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)}), payload_size);
+        NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}), payload_size);
 }
 
 template <typename AddrGenType>

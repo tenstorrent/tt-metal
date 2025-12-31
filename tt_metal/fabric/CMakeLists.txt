@@ -1,6 +1,9 @@
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(fabric)
+
 # These headers are for the device, not host; will require cross compiling to lint them (future work).
 set_target_properties(
     fabric
@@ -38,6 +41,8 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric_router_channel_mapping.cpp
         fabric_router_builder.cpp
+        compute_mesh_router_builder.cpp
+        fabric_builder.cpp
         builder/fabric_builder_config.cpp
         builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
@@ -48,11 +53,14 @@ target_sources(
         builder/fabric_router_recipe.cpp
         builder/channel_to_pool_mapping.cpp
         builder/multi_pool_channel_allocator.cpp
+        builder/connection_registry.cpp
+        builder/router_connection_mapping.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
+        fabric_builder_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         fabric_tensix_builder_impl.cpp
@@ -63,7 +71,6 @@ target_sources(
         serialization/physical_system_descriptor_serialization.cpp
         serialization/intermesh_connections_serialization.cpp
         serialization/port_descriptor_serialization.cpp
-        erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp
@@ -86,6 +93,14 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
+
+# Exclude protobuf generated files from unity builds (they have conflicting static symbols)
+set_source_files_properties(
+    ${GENERATED_PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
 
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})

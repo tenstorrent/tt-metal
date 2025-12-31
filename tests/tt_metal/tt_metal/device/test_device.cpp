@@ -520,26 +520,19 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
             MetalContext::instance().hal().get_write_alignment(HalMemType::HOST),
         0);
 
-    // Get the pinned memory address that the device can write to
-    uint64_t pinned_memory_device_addr = pinned_memory->get_device_addr(device->id());
-
     // Write source data to L1
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
     // Create program and kernel for mesh workload
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    // Compute PCIe NOC0 XY encoding for the MMIO device and split 64-bit PCIe address
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
-    TT_ASSERT(!pcie_cores.empty());
-    auto pcie_xy = pcie_cores.front();
-    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+    auto noc_addr = pinned_memory->get_noc_addr(device->id());
+    ASSERT_TRUE(noc_addr.has_value());
+    ASSERT_EQ(noc_addr.value().device_id, device->id());
 
-    uint32_t dst_lo = static_cast<uint32_t>(pinned_memory_device_addr & 0xFFFFFFFFull);
-    uint32_t dst_hi = static_cast<uint32_t>(pinned_memory_device_addr >> 32);
+    uint32_t dst_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
+    uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
 
     CreateKernel(
         program,

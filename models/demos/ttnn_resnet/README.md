@@ -66,6 +66,7 @@ This demo includes preprocessing, postprocessing and inference time for batch si
 For single device and other platform-specific versions, please refer to:
 
 ### Single Device
-[Grayskull](/models/demos/grayskull/resnet50/)
 
 [Wormhole_B0](/models/demos/wormhole/resnet50/)
+
+[Blackhole](/models/demos/blackhole/resnet50/)

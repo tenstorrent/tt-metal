@@ -55,7 +55,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
+        ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, single_tile_size);
@@ -124,11 +125,24 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
+            case UnaryOpType::LOGIT: {
+                float value1 = *ops_chain[0].get_param_if<float>(0);
+                float value2 = 1.0f - value1;
+                packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
+                if (value1 > 0.5f) {
+                    unary_defines["WHERE"] = "where_tile";
+                    unary_defines["CLAMP"] = "clamp_tile";
+                } else if (value1 >= 0.0f) {
+                    unary_defines["CLAMP"] = "clamp_tile";
+                }
+                break;
+            }
             default: break;
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
+    auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -361,7 +375,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
+    auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
         program,

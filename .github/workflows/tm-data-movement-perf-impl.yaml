@@ -1,4 +1,4 @@
-name: "[impl] Data Movement Perf Tests impl"
+name: "[internal] Data Movement Perf Tests impl"
 
 on:
   workflow_call:

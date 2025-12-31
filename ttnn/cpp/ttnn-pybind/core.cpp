@@ -18,9 +18,10 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/common/guard.hpp"
-#include "tt-metalium/lightmetal_binary.hpp"
-#include "tt-metalium/lightmetal_replay.hpp"
-#include "tt-metalium/mesh_device.hpp"
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "tt_stl/caseless_comparison.hpp"
 
 namespace ttnn::core {
@@ -28,9 +29,7 @@ namespace ttnn::core {
 void py_module_types(py::module& module) { py::class_<ttnn::Config>(module, "Config"); }
 
 void py_module(py::module& module) {
-    using tt::tt_metal::LightMetalBeginCapture;
-    using tt::tt_metal::LightMetalBinary;
-    using tt::tt_metal::LightMetalEndCapture;
+    namespace lightmetal = tt::tt_metal::experimental::lightmetal;
     auto py_config = static_cast<py::class_<ttnn::Config>>(module.attr("Config"));
     py_config.def(py::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
         return fmt::format("{}", config);
@@ -43,29 +42,29 @@ void py_module(py::module& module) {
     });
     py_config.def_property_readonly("report_path", &ttnn::Config::get<"report_path">);
 
-    py::class_<LightMetalBinary>(module, "LightMetalBinary")
+    py::class_<lightmetal::LightMetalBinary>(module, "LightMetalBinary")
         .def(py::init<>())
         .def(py::init<std::vector<uint8_t>>())
-        .def("get_data", &LightMetalBinary::get_data)
-        .def("set_data", &LightMetalBinary::set_data)
-        .def("size", &LightMetalBinary::size)
-        .def("is_empty", &LightMetalBinary::is_empty)
-        .def("save_to_file", &LightMetalBinary::save_to_file)
-        .def_static("load_from_file", &LightMetalBinary::load_from_file);
+        .def("get_data", &lightmetal::LightMetalBinary::get_data)
+        .def("set_data", &lightmetal::LightMetalBinary::set_data)
+        .def("size", &lightmetal::LightMetalBinary::size)
+        .def("is_empty", &lightmetal::LightMetalBinary::is_empty)
+        .def("save_to_file", &lightmetal::LightMetalBinary::save_to_file)
+        .def_static("load_from_file", &lightmetal::LightMetalBinary::load_from_file);
 
-    py::class_<tt::tt_metal::LightMetalReplay>(module, "LightMetalReplay")
+    py::class_<lightmetal::LightMetalReplay>(module, "LightMetalReplay")
         .def_static(
             "create",
-            [](LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
-                return std::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
+            [](lightmetal::LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
+                return std::make_unique<lightmetal::LightMetalReplay>(std::move(binary), device);
             },
             py::arg("binary"),
             py::arg("device") = nullptr)
-        .def("run", &tt::tt_metal::LightMetalReplay::run);
+        .def("run", &lightmetal::LightMetalReplay::run);
 
     module.def("get_memory_config", &ttnn::get_memory_config);
-    module.def("light_metal_begin_capture", &LightMetalBeginCapture);
-    module.def("light_metal_end_capture", &LightMetalEndCapture);
+    module.def("light_metal_begin_capture", &lightmetal::LightMetalBeginCapture);
+    module.def("light_metal_end_capture", &lightmetal::LightMetalEndCapture);
 
     module.def(
         "set_printoptions",

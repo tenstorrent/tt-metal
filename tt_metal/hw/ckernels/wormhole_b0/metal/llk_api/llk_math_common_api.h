@@ -13,7 +13,7 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
-#include "debug/waypoint.h"
+#include "api/debug/waypoint.h"
 
 // Need to revisit why we even need this
 #define EPS 1.19209e-07  // std::numeric_limits::epsilon() for FP32

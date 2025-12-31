@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 namespace norm::layernorm::device::kernels::dataflow {
 

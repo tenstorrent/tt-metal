@@ -35,11 +35,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
     constexpr size_t ELEMENTS_PER_TILE = 1024;
@@ -418,10 +416,9 @@ static bool reader_datacopy_writer(
     // Check the print log against golden output.
     if (config.data_format == tt::DataFormat::Float32 && arch == ARCH::WORMHOLE_B0) {
         // Skip all device-side warning lines added before each tile print
-        DeleteLinesStartingWith(
-            DPrintMeshFixture::dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
     }
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
     // Compare input and output data
     return input_data == output_data;

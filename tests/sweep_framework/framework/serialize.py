@@ -113,16 +113,19 @@ def deserialize(object):
 
 
 def serialize_structured(object, warnings=[]):
-    if "to_json" in dir(object):
+    if isinstance(object, (str, int, float, bool, type(None))):
+        return object
+    elif isinstance(object, dict):
+        return {k: serialize_structured(v, warnings) for k, v in object.items()}
+    elif isinstance(object, list):
+        return [serialize_structured(item, warnings) for item in object]
+    elif "to_json" in dir(object):
         json_str = object.to_json()
         try:
-            # Parse the JSON string
             parsed_data = json.loads(json_str)
-            # Convert enum integers to human-readable strings
             parsed_data = convert_enum_values_to_strings(parsed_data)
             return {"type": str(type(object)).split("'")[1], "data": parsed_data}
         except (json.JSONDecodeError, TypeError):
-            # If parsing fails, fall back to storing as string
             return {"type": str(type(object)).split("'")[1], "data": json_str}
     elif "pybind" in str(type(type(object))) and type(object) and type(object) not in warnings:
         logger.warning(

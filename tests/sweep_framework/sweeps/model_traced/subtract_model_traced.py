@@ -50,26 +50,21 @@ def run(
     input_b_layout,
     input_a_memory_config,
     input_b_memory_config,
-    output_memory_config,
+    output_memory_config=None,  # Make optional with default
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept extra parameters from loader
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple) and model_traced suite (dict)
-    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
-        # This is model_traced suite - dict with 'self' and 'other' keys
-        shape_a = input_shape["self"]
-        shape_b = input_shape["other"]
+    # Handle both sample suite (tuple) and model_traced suite (dict with 'self'/'other')
+    if isinstance(input_shape, dict):
+        shape_a = input_shape.get("self", input_shape.get("input_a", (1, 1, 32, 32)))
+        shape_b = input_shape.get("other", input_shape.get("input_b", (1, 1, 32, 32)))
     else:
-        # This is sample suite - use same shape for both inputs
-        if isinstance(input_shape, (tuple, list)):
-            shape_a = tuple(input_shape)
-            shape_b = tuple(input_shape)
-        else:
-            shape_a = input_shape
-            shape_b = input_shape
+        shape_a = input_shape
+        shape_b = input_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -111,6 +106,10 @@ def run(
         from_torch_kwargs["memory_config"] = input_b_memory_config
 
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+
+    # Use input_a_memory_config as fallback if output_memory_config not provided
+    if output_memory_config is None:
+        output_memory_config = input_a_memory_config
 
     start_time = start_measuring_time()
     output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

@@ -17,8 +17,8 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-namespace ttnn::operations::conv {
-namespace conv2d {
+
+namespace ttnn::operations::conv::conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -656,7 +656,7 @@ bool is_split_reader_viable(
     const bool is_viable = activation_cycles / 2 + std::max(weight_cycles, tilize_cycles) <
                            std::max(activation_cycles + tilize_cycles, weight_cycles);
 
-    log_debug(
+    log_trace(
         tt::LogOp,
         "Split reader viability: activation_cycles={:.3f}, weight_cycles={:.3f}, tilize_cycles={:.3f}, is_viable={}",
         activation_cycles,
@@ -752,5 +752,4 @@ void post_conv2d_op_memory_checks(
         l1_usage.tensor_allocation_size);
 }
 
-}  // namespace conv2d
-}  // namespace ttnn::operations::conv
+}  // namespace ttnn::operations::conv::conv2d

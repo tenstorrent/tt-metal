@@ -35,10 +35,6 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
         "AllToAllAsync: input tensor dimension {} must be divisible by num_devices {}",
         input_shape[operation_attributes.out_dim],
         operation_attributes.num_devices);
-    TT_FATAL(
-        input_tensor.buffer()->buffer_type() == BufferType::DRAM,
-        "AllToAllAsync: Input tensor must be in DRAM, but is in {}",
-        input_tensor.buffer()->buffer_type());
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Unsupported input layout {}.", input_tensor.layout());
 
     // recreate output shape to cover optional output buffer

@@ -11,11 +11,7 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
@@ -204,8 +200,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

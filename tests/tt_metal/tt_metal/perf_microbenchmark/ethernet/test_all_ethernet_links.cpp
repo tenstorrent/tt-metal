@@ -10,6 +10,7 @@
 #include <vector>
 #include <queue>
 #include <optional>
+#include <fstream>
 
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>

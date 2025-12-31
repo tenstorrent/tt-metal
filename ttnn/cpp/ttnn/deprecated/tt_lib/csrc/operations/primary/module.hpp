@@ -9,15 +9,13 @@
 
 namespace py = pybind11;
 
-namespace tt {
-namespace operations {
-namespace primary {
+namespace tt::operations::primary {
 
 inline void py_module(py::module& m_primary) {}
 
-}  // namespace
+}  // namespace tt::operations::primary
    // primary
-}  // namespace
-   // operations
-}  // namespace
-   // tt
+// namespace
+// operations
+// namespace
+// tt

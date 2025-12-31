@@ -47,8 +47,8 @@ void validate_pool2d(
         auto kernel_h = sliding_window_config.window_hw.first;
         auto kernel_w = sliding_window_config.window_hw.second;
         TT_FATAL(
-            kernel_h * kernel_w <= 9,
-            "only kernel sizes less than or equal to 9 are supported, got {}x{}",
+            kernel_h * kernel_w <= 32,
+            "only kernel sizes less than or equal to 32 are supported, got {}x{}",
             kernel_h,
             kernel_w);
 

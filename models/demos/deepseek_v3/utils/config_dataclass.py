@@ -212,7 +212,7 @@ class RMSNormConfig(OpConfigBase):
     residual_input_tensor: ConfigWeight | None = None
     memory_config: ttnn.MemoryConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
 
 
 @dataclass
@@ -221,7 +221,7 @@ class RMSNormPreAllGatherConfig(OpConfigBase):
 
     dtype: ttnn.DataType = ttnn.bfloat16
     residual_input_tensor: ConfigWeight | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     memory_config: ttnn.MemoryConfig | None = None
 
@@ -235,7 +235,7 @@ class RMSNormPostAllGatherConfig(OpConfigBase):
     bias: ConfigWeight | None = None
     memory_config: ttnn.MemoryConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     dtype: ttnn.DataType | None = None
 
 

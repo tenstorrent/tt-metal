@@ -43,7 +43,7 @@ void MAIN {
                         }
                         cb_wait_front(tt::CBIndex::c_1, onetile);
 
-                        matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, kt, 0, 0, transpose_hw);
+                        matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, kt, 0, 0);
 
                         cb_pop_front(tt::CBIndex::c_1, onetile);
                     }

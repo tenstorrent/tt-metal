@@ -11,7 +11,18 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+
+// Import functions from the new namespace
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    build_line_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::
+    ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
@@ -126,11 +137,12 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         std::nullopt,  // use num buffers per channel decision making tree
         first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
 
-    return {
-        std::move(program),
-        {.multidevice_semaphores = multidevice_semaphores,
-         .barrier_semaphore = barrier_semaphore,
-         .program_artifacts = reduce_scatter_program_artifacts}};
+    shared_variables_t shared_vars{
+        .multidevice_semaphores = multidevice_semaphores,
+        .barrier_semaphore = barrier_semaphore,
+        .program_artifacts = reduce_scatter_program_artifacts};
+
+    return {std::move(program), std::move(shared_vars)};
 }
 
 void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_arguments(

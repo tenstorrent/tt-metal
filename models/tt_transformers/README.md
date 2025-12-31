@@ -97,11 +97,8 @@ The current version is verified to work with the following models:
 
 ## Prerequisites
 
-1. Install [TT-Metalium and TTNN](../../INSTALLING.md).
-2. Install additional python dependencies:
-    ```
-    pip install -r models/tt_transformers/requirements.txt
-    ```
+Install [TT-Metalium and TTNN](../../INSTALLING.md).
+
 
 ## How to Run
 
@@ -186,6 +183,8 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 ```
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
+
+NOTE: for models that are not listed in [`get_supported_trace_region_size` function](demo/trace_region_config.py#L79), the default trace region size will be used as set in the [`demo/simple_text_demo.py` script](demo/simple_text_demo.py#L704). The default trace region size may not be sufficient for such a model and there will be a helpful error message that informs the required trace region size, which can be overridden by setting the `trace_region_size` argument in the demo.
 
 ## Details
 

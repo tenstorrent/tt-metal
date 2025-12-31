@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
-#include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -18,16 +16,21 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::program {
 
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
-    const Tensor& input, const Tensor& output, bool is_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
+ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgramFactory::create(
+    const sharded_to_interleaved_operation_attributes_t& operation_attributes,
+    const sharded_to_interleaved_tensor_args_t& tensor_args,
+    sharded_to_interleaved_tensor_return_value_t& output) {
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t num_slices = operation_attributes.num_slices;
+    const uint32_t slice_index = operation_attributes.slice_index;
+    const bool is_l1_aligned = true;
+
     tt_metal::Program program{};
-    is_l1_aligned = true;
     uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
-        num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
-        num_units_per_shard_width_last;
-
+        num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height,
+        num_units_per_shard_height_last, num_units_per_shard_width_last;
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -122,7 +125,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+            "writer_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
@@ -148,10 +152,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
 
-    uint32_t starting_idx_h = calculate_starting_idx_h(output, num_slices, slice_index);
+    uint32_t starting_idx_h = detail::calculate_starting_idx_h(output, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
-
 
     for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
         const auto& core = cores[core_idx];
@@ -229,7 +232,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             }
             uint32_t l1_alignment = hal::get_l1_alignment();
             uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
-            if(is_blackhole or is_l1_aligned) {
+            if (is_blackhole or is_l1_aligned) {
                 if (!dst_is_dram or is_l1_aligned) {
                     padded_shard_width = align(output_unit_size, l1_alignment);
                 }
@@ -252,48 +255,47 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             }
         }
     }
-    auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices, num_cores_unpadded](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            auto* src_buffer = input_tensors[0].buffer();
 
-            Buffer* dst_buffer = nullptr;
-            uint32_t starting_idx_h = 0;
-            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.empty());
-            if (partial_op) {
-                // If we have num_slices > 1, it means that our op is S->I partial.
-                // And currently we store output tensors there as input[1]
-                // If we have num_slices == 1, and output_tensors.size() == 0,
-                // it also means we are in S->I partial and must read from output from inputs[1]
-                dst_buffer = input_tensors.at(1).buffer();
-
-                // Calculate starting_idx_h
-                uint32_t runtime_slice_index = static_cast<const ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation*>(operation)->slice_index;
-                starting_idx_h = calculate_starting_idx_h(input_tensors.at(1), num_slices, runtime_slice_index);
-            } else {
-                dst_buffer = output_tensors.at(0).buffer();
-            }
-            // TODO: Make these common args instead
-            auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-            for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
-                const auto& core = cores[core_idx];
-                auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = dst_buffer->address();
-                if (partial_op) {
-                    runtime_args[8] = starting_idx_h;
-                }
-            }
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .unary_reader_kernel_id = unary_reader_kernel_id,
+            .unary_writer_kernel_id = unary_writer_kernel_id,
+            .cb_src0 = cb_src0,
+            .cores = cores,
+            .num_slices = num_slices,
+            .num_cores_unpadded = num_cores_unpadded,
+        }};
 }
 
+void ShardedToInterleavedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const sharded_to_interleaved_operation_attributes_t& operation_attributes,
+    const sharded_to_interleaved_tensor_args_t& tensor_args,
+    sharded_to_interleaved_tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    const auto& cores = cached_program.shared_variables.cores;
+    const uint32_t num_slices = cached_program.shared_variables.num_slices;
+    const uint32_t num_cores_unpadded = cached_program.shared_variables.num_cores_unpadded;
 
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = output.buffer();
 
+    // Calculate starting_idx_h if partial operation
+    uint32_t starting_idx_h = detail::calculate_starting_idx_h(output, num_slices, operation_attributes.slice_index);
 
+    auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
+    for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+        const auto& core = cores[core_idx];
+        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        runtime_args[0] = dst_buffer->address();
+        if (num_slices > 1) {
+            runtime_args[8] = starting_idx_h;
+        }
+    }
+    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
 }
+
+}  // namespace ttnn::operations::data_movement::program

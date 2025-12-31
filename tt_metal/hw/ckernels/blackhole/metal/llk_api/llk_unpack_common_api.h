@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "debug/waypoint.h"
+#include "api/debug/waypoint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
@@ -31,20 +31,6 @@ void llk_zero_operand(std::uint32_t operand) {
         (get_local_cb_interface(operand_id).fifo_limit + 1) - get_local_cb_interface(operand_id).fifo_size;
     std::uint32_t size = get_local_cb_interface(operand_id).fifo_size;
     _llk_zero_buffer_(fifo_base_addr, size);
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t* p_tile) {
-    std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-    std::uint32_t address = base_address + offset_address;
-    _llk_unpack_get_tile_<mail2math, mail2pack>(address, p_tile);
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void llk_unpack_release_tile(std::uint32_t operand) {
-    _llk_unpack_release_tile_<mail2math, mail2pack>();
 }
 
 inline void llk_unpack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) {

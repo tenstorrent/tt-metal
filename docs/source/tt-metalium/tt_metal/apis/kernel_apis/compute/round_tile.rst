@@ -6,12 +6,10 @@ Rounding operations
 frac_tile
 =========
 .. doxygenfunction:: frac_tile(uint32_t idst)
-.. doxygenfunction:: frac_tile_float32(uint32_t idst)
 
 trunc_tile
 ==========
 .. doxygenfunction:: trunc_tile(uint32_t idst)
-.. doxygenfunction:: trunc_tile_float32(uint32_t idst)
 
 round_tile
 ==========
@@ -20,4 +18,7 @@ round_tile
 floor_tile
 ==========
 .. doxygenfunction:: floor_tile(uint32_t idst)
-.. doxygenfunction:: floor_tile_float32(uint32_t idst)
+
+ceil_tile
+==========
+.. doxygenfunction:: ceil_tile(uint32_t idst)

@@ -13,9 +13,23 @@
 
 namespace tt::tt_fabric {
 
+// Forward declaration
+struct IntermeshVCConfig;
+
 enum class BuilderType : uint8_t {
     ERISC = 0,
     TENSIX = 1,
+};
+
+/**
+ * RouterVariant - Distinguishes between mesh and Z routers
+ *
+ * MESH: Standard mesh router (N/E/S/W directions)
+ * Z_ROUTER: Vertical Z router for inter-device connectivity
+ */
+enum class RouterVariant : uint8_t {
+    MESH = 0,
+    Z_ROUTER = 1,
 };
 
 struct LogicalSenderChannelKey {
@@ -56,19 +70,18 @@ struct InternalReceiverChannelMapping {
  * FabricRouterChannelMapping
  *
  * Defines the mapping from logical channels (VC + relative channel index within VC) to internal builder channels.
- * This mapping is computed based on topology, direction, and tensix extension mode.
+ * This mapping is computed based on topology, direction, router variant, and tensix extension mode.
  *
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
  * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
- * - VC1: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
+ * - VC1 (2D): [0-2] = intermesh channels (standard 2D)
+ * - VC1 (Z router): [0-3] = Z→mesh channels (4 sender channels mapping to 2-4 mesh routers)
  */
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
-        Topology topology,
-        eth_chan_directions direction,
-        bool has_tensix_extension = false);
+        Topology topology, bool has_tensix_extension, RouterVariant variant, const IntermeshVCConfig* intermesh_config);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -91,11 +104,16 @@ public:
 
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
+    /**
+     * Check if this is a Z router
+     */
+    bool is_z_router() const;
+
 private:
     Topology topology_;
-    // will become used when Z-link support is added
-    [[maybe_unused]] eth_chan_directions direction_;
     bool downstream_is_tensix_builder_;
+    RouterVariant variant_;
+    const IntermeshVCConfig* intermesh_vc_config_ = nullptr;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
@@ -103,8 +121,6 @@ private:
     void initialize_mappings();
     void initialize_vc0_mappings();
     void initialize_vc1_mappings();
-    bool is_2d_topology() const;
-    bool is_ring_or_torus() const;
 };
 
 }  // namespace tt::tt_fabric

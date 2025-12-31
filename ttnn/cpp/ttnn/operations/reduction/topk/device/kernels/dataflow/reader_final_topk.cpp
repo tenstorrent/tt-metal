@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));
@@ -47,4 +47,5 @@ void kernel_main() {
         cb_push_back(final_values_cb_index, Wt_final);
         cb_push_back(final_indices_cb_index, Wt_final);
     }
+    noc_async_write_barrier();
 }

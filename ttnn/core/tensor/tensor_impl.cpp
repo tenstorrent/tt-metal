@@ -31,11 +31,7 @@
 
 using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace tensor_impl {
+namespace tt::tt_metal::tensor_impl {
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
@@ -1444,8 +1440,4 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
 
-}  // namespace tensor_impl
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal::tensor_impl

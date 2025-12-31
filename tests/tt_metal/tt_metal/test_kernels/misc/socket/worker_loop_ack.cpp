@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
-#include "dataflow_api.h"
-#include "socket_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 
 void kernel_main() {
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(0);

@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 
+#include <fstream>
 #include <string_view>
 
 // Helper function to open a file as an fstream, and check that it was opened properly.

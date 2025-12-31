@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {

@@ -82,13 +82,13 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
     TestResult results;
     Context ctx{
         {},
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        0,               // Readers
-        0,               // Writers
-        true,            // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        0,                                      // Readers
+        0,                                      // Writers
+        true,                                   // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
@@ -118,13 +118,13 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
     TestResult results;
     Context ctx{
         {},
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        state.range(2),  // Threads
-        0,               // Readers
-        0,               // Writers
-        true,            // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        static_cast<int>(state.range(2)),       // Threads
+        0,                                      // Readers
+        0,                                      // Writers
+        true,                                   // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
     auto src_data = generate_random_src_data(ctx.total_size);
     auto* hugepage = get_hugepage(device_id, 0);
@@ -167,13 +167,13 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     IDevice* device = devices[device_id];
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers
-        state.range(3),  // Writers
-        state.range(4),  // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        static_cast<int>(state.range(2)),       // Readers
+        static_cast<int>(state.range(3)),       // Writers
+        static_cast<bool>(state.range(4)),      // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
     if (ctx.number_reader_kernels && ctx.number_writer_kernels) {
         TT_THROW(
@@ -238,13 +238,13 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     IDevice* device = devices[device_id];
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers
-        0,               // Writers
-        true,            // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        static_cast<int>(state.range(2)),       // Readers
+        0,                                      // Writers
+        true,                                   // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
@@ -347,13 +347,13 @@ TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& stat
 
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers on each device
-        0,               // Writers
-        false,           // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        static_cast<int>(state.range(2)),       // Readers on each device
+        0,                                      // Writers
+        false,                                  // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
 
     TestResult results = mem_bench_multi_mmio_devices(state, devices, ctx);
@@ -369,13 +369,13 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
 
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers on each device
-        0,               // Writers
-        false,           // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        static_cast<int>(state.range(2)),       // Readers on each device
+        0,                                      // Writers
+        false,                                  // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
 
     TestResult results = mem_bench_multi_mmio_devices(state, devices, ctx);
@@ -394,13 +394,13 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     IDevice* device = devices[device_id];
     Context ctx{
         devices,
-        state.range(0),  // Total size
-        state.range(1),  // Page size
-        0,               // Threads
-        state.range(2),  // Readers
-        state.range(3),  // Writers
-        state.range(4),  // Enable host copy
-        0,               // Iterations is managed by the benchmark framework
+        static_cast<uint32_t>(state.range(0)),  // Total size
+        static_cast<uint32_t>(state.range(1)),  // Page size
+        0,                                      // Threads
+        static_cast<int>(state.range(2)),       // Readers
+        static_cast<int>(state.range(3)),       // Writers
+        static_cast<bool>(state.range(4)),      // Enable host copy
+        0,                                      // Iterations is managed by the benchmark framework
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);

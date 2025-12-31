@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "dataflow_api.h"
-#include "socket_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
 
 void fabric_write_any_len(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr,

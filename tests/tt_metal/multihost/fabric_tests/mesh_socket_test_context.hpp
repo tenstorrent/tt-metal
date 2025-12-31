@@ -65,7 +65,7 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
     // Control plane and mesh configuration
-    ControlPlane* control_plane_ptr_;
+    ControlPlane* control_plane_ptr_{nullptr};
     MeshId local_mesh_id_;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
 

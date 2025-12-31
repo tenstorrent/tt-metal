@@ -18,7 +18,8 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC)
+    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
+    - cron: '0 */3 * * *'  # Every 3 hours - T3K schedule
 
 jobs:
   build-artifact:
@@ -29,8 +30,9 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
+
   multi-host-t3k:
-    if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == 'true') && github.event_name != 'schedule' }}
+    if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
@@ -85,7 +87,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.glx_2x_multihost == 'true') && github.event_name != 'schedule' }}
+    if: ${{ github.event.inputs.glx_2x_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
@@ -124,6 +126,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e NANOBIND=1
             -e PYTHONPATH=${{ github.workspace }}
             -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
@@ -140,7 +143,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.glx_4x_multihost == 'true' }}
+    if: ${{ github.event.inputs.glx_4x_multihost == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
@@ -173,7 +176,7 @@ jobs:
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
-        timeout-minutes: 30
+        timeout-minutes: 140
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}

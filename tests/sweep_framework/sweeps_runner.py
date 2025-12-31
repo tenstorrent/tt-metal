@@ -73,7 +73,6 @@ def create_config_from_args(args) -> SweepsConfig:
         vector_id=args.vector_id,
         result_destination=args.result_dest,
         watcher=args.watcher,
-        # E2E perf measurement disabled until kernel cache clearing is available
         measure_perf=args.perf,
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
@@ -201,7 +200,7 @@ def get_timeout(test_module_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "input_hash"]
+    info_field_names = ["sweep_name", "suite_name", "input_hash", "traced_source", "traced_machine_info"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -517,6 +516,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
+                result["peak_l1_memory"] = None
                 result["original_vector_data"] = original_vector_data
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
@@ -879,10 +879,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
-    # E2E performance measurement is inaccurate due to default kernel caching
-    # The kernel compilation cache cannot be cleared from Python, leading to misleading results
-    # where initial tests show ~900ms compilation time but subsequent tests show ~4ms due to
-    # kernel cache hits. This will be re-enabled once something like ttnn.ClearKernelCache() is available.
     parser.add_argument(
         "--perf",
         action="store_true",

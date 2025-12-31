@@ -381,7 +381,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
 
 // clang-format off
 /**
- * Issues a unicast scatter write from local L1 to destination chunks (split into up to two chunks).
+ * Issues a unicast scatter write from local L1 to destination chunks (split into up to four chunks).
  *
  * Return value: None
  *
@@ -2317,8 +2317,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
             dst_mesh_id,
             src_addr,
             page_size * 2,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}));
     } else {
         // Large pages: fall back to separate unicast writes
         // The fabric_unicast_noc_unicast_write calls will handle auto-packetization
@@ -2379,8 +2379,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
             client_interface,
             packet_header,
             src_addr,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
     } else {
         // Large pages: fall back to separate unicast writes
@@ -2445,7 +2445,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
         packet_header,
         dst_dev_id,
         dst_mesh_id,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
         capped_payload_size);
 }
 
@@ -2696,8 +2696,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
             ranges,
             src_addr,
             page_size * 2,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}));
     } else {
         // Large pages: fall back to separate multicast unicast writes
         // The fabric_multicast_noc_unicast_write calls will handle auto-packetization
@@ -2771,8 +2771,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
             client_interface,
             packet_header,
             src_addr,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
     } else {
         // Large pages: fall back to separate multicast unicast writes
@@ -2849,7 +2849,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
         dst_dev_id,
         dst_mesh_id,
         ranges,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
         capped_payload_size);
 }
 

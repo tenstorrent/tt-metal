@@ -11,6 +11,8 @@
 
 #include <sstream>
 
+#include <sstream>
+
 namespace ttnn::graph {
 
 namespace py = pybind11;
@@ -58,7 +60,7 @@ void py_graph_module(py::module& m) {
         doc_begin,
         py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
-    const char* doc_end =
+    auto doc_end =
         R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]
         returns the value captured graph as a json object converted to python object
     )doc";

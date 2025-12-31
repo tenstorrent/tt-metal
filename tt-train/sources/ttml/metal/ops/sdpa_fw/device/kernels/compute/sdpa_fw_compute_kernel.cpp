@@ -11,6 +11,7 @@
 
 #include <cstdint>
 
+#include "api/debug/dprint.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/common.h"
@@ -27,7 +28,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "debug/dprint.h"
 #include "sdpa_compute_utils.hpp"
 namespace NAMESPACE {
 
@@ -96,8 +96,7 @@ void MAIN {
                     cb_key,
                     /* tile_idx */ tile_idx,
                     /* tile_idx */ tile_idx,
-                    /* dst_reg_idx*/ matmul_accum_reg,
-                    /* transpose */ 1);  // accumulate in dest_reg 0
+                    /* dst_reg_idx*/ matmul_accum_reg);
             }
 
 #ifdef USE_ATTN_MASK
