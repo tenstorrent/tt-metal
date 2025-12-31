@@ -461,68 +461,70 @@ Note: Kernel naming (reader/writer) reflects RISC-V core assignment, not functio
 
 ## Phase 4: Kernel Implementation
 
-Split into three separate agents to contain scope and prevent context exhaustion.
+Split into **design** and **implementation** phases to ensure proper use of kernel helper libraries.
 
 **Important**: Kernel naming (reader/writer) reflects RISC-V core assignment convention, not actual function:
 - "Reader" runs on RISCV_0 (BRISC), typically uses NOC0
 - "Writer" runs on RISCV_1 (NCRISC), typically uses NOC1
 - **Both can read AND write data** - see spec's "Kernel Data Movement" table for actual functions
 
-### Phase 4a: RISCV_0 Data Movement Kernel (Reader)
+### Phase 4a: Kernel Design
 
-**Agent**: `ttnn-kernel-dataflow` (Sonnet)
+**Agent**: `ttnn-kernel-designer` (Opus)
 
-**Status**: 🔲 To be implemented
+**Status**: ✅ Implemented
 
-**Purpose**: Implement the RISCV_0 (BRISC) kernel based on spec's "RISCV_0 Access" pattern.
-Typically the "reader" - fetches data into L1 CBs via NOC0.
-
-**Input**:
-- Operation spec ("Kernel Data Movement" and "RISCV_0 Access" sections)
-- Factory code
-- Reference operation's corresponding kernel
-
-**Output**: Working RISCV_0 kernel
-
-**Validation Gate**: Data reaches compute CBs correctly (verified via DPRINT or test)
-
-### Phase 4b: Compute Kernel
-
-**Agent**: `ttnn-kernel-compute` (Sonnet)
-
-**Status**: 🔲 To be implemented
-
-**Purpose**: Implement the compute kernel that performs the actual operation.
+**Purpose**: Design how kernels should be implemented by mapping computation phases to kernel helper library functions (priority) or raw low-level calls (when no helper exists).
 
 **Input**:
-- Operation spec ("Compute Access" section)
-- Factory code
-- Working RISCV_0 kernel
-- Reference operation's compute kernel
+- Functional spec (`{operation}_spec.md`)
+- Kernel helper library headers (`ttnn/cpp/ttnn/kernel_lib/*.hpp`)
+- Reference analyses (optional)
+- Program factory (optional, for CB configuration)
 
-**Output**: Working compute kernel
+**Output**: `{operation_dir}/kernel_design.md` containing:
+- Per-kernel breakdown (reader, compute, writer)
+- For each phase: "USE HELPER: `compute_kernel_lib::X()`" or "NO HELPER: use raw calls"
+- CB synchronization summary
+- Helper encapsulation acknowledgment
 
-**Validation Gate**: Compute output CBs have correct values for simple test cases
+**Key Principle**: Designer identifies WHICH helpers to use. Writer implements WHAT designer specifies.
 
-### Phase 4c: RISCV_1 Data Movement Kernel (Writer)
+**Validation Gate**: Design document exists with all phases mapped to helpers or raw calls.
 
-**Agent**: `ttnn-kernel-dataflow` (Sonnet)
+**User Checkpoint**: Review kernel design document before proceeding to implementation. Present:
+- Helper vs raw call decisions for each phase
+- CB synchronization strategy
+- Any tradeoffs or concerns
 
-**Status**: 🔲 To be implemented
+### Phase 4b: Kernel Implementation
 
-**Purpose**: Implement the RISCV_1 (NCRISC) kernel based on spec's "RISCV_1 Access" pattern.
-Typically the "writer" - sends data from L1 CBs to DRAM via NOC1.
-Note: May also READ auxiliary data (masks, indices) in addition to writing output.
+**Agent**: `ttnn-kernel-writer` (Opus)
+
+**Status**: ✅ Implemented
+
+**Purpose**: Implement kernels following the Kernel Design Document from Phase 4a.
 
 **Input**:
-- Operation spec ("Kernel Data Movement" and "RISCV_1 Access" sections)
-- Factory code
-- Working compute kernel
-- Reference operation's corresponding kernel
+- **Kernel Design Document** (`kernel_design.md`) - MANDATORY
+- Functional spec
+- Stub kernels from Stage 6
+- Kernel helper library headers (for API reference)
 
-**Output**: Working RISCV_1 kernel
+**Output**: Working kernels that:
+- Call helpers for phases marked "USE HELPER"
+- Use raw calls ONLY for phases marked "NO HELPER"
+- **MUST NOT** add raw CB operations around helper calls
 
-**Validation Gate**: E2E test passes
+**Implementation Rules**:
+1. If design says "USE HELPER: X()" → Call X(), do NOT add cb_wait/pop/reserve/push
+2. If design says "NO HELPER" → Use raw calls as design specifies
+3. CB operations only BETWEEN phases, not around helpers
+
+**Violation Detection**:
+- Design says "USE HELPER" but code has raw CB ops for that phase → VIOLATION
+
+**Validation Gate**: E2E test passes with correct values
 
 ---
 
@@ -653,22 +655,20 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
                                      ▼ [USER REVIEW FACTORY]
                                                    │
 ┌─────────────────────┐                            │
-│ Phase 4a: RISCV_0   │◄───────────────────────────┘
-│ (reader/BRISC)      │ ──► dataflow kernel
+│ Phase 4a: Kernel    │◄───────────────────────────┘
+│ Designer (Opus)     │ ──► kernel_design.md
+│ - Map phases to     │     (USE HELPER or NO HELPER
+│   helper functions  │      for each phase)
 └──────────┬──────────┘
            │
-           ▼ [TEST: data in compute CBs]
+           ▼ [USER REVIEW KERNEL DESIGN]
            │
 ┌─────────────────────┐
-│ Phase 4b: Compute   │ ──► compute_kernel.cpp
-│ (Sonnet)            │
-└──────────┬──────────┘
-           │
-           ▼ [TEST: correct compute output]
-           │
-┌─────────────────────┐
-│ Phase 4c: RISCV_1   │ ──► dataflow kernel
-│ (writer/NCRISC)     │     (may read too!)
+│ Phase 4b: Kernel    │ ──► reader, compute, writer
+│ Writer (Opus)       │     kernels following design
+│ - Follow design     │
+│ - Helpers where     │
+│   specified         │
 └──────────┬──────────┘
            │
            ▼ [TEST: E2E passes]
