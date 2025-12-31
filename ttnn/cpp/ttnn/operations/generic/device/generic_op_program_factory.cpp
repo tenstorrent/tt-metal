@@ -67,9 +67,14 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
 
     const bool has_fabric_topology = operation_attributes.fabric_topology.has_value();
     const bool has_fabric_connections = !operation_attributes.fabric_connections.empty();
-    const bool use_fabric = has_fabric_topology || has_fabric_connections;
+    const bool needs_fabric_setup = (has_fabric_topology || has_fabric_connections);
 
-    if (!use_fabric) {
+    // MUX mode means user handles all fabric setup - framework should not set up fabric connections
+    TT_FATAL(
+        !(operation_attributes.mode == FabricConnectionMode::MUX && needs_fabric_setup),
+        "MUX mode should not specify fabric_topology or fabric_connections - user handles all fabric setup");
+
+    if (!needs_fabric_setup) {
         for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
             auto cached_program = create_at(program_descriptor, tensor_args, tensor_return_value);
             mesh_workload.add_program(mesh_coord_range, std::move(cached_program.program));
@@ -118,10 +123,13 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
             auto src_fabric_node_id = mesh_device->get_fabric_node_id(coord);
 
             for (const auto* connection : coord_connections) {
+                TT_FATAL(
+                    connection->mode != FabricConnectionMode::MUX, "Fabric connections are not supported for MUX mode");
                 if (connection->kernel_index >= modified_desc.kernels.size()) {
                     continue;
                 }
 
+                // TODO (vtangTT): need to handle routing plane setup here for 1:N connections (all_broadcast, etc.)
                 auto& kernel_desc = modified_desc.kernels[connection->kernel_index];
 
                 // Find runtime args for this core

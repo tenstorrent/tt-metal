@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <type_traits>
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -253,12 +255,18 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
     return ct_args;
 }
 
+template <typename ProgramOrDescriptor>
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
-    tt::tt_metal::Program& mux_program,
+    ProgramOrDescriptor& mux_program_or_desc,
     const CoreCoord& mux_logical_core) const {
+    static_assert(
+        std::is_same_v<ProgramOrDescriptor, tt::tt_metal::Program> ||
+            std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>,
+        "ProgramOrDescriptor must be either Program or ProgramDescriptor");
+
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -271,10 +279,17 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     }
 
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program, mux_logical_core, args, core_type_);
+        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
 
     return args;
 }
+
+// Explicit template instantiations
+template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const CoreCoord&) const;
+
+template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const CoreCoord&) const;
 
 uint8_t FabricMuxConfig::get_num_buffers(FabricMuxChannelType channel_type) const {
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL ? num_buffers_full_size_channel_

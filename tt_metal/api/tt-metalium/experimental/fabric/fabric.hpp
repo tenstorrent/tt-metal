@@ -177,11 +177,13 @@ public:
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
+    // Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
+    template <typename ProgramOrDescriptor = tt::tt_metal::Program>
     std::vector<uint32_t> get_fabric_mux_run_time_args(
         const FabricNodeId& src_fabric_node_id,
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
-        tt::tt_metal::Program& mux_program,
+        ProgramOrDescriptor& mux_program_or_desc,
         const CoreCoord& mux_logical_core) const;
 
     uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
