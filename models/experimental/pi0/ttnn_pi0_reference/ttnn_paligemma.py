@@ -368,15 +368,15 @@ class PaliGemmaBackboneTTNN:
         else:
             self.vlm_embed_tokens = None
 
-        # Convert norms
+        # Convert norms - OPTIMIZATION: Pre-add Gemma-style +1 offset
         self.vlm_norm = ttnn.from_torch(
-            weights["vlm_language"]["model.norm.weight"].unsqueeze(0),
+            (weights["vlm_language"]["model.norm.weight"] + 1.0).unsqueeze(0),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
         self.expert_norm = ttnn.from_torch(
-            weights["action_expert"]["model.norm.weight"].unsqueeze(0),
+            (weights["action_expert"]["model.norm.weight"] + 1.0).unsqueeze(0),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -439,7 +439,9 @@ class PaliGemmaBackboneTTNN:
                     value = value.T
                     layout = ttnn.TILE_LAYOUT
                 elif "layernorm" in new_key or "norm" in new_key:
-                    # Layer norms don't need transpose
+                    # OPTIMIZATION: Pre-add Gemma-style +1 offset to norm weights
+                    # This avoids computing weight+1 every forward pass
+                    value = value + 1.0
                     layout = ttnn.TILE_LAYOUT
                 else:
                     layout = ttnn.TILE_LAYOUT
@@ -468,6 +470,9 @@ class PaliGemmaBackboneTTNN:
                     value = value.T
                     layout = ttnn.TILE_LAYOUT
                 elif "layernorm" in new_key or "norm" in new_key:
+                    # OPTIMIZATION: Pre-add Gemma-style +1 offset to norm weights
+                    # This avoids computing weight+1 every forward pass
+                    value = value + 1.0
                     layout = ttnn.TILE_LAYOUT
                 else:
                     layout = ttnn.TILE_LAYOUT

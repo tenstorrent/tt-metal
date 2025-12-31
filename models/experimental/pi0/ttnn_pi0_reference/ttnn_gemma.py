@@ -103,38 +103,29 @@ def rms_norm_ttnn(
     eps: float = 1e-6,
 ) -> "ttnn.Tensor":
     """
-    RMSNorm using TTNN operations.
-    
+    OPTIMIZED: RMSNorm using ttnn.rms_norm fused operation.
+
+    NOTE: The weight tensor should already have the Gemma-style +1 offset
+    pre-applied during initialization (not computed here every forward pass).
+
     Args:
         x: TTNN tensor (batch_size, seq_len, hidden_dim)
-        weight: TTNN weight tensor (1, hidden_dim)
+        weight: TTNN weight tensor with +1 offset already applied (1, hidden_dim)
         eps: Epsilon for numerical stability
-    
+
     Returns:
         Normalized TTNN tensor
     """
     if not TTNN_AVAILABLE:
         raise RuntimeError("TTNN not available")
-    
-    # Compute x^2
-    x_squared = ttnn.pow(x, 2)
-    
-    # Mean across last dimension
-    variance = ttnn.mean(x_squared, dim=-1, keepdim=True)
-    
-    # rsqrt(variance + eps)
-    eps_tensor = ttnn.full_like(variance, eps)
-    variance_eps = ttnn.add(variance, eps_tensor)
-    rsqrt_var = ttnn.rsqrt(variance_eps)
-    
-    # Normalize
-    x_normalized = ttnn.multiply(x, rsqrt_var)
-    
-    # Apply weight + 1
-    ones = ttnn.ones_like(weight)
-    weight_plus_one = ttnn.add(weight, ones)
-    
-    return ttnn.multiply(x_normalized, weight_plus_one)
+
+    # Use fused ttnn.rms_norm (single optimized kernel instead of 9 separate ops)
+    return ttnn.rms_norm(
+        x,
+        weight=weight,
+        epsilon=eps,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
 
 # ============================================================================
@@ -150,27 +141,67 @@ def precompute_freqs_cis_torch(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Precompute cos and sin for rotary embeddings.
-    
+
     Args:
         head_dim: Dimension per head (must be even)
         max_seq_len: Maximum sequence length
         base: Base for frequency computation
         dtype: Output dtype
         device: Device to create tensors on
-    
+
     Returns:
         Tuple of (cos, sin) each of shape (max_seq_len, head_dim // 2)
     """
     # Compute inverse frequencies
     freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, device=device, dtype=dtype) / head_dim))
-    
+
     # Compute positions
     t = torch.arange(max_seq_len, device=device, dtype=dtype)
-    
+
     # Outer product
     freqs_outer = torch.outer(t, freqs)
-    
+
     return torch.cos(freqs_outer), torch.sin(freqs_outer)
+
+
+def precompute_freqs_cis_ttnn(
+    head_dim: int,
+    max_seq_len: int,
+    base: float = 10000.0,
+    dtype: torch.dtype = torch.float32,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Precompute cos and sin for TTNN rotary embeddings.
+
+    Returns format compatible with ttnn.experimental.rotary_embedding:
+    - Shape: [1, 1, max_seq_len, head_dim] (full head_dim, not half)
+
+    Args:
+        head_dim: Dimension per head (must be even)
+        max_seq_len: Maximum sequence length
+        base: Base for frequency computation
+        dtype: Output dtype
+
+    Returns:
+        Tuple of (cos, sin) each of shape [1, 1, max_seq_len, head_dim]
+    """
+    # Compute inverse frequencies
+    inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=dtype) / head_dim))
+
+    # Compute positions
+    t = torch.arange(max_seq_len, dtype=dtype)
+
+    # Outer product -> [max_seq_len, head_dim/2]
+    freqs = torch.einsum("i,j->ij", t, inv_freq)
+
+    # Concatenate to full head_dim: [max_seq_len, head_dim]
+    emb = torch.cat((freqs, freqs), dim=-1)
+
+    # Add batch/head dims: [1, 1, max_seq_len, head_dim]
+    cos = emb.cos()[None, None, :, :]
+    sin = emb.sin()[None, None, :, :]
+
+    return cos, sin
 
 
 def apply_rotary_emb_torch(
@@ -347,10 +378,10 @@ class GemmaAttentionTorch:
 class GemmaAttentionTTNN:
     """
     Gemma Multi-Query Attention using TTNN operations.
-    
+
     Leverages TTNN's optimized attention kernels.
     """
-    
+
     def __init__(
         self,
         config: GemmaConfig,
@@ -360,7 +391,7 @@ class GemmaAttentionTTNN:
     ):
         """
         Initialize attention layer with TTNN weights.
-        
+
         Args:
             config: Gemma configuration
             weights: TTNN weight tensors
@@ -369,21 +400,21 @@ class GemmaAttentionTTNN:
         """
         if not TTNN_AVAILABLE:
             raise RuntimeError("TTNN not available")
-        
+
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
-        
+
         self.q_proj = weights["self_attn.q_proj.weight"]
         self.k_proj = weights["self_attn.k_proj.weight"]
         self.v_proj = weights["self_attn.v_proj.weight"]
         self.o_proj = weights["self_attn.o_proj.weight"]
-        
+
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.head_dim
         self.scale = 1.0 / math.sqrt(self.head_dim)
-    
+
     def forward(
         self,
         hidden_states: "ttnn.Tensor",
@@ -396,7 +427,7 @@ class GemmaAttentionTTNN:
     ) -> Tuple["ttnn.Tensor", Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
         """
         Forward pass using TTNN operations.
-        
+
         Args:
             hidden_states: TTNN tensor (batch, seq_len, hidden_dim)
             cos, sin: RoPE embeddings
@@ -404,7 +435,7 @@ class GemmaAttentionTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
-        
+
         Returns:
             Tuple of (output, optional_cache)
         """
@@ -412,27 +443,27 @@ class GemmaAttentionTTNN:
         q = ttnn.linear(hidden_states, self.q_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.linear(hidden_states, self.k_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.linear(hidden_states, self.v_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        
+
         # Reshape and split heads using TTNN experimental ops
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-        
+
         q = ttnn.reshape(q, (batch_size, seq_len, self.num_heads, self.head_dim))
         k = ttnn.reshape(k, (batch_size, seq_len, self.num_kv_heads, self.head_dim))
         v = ttnn.reshape(v, (batch_size, seq_len, self.num_kv_heads, self.head_dim))
-        
+
         # Transpose: (batch, seq, heads, dim) -> (batch, heads, seq, dim)
         q = ttnn.permute(q, (0, 2, 1, 3))
         k = ttnn.permute(k, (0, 2, 1, 3))
         v = ttnn.permute(v, (0, 2, 1, 3))
-        
+
         # Apply RoPE using hybrid approach (convert to torch, apply RoPE, convert back)
         # This handles the complex broadcasting required for rotary embeddings
         q_torch = ttnn.to_torch(q)
         k_torch = ttnn.to_torch(k)
-        cos_torch = ttnn.to_torch(cos) if hasattr(cos, 'shape') else cos
-        sin_torch = ttnn.to_torch(sin) if hasattr(sin, 'shape') else sin
-        
+        cos_torch = ttnn.to_torch(cos) if hasattr(cos, "shape") else cos
+        sin_torch = ttnn.to_torch(sin) if hasattr(sin, "shape") else sin
+
         # Apply rotary embeddings in torch
         def apply_rope_torch(x, cos_t, sin_t):
             # x: (batch, heads, seq, dim)
@@ -443,29 +474,29 @@ class GemmaAttentionTTNN:
             elif len(cos_t.shape) == 3:
                 cos_t = cos_t.unsqueeze(0)  # (1, 1, seq, dim/2)
                 sin_t = sin_t.unsqueeze(0)
-            
+
             # Slice to match sequence length
             seq_len = x.shape[2]
             cos_t = cos_t[:, :, :seq_len, :]
             sin_t = sin_t[:, :, :seq_len, :]
-            
+
             # Repeat cos/sin to match full head_dim
             cos_t = torch.cat([cos_t, cos_t], dim=-1)  # (1, 1, seq, dim)
             sin_t = torch.cat([sin_t, sin_t], dim=-1)  # (1, 1, seq, dim)
-            
+
             # Split x into two halves for rotation
             x1 = x[..., : x.shape[-1] // 2]
             x2 = x[..., x.shape[-1] // 2 :]
-            
+
             # Rotate
             rotated = torch.cat([-x2, x1], dim=-1)
-            
+
             # Apply RoPE
             return x * cos_t + rotated * sin_t
-        
+
         q_rope_torch = apply_rope_torch(q_torch, cos_torch, sin_torch)
         k_rope_torch = apply_rope_torch(k_torch, cos_torch, sin_torch)
-        
+
         # Convert back to TTNN
         q_rope = ttnn.from_torch(
             q_rope_torch,
@@ -479,15 +510,15 @@ class GemmaAttentionTTNN:
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
-        
+
         # Handle KV cache
         if past_key_value is not None:
             past_k, past_v = past_key_value
             k_rope = ttnn.concat([past_k, k_rope], dim=2)
             v = ttnn.concat([past_v, v], dim=2)
-        
+
         new_cache = (k_rope, v) if use_cache else None
-        
+
         # Use TTNN scaled dot product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_rope,
@@ -497,14 +528,14 @@ class GemmaAttentionTTNN:
             is_causal=False,  # Mask handles causality
             scale=self.scale,
         )
-        
+
         # Transpose back and reshape
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_len, -1))
-        
+
         # Output projection (DRAM for large tensors)
         output = ttnn.linear(attn_output, self.o_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        
+
         return output, new_cache
 
 
