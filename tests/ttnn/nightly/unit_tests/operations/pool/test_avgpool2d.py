@@ -108,6 +108,7 @@ def run_avg_pool2d(
     compute_kernel_config=None,
     use_reshaped_tensor=True,
     dram_slice_config=None,
+    config_tensor_in_dram=True,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -175,6 +176,9 @@ def run_avg_pool2d(
     # 1x256x56x56 tensor with divisor_override=5 and 5x5 kernel resulting in rtol=0.015 for that element
     torch.manual_seed(1e3)
     torch_input = randomize_tensor(tensor_map, input_shape)
+    torch_input = (
+        torch.tensor(range(in_h * in_w), dtype=torch.bfloat16).reshape(1, 1, in_h, in_w).broadcast_to(input_shape)
+    )
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
@@ -210,6 +214,7 @@ def run_avg_pool2d(
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
         dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=config_tensor_in_dram,
     )
 
     if run_twice:
@@ -232,6 +237,7 @@ def run_avg_pool2d(
             output_layout=output_layout,
             compute_kernel_config=compute_kernel_config,
             dram_slice_config=dram_slice_config,
+            config_tensor_in_dram=config_tensor_in_dram,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -260,11 +266,11 @@ def run_avg_pool2d(
     )(torch_input_padded)
 
     # adjust the TTNN output to match the expected shape
-    ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(
+    out = ttnn.to_torch(ttnn_output)
+    out = out.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
     )  # N, H, W, C
-    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
+    out = torch.permute(out, (0, 3, 1, 2))  # N, C, H, W
 
     # apply correction to TORCH output for asymmetric padding when needed
     torch_needs_correction = padding_is_4d and divisor_override is None and count_include_pad is False
@@ -278,7 +284,7 @@ def run_avg_pool2d(
             divisor_override,
             count_include_pad,
         )
-
+    ref = torch_output
     # test for equivalence
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN supports scalars only in Bfloat16 and from recently it uses
@@ -300,8 +306,8 @@ def run_avg_pool2d(
         atol = 0.35
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
-        ttnn_output = ttnn_output.to(torch.bfloat16)
-    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+        out = out.to(torch.bfloat16)
+    allclose = torch.allclose(out, ref, atol=atol, rtol=rtol)
     assert allclose
 
 
