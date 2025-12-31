@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/tensor_accessor_args.h"
+#include "fabric_kernel_utils.hpp"
 
 using namespace tt;
 using namespace tt::tt_fabric;
@@ -38,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 0);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
+    constexpr uint32_t GROUP_PAGES = 4;
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
@@ -46,49 +48,61 @@ void kernel_main() {
     const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t max_packet_size_bytes = get_arg_val<uint32_t>(idx++);
 
     // Build a fabric send adapter from the runtime args that the host packed.
     // Needed before sending over fabric: binds this core to a specific routing/link.
     auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
 
-    // TEMP (2D API): manual packet header. Post-uplift this becomes implicit.
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
+    // Allocate headers as group pages
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr = PacketHeaderPool::allocate_header((uint8_t)GROUP_PAGES);
 
     // Fabric route setup (temporary 2D API):
     // Program a fixed unicast route to (dst_mesh_id, dst_dev_id). Dynamic routing is not
     // supported in this path (see guard below). This API will change soon. The future 2D
     // interface will mirror the 1D style. See linear/api.h for the reference shape.
-    auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
+    (void)fabric_set_unicast_route(pkt_hdr, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
 
     sender.open<true>();
 
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
 
-    for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
-        cb_wait_front(CB_ID, 1);
-        const uint32_t src_l1_addr = get_read_ptr(CB_ID);
+    uint32_t sent = 0;
+    while (sent < TOTAL_PAGES) {
+        uint32_t group_pages = GROUP_PAGES;
+        uint32_t remaining = TOTAL_PAGES - sent;
+        if (remaining < group_pages) {
+            group_pages = remaining;
+        }
 
-        // Pace transmissions so we don’t overrun the fabric send queue.
-        sender.wait_for_empty_write_slot();
+        cb_wait_front(CB_ID, group_pages);
+        const uint32_t src_l1_addr_base = get_read_ptr(CB_ID);
 
-        // Compute destination NOC address (DRAM or L1 interleaved)
-        uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
+        // Process each page individually to handle bank interleaving correctly
+        // Each page may be in a different bank, so we must compute NOC address per page
+        for (uint32_t page_in_group = 0; page_in_group < group_pages; ++page_in_group) {
+            const uint32_t page_id = sent + page_in_group;
+            const uint32_t src_l1_addr = src_l1_addr_base + (page_in_group * PAGE_SIZE);
+            const uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/page_id, /*offset=*/0, /*noc=*/0);
 
-        // Build the NOC header for this page
-        (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
-        header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            // tt_fabric::fabric_write_chunked<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
+            //     sender,
+            //     pkt_hdr,
+            //     dest_noc_addr,
+            //     src_l1_addr,
+            //     PAGE_SIZE,
+            //     max_packet_size_bytes);
 
-        // TEMP (2D API): payload then header. Will be a single call after uplift
-        // 1) send payload (no header)
-        sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-        // 2) send header (completes the packet)
-        sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+            tt_fabric::fabric_write_chunked_nonblocking<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
+                sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes, dst_dev_id, dst_mesh_id);
+        }
 
-        cb_pop_front(CB_ID, 1);
+        cb_pop_front(CB_ID, group_pages);
+
+        // noc_async_writes_flushed();
+
+        sent += group_pages;
     }
-
-    noc_async_writes_flushed();
 
     // Final signal: bump receiver semaphore so the receiver kernel exits.
     // In this benchmark we always have a completion semaphore.
@@ -96,11 +110,11 @@ void kernel_main() {
 
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1));
+    (void)fabric_set_unicast_route(pkt_hdr, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
+    pkt_hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1));
 
     sender.wait_for_empty_write_slot();
-    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    sender.send_payload_flush_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
 
     sender.close();
 }
