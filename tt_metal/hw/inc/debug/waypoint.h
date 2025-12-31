@@ -33,11 +33,12 @@ constexpr uint32_t helper(const char (&s)[N]) {
 
 template <uint32_t x>
 inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
-    *debug_waypoint = x;
+    std::uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    debug_waypoint[hartid] = x;
 }
 
-#define WATCHER_WAYPOINT_MAILBOX \
-    (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[PROCESSOR_INDEX])
+#define WATCHER_WAYPOINT_MAILBOX (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint)))
 
 #define WAYPOINT(x) write_debug_waypoint<helper(x)>(WATCHER_WAYPOINT_MAILBOX)
 

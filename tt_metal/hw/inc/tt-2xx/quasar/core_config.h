@@ -22,11 +22,15 @@ enum class TensixProcessorTypes : uint8_t {
     DM5 = 5,
     DM6 = 6,
     DM7 = 7,
-    MATH0 = 8,
-    MATH1 = 9,
-    MATH2 = 10,
-    MATH3 = 11,
-    COUNT = 12
+    E0_MATH0 = 8,
+    E0_MATH1 = 9,
+    E0_MATH2 = 10,
+    E0_MATH3 = 11,
+    E1_MATH0 = 12,
+    E1_MATH1 = 13,
+    E1_MATH2 = 14,
+    E1_MATH3 = 15,
+    COUNT = 16
 };
 
 enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };

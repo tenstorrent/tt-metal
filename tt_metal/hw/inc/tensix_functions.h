@@ -160,12 +160,15 @@ inline void ex_zeroacc(vptr_uint instrn_buf, uint clear_mode = 3, uint dest_regi
     ex_push_insn(instrn_buf, INSTRN_ZEROACC(instrn));
 }
 
+// TODO
+#ifndef ARCH_QUASAR
 inline void ex_encc(vptr_uint instrn_buf) {
     uint instrn;
     instrn = (3 << 12) | (10 << 0);  // Set CC enable and result
     ex_push_insn(instrn_buf, INSTRN_SFPENCC(instrn));
     ex_push_insn(instrn_buf, INSTRN_NOP(0));
 }
+#endif
 
 /**
  * Set address counters for X and Y dimensions.
@@ -625,73 +628,74 @@ inline void thcon_write_descriptor_to_l1(
 #define BKPT_CMD_PAYLOAD(thread, cmd, data) ((thread << 31) | (cmd << 28) | data)
 #define BKPT_CMD_ID_PAYLOAD(thread, cmd, id, data) ((thread << 31) | (cmd << 28) | (id << 26) | data)
 
-inline void breakpoint_set(uint thread, uint bkpt_index, bool pc_valid, uint pc = 0) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET, bkpt_index, (pc_valid << 21 | pc)));
-}
+// inline void breakpoint_set(uint thread, uint bkpt_index, bool pc_valid, uint pc = 0) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET, bkpt_index, (pc_valid << 21 |
+//         pc)));
+// }
 
-inline void breakpoint_clear(uint thread, uint bkpt_index) {
-    memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR, bkpt_index, 0));
-}
+// inline void breakpoint_clear(uint thread, uint bkpt_index) {
+//     memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR, bkpt_index, 0));
+// }
 
-// Set which breakpoint will be returning data
-inline void breakpoint_set_data(uint thread, uint bkpt_index, uint data_index) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_DATASEL, bkpt_index, data_index));
-}
+// // Set which breakpoint will be returning data
+// inline void breakpoint_set_data(uint thread, uint bkpt_index, uint data_index) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_DATASEL, bkpt_index, data_index));
+// }
 
-inline void breakpoint_set_condition_op(uint thread, uint bkpt_index, uint opcode, uint opcode_mask = 0xFF) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL,
-        BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET_COND, bkpt_index, (opcode_mask << 8 | opcode)));
-}
+// inline void breakpoint_set_condition_op(uint thread, uint bkpt_index, uint opcode, uint opcode_mask = 0xFF) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL,
+//         BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET_COND, bkpt_index, (opcode_mask << 8 | opcode)));
+// }
 
-inline void breakpoint_clear_condition_op(uint thread, uint bkpt_index) {
-    memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR_COND, bkpt_index, 0));
-}
+// inline void breakpoint_clear_condition_op(uint thread, uint bkpt_index) {
+//     memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR_COND, bkpt_index, 0));
+// }
 
-inline void breakpoint_set_condition_loop(uint thread, uint bkpt_index, uint loop) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL,
-        BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET_COND, bkpt_index, (0x1 << 16) | loop));
-}
+// inline void breakpoint_set_condition_loop(uint thread, uint bkpt_index, uint loop) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL,
+//         BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET_COND, bkpt_index, (0x1 << 16) | loop));
+// }
 
-inline void breakpoint_clear_condition_loop(uint thread, uint bkpt_index) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR_COND, bkpt_index, 0x1 << 16));
-}
+// inline void breakpoint_clear_condition_loop(uint thread, uint bkpt_index) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR_COND, bkpt_index, 0x1 << 16));
+// }
 
-inline void breakpoint_set_condition_other_thread(uint thread, uint bkpt_index) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET_COND, bkpt_index, (0x2 << 16)));
-}
+// inline void breakpoint_set_condition_other_thread(uint thread, uint bkpt_index) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_SET_COND, bkpt_index, (0x2 << 16)));
+// }
 
-inline void breakpoint_clear_condition_other_thread(uint thread, uint bkpt_index) {
-    memory_write(
-        RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR_COND, bkpt_index, 0x2 << 16));
-}
+// inline void breakpoint_clear_condition_other_thread(uint thread, uint bkpt_index) {
+//     memory_write(
+//         RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_ID_PAYLOAD(thread, BKPT_CMD_CLEAR_COND, bkpt_index, 0x2 << 16));
+// }
 
-inline void breakpoint_resume_execution(uint thread) {
-    memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_PAYLOAD(thread, BKPT_CMD_RESUME, 0));
-}
+// inline void breakpoint_resume_execution(uint thread) {
+//     memory_write(RISCV_DEBUG_REG_BREAKPOINT_CTRL, BKPT_CMD_PAYLOAD(thread, BKPT_CMD_RESUME, 0));
+// }
 
-// return status for a specific breakpoint
-inline uint breakpoint_status(uint thread, uint bkpt_index) {
-    uint status = memory_read(RISCV_DEBUG_REG_BREAKPOINT_STATUS);
-    return (status >> ((bkpt_index + thread * 4) * 4)) & 0xF;
-}
+// // return status for a specific breakpoint
+// inline uint breakpoint_status(uint thread, uint bkpt_index) {
+//     uint status = memory_read(RISCV_DEBUG_REG_BREAKPOINT_STATUS);
+//     return (status >> ((bkpt_index + thread * 4) * 4)) & 0xF;
+// }
 
-// return status for all breakpoints
-inline uint breakpoint_status() {
-    uint status = memory_read(RISCV_DEBUG_REG_BREAKPOINT_STATUS);
-    return status;
-}
+// // return status for all breakpoints
+// inline uint breakpoint_status() {
+//     uint status = memory_read(RISCV_DEBUG_REG_BREAKPOINT_STATUS);
+//     return status;
+// }
 
-inline uint breakpoint_data() {
-    volatile uint* ptr = reinterpret_cast<volatile uint*>(RISCV_DEBUG_REG_BREAKPOINT_DATA);
-    *ptr = 0;  // Ensure ordering with any previous control writes
-    return *ptr;
-}
+// inline uint breakpoint_data() {
+//     volatile uint* ptr = reinterpret_cast<volatile uint*>(RISCV_DEBUG_REG_BREAKPOINT_DATA);
+//     *ptr = 0;  // Ensure ordering with any previous control writes
+//     return *ptr;
+// }
 
 // Read debug array functions
 #define SRCA_ARRAY_ID 0x0
@@ -700,52 +704,52 @@ inline uint breakpoint_data() {
 #define MAX_EXP_ARRAY_ID 0x3
 #define DBG_RD_CMD_PAYLOAD(thread, array_id, addr) ((thread << 19) | (array_id << 16) | addr)
 
-inline void dbg_dump_array_enable() { memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 1); }
+// inline void dbg_dump_array_enable() { memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 1); }
 
-inline void dbg_dump_array_disable() {
-    // Invalidate array_id to invalid to set logic rd_en to 0
-    memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, DBG_RD_CMD_PAYLOAD(0, 0xF, 0));
-    memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 0);
-}
+// inline void dbg_dump_array_disable() {
+//     // Invalidate array_id to invalid to set logic rd_en to 0
+//     memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, DBG_RD_CMD_PAYLOAD(0, 0xF, 0));
+//     memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 0);
+// }
 
-inline void dbg_dump_array_rd_cmd(uint thread, uint array_id, uint addr) {
-    memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, DBG_RD_CMD_PAYLOAD(thread, array_id, addr));
-    volatile uint dummy_wait;
-    volatile uint* dummy_wait_ptr = &dummy_wait;
-    *dummy_wait_ptr = memory_read(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD);
-}
+// inline void dbg_dump_array_rd_cmd(uint thread, uint array_id, uint addr) {
+//     memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, DBG_RD_CMD_PAYLOAD(thread, array_id, addr));
+//     volatile uint dummy_wait;
+//     volatile uint* dummy_wait_ptr = &dummy_wait;
+//     *dummy_wait_ptr = memory_read(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD);
+// }
 
-inline void dbg_dump_array_to_l1(uint thread, uint addr) {
-    // This will trigger debug bus input to L1
-}
+// inline void dbg_dump_array_to_l1(uint thread, uint addr) {
+//     // This will trigger debug bus input to L1
+// }
 
-inline void dbg_instrn_buf_wait_for_ready() {
-    while (1) {
-        volatile uint status = memory_read(RISCV_DEBUG_REG_INSTRN_BUF_STATUS);
-        if (status == 0x77) {
-            break;
-        }
-    }
-}
+// inline void dbg_instrn_buf_wait_for_ready() {
+//     while (1) {
+//         volatile uint status = memory_read(RISCV_DEBUG_REG_INSTRN_BUF_STATUS);
+//         if (status == 0x77) {
+//             break;
+//         }
+//     }
+// }
 
-inline void dbg_instrn_buf_set_override_en() {
-    // Set override enable
-    memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x7);
-}
+// inline void dbg_instrn_buf_set_override_en() {
+//     // Set override enable
+//     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x7);
+// }
 
-inline void dbg_instrn_buf_push_instrn(uint instrn) {
-    // write instrn
-    memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL1, instrn);
-    // write -> 1
-    memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x17);
-    // write -> 0
-    memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x07);
-}
+// inline void dbg_instrn_buf_push_instrn(uint instrn) {
+//     // write instrn
+//     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL1, instrn);
+//     // write -> 1
+//     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x17);
+//     // write -> 0
+//     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x07);
+// }
 
-inline void dbg_instrn_buf_clear_override_en() {
-    // Set override enable
-    memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x0);
-}
+// inline void dbg_instrn_buf_clear_override_en() {
+//     // Set override enable
+//     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x0);
+// }
 
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 inline void wzeromem(uintptr_t start, uint32_t len) { wzerorange((uint32_t*)start, (uint32_t*)(start + len)); }

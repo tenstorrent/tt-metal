@@ -276,7 +276,7 @@ private:
     uint16_t get_bank_y(uint16_t packed_xy_coord) const { return packed_xy_coord & 0xFF; }
 
 public:
-    const size_t bank_base_address = 0;
+    const uintptr_t bank_base_address = 0;
     const uint32_t page_size = 0;
 
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
@@ -312,14 +312,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
-        const size_t bank_base_address_in,
+        const uintptr_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        InterleavedAddrGen<IsDram>({.bank_base_address = (uint32_t)bank_base_address_in, .page_size = page_size_in}) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
-        DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
-        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+        DSpec_&& dspec, const uintptr_t bank_base_address_in, const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = (uint32_t)bank_base_address_in, .page_size = page_size_in}) {}
 
     // Locality APIs
     FORCE_INLINE
