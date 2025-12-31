@@ -201,7 +201,7 @@ void BandwidthResultsManager::add_result(const TestConfig& config, const Bandwid
 void BandwidthResultsManager::add_summary(const TestConfig& config, const BandwidthResultSummary& summary) {
     const std::string& test_name = config.name;
     // First iteration or first time we see this test name
-    if (config.iteration_number == 0 || !test_name_to_summary_index_.count(test_name)) {
+    if (config.iteration_number == 0 || !test_name_to_summary_index_.contains(test_name)) {
         test_name_to_summary_index_[test_name] = bandwidth_results_summary_.size();
         bandwidth_results_summary_.push_back(summary);
         return;

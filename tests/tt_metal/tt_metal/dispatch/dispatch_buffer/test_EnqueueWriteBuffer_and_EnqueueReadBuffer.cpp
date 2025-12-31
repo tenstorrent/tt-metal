@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <stdlib.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>

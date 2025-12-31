@@ -602,7 +602,7 @@ void CablingGenerator::collect_host_assignments(
         HostId host_id = node.host_id;
         std::string full_node_path = path_prefix.empty() ? node_name : path_prefix + "/" + node_name;
 
-        if (host_to_node_path.count(host_id)) {
+        if (host_to_node_path.contains(host_id)) {
             throw std::runtime_error(
                 "Host ID " + std::to_string(*host_id) + " is assigned to multiple nodes: '" +
                 host_to_node_path[host_id] + "' and '" + full_node_path + "'");
