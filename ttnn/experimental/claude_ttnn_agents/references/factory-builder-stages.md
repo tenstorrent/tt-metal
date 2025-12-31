@@ -171,9 +171,10 @@ import ttnn
 
 @pytest.fixture
 def device():
-    dev = ttnn.open_device(0)
-    yield dev
-    ttnn.close_device(dev)
+    # Note: Run 'tt-smi -ls' first to verify device 0 is available
+    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
+    with ttnn.manage_device(device_id=0) as dev:
+        yield dev
 
 def test_device_op_called(device):
     """Operation should reach program factory, not fail at validation"""
@@ -307,9 +308,10 @@ import ttnn
 
 @pytest.fixture
 def device():
-    dev = ttnn.open_device(0)
-    yield dev
-    ttnn.close_device(dev)
+    # Note: Run 'tt-smi -ls' first to verify device 0 is available
+    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
+    with ttnn.manage_device(device_id=0) as dev:
+        yield dev
 
 def test_program_factory_creates_cbs(device):
     """Program factory should create CBs before failing at kernel creation"""
@@ -487,9 +489,10 @@ import ttnn
 
 @pytest.fixture
 def device():
-    dev = ttnn.open_device(0)
-    yield dev
-    ttnn.close_device(dev)
+    # Note: Run 'tt-smi -ls' first to verify device 0 is available
+    # and 'tt-smi -r 0' to reset if needed (see CLAUDE.md)
+    with ttnn.manage_device(device_id=0) as dev:
+        yield dev
 
 def test_kernels_compile_at_runtime(device):
     """Kernels should compile without errors when operation runs"""
