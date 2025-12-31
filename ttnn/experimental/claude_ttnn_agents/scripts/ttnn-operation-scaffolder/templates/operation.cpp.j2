@@ -20,6 +20,7 @@ ttnn::Tensor Execute{{ operation_name_pascal }}::invoke(
 {% endfor %}
     const std::optional<MemoryConfig>& memory_config) {
     // Call the primitive device operation
+    // Unwrap optional memory_config, defaulting to input tensor's memory config
     return ttnn::prim::{{ operation_name }}(
 {% for tensor in input_tensors %}
         {{ tensor.cpp_name }},
@@ -27,7 +28,7 @@ ttnn::Tensor Execute{{ operation_name_pascal }}::invoke(
 {% for param in parameters %}
         {{ param.name }},
 {% endfor %}
-        memory_config);
+        memory_config.value_or({{ input_tensors[0].cpp_name }}.memory_config()));
 }
 
 }  // namespace ttnn::operations::{{ operation_name }}

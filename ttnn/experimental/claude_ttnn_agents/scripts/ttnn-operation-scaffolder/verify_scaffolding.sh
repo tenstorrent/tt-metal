@@ -59,8 +59,8 @@ REQUIRED_FILES=(
     "device/${OP_NAME}_program_factory.cpp"
     "${OP_NAME}.hpp"
     "${OP_NAME}.cpp"
-    "${OP_NAME}_pybind.hpp"
-    "${OP_NAME}_pybind.cpp"
+    "${OP_NAME}_nanobind.hpp"
+    "${OP_NAME}_nanobind.cpp"
 )
 
 for file in "${REQUIRED_FILES[@]}"; do
@@ -105,6 +105,20 @@ if grep -r "void validate.*const$" "$OP_PATH/device/" 2>/dev/null | grep -v "sta
     ERRORS=$((ERRORS + 1))
 fi
 
+# Check for banned register_operation for primitives (post-PR #35013/#35015)
+if grep -r "register_operation.*prim::" "$OP_PATH/device/" 2>/dev/null; then
+    echo -e "${RED}  ✗ FAIL: Found banned pattern 'register_operation' for primitive operation${NC}"
+    echo "    Modern pattern uses free functions in ttnn::prim namespace, not register_operation"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Check for banned DeviceOperation::invoke (post-PR #35015)
+if grep -r "DeviceOperation::invoke" "$OP_PATH/device/" 2>/dev/null; then
+    echo -e "${RED}  ✗ FAIL: Found banned pattern 'DeviceOperation::invoke'${NC}"
+    echo "    Modern pattern: primitives are free functions that call launch_on_device<>()"
+    ERRORS=$((ERRORS + 1))
+fi
+
 if [ $ERRORS -eq 0 ]; then
     echo -e "${GREEN}  ✓ PASS: No banned patterns found${NC}"
 fi
@@ -145,6 +159,13 @@ fi
 # Check for tensor_args_t
 if ! grep -r "tensor_args_t" "$OP_PATH/device/" 2>/dev/null >/dev/null; then
     echo -e "${RED}  ✗ FAIL: Missing required pattern 'tensor_args_t'${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Check for launch_on_device (post-PR #35013/#35015)
+if ! grep -r "launch_on_device<" "$OP_PATH/device/" 2>/dev/null >/dev/null; then
+    echo -e "${RED}  ✗ FAIL: Missing required pattern 'launch_on_device<'${NC}"
+    echo "    Primitive operations must call ttnn::device_operation::detail::launch_on_device<>()"
     ERRORS=$((ERRORS + 1))
 fi
 
