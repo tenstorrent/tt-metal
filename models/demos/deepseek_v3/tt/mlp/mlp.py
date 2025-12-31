@@ -209,6 +209,7 @@ class MLP(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
 
     @classmethod
