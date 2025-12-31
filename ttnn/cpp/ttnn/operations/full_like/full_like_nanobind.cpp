@@ -8,11 +8,12 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/variant.h>  // bound function takes a variant
+#include <nanobind/stl/variant.h>
 
 #include "full_like.hpp"
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
+#include "ttnn/types.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::full_like {
 
@@ -31,16 +32,15 @@ void bind_full_like_operation(nb::module_& mod) {
         * :attr:`memory_config`: The memory configuration for the output tensor.
     )doc";
 
-    bind_registered_operation(
-        mod,
-        ttnn::moreh_full_like,
+    mod.def(
+        "moreh_full_like",
+        &ttnn::moreh_full_like,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input"),
-            nb::arg("fill_value"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+        nb::arg("input"),
+        nb::arg("fill_value"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::full_like

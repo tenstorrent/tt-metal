@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -34,6 +35,6 @@ struct NonZeroIndicesDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::operations::data_movement::nonzero::NonZeroIndicesDeviceOperation::tensor_return_value_t nonzero(
-    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& memory_config);
+    const Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn::prim

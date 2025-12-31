@@ -4,39 +4,20 @@
 
 #include "send_async_nanobind.hpp"
 
-#include <nanobind/nanobind.h>
+#include <vector>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+
+#include "send_async.hpp"
 #include <tt-metalium/mesh_socket.hpp>
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_send_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::distributed::MeshSocket& mesh_socket) -> std::vector<ttnn::Tensor> {
-                return self(input_tensor, mesh_socket);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("mesh_socket")});
-}
-
-}  // namespace
-
 void bind_send_async(nb::module_& mod) {
-    bind_send_async(
-        mod,
-        ttnn::experimental::send_async,
-        R"doc(
+    const char* doc = R"doc(
         Performs a send operation on multi-device :attr:`input_tensor` to a :attr:`mesh_socket`.
 
         Args:
@@ -48,7 +29,9 @@ void bind_send_async(nb::module_& mod) {
         Returns:
             std::vector<ttnn.Tensor>: an empty vector.
 
-        )doc");
+        )doc";
+
+    mod.def("send_async", &ttnn::experimental::send_async, doc, nb::arg("input_tensor"), nb::arg("mesh_socket"));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

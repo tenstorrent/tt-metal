@@ -87,26 +87,3 @@ tensor_return_value_t EmaDeviceOperation::create_output_tensors(
 }
 
 }  // namespace ttnn::operations::reduction::ema
-
-namespace ttnn::prim {
-ttnn::Tensor ema_device(
-    const Tensor& input,
-    float alpha,
-    CoreCoord grid_size,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<Tensor> optional_output_tensor) {
-    using OperationType = ttnn::operations::reduction::ema::EmaDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .alpha = alpha,
-            .grid_size = grid_size,
-            .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config,
-        },
-        OperationType::tensor_args_t{
-            .input = input,
-            .optional_output_tensor = std::move(optional_output_tensor),
-        });
-}
-}  // namespace ttnn::prim

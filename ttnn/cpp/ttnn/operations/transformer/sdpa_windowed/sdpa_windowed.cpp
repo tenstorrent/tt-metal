@@ -8,10 +8,11 @@
 
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::transformer {
 
-ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
+ttnn::Tensor windowed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -20,18 +21,23 @@ ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType = sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return ttnn::prim::windowed_scaled_dot_product_attention(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        cu_window_seqlens,
-        scale,
-        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        std::move(program_config),
-        kernel_config_val);
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .scale = scale,
+            .output_mem_config = memory_config.value_or(tt::tt_metal::MemoryConfig{}),
+            .program_config = std::move(program_config),
+            .compute_kernel_config = kernel_config_val,
+        },
+        OperationType::tensor_args_t{
+            .q = input_tensor_q,
+            .k = input_tensor_k,
+            .v = input_tensor_v,
+            .cu_window_seqlens = cu_window_seqlens,
+        });
 }
 
 }  // namespace ttnn::operations::transformer

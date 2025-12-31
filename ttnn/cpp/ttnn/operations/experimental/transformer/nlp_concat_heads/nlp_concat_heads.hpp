@@ -6,25 +6,13 @@
 
 #include <optional>
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
-namespace ttnn {
-namespace operations::experimental::nlp_concat_heads {
+using tt::tt_metal::MemoryConfig;
 
-struct NLPConcatHeadsOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
-};
-}  // namespace operations::experimental::nlp_concat_heads
+namespace ttnn::experimental {
 
-namespace experimental {
+Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-constexpr auto nlp_concat_heads = ttnn::register_operation<
-    "ttnn::experimental::nlp_concat_heads",
-    ttnn::operations::experimental::nlp_concat_heads::NLPConcatHeadsOperation>();
-
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

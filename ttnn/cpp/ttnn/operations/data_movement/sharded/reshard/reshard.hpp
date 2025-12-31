@@ -4,20 +4,14 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct ReshardOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const MemoryConfig& memory_config,
-        const std::optional<Tensor>& optional_output_tensor);
-};
+Tensor reshard(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-}  // namespace operations::data_movement
-
-constexpr auto reshard = ttnn::register_operation<"ttnn::reshard", ttnn::operations::data_movement::ReshardOperation>();
 }  // namespace ttnn

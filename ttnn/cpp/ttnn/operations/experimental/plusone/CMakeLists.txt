@@ -9,7 +9,6 @@ target_sources(
     PRIVATE
         device/plusone_device_operation.cpp
         device/plusone_program_factory.cpp
-        plusone.cpp
 )
 
 target_include_directories(ttnn_op_experimental_plusone PRIVATE ${FixmeOpIncDirs})

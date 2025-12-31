@@ -30,11 +30,3 @@ struct DramPrefetcherOperation {
 };
 
 }  // namespace ttnn::operations::dram_prefetcher
-
-namespace ttnn::prim {
-ttnn::operations::dram_prefetcher::DramPrefetcherOperation::tensor_return_value_t dram_prefetcher(
-    std::vector<ttnn::Tensor>& tensors,
-    uint32_t num_layers,
-    const std::optional<const GlobalCircularBuffer>& global_cb,
-    bool enable_performance_mode);
-}  // namespace ttnn::prim

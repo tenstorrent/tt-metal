@@ -4,22 +4,18 @@
 
 #include "full_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 
 #include "full.hpp"
-#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn/operations/full/device/full_device_operation.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::full {
 void bind_full_operation(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
+    const char* doc = R"doc(
         Creates a tensor of the specified shape and fills it with the specified scalar value.
 
         Args:
@@ -39,21 +35,19 @@ void bind_full_operation(nb::module_& mod) {
             >>> print(filled_tensor)
             ttnn.Tensor([[[[7.0,  7.0],
                             [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
-        )doc",
-        ttnn::moreh_full.base_name());
+        )doc";
 
-    bind_registered_operation(
-        mod,
-        ttnn::moreh_full,
+    mod.def(
+        "moreh_full",
+        ttnn::prim::full,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("shape"),
-            nb::arg("fill_value"),
-            nb::arg("device"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = ttnn::TILE_LAYOUT,
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+        nb::arg("shape"),
+        nb::arg("fill_value"),
+        nb::arg("device"),
+        nb::kw_only(),
+        nb::arg("dtype") = DataType::BFLOAT16,
+        nb::arg("layout") = ttnn::TILE_LAYOUT,
+        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
 }
 
 }  // namespace ttnn::operations::full

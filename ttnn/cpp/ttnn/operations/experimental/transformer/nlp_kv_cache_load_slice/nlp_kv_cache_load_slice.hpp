@@ -4,27 +4,21 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <cstdint>
+#include <optional>
 
-namespace ttnn {
-namespace operations::experimental::transformer {
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
-struct NLPKVCacheLoadSliceOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        uint32_t seq_len_start,
-        uint32_t seq_len_end,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-}  // namespace operations::experimental::transformer
+using tt::tt_metal::MemoryConfig;
 
-namespace experimental {
+namespace ttnn::experimental {
 
-constexpr auto nlp_kv_cache_load_slice = ttnn::register_operation<
-    "ttnn::experimental::nlp_kv_cache_load_slice",
-    ttnn::operations::experimental::transformer::NLPKVCacheLoadSliceOperation>();
+Tensor nlp_kv_cache_load_slice(
+    const Tensor& input_tensor,
+    uint32_t seq_len_start,
+    uint32_t seq_len_end,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

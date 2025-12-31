@@ -49,4 +49,19 @@ ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output,
     bool backwards = false);
+
+// Convenience overload: copy src to dst tensor
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t copy(
+    const Tensor& src_tensor, const Tensor& dst_tensor);
+
+// Assign overload: optional dtype defaults to input dtype
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t assign(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
+
+// Assign overload: copy input_a to input_b
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t assign(
+    const Tensor& input_a, const Tensor& input_b);
 }  // namespace ttnn::prim

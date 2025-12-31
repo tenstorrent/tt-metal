@@ -49,5 +49,5 @@ ttnn::Tensor fill_rm(
     const Tensor& input,
     float val_hi,
     float val_lo,
-    const MemoryConfig& output_memory_config);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
 }  // namespace ttnn::prim

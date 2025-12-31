@@ -70,19 +70,3 @@ struct DeepseekGroupedGateDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::reduction
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::reduction::DeepseekGroupedGateDeviceOperation::tensor_return_value_t
-deepseek_grouped_gate(
-    const Tensor& scores,
-    const Tensor& bias,
-    uint32_t n_groups,
-    uint32_t summed_experts_per_group,
-    uint32_t topk_groups,
-    uint32_t n_activated_experts,
-    float route_scale,
-    float epsilon,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-}  // namespace ttnn::prim

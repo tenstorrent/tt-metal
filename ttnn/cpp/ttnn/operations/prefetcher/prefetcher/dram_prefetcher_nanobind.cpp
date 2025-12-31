@@ -8,15 +8,16 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "dram_prefetcher.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::dram_prefetcher::detail {
 
 void bind_dram_prefetcher_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::dram_prefetcher,
+    mod.def(
+        "dram_prefetcher",
+        &ttnn::dram_prefetcher,
         R"doc(
             Asynchronously pre-fetch tensors from DRAM into the neighbouring L1 cores.
             This utilizes a global circular buffer to push data on consumer cores.
@@ -31,14 +32,11 @@ void bind_dram_prefetcher_operation(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: empty tensor (TODO: Should return None)
         )doc",
-
-        ttnn::nanobind_arguments_t{
-            nb::arg("tensors"),
-            nb::arg("num_layers"),
-            nb::arg("global_cb"),
-            nb::kw_only(),
-            nb::arg("enable_performance_mode") = false,
-        });
+        nb::arg("tensors"),
+        nb::arg("num_layers"),
+        nb::arg("global_cb"),
+        nb::kw_only(),
+        nb::arg("enable_performance_mode") = false);
 }
 
 void bind_dram_prefetcher(nb::module_& mod) { bind_dram_prefetcher_operation(mod); }

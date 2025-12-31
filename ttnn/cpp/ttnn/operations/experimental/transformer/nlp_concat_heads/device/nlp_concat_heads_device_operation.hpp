@@ -37,8 +37,3 @@ struct NLPConcatHeadsDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::nlp_concat_heads
-
-namespace ttnn::prim {
-ttnn::operations::experimental::nlp_concat_heads::tensor_return_value_t nlp_concat_heads(
-    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
-}  // namespace ttnn::prim

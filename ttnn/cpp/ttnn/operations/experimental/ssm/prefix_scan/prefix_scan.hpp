@@ -4,26 +4,23 @@
 
 #pragma once
 
-#include <ttnn/decorators.hpp>
-#include <ttnn/tensor/tensor.hpp>
+#include <optional>
 
-namespace ttnn::operations::experimental::ssm {
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <tt-metalium/base_types.hpp>
 
-struct ExecutePrefixScan {
-    static ttnn::Tensor invoke(
-        const Tensor& a,
-        const Tensor& bx,
-        const Tensor& h_prev,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> dtype = std::nullopt,
-        std::optional<MathFidelity> math_fidelity = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::ssm
+using tt::tt_metal::DataType;
+using tt::tt_metal::MemoryConfig;
 
 namespace ttnn::experimental {
 
-constexpr auto prefix_scan = ttnn::
-    register_operation<"ttnn::experimental::prefix_scan", ttnn::operations::experimental::ssm::ExecutePrefixScan>();
+Tensor prefix_scan(
+    const Tensor& a,
+    const Tensor& bx,
+    const Tensor& h_prev,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> dtype = std::nullopt,
+    std::optional<MathFidelity> math_fidelity = std::nullopt);
 
 }  // namespace ttnn::experimental

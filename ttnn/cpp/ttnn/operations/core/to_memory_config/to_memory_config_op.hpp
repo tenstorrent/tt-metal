@@ -11,7 +11,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
@@ -59,8 +59,8 @@ struct ToMemoryConfig {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
                     TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
-                    Tensor temp = ttnn::prim::sharded_to_interleaved(
-                        tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
+                    Tensor temp =
+                        ttnn::sharded_to_interleaved(tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
                     const bool keep_l1_aligned = false;
                     return ttnn::interleaved_to_sharded(
                         temp,
@@ -83,7 +83,7 @@ struct ToMemoryConfig {
         } else {
             // to_interleaved path
             if (tensor.is_sharded()) {
-                return ttnn::prim::sharded_to_interleaved(
+                return ttnn::sharded_to_interleaved(
                     tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
             } else {
                 // L1 to DRAM or DRAM to L1

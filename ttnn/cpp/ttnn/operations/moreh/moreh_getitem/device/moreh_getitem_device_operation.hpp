@@ -89,12 +89,3 @@ struct MorehGetItemOperation {
 };
 
 }  // namespace ttnn::operations::moreh::moreh_getitem
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_value_t moreh_getitem(
-    const Tensor& input,
-    const std::vector<Tensor>& index_tensors,
-    const ttnn::SmallVector<uint32_t>& index_dims,
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config);
-}

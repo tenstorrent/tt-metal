@@ -4,20 +4,16 @@
 
 #include "conv3d.hpp"
 #include "device/conv3d_device_operation.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "ttnn/common/constants.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
 
-using namespace tt::tt_metal;
+namespace ttnn::experimental {
 
-namespace ttnn::operations::experimental::conv3d {
-
-ttnn::Tensor ExecuteConv3d::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<ttnn::Tensor>& bias_tensor,
-    const Conv3dConfig& config,
+Tensor conv3d(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<Tensor>& bias_tensor,
+    const operations::experimental::conv3d::Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
@@ -28,21 +24,27 @@ ttnn::Tensor ExecuteConv3d::invoke(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return ttnn::prim::conv3d(
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        config,
-        dtype_,
-        output_channels_,
-        kernel_size_,
-        stride_,
-        padding_,
-        dilation_,
-        padding_mode_,
-        groups_,
-        memory_config,
-        compute_kernel_config);
+    using OperationType = operations::experimental::conv3d::Conv3dDeviceOperation;
+
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .config = config,
+        .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        .compute_kernel_config = kernel_config_val,
+        .dtype = dtype_,
+        .output_channels = output_channels_,
+        .kernel_size = kernel_size_,
+        .stride = stride_,
+        .padding = padding_,
+        .dilation = dilation_,
+        .padding_mode = padding_mode_,
+        .groups = groups_};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor};
+
+    return device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental

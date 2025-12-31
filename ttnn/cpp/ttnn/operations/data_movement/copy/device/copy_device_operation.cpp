@@ -128,4 +128,22 @@ ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_
         OperationType::operation_attributes_t{output_mem_config, output_dtype, backwards},
         OperationType::tensor_args_t{input, preallocated_output});
 }
+
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t copy(
+    const Tensor& src_tensor, const Tensor& dst_tensor) {
+    return copy(src_tensor, dst_tensor.memory_config(), dst_tensor.dtype(), std::make_optional(dst_tensor));
+}
+
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t assign(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<tt::tt_metal::DataType> output_dtype,
+    const std::optional<Tensor>& preallocated_output) {
+    return copy(input, output_mem_config, output_dtype.value_or(input.dtype()), preallocated_output);
+}
+
+ttnn::operations::data_movement::copy::CopyDeviceOperation::tensor_return_value_t assign(
+    const Tensor& input_a, const Tensor& input_b) {
+    return copy(input_a, input_b.memory_config(), input_b.dtype(), std::make_optional(input_b));
+}
 }  // namespace ttnn::prim

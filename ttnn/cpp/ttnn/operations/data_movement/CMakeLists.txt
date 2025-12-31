@@ -107,7 +107,6 @@ target_sources(
         bcast/device/bcast_multi_core_w_program_factory.cpp
         bcast/device/bcast_multi_core_hw_program_factory.cpp
         chunk/chunk.cpp
-        clone/clone.cpp
         clone/device/clone_device_operation.cpp
         clone/device/clone_program_factory.cpp
         common/common.cpp
@@ -118,7 +117,6 @@ target_sources(
         concat/device/concat_s2s_rm_program_factory.cpp
         concat/device/concat_s2s_multi_program_factory.cpp
         concat/device/concat_s2i_program_factory.cpp
-        copy/copy.cpp
         copy/device/copy_device_operation.cpp
         copy/device/copy_program_factory.cpp
         expand/expand.cpp
@@ -149,7 +147,6 @@ target_sources(
         move/move.cpp
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
-        non_zero_indices/non_zero_indices.cpp
         pad/device/pad_device_operation.cpp
         pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
         pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.cpp

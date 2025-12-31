@@ -69,9 +69,3 @@ struct GenericOpDeviceOperation {
 };  // struct GenericOpDeviceOperation
 
 }  // namespace ttnn::operations::generic
-
-namespace ttnn::prim {
-ttnn::operations::generic::GenericOpDeviceOperation::tensor_return_value_t generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t& operation_attributes);
-}  // namespace ttnn::prim

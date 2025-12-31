@@ -199,32 +199,3 @@ WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
 }
 
 }  // namespace ttnn::operations::transformer::sdpa_windowed
-
-namespace ttnn::prim {
-ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation::tensor_return_value_t
-windowed_scaled_dot_product_attention(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& cu_window_seqlens,
-    std::optional<float> scale,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    using OperationType =
-        ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .scale = scale,
-            .output_mem_config = output_mem_config,
-            .program_config = std::move(program_config),
-            .compute_kernel_config = compute_kernel_config,
-        },
-        OperationType::tensor_args_t{
-            .q = input_tensor_q,
-            .k = input_tensor_k,
-            .v = input_tensor_v,
-            .cu_window_seqlens = cu_window_seqlens,
-        });
-}
-}  // namespace ttnn::prim

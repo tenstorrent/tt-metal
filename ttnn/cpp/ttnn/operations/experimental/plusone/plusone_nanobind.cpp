@@ -4,18 +4,16 @@
 
 #include "plusone_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/plusone/plusone.hpp"
+#include "plusone.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::plusone::detail {
 void bind_experimental_plusone_operation(nb::module_& mod) {
-    const auto* doc =
-        R"doc(
+    const char* doc = R"doc(
             Returns input tensor elements increased by 1.
             Input tensor must have UINT32 data type, ROW_MAJOR layout, and 1-D shape.
             This op only gives decent performance for small tensors (up to 100 elements).
@@ -36,19 +34,13 @@ void bind_experimental_plusone_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::plus_one);
-    bind_registered_operation(
-        mod,
-        ttnn::plus_one,
+    mod.def(
+        "plus_one",
+        &ttnn::plus_one,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               bool skip_negative_entries) { return self(input_tensor, sub_core_grids, skip_negative_entries); },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("skip_negative_entries") = false});
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("skip_negative_entries") = false);
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail

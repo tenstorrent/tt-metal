@@ -37,15 +37,3 @@ struct GeluBackwardDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::gelu_backward
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::gelu_backward::GeluBackwardDeviceOperation::tensor_return_value_t gelu_bw(
-    const Tensor& grad_output,
-    const Tensor& input,
-    const std::string& approximate,
-    DataType output_dtype,
-    const MemoryConfig& output_memory_config,
-    const std::optional<Tensor>& preallocated_output);
-
-}  // namespace ttnn::prim

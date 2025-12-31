@@ -46,10 +46,3 @@ struct IntImgDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::reduction
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::reduction::IntImgDeviceOperation::tensor_return_value_t intimg(
-    const Tensor& input_tensor);
-
-}  // namespace ttnn::prim

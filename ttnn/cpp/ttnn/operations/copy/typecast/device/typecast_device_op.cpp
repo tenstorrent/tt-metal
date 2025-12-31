@@ -134,16 +134,32 @@ namespace ttnn::prim {
 ttnn::operations::copy::TypecastDeviceOperation::tensor_return_value_t typecast(
     const Tensor& input,
     DataType output_dtype,
-    const MemoryConfig& output_memory_config,
-    bool fp32_dest_acc_en,
-    bool preserve_fp32_precision,
-    bool bfp8_pack_precise,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& preallocated_output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Validate output dtype matches preallocated tensor if provided
+    if (preallocated_output.has_value()) {
+        TT_FATAL(
+            output_dtype == preallocated_output.value().dtype(),
+            "If both output dtype and output tensor provided dtype should match");
+    }
+
+    // Compute precision flags from dtypes
+    DataType input_dtype = input.dtype();
+    bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
+    bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
+                            output_dtype == DataType::INT32 || output_dtype == DataType::FLOAT32 ||
+                            input_dtype == DataType::UINT32 || input_dtype == DataType::INT32;
+    bool bfp8_pack_precise = (output_dtype == DataType::BFLOAT8_B);
+
+    // Resolve output memory config
+    auto output_memory_config = preallocated_output.has_value() ? preallocated_output.value().memory_config()
+                                                                : memory_config.value_or(input.memory_config());
+
     using OperationType = ttnn::operations::copy::TypecastDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .input_dtype = input.dtype(),
+            .input_dtype = input_dtype,
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .fp32_dest_acc_en = fp32_dest_acc_en,

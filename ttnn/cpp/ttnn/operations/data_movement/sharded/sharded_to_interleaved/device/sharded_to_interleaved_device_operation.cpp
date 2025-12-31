@@ -96,17 +96,3 @@ ShardedToInterleavedDeviceOperation::create_op_performance_model(
     return result;
 }
 }  // namespace ttnn::operations::data_movement
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation::tensor_return_value_t sharded_to_interleaved(
-    const Tensor& input_tensor,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const tt::tt_metal::DataType& output_dtype,
-    const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::data_movement::ShardedToInterleavedDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .output_mem_config = output_mem_config, .output_dtype = output_dtype, .num_slices = 1, .slice_index = 0},
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = preallocated_output});
-}
-}  // namespace ttnn::prim

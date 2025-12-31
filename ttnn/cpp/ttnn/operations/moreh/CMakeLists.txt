@@ -59,13 +59,11 @@ target_sources(
         moreh_abs_pow/moreh_abs_pow.cpp
         moreh_adam/device/moreh_adam_device_operation.cpp
         moreh_adam/device/moreh_adam_program_factory.cpp
-        moreh_adam/moreh_adam.cpp
         moreh_adamw/device/moreh_adamw_device_operation.cpp
         moreh_adamw/device/multi_core_program_factory.cpp
         moreh_adamw/moreh_adamw.cpp
         moreh_arange/device/moreh_arange_device_operation.cpp
         moreh_arange/device/moreh_arange_program_factory.cpp
-        moreh_arange/moreh_arange.cpp
         moreh_bmm_backward/moreh_bmm_backward.cpp
         moreh_bmm/moreh_bmm.cpp
         moreh_cumsum/moreh_cumsum.cpp
@@ -136,7 +134,6 @@ target_sources(
         moreh_norm/moreh_norm.cpp
         moreh_sgd/device/moreh_sgd_device_operation.cpp
         moreh_sgd/device/moreh_sgd_program_factory.cpp
-        moreh_sgd/moreh_sgd.cpp
         moreh_softmax_backward/device/moreh_softmax_backward_device_operation.cpp
         moreh_softmax_backward/device/softmax_backward_c_large/softmax_backward_c_large.cpp
         moreh_softmax_backward/device/softmax_backward_h_large/softmax_backward_h_large.cpp

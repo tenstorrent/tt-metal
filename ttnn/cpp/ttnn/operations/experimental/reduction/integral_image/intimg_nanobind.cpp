@@ -7,10 +7,12 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/types.hpp"
 
+namespace nb = nanobind;
+
 namespace ttnn::operations::experimental::reduction::detail {
+
 void bind_reduction_intimg_operation(nb::module_& mod) {
     const auto* docstring =
         R"doc(
@@ -79,14 +81,7 @@ void bind_reduction_intimg_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::intimg);
-    bind_registered_operation(
-        mod,
-        ttnn::experimental::intimg,
-        docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self, const ttnn::Tensor& input_tensor) -> Tensor { return self(input_tensor); },
-            nb::arg("input_tensor").noconvert()});
+    mod.def("intimg", &ttnn::experimental::intimg, docstring, nb::arg("input_tensor").noconvert());
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

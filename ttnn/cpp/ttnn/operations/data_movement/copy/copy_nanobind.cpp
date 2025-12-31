@@ -15,7 +15,6 @@
 #include <nanobind/stl/string_view.h>
 
 #include "copy.hpp"
-#include "ttnn-nanobind/decorators.hpp"
 
 namespace {
 std::string get_binary_doc_string(
@@ -50,17 +49,12 @@ void bind_copy(nb::module_& mod) {
         "input_b",
         R"doc(Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
 
-    bind_registered_operation(
-        mod,
-        ttnn::copy,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::copy)& self, const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-                return self(input_a, input_b);
-            },
-            nb::arg("input_a").noconvert(),
-            nb::arg("input_b").noconvert(),
-        });
+    mod.def(
+        "copy",
+        nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::copy),
+        doc.c_str(),
+        nb::arg("input_a").noconvert(),
+        nb::arg("input_b").noconvert());
 }
 
 void bind_assign(nb::module_& mod) {
@@ -77,29 +71,26 @@ void bind_assign(nb::module_& mod) {
 
     )doc";
 
-    bind_registered_operation(
-        mod,
-        ttnn::assign,
+    mod.def(
+        "assign",
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            const tt::tt_metal::MemoryConfig&,
+            std::optional<tt::tt_metal::DataType>,
+            const std::optional<Tensor>&>(&ttnn::assign),
         doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::assign)& self,
-               const ttnn::Tensor& input,
-               const ttnn::MemoryConfig& memory_config,
-               const std::optional<const ttnn::DataType> dtype,
-               std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(input, memory_config, dtype, optional_output_tensor);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::assign)& self, const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-                return self(input_a, input_b);
-            },
-            nb::arg("input_a").noconvert(),
-            nb::arg("input_b").noconvert()});
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+
+    mod.def(
+        "assign",
+        nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::assign),
+        doc,
+        nb::arg("input_a").noconvert(),
+        nb::arg("input_b").noconvert());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

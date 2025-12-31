@@ -8,9 +8,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "generic_op.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::generic {
 
@@ -35,8 +37,7 @@ void bind_generic_operation(nb::module_& mod) {
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
         )doc";
 
-    bind_registered_operation(
-        mod, ttnn::generic_op, doc, ttnn::nanobind_arguments_t{nb::arg("io_tensors"), nb::arg("program_descriptors")});
+    mod.def("generic_op", &ttnn::generic_op, doc.c_str(), nb::arg("io_tensors"), nb::arg("program_descriptors"));
 }
 
 }  // namespace ttnn::operations::generic

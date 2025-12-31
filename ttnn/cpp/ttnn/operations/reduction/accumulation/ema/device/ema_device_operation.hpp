@@ -30,13 +30,3 @@ struct EmaDeviceOperation {
 };
 
 }  // namespace ttnn::operations::reduction::ema
-
-namespace ttnn::prim {
-ttnn::Tensor ema_device(
-    const Tensor& input,
-    float alpha,
-    CoreCoord grid_size,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<Tensor> optional_output_tensor = std::nullopt);
-}  // namespace ttnn::prim

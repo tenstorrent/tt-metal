@@ -53,17 +53,3 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
 }
 
 }  // namespace ttnn::operations::experimental::ccl::send_async
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation::tensor_return_value_t send_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    using OperationType = ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation;
-
-    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-}
-
-}  // namespace ttnn::prim

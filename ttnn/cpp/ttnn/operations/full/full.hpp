@@ -4,20 +4,11 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
-namespace ttnn::operations::full {
-struct Full {
-    static ttnn::Tensor invoke(
-        const ttnn::SmallVector<uint32_t>& shape,
-        std::variant<float, int> fill_value,
-        ttnn::MeshDevice* mesh_device,
-        const DataType& dtype,
-        const Layout& layout,
-        const MemoryConfig& memory_config);
-};
-}  // namespace ttnn::operations::full
+#include "device/full_device_operation.hpp"
 
 namespace ttnn {
-constexpr auto moreh_full = ttnn::register_operation<"ttnn::moreh_full", ttnn::operations::full::Full>();
+// Note: exposed as moreh_full for Python compatibility, but prim::full for C++
+using prim::full;
+// Alias for backward compatibility
+inline auto moreh_full = prim::full;
 }  // namespace ttnn

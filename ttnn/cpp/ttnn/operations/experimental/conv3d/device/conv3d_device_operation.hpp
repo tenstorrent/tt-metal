@@ -39,23 +39,3 @@ struct Conv3dDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::conv3d
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::conv3d::Conv3dDeviceOperation::tensor_return_value_t conv3d(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<Tensor>& bias_tensor,
-    const ttnn::operations::experimental::conv3d::Conv3dConfig& config,
-    tt::tt_metal::DataType dtype_,
-    uint32_t output_channels_,
-    const std::array<uint32_t, 3>& kernel_size_,
-    const std::array<uint32_t, 3>& stride_,
-    const std::array<uint32_t, 3>& padding_,
-    const std::array<uint32_t, 3>& dilation_,
-    const std::string& padding_mode_,
-    uint32_t groups_,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
-
-}  // namespace ttnn::prim

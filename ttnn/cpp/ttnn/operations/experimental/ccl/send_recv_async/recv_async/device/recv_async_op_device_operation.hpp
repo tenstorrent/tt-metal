@@ -33,10 +33,3 @@ struct RecvAsyncDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::ccl::recv_async
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::recv_async::RecvAsyncDeviceOperation::tensor_return_value_t recv_async(
-    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
-
-}  // namespace ttnn::prim

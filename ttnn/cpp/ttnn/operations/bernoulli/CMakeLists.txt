@@ -25,7 +25,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        bernoulli.cpp
         device/bernoulli_device_operation.cpp
         device/bernoulli_program_factory.cpp
 )

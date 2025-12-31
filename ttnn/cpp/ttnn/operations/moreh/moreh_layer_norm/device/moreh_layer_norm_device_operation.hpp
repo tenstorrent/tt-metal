@@ -65,17 +65,3 @@ struct MorehLayerNormOperation {
 };
 
 }  // namespace ttnn::operations::moreh::moreh_layer_norm
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_layer_norm::MorehLayerNormOperation::tensor_return_value_t moreh_layer_norm(
-    const Tensor& input,
-    uint32_t normalized_dims,
-    float eps,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& output,
-    const std::optional<const Tensor>& mean,
-    const std::optional<const Tensor>& rstd,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-}  // namespace ttnn::prim

@@ -154,32 +154,3 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     return result;
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_return_value_t moreh_group_norm(
-    const Tensor& input,
-    const uint32_t num_groups,
-    const float eps,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor>& output,
-    const std::optional<const Tensor>& mean,
-    const std::optional<const Tensor>& rstd,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<MemoryConfig>& mean_memory_config,
-    const std::optional<MemoryConfig>& rstd_memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    using OperationType = ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
-        num_groups,
-        eps,
-        are_required_outputs,
-        memory_config.value_or(input.memory_config()),
-        mean_memory_config.value_or(input.memory_config()),
-        rstd_memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-    auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-}
-}  // namespace ttnn::prim

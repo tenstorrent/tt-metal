@@ -39,15 +39,3 @@ struct PrefixScanDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::ssm::prefix_scan
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation::tensor_return_value_t prefix_scan(
-    const Tensor& a,
-    const Tensor& bx,
-    const Tensor& h_prev,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<DataType> dtype = std::nullopt,
-    std::optional<MathFidelity> math_fidelity = std::nullopt);
-
-}  // namespace ttnn::prim

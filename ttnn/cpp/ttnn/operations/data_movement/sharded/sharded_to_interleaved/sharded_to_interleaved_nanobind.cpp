@@ -4,49 +4,19 @@
 
 #include "sharded_to_interleaved_nanobind.hpp"
 
-#include <optional>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "sharded_to_interleaved.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
-using namespace tt::tt_metal;
+namespace nb = nanobind;
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
-
-template <typename data_movement_sharded_operation_t>
-void bind_sharded_to_interleaved(
-    nb::module_& mod, const data_movement_sharded_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType>& output_dtype) -> ttnn::Tensor {
-                return self(
-                    input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_dtype") = nb::none(),
-        });
-}
-
-}  // namespace detail
-
-// TODO: Add more descriptions to the arguments
 void bind_sharded_to_interleaved(nb::module_& mod) {
-    detail::bind_sharded_to_interleaved(
-        mod,
-        ttnn::sharded_to_interleaved,
-        R"doc(
+    const char* doc = R"doc(
         Converts a tensor from sharded to interleaved memory layout
 
         Args:
@@ -60,7 +30,23 @@ void bind_sharded_to_interleaved(nb::module_& mod) {
 
             >>> interleaved_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-        )doc");
+        )doc";
+
+    // Wrapper to handle optional memory_config with default
+    mod.def(
+        "sharded_to_interleaved",
+        [](const ttnn::Tensor& input_tensor,
+           const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+           const std::optional<tt::tt_metal::DataType>& output_dtype) -> ttnn::Tensor {
+            return ttnn::sharded_to_interleaved(
+                input_tensor,
+                memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+                output_dtype);
+        },
+        doc,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

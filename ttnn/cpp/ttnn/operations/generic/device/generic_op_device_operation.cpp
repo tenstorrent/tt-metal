@@ -97,19 +97,3 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
 }
 
 }  // namespace ttnn::operations::generic
-
-namespace ttnn::prim {
-ttnn::operations::generic::GenericOpDeviceOperation::tensor_return_value_t generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t& operation_attributes) {
-    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
-    TT_FATAL(
-        io_tensors.size() >= 2,
-        "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
-        io_tensors.size());
-
-    auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-}
-}  // namespace ttnn::prim

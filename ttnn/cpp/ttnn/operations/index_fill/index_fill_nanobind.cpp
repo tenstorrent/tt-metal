@@ -4,18 +4,18 @@
 
 #include "index_fill_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "index_fill.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::index_fill {
 
 void bind_index_fill_operation(nb::module_& mod) {
-    const auto* doc =
+    const char* doc =
         R"doc(index_fill(input: Tensor, dim: uint32, index: Tensor, value: int or float, memory_config: MemoryConfig) -> Tensor
     Create or fill a tensor with the given value, with the specified `memory_config`.
     This operation only supports ROW_MAJOR_LAYOUT for now.
@@ -27,17 +27,16 @@ void bind_index_fill_operation(nb::module_& mod) {
         * :attr:`memory_config`: The memory configuration for the output tensor.
     )doc";
 
-    bind_registered_operation(
-        mod,
-        ttnn::index_fill,
+    mod.def(
+        "index_fill",
+        &ttnn::index_fill,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input"),
-            nb::arg("dim"),
-            nb::arg("index"),
-            nb::arg("value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        nb::arg("input"),
+        nb::arg("dim"),
+        nb::arg("index"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::index_fill

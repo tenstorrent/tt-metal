@@ -317,27 +317,3 @@ Tensor GridSampleOperation::create_output_tensors(
 }
 
 }  // namespace ttnn::operations::pool::grid_sample
-
-namespace ttnn::prim {
-ttnn::Tensor grid_sample(
-    const Tensor& input_tensor,
-    const Tensor& grid,
-    const std::string& mode,
-    const std::string& padding_mode,
-    bool align_corners,
-    bool use_precomputed_grid,
-    bool batch_output_channels,
-    const std::optional<MemoryConfig>& memory_config) {
-    using OperationType = ttnn::operations::pool::grid_sample::GridSampleOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .mode = mode,
-            .padding_mode = padding_mode,
-            .align_corners = align_corners,
-            .use_precomputed_grid = use_precomputed_grid,
-            .batch_output_channels = batch_output_channels,
-            .output_mem_config = memory_config.value_or(grid.memory_config()),
-        },
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .grid = grid});
-}
-}  // namespace ttnn::prim

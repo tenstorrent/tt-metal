@@ -59,22 +59,3 @@ FullLikeOperation::tensor_return_value_t FullLikeOperation::create_output_tensor
 }
 
 }  // namespace ttnn::operations::full_like
-
-namespace ttnn::prim {
-ttnn::operations::full_like::FullLikeOperation::tensor_return_value_t moreh_full_like(
-    const Tensor& input,
-    std::variant<float, int> fill_value,
-    const std::optional<DataType>& dtype,
-    const std::optional<Layout>& layout,
-    const std::optional<MemoryConfig>& memory_config) {
-    using OperationType = ttnn::operations::full_like::FullLikeOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
-        fill_value,
-        dtype.value_or(input.dtype()),
-        layout.value_or(input.layout()),
-        memory_config.value_or(input.memory_config())};
-    auto tensor_args = OperationType::tensor_args_t{input};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-}
-}  // namespace ttnn::prim

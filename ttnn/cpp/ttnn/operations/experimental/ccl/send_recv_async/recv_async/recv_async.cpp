@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "recv_async.hpp"
+#include "device/recv_async_op_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
-#include <vector>
+namespace ttnn::experimental {
 
-#include <tt-metalium/mesh_socket.hpp>
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op_device_operation.hpp"
+std::vector<ttnn::Tensor> recv_async(
+    const ttnn::Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    using OperationType = operations::experimental::ccl::recv_async::RecvAsyncDeviceOperation;
 
-namespace ttnn::operations::experimental::ccl {
+    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
+    auto tensor_args = OperationType::tensor_args_t{.output_tensor = output_tensor};
 
-std::vector<ttnn::Tensor> ExecuteRecvAsync::invoke(
-    const Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    return ttnn::prim::recv_async(output_tensor, mesh_socket);
+    return device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

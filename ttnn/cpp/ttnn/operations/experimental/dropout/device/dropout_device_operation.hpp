@@ -38,17 +38,3 @@ struct DropoutDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::dropout
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_value_t dropout(
-    const Tensor& input,
-    float prob,
-    float scale,
-    uint32_t seed,
-    bool use_per_device_seed,
-    DataType output_dtype,
-    const MemoryConfig& output_memory_config = MemoryConfig(),
-    const std::optional<Tensor>& preallocated_output = std::nullopt);
-
-}  // namespace ttnn::prim

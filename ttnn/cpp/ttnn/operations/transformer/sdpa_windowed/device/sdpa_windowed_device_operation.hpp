@@ -45,16 +45,3 @@ struct WindowedScaledDotProductAttentionDeviceOperation {
 };
 
 }  // namespace ttnn::operations::transformer::sdpa_windowed
-
-namespace ttnn::prim {
-ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation::tensor_return_value_t
-windowed_scaled_dot_product_attention(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& cu_window_seqlens,
-    std::optional<float> scale,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
-}  // namespace ttnn::prim

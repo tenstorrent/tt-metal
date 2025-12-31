@@ -4,19 +4,17 @@
 
 #include "bernoulli_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
+#include <nanobind/stl/optional.h>
 
 #include "bernoulli.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::bernoulli {
 
 void bind_bernoulli_operation(nb::module_& mod) {
-    std::string doc =
-        R"doc(
+    const char* doc = R"doc(
         Generates a tensor to draw binary random numbers (0 or 1) from a Bernoulli distribution.
 
         Args:
@@ -37,17 +35,16 @@ void bind_bernoulli_operation(nb::module_& mod) {
 
         )doc";
 
-    bind_registered_operation(
-        mod,
-        ttnn::bernoulli,
+    mod.def(
+        "bernoulli",
+        &ttnn::bernoulli,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input"),
-            nb::arg("seed") = 0,
-            nb::kw_only(),
-            nb::arg("output") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        nb::arg("input"),
+        nb::arg("seed") = 0,
+        nb::kw_only(),
+        nb::arg("output") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::bernoulli

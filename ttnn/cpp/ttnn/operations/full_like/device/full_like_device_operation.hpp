@@ -60,12 +60,3 @@ struct FullLikeOperation {
 };
 
 }  // namespace ttnn::operations::full_like
-
-namespace ttnn::prim {
-ttnn::operations::full_like::FullLikeOperation::tensor_return_value_t moreh_full_like(
-    const Tensor& input,
-    std::variant<float, int> fill_value,
-    const std::optional<DataType>& dtype,
-    const std::optional<Layout>& layout,
-    const std::optional<MemoryConfig>& memory_config);
-}  // namespace ttnn::prim

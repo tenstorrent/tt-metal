@@ -72,7 +72,6 @@ target_sources(
         topk/device/topk_single_core_program_factory.cpp
         topk/device/topk_multi_core_program_factory.cpp
         reduction_common/reduction_common.cpp
-        manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp
         manual_seed/device/manual_seed_program_factory.cpp
 )

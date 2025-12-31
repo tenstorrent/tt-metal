@@ -32,12 +32,3 @@ struct NlpKVCacheLoadSliceDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
-
-namespace ttnn::prim {
-ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::tensor_return_value_t nlp_kv_cache_load_slice(
-    const Tensor& input_tensor,
-    uint32_t seq_len_start,
-    uint32_t seq_len_end,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& preallocated_output);
-}  // namespace ttnn::prim

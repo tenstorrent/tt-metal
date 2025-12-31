@@ -48,10 +48,7 @@ namespace ttnn::prim {
 ttnn::operations::copy::TypecastDeviceOperation::tensor_return_value_t typecast(
     const Tensor& input,
     DataType output_dtype,
-    const MemoryConfig& output_memory_config,
-    bool fp32_dest_acc_en,
-    bool preserve_fp32_precision,
-    bool bfp8_pack_precise,
-    const std::optional<Tensor>& preallocated_output,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& preallocated_output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

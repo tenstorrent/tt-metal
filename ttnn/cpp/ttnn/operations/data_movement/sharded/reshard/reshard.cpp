@@ -2,19 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
-#include "device/reshard_device_operation.hpp"
 #include "reshard.hpp"
+#include "device/reshard_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
-using namespace tt::tt_metal;
+namespace ttnn {
 
-namespace ttnn::operations::data_movement {
-
-ttnn::Tensor ReshardOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const MemoryConfig& memory_config,
+Tensor reshard(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return ttnn::prim::reshard(input_tensor, memory_config, optional_output_tensor);
+    using OperationType = operations::data_movement::reshard::ReshardDeviceOperation;
+    return device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = memory_config,
+        },
+        OperationType::tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor});
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

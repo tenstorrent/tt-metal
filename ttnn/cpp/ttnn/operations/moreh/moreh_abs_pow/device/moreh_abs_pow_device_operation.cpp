@@ -68,21 +68,3 @@ MorehAbsPowOperation::tensor_return_value_t MorehAbsPowOperation::create_output_
 };
 
 }  // namespace ttnn::operations::moreh::moreh_abs_pow
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation::tensor_return_value_t moreh_abs_pow(
-    const Tensor& input,
-    const float p,
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    using OperationType = ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation;
-    const OperationType::operation_attributes_t operation_attributes{
-        p,
-        memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
-    const OperationType::tensor_args_t tensor_args{input, output};
-
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-}
-}  // namespace ttnn::prim

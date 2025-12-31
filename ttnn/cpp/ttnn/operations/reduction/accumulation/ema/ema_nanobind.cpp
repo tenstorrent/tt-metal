@@ -9,9 +9,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/reduction/accumulation/ema/ema.hpp"
 #include "ttnn/types.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_ema_operation(nb::module_& mod) {
@@ -40,55 +41,19 @@ void bind_reduction_ema_operation(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the output tensor.
-
-        Note:
-
-            Supported dtypes, layouts, ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16
-                 - TILE
-                 - 4
-
-            The output tensor will be in TILE layout and BFLOAT16.
-
-        Memory Support:
-            - Interleaved: DRAM and L1
-
-        Limitations:
-            - Tensors should be on the device.
-            - Preallocated output must have the same shape as the input
-
-
         )doc";
 
-    using OperationType = decltype(ttnn::ema);
-    bind_registered_operation(
-        mod,
-        ttnn::ema,
+    mod.def(
+        "ema",
+        &ttnn::ema,
         docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const float& alpha,
-               std::optional<Tensor> optional_out,
-               const std::optional<CoreGrid>& core_grid,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) -> Tensor {
-                return self(input_tensor, alpha, optional_out, core_grid, memory_config, compute_kernel_config);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("alpha"),
-            nb::kw_only(),
-            nb::arg("out") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("alpha"),
+        nb::kw_only(),
+        nb::arg("out") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

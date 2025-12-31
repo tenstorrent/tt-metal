@@ -35,26 +35,3 @@ struct RMSAllGatherDeviceOperation {
 };
 
 }  // namespace ttnn::operations::fused::normalization
-
-namespace ttnn::prim {
-
-ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_return_value_t rms_allgather(
-    const Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
-    uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    const GlobalSemaphore& semaphore,
-    const std::optional<ttnn::Tensor>& persistent_output_tensor,
-    std::optional<size_t> num_preferred_links,
-    ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<const DataType> dtype,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::Tensor>& residual_input_tensor,
-    float epsilon,
-    const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& stats,
-    bool use_noc1_only);
-
-}  // namespace ttnn::prim

@@ -4,19 +4,16 @@
 
 #include "uniform_nanobind.hpp"
 
-#include <optional>
-#include <string>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "uniform.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::uniform {
 void bind_uniform_operation(nb::module_& mod) {
-    std::string doc =
-        R"doc(
+    const char* doc = R"doc(
         Update in-place the input tensor with values drawn from the continuous uniform distribution 1 / (`to` - `from`).
 
         Args:
@@ -37,17 +34,16 @@ void bind_uniform_operation(nb::module_& mod) {
 
         )doc";
 
-    bind_registered_operation(
-        mod,
-        ttnn::uniform,
+    mod.def(
+        "uniform",
+        &ttnn::uniform,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input"),
-            nb::arg("from") = 0,
-            nb::arg("to") = 1,
-            nb::arg("seed") = 0,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        nb::arg("input"),
+        nb::arg("from") = 0,
+        nb::arg("to") = 1,
+        nb::arg("seed") = 0,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::uniform

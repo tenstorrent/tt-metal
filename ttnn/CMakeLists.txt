@@ -551,7 +551,6 @@ target_sources(
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
-        cpp/ttnn/operations/copy/typecast/typecast.cpp
 )
 
 target_include_directories(

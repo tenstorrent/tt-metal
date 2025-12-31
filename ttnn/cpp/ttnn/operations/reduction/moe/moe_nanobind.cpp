@@ -10,8 +10,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "moe.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::reduction::detail {
 
@@ -37,56 +38,19 @@ void bind_reduction_moe_operation(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-
-            Note:
-                The :attr:`input_tensor`, :attr:`expert_mask_tensor`, and :attr:`topk_mask_tensor` must match the following data type and layout:
-
-                    .. list-table::
-                        :header-rows: 1
-
-                        * - dtype
-                          - layout
-                        * - BFLOAT16
-                          - TILE
-
-                The output tensor will be in TILE layout and BFLOAT16.
-
-            Memory Support:
-                - Interleaved: DRAM and L1
-
-            Limitations:
-                - Tensors must be 4D with shape [N, C, H, W], and must be located on the device.
-                - For the :attr:`input_tensor`, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.
-                - :attr:`k` must be exactly 32.
-                - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
-                - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
-                - All of the shape validations are performed on padded shapes.
-                - Sharding is not supported for this operation.
-
         )doc";
 
-    using OperationType = decltype(ttnn::moe);
-    bind_registered_operation(
-        mod,
-        ttnn::moe,
+    mod.def(
+        "moe",
+        &ttnn::moe,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_tensor,
-               const Tensor& expert_mask_tensor,
-               const Tensor& topk_mask_tensor,
-               uint16_t k,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("expert_mask_tensor").noconvert(),
-            nb::arg("topk_mask_tensor").noconvert(),
-            nb::arg("k") = 32,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("expert_mask_tensor").noconvert(),
+        nb::arg("topk_mask_tensor").noconvert(),
+        nb::arg("k") = 32,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

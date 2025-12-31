@@ -63,12 +63,3 @@ struct MorehAbsPowOperation {
 };
 
 }  // namespace ttnn::operations::moreh::moreh_abs_pow
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation::tensor_return_value_t moreh_abs_pow(
-    const Tensor& input,
-    float p,
-    const std::optional<Tensor>& output = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-}  // namespace ttnn::prim

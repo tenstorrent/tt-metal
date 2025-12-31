@@ -16,7 +16,7 @@ Tensor preprocess_input_tensor(
     Tensor processed_tensor = input_tensor;
     const auto& input_dtype = input_tensor.dtype();
     if (dtype.has_value() && (input_dtype != *dtype)) {
-        processed_tensor = ttnn::typecast(input_tensor, input_dtype, *dtype);
+        processed_tensor = ttnn::typecast(input_tensor, *dtype);
     }
     const auto& input_shape = processed_tensor.logical_shape();
     const auto& input_rank = input_shape.rank();

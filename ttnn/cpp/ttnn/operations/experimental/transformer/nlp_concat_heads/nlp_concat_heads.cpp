@@ -2,18 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/nlp_concat_heads_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "nlp_concat_heads.hpp"
+#include "device/nlp_concat_heads_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
-#include <utility>
+namespace ttnn::experimental {
 
-namespace ttnn::operations::experimental::nlp_concat_heads {
+Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    using OperationType = operations::experimental::nlp_concat_heads::NLPConcatHeadsDeviceOperation;
 
-ttnn::Tensor NLPConcatHeadsOperation::invoke(
-    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
+
+    return device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads
+}  // namespace ttnn::experimental

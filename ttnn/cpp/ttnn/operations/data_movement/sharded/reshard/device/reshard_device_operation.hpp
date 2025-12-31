@@ -47,10 +47,3 @@ struct ReshardDeviceOperation {
 };
 
 }  // namespace ttnn::operations::data_movement::reshard
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::reshard::ReshardDeviceOperation::tensor_return_value_t reshard(
-    const Tensor& input_tensor,
-    const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<Tensor>& optional_output_tensor);
-}  // namespace ttnn::prim

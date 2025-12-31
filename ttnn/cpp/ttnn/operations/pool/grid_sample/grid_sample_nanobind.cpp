@@ -7,10 +7,12 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "grid_sample.hpp"
 #include "grid_sample_prepare_grid.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::grid_sample {
 
@@ -77,66 +79,21 @@ void bind_grid_sample_op(nb::module_& mod) {
                 - When batch_output_channels=True: (N, H_grid, W_grid, C*K) - channels batched
 
                 Where K is the grid batching factor.
-
-        Example:
-            >>> # Create input tensor (N=1, H=4, W=4, C=32) - channel last format
-            >>> input_tensor = ttnn.from_torch(torch.randn(1, 4, 4, 32), device=device)
-
-            >>> # Example 1: Standard single grid (K=1) - both batch_output_channels values produce same result
-            >>> theta = torch.tensor([[[1., 0., 0.], [0., 1., 0.]]], dtype=torch.float)
-            >>> grid = torch.nn.functional.affine_grid(theta, (1, 32, 4, 4), align_corners=False)
-            >>> grid_tensor = ttnn.from_torch(grid.to(torch.bfloat16), device=device)
-            >>> output_default = ttnn.grid_sample(input_tensor, grid_tensor)  # batch_output_channels=False (default)
-            >>> print(output_default.shape)  # [1, 4, 4, 32] - same for both when K=1
-
-            >>> # Example 2: Grid batching (K=4) - demonstrates proper reshaping workflow
-            >>> # Step 1: Create natural grid as you normally would (like in PyTorch)
-            >>> K = 4  # Grid batching factor
-            >>> natural_grid = torch.randn(1, 4, 16, 2) * 0.5  # Natural shape: (N, H_grid, W_grid*K, 2)
-            >>>
-            >>> # Step 2: Reshape for optimization - pack K coordinate sets into last dimension
-            >>> W_grid = 16 // K  # W_grid = 4
-            >>> batched_grid = natural_grid.view(1, 4, W_grid, 2*K)  # Reshaped: (1, 4, 4, 8)
-            >>> batched_grid_tensor = ttnn.from_torch(batched_grid.to(torch.bfloat16), device=device)
-            >>>
-            >>> # batch_output_channels=False (default): W dimension extended
-            >>> output_w_extend = ttnn.grid_sample(input_tensor, batched_grid_tensor)
-            >>> print(output_w_extend.shape)  # [1, 4, 16, 32] - W extended from 4 to 16 (W_grid*K)
-            >>>
-            >>> # batch_output_channels=True: channels batched
-            >>> output_c_extend = ttnn.grid_sample(input_tensor, batched_grid_tensor, batch_output_channels=True)
-            >>> print(output_c_extend.shape)  # [1, 4, 4, 128] - channels batched from 32 to 128 (K*C)
-
-            >>> # Example 3: Using FLOAT32 grid for higher precision
-            >>> grid_float32 = ttnn.from_torch(grid.to(torch.float32), dtype=ttnn.float32, device=device)
-            >>> output_float32 = ttnn.grid_sample(input_tensor, grid_float32)  # Higher precision coordinates
-            >>> print(output_float32.shape)  # [1, 4, 4, 32]
-
-            >>> # Example 4: Using precomputed grid for better performance
-            >>> grid_float32_host = ttnn.from_torch(grid, dtype=ttnn.float32)
-            >>> input_shape = [1, 4, 4, 32]  # [N, H, W, C] format
-            >>> prepared_grid = ttnn.prepare_grid_sample_grid(
-            ...     grid_float32_host, input_shape, padding_mode="zeros", output_dtype=ttnn.bfloat16
-            ... )
-            >>> prepared_grid = ttnn.to_device(prepared_grid, device)
-            >>> output_precomputed = ttnn.grid_sample(input_tensor, prepared_grid, use_precomputed_grid=True)
-            >>> print(output_precomputed.shape)  # [1, 4, 4, 32]
         )doc";
 
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::grid_sample,
+    mod.def(
+        "grid_sample",
+        &ttnn::grid_sample,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("grid"),
-            nb::kw_only(),
-            nb::arg("mode") = nb::str("bilinear"),
-            nb::arg("padding_mode") = nb::str("zeros"),
-            nb::arg("align_corners") = false,
-            nb::arg("use_precomputed_grid") = false,
-            nb::arg("batch_output_channels") = false,
-            nb::arg("memory_config") = nb::none()});
+        nb::arg("input_tensor"),
+        nb::arg("grid"),
+        nb::kw_only(),
+        nb::arg("mode") = nb::str("bilinear"),
+        nb::arg("padding_mode") = nb::str("zeros"),
+        nb::arg("align_corners") = false,
+        nb::arg("use_precomputed_grid") = false,
+        nb::arg("batch_output_channels") = false,
+        nb::arg("memory_config") = nb::none());
 }
 
 void bind_prepare_grid_sample_grid(nb::module_& mod) {
@@ -171,38 +128,7 @@ void bind_prepare_grid_sample_grid(nb::module_& mod) {
             output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
 
         Returns:
-            ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
-
-                - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
-                - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
-                - [:, :, :, 2]: Weight for north-west pixel
-                - [:, :, :, 3]: Weight for north-east pixel
-                - [:, :, :, 4]: Weight for south-west pixel
-                - [:, :, :, 5]: Weight for south-east pixel
-
-        Example:
-            >>> # Create a normalized grid with coordinates in [-1, 1] range
-            >>> torch_grid = torch.randn(1, 8, 8, 2) * 0.8  # Keep within valid range
-            >>> grid = ttnn.from_torch(torch_grid, dtype=ttnn.float32)
-            >>> input_shape = [1, 32, 32, 64]  # N, H, W, C format
-            >>>
-            >>> # Precompute grid for optimized sampling
-            >>> precomputed_grid = ttnn.prepare_grid_sample_grid(
-            ...     grid, input_shape, mode="bilinear", padding_mode="zeros", align_corners=False, output_dtype=ttnn.bfloat16
-            ... )
-            >>> print(precomputed_grid.shape)  # [1, 8, 8, 6]
-            >>>
-            >>> # The output contains:
-            >>> # precomputed_grid[:, :, :, 0] = North-west height coordinates
-            >>> # precomputed_grid[:, :, :, 1] = North-west width coordinates
-            >>> # precomputed_grid[:, :, :, 2] = North-west pixel weight
-            >>> # precomputed_grid[:, :, :, 3] = North-east pixel weight
-            >>> # precomputed_grid[:, :, :, 4] = South-west pixel weight
-            >>> # precomputed_grid[:, :, :, 5] = South-east pixel weight
-            >>>
-            >>> # Use with grid_sample for better performance on repeated operations
-            >>> precomputed_grid_device = ttnn.to_device(precomputed_grid, device)
-            >>> output = ttnn.grid_sample(input_tensor, precomputed_grid_device, use_precomputed_grid=True)
+            ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6)
         )doc");
 }
 

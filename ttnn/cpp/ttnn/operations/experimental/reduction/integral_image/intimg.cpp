@@ -2,13 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/intimg_device_operation.hpp"
-
-#include <tt_stl/assert.hpp>
 #include "intimg.hpp"
+#include "device/intimg_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental {
 
-Tensor IntImgOperation::invoke(const Tensor& input_tensor) { return ttnn::prim::intimg(input_tensor); }
+Tensor intimg(const Tensor& input_tensor) {
+    using OperationType = operations::experimental::reduction::IntImgDeviceOperation;
 
-}  // namespace ttnn::operations::experimental::reduction
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor};
+
+    return device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::experimental

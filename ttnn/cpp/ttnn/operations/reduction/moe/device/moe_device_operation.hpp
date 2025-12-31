@@ -31,13 +31,3 @@ struct MoeDeviceOperation {
 };
 
 }  // namespace ttnn::operations::reduction::moe
-
-namespace ttnn::prim {
-ttnn::Tensor moe(
-    const Tensor& input_tensor,
-    const Tensor& expert_mask_tensor,
-    const Tensor& topk_mask_tensor,
-    uint16_t k,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
-}  // namespace ttnn::prim

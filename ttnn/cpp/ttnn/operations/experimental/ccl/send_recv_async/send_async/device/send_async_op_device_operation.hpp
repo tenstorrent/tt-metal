@@ -33,10 +33,3 @@ struct SendAsyncDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::ccl::send_async
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation::tensor_return_value_t send_async(
-    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
-
-}  // namespace ttnn::prim

@@ -33,19 +33,3 @@ struct FusedRMSNormPostAllGatherDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
-
-namespace ttnn::prim {
-ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::tensor_return_value_t
-fused_rmsnorm_post_all_gather(
-    const Tensor& input_tensor,
-    const Tensor& stats_tensor,
-    float eps,
-    uint32_t num_heads,
-    const std::optional<const Tensor>& weight,
-    const std::optional<const Tensor>& transformation_mat,
-    const std::optional<const Tensor>& rope_cos,
-    const std::optional<const Tensor>& rope_sin,
-    const MemoryConfig& memory_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<DataType>& dtype);
-}  // namespace ttnn::prim

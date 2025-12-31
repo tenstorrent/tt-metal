@@ -72,17 +72,3 @@ struct MorehNllLossBackwardDeviceOperation {
 };
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_nll_loss_backward::MorehNllLossBackwardDeviceOperation::tensor_return_value_t
-moreh_nll_loss_backward(
-    const Tensor& target_tensor,
-    const Tensor& output_grad_tensor,
-    bool reduction_mean,
-    const std::optional<Tensor>& weight_tensor,
-    const std::optional<Tensor>& input_grad_tensor,
-    const std::optional<Tensor>& divisor_tensor,
-    int32_t ignore_index,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
-}  // namespace ttnn::prim

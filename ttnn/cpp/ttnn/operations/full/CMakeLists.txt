@@ -27,7 +27,6 @@ target_sources(
     PRIVATE
         device/full_device_operation.cpp
         device/full_program_factory.cpp
-        full.cpp
 )
 
 target_include_directories(ttnn_op_full PRIVATE ${FixmeOpIncDirs})

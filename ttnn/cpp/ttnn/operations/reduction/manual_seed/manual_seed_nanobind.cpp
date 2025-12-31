@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <optional>
 #include <variant>
 
 #include <nanobind/nanobind.h>
@@ -14,13 +13,14 @@
 #include <nanobind/stl/variant.h>
 
 #include "manual_seed.hpp"
-#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::reduction::detail {
 
 void bind_manual_seed_operation(nb::module_& mod) {
-    const auto* doc = R"doc(
+    const char* doc = R"doc(
             Sets a seed to pseudo random number generators (PRNGs) on the specified device.
 
             This operation allows users to either set a single seed value to all PRNGs in the device, or to specify potentially different seed values to PRNGs at the cores assigned to the provided user IDs.
@@ -57,24 +57,21 @@ void bind_manual_seed_operation(nb::module_& mod) {
                     * - UINT32
                       - ROW_MAJOR_LAYOUT
         )doc";
-    using OperationType = decltype(ttnn::manual_seed);
-    bind_registered_operation(
-        mod,
-        ttnn::manual_seed,
+
+    mod.def(
+        "manual_seed",
+        [](const std::variant<uint32_t, ttnn::Tensor>& seeds,
+           const std::optional<MeshDevice*> device,
+           const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
+           const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
+            return ttnn::manual_seed(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
+        },
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const std::variant<uint32_t, ttnn::Tensor>& seeds,
-               const std::optional<MeshDevice*> device,
-               const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
-                return self(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
-            },
-            nb::arg("seeds") = 0,
-            nb::kw_only(),
-            nb::arg("device") = nb::none(),
-            nb::arg("user_ids") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+        nb::arg("seeds") = 0,
+        nb::kw_only(),
+        nb::arg("device") = nb::none(),
+        nb::arg("user_ids") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

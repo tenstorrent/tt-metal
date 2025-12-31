@@ -12,8 +12,10 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
+#include "gelu_backward.hpp"
+#include "ttnn/types.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::experimental::gelu_backward::detail {
 
@@ -61,25 +63,16 @@ void bind_experimental_gelu_backward_operation(nb::module_& mod) {
             >>> output = ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
         )doc");
 
-    using OperationType = decltype(ttnn::experimental::gelu_bw);
-    bind_registered_operation(
-        mod,
-        ttnn::experimental::gelu_bw,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& grad_output_tensor,
-               const Tensor& input_tensor,
-               const std::string& approximate,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor>& input_grad_tensor) -> ttnn::Tensor {
-                return self(grad_output_tensor, input_tensor, approximate, memory_config, input_grad_tensor);
-            },
-            nb::arg("grad_output_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("approximate") = "none",
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none()});
+    mod.def(
+        "gelu_bw",
+        &ttnn::experimental::gelu_bw,
+        doc.c_str(),
+        nb::arg("grad_output_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("approximate") = "none",
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none());
 }
+
 }  // namespace ttnn::operations::experimental::gelu_backward::detail

@@ -29,7 +29,6 @@ target_sources(
     PRIVATE
         device/uniform_device_operation.cpp
         device/uniform_program_factory.cpp
-        uniform.cpp
 )
 
 target_include_directories(ttnn_op_uniform PRIVATE ${FixmeOpIncDirs})

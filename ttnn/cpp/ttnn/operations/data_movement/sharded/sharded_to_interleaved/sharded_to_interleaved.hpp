@@ -4,22 +4,15 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct ShardedToInterleavedOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const MemoryConfig& memory_config,
-        const std::optional<DataType>& output_dtype);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto sharded_to_interleaved = ttnn::register_operation<
-    "ttnn::sharded_to_interleaved",
-    ttnn::operations::data_movement::ShardedToInterleavedOperation>();
+Tensor sharded_to_interleaved(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn

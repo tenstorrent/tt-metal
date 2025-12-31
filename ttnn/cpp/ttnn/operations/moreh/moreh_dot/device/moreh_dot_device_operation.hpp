@@ -57,13 +57,3 @@ struct MorehDotOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::moreh::moreh_dot
-
-namespace ttnn::prim {
-ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t moreh_dot(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const std::optional<Tensor>& output,
-    const std::optional<DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-}  // namespace ttnn::prim

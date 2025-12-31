@@ -4,23 +4,8 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "device/plusone_device_operation.hpp"
 
 namespace ttnn {
-namespace operations::experimental {
-
-struct PlusOneOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        bool skip_negative_entries = false);
-};
-
-}  // namespace operations::experimental
-
-constexpr auto plus_one =
-    ttnn::register_operation<"ttnn::plus_one", ttnn::operations::experimental::PlusOneOperation>();
-
+using prim::plus_one;
 }  // namespace ttnn

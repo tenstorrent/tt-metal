@@ -10,23 +10,23 @@
 #include <nanobind/stl/optional.h>
 
 #include "moreh_dot.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+
+namespace nb = nanobind;
 
 namespace ttnn::operations::moreh::moreh_dot {
 
 void bind_moreh_dot_operation(nb::module_& mod) {
-    bind_registered_operation(
-        mod,
-        ttnn::moreh_dot,
-        "Moreh Moreh Dot Operation",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("output") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+    mod.def(
+        "moreh_dot",
+        ttnn::operations::moreh::moreh_dot::moreh_dot,
+        R"doc(Moreh Moreh Dot Operation)doc",
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("output") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::moreh::moreh_dot
