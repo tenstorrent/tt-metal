@@ -9,6 +9,8 @@ from typing import Dict, List
 
 from .fused_operation import FusedOperation
 
+FUSED_TESTS_DIR = Path("sources/fused_tests")
+
 
 @dataclass
 class UnpackKernelGenerator:
@@ -135,7 +137,10 @@ class FusedKernelGenerator:
             "pack": self.pack_gen.generate(),
         }
 
-    def write_kernel(self):
+    def write_kernel(self, test_name: str, regenerate_cpp: bool = True):
+        if not regenerate_cpp:
+            return
+
         kernels = self.generate_all()
 
         combined = (
@@ -168,6 +173,10 @@ class FusedKernelGenerator:
             f"{kernels['pack']}"
         )
 
-        llk_home = Path(os.environ.get("LLK_HOME"))
-        with open(llk_home / "tests/helpers/src/fused_test.cpp", "w") as f:
+        test_cpp_dir = Path(os.environ.get("LLK_HOME")) / "tests"
+
+        fused_test_cpp_dir = test_cpp_dir / FUSED_TESTS_DIR
+        fused_test_cpp_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(test_cpp_dir / f"{test_name}", "w") as f:
             f.write(combined)

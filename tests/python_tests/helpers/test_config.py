@@ -904,13 +904,17 @@ class TestConfig:
 
         return elfs
 
-    def run_fused(self, pipeline: List[FusedOperation], location="0,0"):
+    def run_fused(
+        self,
+        pipeline: List[FusedOperation],
+        regenerate_cpp: bool = True,
+        location="0,0",
+    ):
         # Generate fused kernel code
         compiler = FusedKernelGenerator(pipeline)
-        compiler.write_kernel()
+        compiler.write_kernel(self.test_name, regenerate_cpp)
 
         # Build and run
-        self.test_name = "fused_test"
         self.generate_variant_hash()
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -945,7 +949,7 @@ class TestConfig:
             for name in TestConfig.KERNEL_COMPONENTS:
                 # Compile kernel
                 run_shell_command(
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} {kernel_trisc_flag} -DLLK_TRISC_{name.upper()} -c -o {VARIANT_OBJ_DIR}/{name}.o {TestConfig.RISCV_SOURCES}/fused_test.cpp""",
+                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} {kernel_trisc_flag} -DLLK_TRISC_{name.upper()} -c -o {VARIANT_OBJ_DIR}/{name}.o {TestConfig.TESTS_WORKING_DIR / self.test_name}""",
                     TestConfig.TESTS_WORKING_DIR,
                 )
                 # Link

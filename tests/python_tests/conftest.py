@@ -113,6 +113,11 @@ def perf_report(request, worker_id):
     temp_report.dump_csv(f"{test_module}.{worker_id}.post.csv")
 
 
+@pytest.fixture
+def regenerate_cpp(request):
+    return not request.config.getoption("--skip-codegen")
+
+
 def pytest_configure(config):
     compile_producer = config.getoption("--compile-producer", default=False)
     compile_consumer = config.getoption("--compile-consumer", default=False)
@@ -268,6 +273,13 @@ def pytest_addoption(parser):
         "--detailed-artefacts",
         action="store_true",
         help="Insert few more compilation flags to produce binary artefacts suitable for debugging",
+    )
+
+    parser.addoption(
+        "--skip-codegen",
+        action="store_true",
+        default=False,
+        help="Skip C++ code generation for fused tests and use existing files",
     )
 
 

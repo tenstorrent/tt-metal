@@ -42,9 +42,13 @@ class FusedGolden:
             master_golden = master_golden.flatten()
 
         print("L1 golden check:")
-        l1_passed = passed_test(l1_golden, res_tensor, output.data_format)
+        l1_passed = passed_test(
+            l1_golden, res_tensor, output.data_format, print_pcc=True
+        )
         print("Master golden check:")
-        master_passed = passed_test(master_golden, res_tensor, output.data_format)
+        master_passed = passed_test(
+            master_golden, res_tensor, output.data_format, print_pcc=True
+        )
 
         passed = l1_passed and master_passed
 
