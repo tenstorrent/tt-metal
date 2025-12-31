@@ -975,8 +975,9 @@ class MasterConfigLoader:
 
                     # Convert shape to tuple so it serializes as a string for proper deserialization
                     input_shapes.append(tuple(cfg["shape"]))
-                    input_a_dtypes.append(cfg["dtype"])
-                    input_a_layouts.append(cfg["layout"])
+                    # Parse dtype/layout strings to ttnn objects
+                    input_a_dtypes.append(self.parse_dtype(cfg["dtype"]))
+                    input_a_layouts.append(self.parse_layout(cfg["layout"]))
                     input_a_memory_configs.append(cfg["memory_config"])
                     output_memory_configs.append(cfg["output_memory_config"])
                     storage_types.append(cfg.get("storage_type", "StorageType::DEVICE"))
@@ -1434,10 +1435,11 @@ class MasterConfigLoader:
                         # Tensor-scalar: Pass "other" as None to indicate scalar operation
                         input_shapes.append({"self": tuple(cfg["shape_a"]), "other": None})
 
-                    input_a_dtypes.append(cfg["dtype_a"])
-                    input_b_dtypes.append(cfg["dtype_b"])
-                    input_a_layouts.append(cfg["layout_a"])
-                    input_b_layouts.append(cfg["layout_b"])
+                    # Parse dtype/layout strings to ttnn objects
+                    input_a_dtypes.append(self.parse_dtype(cfg["dtype_a"]))
+                    input_b_dtypes.append(self.parse_dtype(cfg["dtype_b"]))
+                    input_a_layouts.append(self.parse_layout(cfg["layout_a"]))
+                    input_b_layouts.append(self.parse_layout(cfg["layout_b"]))
                     input_a_memory_configs.append(cfg["memory_config_a"])
                     input_b_memory_configs.append(cfg["memory_config_b"])
                     output_memory_configs.append(cfg["output_memory_config"])
@@ -2713,8 +2715,9 @@ class MasterConfigLoader:
 
             for cfg in paired_configs:
                 input_shape_list.append(cfg["input_shape"])
-                input_a_dtype_list.append(cfg["input_a_dtype"])
-                input_a_layout_list.append(cfg["input_a_layout"])
+                # Parse dtype/layout strings to ttnn objects
+                input_a_dtype_list.append(self.parse_dtype(cfg["input_a_dtype"]))
+                input_a_layout_list.append(self.parse_layout(cfg["input_a_layout"]))
                 input_a_memory_config_list.append(cfg["input_a_memory_config"])
                 output_memory_config_list.append(cfg["output_memory_config"])
                 num_heads_list.append(cfg["num_heads"])

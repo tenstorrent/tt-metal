@@ -52,33 +52,6 @@ def mesh_device_fixture():
     del device
 
 
-def _convert_dtype_layout(value):
-    """Convert C++ style dtype/layout strings to Python ttnn objects."""
-    if isinstance(value, str):
-        # Handle C++ style DataType::XXX
-        if value.startswith("DataType::"):
-            dtype_map = {
-                "DataType::BFLOAT16": ttnn.bfloat16,
-                "DataType::BFLOAT8_B": ttnn.bfloat8_b,
-                "DataType::FLOAT32": ttnn.float32,
-                "DataType::INT32": ttnn.int32,
-                "DataType::UINT32": ttnn.uint32,
-                "DataType::UINT16": ttnn.uint16,
-            }
-            return dtype_map.get(value, ttnn.bfloat16)
-        # Handle C++ style layout
-        elif value == "TILE":
-            return ttnn.TILE_LAYOUT
-        elif value == "ROW_MAJOR":
-            return ttnn.ROW_MAJOR_LAYOUT
-        # Handle Python style DataType.XXX (already handled by deserializer)
-        elif value.startswith("DataType."):
-            return value  # Let deserializer handle it
-        elif value.startswith("Layout."):
-            return value  # Let deserializer handle it
-    return value
-
-
 def run(
     input_shape,
     input_a_dtype,
@@ -94,10 +67,6 @@ def run(
     **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
-
-    # Convert C++ style dtype/layout strings to ttnn objects if needed
-    input_a_dtype = _convert_dtype_layout(input_a_dtype)
-    input_a_layout = _convert_dtype_layout(input_a_layout)
 
     # Handle tuple input_shape for sample suite
     if isinstance(input_shape, (tuple, list)):
@@ -220,16 +189,10 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC for all three outputs using check_with_pcc
-    # Set PCC threshold based on dtype
-    if input_a_dtype == ttnn.bfloat8_b:
-        pcc_threshold = 0.99
-    else:
-        pcc_threshold = 1.0
-
-    # check_with_pcc returns (bool, message) tuple
-    pcc_q = check_with_pcc(ref_q, q, pcc_threshold)
-    pcc_k = check_with_pcc(ref_k, k, pcc_threshold)
-    pcc_v = check_with_pcc(ref_v, v, pcc_threshold)
+    # Use 0.99 as common threshold for all dtypes
+    pcc_q = check_with_pcc(ref_q, q, 0.99)
+    pcc_k = check_with_pcc(ref_k, k, 0.99)
+    pcc_v = check_with_pcc(ref_v, v, 0.99)
 
     # All three must pass - combine the results
     all_passed = pcc_q[0] and pcc_k[0] and pcc_v[0]
