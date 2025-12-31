@@ -355,8 +355,8 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     // create a vector of cores, in either RM or CM
     std::vector<CoreCoord> core_coords =
         grid_to_cores(num_cores, num_cores_c, num_cores_r, shard_orientation == ShardOrientation::ROW_MAJOR);
-    for (size_t i = 0; i < core_coords.size(); ++i) {
-        log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
+    for ([[maybe_unused]] const auto& core_coord : core_coords) {
+        log_debug(tt::LogOp, "worker coord: {} {}", core_coord.x, core_coord.y);
     }
     std::vector<std::vector<CoreCoord>> core_coords2D;
     if (shard_orientation == ShardOrientation::ROW_MAJOR) {
@@ -423,15 +423,15 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
             mcast_groups[group_index].push_back(core_coords[i]);
         }
     } else {
-        for (size_t i = 0; i < core_coords2D.size(); ++i) {
-            for (size_t j = 0; j < core_coords2D[i].size(); ++j) {
-                if (mcast_sender_core_ranges.contains(CoreRange(core_coords2D[i][j]))) {
+        for (const auto& core_group : core_coords2D) {
+            for (size_t j = 0; j < core_group.size(); ++j) {
+                if (mcast_sender_core_ranges.contains(CoreRange(core_group[j]))) {
                     group_index += 1;
                 }
                 if (group_index >= static_cast<int>(mcast_groups.size())) {
                     mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
                 }
-                mcast_groups[group_index].push_back(core_coords2D[i][j]);
+                mcast_groups[group_index].push_back(core_group[j]);
             }
         }
     }
@@ -880,8 +880,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     log_debug(tt::LogOp, "num_cores_per_batch: {}", num_cores_per_batch);
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
 
-    for (size_t i = 0; i < mcast_groups.size(); ++i) {
-        auto group = mcast_groups[i];
+    for (auto group : mcast_groups) {
         bool rectangle_grid = is_rectangle_grid(group);
 
         for (size_t j = 0; j < group.size(); ++j) {
@@ -972,12 +971,12 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
                 // add all coords within a group
                 std::vector<uint32_t> mcast_noc_xy;
-                for (size_t c = 0; c < group.size(); ++c) {
-                    CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+                for (const auto& core : group) {
+                    CoreCoord coord = device->worker_core_from_logical_core(core);
                     mcast_noc_xy.push_back(coord.x);
                 }
-                for (size_t c = 0; c < group.size(); ++c) {
-                    CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+                for (const auto& core : group) {
+                    CoreCoord coord = device->worker_core_from_logical_core(core);
                     mcast_noc_xy.push_back(coord.y);
                 }
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
@@ -997,9 +996,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t gamma_tile_start_id = 0;
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
-    for (size_t i = 0; i < core_coords.size(); ++i) {
-        auto core = core_coords[i];
-
+    for (auto core : core_coords) {
         std::vector<uint32_t> writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(packed_cinv_value);
         writer_mcast_sender_args.push_back(packed_winv_value);

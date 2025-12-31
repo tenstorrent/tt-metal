@@ -195,8 +195,8 @@ ttnn::Tensor ExecutePermute::invoke(
         for (int i = 0; i < additional_ranks; i++) {
             new_order.push_back(i);
         }
-        for (int i = 0; i < dims.size(); i++) {
-            new_order.push_back(dims[i] + additional_ranks);
+        for (unsigned int dim : dims) {
+            new_order.push_back(dim + additional_ranks);
         }
         return new_order;
     };
