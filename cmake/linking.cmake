@@ -82,14 +82,16 @@ endfunction()
 
 # Prints version information for a given linker
 function(print_linker_version linker_executable regex_pattern use_string_regex)
-    find_program(linker_exe ${linker_executable})
-    if(NOT linker_exe)
+    # Use a unique variable name to avoid CMake cache pollution across calls
+    string(MAKE_C_IDENTIFIER "${linker_executable}" linker_var_name)
+    find_program(linker_exe_${linker_var_name} ${linker_executable})
+    if(NOT linker_exe_${linker_var_name})
         return()
     endif()
 
     execute_process(
         COMMAND
-            ${linker_exe} --version
+            ${linker_exe_${linker_var_name}} --version
         OUTPUT_VARIABLE version_output
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
@@ -111,6 +113,9 @@ function(print_linker_version linker_executable regex_pattern use_string_regex)
             message(STATUS "Linker version: ${version_output}")
         endif()
     endif()
+
+    # Clean up to prevent cache accumulation
+    unset(linker_exe_${linker_var_name} CACHE)
 endfunction()
 
 #===============================================================================
