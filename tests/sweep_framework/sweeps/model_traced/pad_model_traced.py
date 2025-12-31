@@ -46,6 +46,32 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple[bool, str]:
+    """
+    Invalidate test vectors that would cause OOM or are unrealistic.
+    Skip vectors with extreme tensor sizes that exceed available memory.
+    """
+    input_shape = test_vector.get("input_shape")
+
+    if isinstance(input_shape, (list, tuple)) and len(input_shape) >= 4:
+        # Calculate tensor size in elements
+        total_elements = 1
+        for dim in input_shape:
+            total_elements *= dim
+
+        # Skip if tensor would require more than 10GB (very conservative limit)
+        # Each element is 2 bytes for bfloat16, so 10GB = 5 billion elements
+        max_elements = 5_000_000_000
+
+        if total_elements > max_elements:
+            return (
+                True,
+                f"Tensor size too large: {total_elements} elements would require {total_elements * 2 / 1e9:.1f}GB",
+            )
+
+    return (False, None)
+
+
 def mesh_device_fixture():
     """
     Override default device fixture for pad operation.

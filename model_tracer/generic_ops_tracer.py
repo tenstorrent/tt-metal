@@ -518,9 +518,10 @@ class OperationsTracingPlugin:
         """
         Merge machine info into an existing configuration.
 
-        Handles smart merging:
-        - If same board_type, merge device_series into a list
-        - If different board_type, create list of machine_info dicts
+        Simplified approach to prevent circular references:
+        - Keeps device_series as simple string (not nested lists)
+        - Checks for exact duplicates before adding
+        - Avoids complex list merging that can create circular refs
         """
         # Skip if new_machine_info is None
         if new_machine_info is None:
@@ -538,39 +539,21 @@ class OperationsTracingPlugin:
             existing_machine_info = [existing_machine_info]
             existing_config['machine_info'] = existing_machine_info
 
-        # Now existing_machine_info is a list
+        # Check if we already have this exact machine info
+        # This prevents duplicates AND avoids circular reference issues
         new_board_type = new_machine_info.get('board_type')
         new_device_series = new_machine_info.get('device_series')
+        new_card_count = new_machine_info.get('card_count')
 
-        # Find if we have an entry with matching board_type
-        matching_board_entry = None
         for entry in existing_machine_info:
-            if entry.get('board_type') == new_board_type:
-                matching_board_entry = entry
-                break
+            if (entry.get('board_type') == new_board_type and
+                entry.get('device_series') == new_device_series and
+                entry.get('card_count') == new_card_count):
+                # Already exists, don't duplicate
+                return
 
-        if matching_board_entry:
-            # Same board type - merge device_series
-            existing_series = matching_board_entry.get('device_series')
-
-            # Convert to list if needed
-            if not isinstance(existing_series, list):
-                existing_series = [existing_series]
-                matching_board_entry['device_series'] = existing_series
-
-            # Add new device_series if not already present
-            if new_device_series not in existing_series:
-                existing_series.append(new_device_series)
-                # Keep sorted for consistency - only sort if all elements are strings
-                try:
-                    if all(isinstance(s, str) for s in existing_series):
-                        existing_series.sort()
-                except (TypeError, AttributeError):
-                    # If sorting fails, just keep the order as is
-                    pass
-        else:
-            # Different board type - add as new entry
-            existing_machine_info.append(new_machine_info)
+        # Add as new entry (no complex merging to avoid circular refs)
+        existing_machine_info.append(new_machine_info)
 
     def update_master_file(self, master_file_path, new_operations, test_name):
         """Update master file with unique operation configurations grouped by operation name"""

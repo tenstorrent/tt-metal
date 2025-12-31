@@ -53,6 +53,33 @@ def mesh_device_fixture():
     del device
 
 
+def _convert_dtype_layout(value):
+    """Convert C++ style dtype/layout strings to Python ttnn objects."""
+    if isinstance(value, str):
+        # Handle C++ style DataType::XXX
+        if value.startswith("DataType::"):
+            dtype_map = {
+                "DataType::BFLOAT16": ttnn.bfloat16,
+                "DataType::BFLOAT8_B": ttnn.bfloat8_b,
+                "DataType::FLOAT32": ttnn.float32,
+                "DataType::INT32": ttnn.int32,
+                "DataType::UINT32": ttnn.uint32,
+                "DataType::UINT16": ttnn.uint16,
+            }
+            return dtype_map.get(value, ttnn.bfloat16)
+        # Handle C++ style layout
+        elif value == "TILE":
+            return ttnn.TILE_LAYOUT
+        elif value == "ROW_MAJOR":
+            return ttnn.ROW_MAJOR_LAYOUT
+        # Handle Python style DataType.XXX (already handled by deserializer)
+        elif value.startswith("DataType."):
+            return value  # Let deserializer handle it
+        elif value.startswith("Layout."):
+            return value  # Let deserializer handle it
+    return value
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -69,6 +96,10 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Convert C++ style dtype/layout strings to ttnn objects if needed
+    input_a_dtype = _convert_dtype_layout(input_a_dtype)
+    input_a_layout = _convert_dtype_layout(input_a_layout)
+
     # Handle tuple input_shape for sample suite
     if isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape)
@@ -79,12 +110,19 @@ def run(
     # For simplicity, we'll create random tensors and compute golden output
     # In real usage, this comes from a matmul with specific weight arrangement
 
-    # Assume shape is [batch, seq_len, hidden_dim] where hidden_dim = num_heads * (q+k+v) * head_dim
-    # For MHA: hidden_dim = num_heads * 3 * head_dim
-    batch, seq_len, hidden_dim = shape if len(shape) == 3 else (shape[0], shape[1], shape[2] * shape[3])
+    # Traced shape is [batch, 1, seq_len, hidden_dim] where hidden_dim = (num_q_heads + 2*num_kv_heads) * head_dim
+    # The input contains Q, K, V interleaved
+    if len(shape) == 4:
+        # Shape is [batch, 1, seq_len, hidden_dim]
+        batch, _, seq_len, hidden_dim = shape
+    elif len(shape) == 3:
+        # Shape is [batch, seq_len, hidden_dim]
+        batch, seq_len, hidden_dim = shape
+    else:
+        raise ValueError(f"Unexpected input shape: {shape}")
 
-    # Infer head_dim
-    num_kv_heads = num_heads  # Assume MHA
+    # Infer head_dim from the input dimensions
+    # hidden_dim = num_heads * head_dim + 2 * num_kv_heads * head_dim
     head_dim = hidden_dim // (num_heads + 2 * num_kv_heads)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -99,6 +137,10 @@ def run(
     ref_q = torch.reshape(ref_q, [batch, seq_len, num_heads, head_dim]).transpose(-3, -2)
     ref_k = torch.reshape(ref_k, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
     ref_v = torch.reshape(ref_v, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+
+    # Apply transpose_k_heads if specified (like unit test does)
+    if transpose_k_heads:
+        ref_k = ref_k.transpose(-2, -1)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -178,14 +220,34 @@ def run(
     v = ttnn.to_torch(v)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC for all three outputs
-    from models.common.utility_functions import comp_pcc
+    # Check with PCC for all three outputs using check_with_pcc
+    # Set PCC threshold based on dtype
+    if input_a_dtype == ttnn.bfloat8_b:
+        pcc_threshold = 0.99
+    else:
+        pcc_threshold = 1.0
 
-    passing_pcc_q, _ = comp_pcc(ref_q, q, 0.99)
-    passing_pcc_k, _ = comp_pcc(ref_k, k, 0.99)
-    passing_pcc_v, _ = comp_pcc(ref_v, v, 0.99)
+    # check_with_pcc returns (bool, message) tuple
+    pcc_q = check_with_pcc(ref_q, q, pcc_threshold)
+    pcc_k = check_with_pcc(ref_k, k, pcc_threshold)
+    pcc_v = check_with_pcc(ref_v, v, pcc_threshold)
 
-    # Return average PCC as boolean converted to float
-    pcc = float(passing_pcc_q and passing_pcc_k and passing_pcc_v)
+    # All three must pass - combine the results
+    all_passed = pcc_q[0] and pcc_k[0] and pcc_v[0]
 
-    return [pcc, e2e_perf]
+    # Combine messages if any fail
+    if not all_passed:
+        messages = []
+        if not pcc_q[0]:
+            messages.append(f"Q: {pcc_q[1]}")
+        if not pcc_k[0]:
+            messages.append(f"K: {pcc_k[1]}")
+        if not pcc_v[0]:
+            messages.append(f"V: {pcc_v[1]}")
+        combined_message = "; ".join(messages)
+        pcc_result = (False, combined_message)
+    else:
+        # All passed, return the Q PCC result (or we could combine messages)
+        pcc_result = pcc_q
+
+    return [pcc_result, e2e_perf]
