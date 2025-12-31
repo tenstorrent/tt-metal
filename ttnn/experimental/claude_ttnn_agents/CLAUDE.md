@@ -305,10 +305,11 @@ Proceed with analysis, or suggest different references?"
 1. Phase 1: Run `ttnn-operation-analyzer` on EACH confirmed reference
 2. Phase 2: Run `ttnn-operation-planner` with all analyzer outputs
 3. **USER REVIEW** (MANDATORY): Present the generated `{new_op}_spec.md` to the user
-   - User approves → proceed to Phase 3
+   - User approves → proceed to Phases 3-6
    - User requests changes → refine spec, re-present for approval
    - Do NOT proceed without explicit user approval
-4. Phase 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
+4. Phases 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
+5. Phase 7: Run `ttnn-kernel-writer` to implement correct kernel computation
 ```
 
 See `.claude/subagent_breakdown.md` for detailed workflow and https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html for official docs.
