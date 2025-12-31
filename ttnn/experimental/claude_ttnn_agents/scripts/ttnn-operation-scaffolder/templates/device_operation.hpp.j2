@@ -30,20 +30,18 @@ struct {{ operation_name_pascal }}DeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-{% for tensor in input_tensors %}
-        const Tensor& {{ tensor.cpp_name }},
-{% endfor %}
-{% for param in parameters %}
-        {{ param.cpp_type }} {{ param.name }},
-{% endfor %}
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace {{ namespace }}
 
 namespace ttnn::prim {
-constexpr auto {{ operation_name }} =
-    ttnn::register_operation<"ttnn::prim::{{ operation_name }}", {{ namespace }}::{{ operation_name_pascal }}DeviceOperation>();
+// Primitive operation - free function that calls launch_on_device
+{{ namespace }}::{{ operation_name_pascal }}DeviceOperation::tensor_return_value_t {{ operation_name }}(
+{% for tensor in input_tensors %}
+    const Tensor& {{ tensor.cpp_name }},
+{% endfor %}
+{% for param in parameters %}
+    {{ param.cpp_type }} {{ param.name }},
+{% endfor %}
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim
