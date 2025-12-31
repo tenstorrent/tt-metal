@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/tt_pause.hpp>
 
 template <typename T>
 class MultiProducerSingleConsumerQueue {
@@ -67,8 +68,7 @@ public:
         // thus overwrite data that's being read. Stall until head
         // has progressed (data has been read).
         std::unique_lock<std::mutex> lock(this->queue_mutex);
-        while (tail.load()->next == head.load()) {
-        };
+        tt::stl::TT_NICE_SPIN_UNTIL([this] { return tail.load()->next != head.load(); });
         tail.load()->data = std::make_shared<T>(std::move(value));
         tail.store(tail.load()->next);
     }
@@ -82,8 +82,7 @@ public:
         // thus overwrite data that's being read. Stall until head
         // has progressed (data has been read).
         std::unique_lock<std::mutex> lock(this->queue_mutex);
-        while (tail.load()->next == head.load()) {
-        };
+        tt::stl::TT_NICE_SPIN_UNTIL([this] { return tail.load()->next != head.load(); });
         tail.load()->data = std::move(value);
         tail.store(tail.load()->next);
     }
