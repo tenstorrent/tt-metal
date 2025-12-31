@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Stage 2 Test: Input Validation
+
+Verifies that the {{ operation_name }} operation correctly validates inputs
+and raises appropriate errors for invalid inputs.
+"""
+
+import pytest
+import torch
+import ttnn
+
+
+@pytest.fixture
+def device():
+    """Get a device for testing."""
+    device = ttnn.open_device(device_id=0)
+    yield device
+    ttnn.close_device(device)
+
+{% if input_tensors[0].required_rank %}
+
+def test_wrong_rank_raises(device):
+    """Verify wrong tensor rank raises RuntimeError."""
+    # Create tensor with wrong rank (expected: {{ input_tensors[0].required_rank }}D)
+{% if input_tensors[0].required_rank == 4 %}
+    wrong_shape = (32, 32)  # 2D instead of 4D
+{% elif input_tensors[0].required_rank == 3 %}
+    wrong_shape = (32, 32)  # 2D instead of 3D
+{% elif input_tensors[0].required_rank == 2 %}
+    wrong_shape = (32,)  # 1D instead of 2D
+{% else %}
+    wrong_shape = (32,)  # Wrong rank
+{% endif %}
+    torch_tensor = torch.randn(wrong_shape, dtype=torch.bfloat16)
+    wrong_rank_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        ttnn.{{ operation_name }}(wrong_rank_tensor)
+
+    # Error should mention rank
+    error_msg = str(exc_info.value).lower()
+    assert "rank" in error_msg or "dimension" in error_msg or "shape" in error_msg, \
+        f"Error should mention rank issue, got: {exc_info.value}"
+{% endif %}
+
+{% if input_tensors[0].required_layout %}
+
+def test_wrong_layout_raises(device):
+    """Verify wrong layout raises RuntimeError."""
+{% if input_tensors[0].required_rank %}
+{% if input_tensors[0].required_rank == 4 %}
+    shape = (1, 1, 32, 32)
+{% elif input_tensors[0].required_rank == 3 %}
+    shape = (1, 32, 32)
+{% elif input_tensors[0].required_rank == 2 %}
+    shape = (32, 32)
+{% else %}
+    shape = (32,) * {{ input_tensors[0].required_rank }}
+{% endif %}
+{% else %}
+    shape = (1, 1, 32, 32)
+{% endif %}
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+
+{% if input_tensors[0].required_layout == "Layout::ROW_MAJOR" %}
+    # Operation expects ROW_MAJOR, give it TILE
+    wrong_layout_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+{% else %}
+    # Operation expects TILE, give it ROW_MAJOR
+    wrong_layout_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+{% endif %}
+
+    with pytest.raises(RuntimeError) as exc_info:
+        ttnn.{{ operation_name }}(wrong_layout_tensor)
+
+    # Error should mention layout
+    error_msg = str(exc_info.value).lower()
+    assert "layout" in error_msg or "row_major" in error_msg or "tile" in error_msg, \
+        f"Error should mention layout issue, got: {exc_info.value}"
+{% endif %}
+
+
+def test_valid_input_does_not_raise_validation_error(device):
+    """Verify valid input passes validation (may fail later in program factory)."""
+{% if input_tensors[0].required_rank %}
+{% if input_tensors[0].required_rank == 4 %}
+    shape = (1, 1, 32, 32)
+{% elif input_tensors[0].required_rank == 3 %}
+    shape = (1, 32, 32)
+{% elif input_tensors[0].required_rank == 2 %}
+    shape = (32, 32)
+{% else %}
+    shape = tuple([32] * {{ input_tensors[0].required_rank }})
+{% endif %}
+{% else %}
+    shape = (1, 1, 32, 32)  # Default 4D shape
+{% endif %}
+    torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+
+{% if input_tensors[0].required_layout == "Layout::ROW_MAJOR" %}
+    valid_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+{% else %}
+    valid_tensor = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+{% endif %}
+
+    try:
+        ttnn.{{ operation_name }}(valid_tensor)
+    except RuntimeError as e:
+        error_msg = str(e).lower()
+        # Should NOT fail on validation - if it fails, it should be in program factory
+        validation_keywords = ["rank", "layout", "dtype", "dimension", "must be", "expected"]
+        is_validation_error = any(kw in error_msg for kw in validation_keywords)
+
+        # If it's a validation error, that's a test failure
+        # If it's a kernel/program error, that's expected (Stage 2 doesn't require working kernels)
+        if is_validation_error and "kernel" not in error_msg and "program" not in error_msg:
+            pytest.fail(f"Valid input raised validation error: {e}")
+        # Otherwise, non-validation errors are OK at this stage

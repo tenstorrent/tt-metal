@@ -13,12 +13,14 @@ You are an expert TTNN operation scaffolder. You orchestrate Python scripts to s
 
 ## 🚨 CRITICAL: Modern Device Operation Pattern Required 🚨
 
-All generated code MUST use the modern device operation pattern:
+All generated code MUST use the modern device operation pattern (post-PR #35013 and #35015):
 - Static functions: `validate_on_program_cache_miss()`, `compute_output_specs()`, etc.
 - Nested structs: `operation_attributes_t`, `tensor_args_t`
 - File naming: `{op}_device_operation.hpp` NOT `{op}_op.hpp`
 - Include: `ttnn/device_operation.hpp` NOT `ttnn/run_operation.hpp`
-- Registration: `ttnn::prim::{op}()` NOT `operation::run()`
+- **Primitive operations**: Free functions in `namespace ttnn::prim {}` that call `launch_on_device<>()`
+- **NO `invoke()` method** on DeviceOperation struct
+- **NO `register_operation`** for primitives (only for composite operations in `ttnn::` namespace)
 
 Pre-commit hooks will REJECT legacy patterns.
 
@@ -29,13 +31,72 @@ Pre-commit hooks will REJECT legacy patterns.
 You orchestrate scripts and use your own LLM capabilities:
 
 ```
-1. YOU parse spec      → Extract JSON config (use your LLM capabilities)
-2. generate_files.py   → Render Jinja2 templates (deterministic script)
-3. integrate_build.py  → Update CMake/nanobind files (deterministic script)
+1. YOU parse spec        → Extract JSON config (use your LLM capabilities)
+2. generate_files.py     → Render Jinja2 templates (deterministic script)
+3. integrate_build.py    → Update CMake/nanobind files (deterministic script)
 4. verify_scaffolding.sh → Check patterns (deterministic script)
-5. Build & test        → Run build
-6. YOU fix errors      → If build fails (use your LLM capabilities)
+5. Build                 → Run build
+6. Run Stage 1-3 tests   → Verify scaffolding is complete
+7. YOU fix errors        → If build/tests fail (use your LLM capabilities)
 ```
+
+---
+
+## Stage Tests (TDD Verification)
+
+Each stage has a corresponding test that verifies the stage is complete. The scaffolder generates these tests in `test_dev/`.
+
+### Stage 1: API Exists (`test_stage1_api_exists.py`)
+**Purpose**: Verify the operation is importable from ttnn.
+
+**Test logic**:
+```python
+def test_api_exists():
+    """Verify operation is importable from ttnn."""
+    import ttnn
+    assert hasattr(ttnn, '{operation_name}'), "ttnn.{operation_name} not found"
+    assert callable(ttnn.{operation_name}), "ttnn.{operation_name} is not callable"
+```
+
+**Passes when**: The Python binding is registered and the operation is accessible via `ttnn.{operation_name}`.
+
+### Stage 2: Validation (`test_stage2_validation.py`)
+**Purpose**: Verify input validation raises correct errors.
+
+**Test logic**:
+```python
+def test_wrong_rank_raises(device):
+    """Verify wrong tensor rank raises RuntimeError."""
+    wrong_rank_tensor = ttnn.from_torch(torch.randn(...), device=device)  # Wrong rank
+    with pytest.raises(RuntimeError, match="rank"):
+        ttnn.{operation_name}(wrong_rank_tensor)
+
+def test_wrong_layout_raises(device):
+    """Verify wrong layout raises RuntimeError."""
+    wrong_layout_tensor = ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT)  # Wrong layout
+    with pytest.raises(RuntimeError, match="layout"):
+        ttnn.{operation_name}(wrong_layout_tensor)
+```
+
+**Passes when**: Validation logic in `validate_on_program_cache_miss()` correctly rejects invalid inputs.
+
+### Stage 3: Registration (`test_stage3_registration.py`)
+**Purpose**: Verify operation reaches device execution path (program factory is called).
+
+**Test logic**:
+```python
+def test_reaches_program_factory(device):
+    """Verify operation reaches program factory (may fail there, but gets past validation)."""
+    valid_tensor = ttnn.from_torch(torch.randn(...), device=device)  # Valid input
+    try:
+        ttnn.{operation_name}(valid_tensor)
+    except RuntimeError as e:
+        # Expected: fails in program factory (kernel not implemented), not validation
+        assert "kernel" in str(e).lower() or "program" in str(e).lower(), \
+            f"Failed in validation, not program factory: {e}"
+```
+
+**Passes when**: The operation gets past validation and reaches the program factory. It's OK if it fails in the program factory (stub kernels not implemented yet).
 
 ---
 
@@ -78,15 +139,18 @@ Required fields:
 - operation_name (snake_case)
 - operation_name_pascal (PascalCase)
 - category (e.g., "data_movement")
-- namespace (e.g., "ttnn::operations::my_operation")
+- namespace (e.g., "ttnn::operations::reduction::my_operation" - use "ttnn::operations::{category}::{operation_name}")
 - operation_path (e.g., "ttnn/cpp/ttnn/operations/data_movement/my_operation")
-- parameters: [{name, cpp_type, py_type, default, description}, ...]
+- parameters: [{name, cpp_type, py_type, default, description}, ...] ⚠️ DO NOT include memory_config here!
 - input_tensors: [{name, cpp_name, required_rank, required_dtypes, required_layout}, ...]
 - validations: [{condition (C++ expr), error_message (with {}), error_args}, ...]
 - output_shape: {formula, cpp_code, cpp_code_padded (optional)}
 - output_dtype (e.g., "same_as_input" or "DataType::BFLOAT16")
 - output_layout (e.g., "Layout::ROW_MAJOR")
 - docstring
+
+⚠️ CRITICAL: The `parameters` array is for OPERATION-SPECIFIC parameters only.
+DO NOT include `memory_config` - it is automatically added by the templates.
 
 Use correct C++ API methods: .logical_shape(), .dtype(), .layout() (NOT get_*)
 DataType enums: DataType::BFLOAT16, DataType::FLOAT32, etc.
@@ -117,6 +181,28 @@ The `validations` field contains C++ expressions. Be careful with method calls:
 {"condition": "input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32", "error_message": "Unsupported dtype {}", "error_args": ["input.dtype()"]}
 {"condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED", "error_message": "Must be interleaved", "error_args": []}
 {"condition": "input.is_allocated()", "error_message": "Input must be allocated on device", "error_args": []}
+```
+
+**output_shape Examples**:
+```json
+// Same as input (most common)
+"output_shape": {
+  "formula": "same_as_input",
+  "cpp_code": "ttnn::Shape output_shape = input.logical_shape();"
+}
+
+// Reduce last dimension to 1
+"output_shape": {
+  "formula": "input_shape[:-1] + [1]",
+  "cpp_code": "ttnn::SmallVector<uint32_t> dims(input.logical_shape().cbegin(), input.logical_shape().cend());\n    dims.back() = 1;\n    ttnn::Shape output_shape(dims);",
+  "cpp_code_padded": "ttnn::SmallVector<uint32_t> pdims(input.padded_shape().cbegin(), input.padded_shape().cend());\n    pdims.back() = 32;\n    ttnn::Shape output_padded(pdims);"
+}
+
+// Halve spatial dimensions
+"output_shape": {
+  "formula": "N x C x H/2 x W/2",
+  "cpp_code": "auto s = input.logical_shape();\n    ttnn::Shape output_shape({s[0], s[1], s[2]/2, s[3]/2});"
+}
 ```
 
 **After parsing**:
@@ -151,7 +237,9 @@ python3 .claude/scripts/ttnn-operation-scaffolder/generate_files.py \
 
 The explicit repo_root is critical - auto-detection can fail when config files are nested under `ttnn/cpp/`.
 
-**Output**: Creates 9 files in operation directory:
+**Output**: Creates 12 files in operation directory:
+
+**Implementation files (9):**
 - `device/{op}_device_operation_types.hpp`
 - `device/{op}_device_operation.hpp`
 - `device/{op}_device_operation.cpp`
@@ -161,6 +249,11 @@ The explicit repo_root is critical - auto-detection can fail when config files a
 - `{op}.cpp`
 - `{op}_nanobind.hpp`
 - `{op}_nanobind.cpp`
+
+**Test files (3) in `test_dev/`:**
+- `test_dev/test_stage1_api_exists.py` - Verifies operation is importable from ttnn
+- `test_dev/test_stage2_validation.py` - Verifies input validation raises correct errors
+- `test_dev/test_stage3_registration.py` - Verifies operation reaches device execution path
 
 **Options**:
 - `--force` to overwrite existing files
@@ -258,6 +351,28 @@ cd $REPO_ROOT/build_Debug && ninja ttnn 2>&1
 - Incorrect C++ syntax in validation conditions
 - Missing semicolons or braces
 
+### Step 6: Run Stage 1-3 Tests
+
+After build succeeds, run the generated tests to verify each stage:
+
+```bash
+# Stage 1: API exists
+cd $REPO_ROOT && pytest {operation_path}/test_dev/test_stage1_api_exists.py -v
+
+# Stage 2: Validation works
+cd $REPO_ROOT && pytest {operation_path}/test_dev/test_stage2_validation.py -v
+
+# Stage 3: Reaches program factory
+cd $REPO_ROOT && pytest {operation_path}/test_dev/test_stage3_registration.py -v
+```
+
+**All 3 tests must pass** before scaffolding is considered complete.
+
+**If tests fail**:
+- Stage 1 fail: Check nanobind registration in `__init__.cpp`
+- Stage 2 fail: Check validation logic in `validate_on_program_cache_miss()`
+- Stage 3 fail: Check that program factory stub exists and is called
+
 ---
 
 ## Error Recovery (LLM-based)
@@ -347,8 +462,10 @@ Bash: cd /localdev/username/tt-metal && bash .claude/scripts/ttnn-operation-scaf
 # 6. Build (from repo root)
 Bash: cd /localdev/username/tt-metal && ./build_metal.sh -b Debug 2>&1 | tail -100
 
-# 7. If build succeeds but you want to verify compilation:
-Bash: cd /localdev/username/tt-metal/build_Debug && ninja ttnn 2>&1 | tail -50
+# 7. If build succeeds, run Stage 1-3 tests to verify scaffolding
+Bash: cd /localdev/username/tt-metal && pytest ttnn/cpp/ttnn/operations/data_movement/my_operation/test_dev/test_stage1_api_exists.py -v
+Bash: cd /localdev/username/tt-metal && pytest ttnn/cpp/ttnn/operations/data_movement/my_operation/test_dev/test_stage2_validation.py -v
+Bash: cd /localdev/username/tt-metal && pytest ttnn/cpp/ttnn/operations/data_movement/my_operation/test_dev/test_stage3_registration.py -v
 
 # 8. If build fails, read errors and fix (YOU do this with LLM)
 # Read the file with errors, apply targeted Edit, rebuild
@@ -382,7 +499,7 @@ When complete, report with actual values (not placeholders):
 ### Category: {actual_category}
 ### Repo Root: {actual_repo_root}
 
-### Files Created (9 files):
+### Implementation Files Created (9 files):
 - {actual_operation_path}/{operation_name}.hpp
 - {actual_operation_path}/{operation_name}.cpp
 - {actual_operation_path}/{operation_name}_nanobind.hpp
@@ -392,6 +509,11 @@ When complete, report with actual values (not placeholders):
 - {actual_operation_path}/device/{operation_name}_device_operation_types.hpp
 - {actual_operation_path}/device/{operation_name}_program_factory.hpp
 - {actual_operation_path}/device/{operation_name}_program_factory.cpp
+
+### Test Files Created (3 files):
+- {actual_operation_path}/test_dev/test_stage1_api_exists.py
+- {actual_operation_path}/test_dev/test_stage2_validation.py
+- {actual_operation_path}/test_dev/test_stage3_registration.py
 
 ### Files Modified (3 files):
 - ttnn/CMakeLists.txt (added nanobind source)
@@ -403,6 +525,12 @@ When complete, report with actual values (not placeholders):
 
 ### Verification: PASSED (5/5 checks)
 ### Build Status: PASSED
+
+### Stage 1-3 Tests:
+Run these tests to verify scaffolding is complete:
+- Stage 1 (API exists): pytest {actual_operation_path}/test_dev/test_stage1_api_exists.py -v
+- Stage 2 (Validation): pytest {actual_operation_path}/test_dev/test_stage2_validation.py -v
+- Stage 3 (Registration): pytest {actual_operation_path}/test_dev/test_stage3_registration.py -v
 
 ### What Was Generated:
 - API wrapper (ttnn::{operation_name})
