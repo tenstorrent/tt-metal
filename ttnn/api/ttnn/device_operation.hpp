@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <random>
+#include <ranges>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -344,12 +345,9 @@ void launch_operation_with_adapter(
 
 // Returns true if the tensor is fully replicated, false otherwise.
 inline bool is_fully_replicated(const Tensor& tensor) {
-    for (const auto& placement : tensor.tensor_topology().placements()) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(tensor.tensor_topology().placements(), [](const auto& placement) {
+        return !std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    });
 }
 
 // Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
