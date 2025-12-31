@@ -37,7 +37,7 @@ from helpers.test_variant_parameters import (
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -175,7 +175,7 @@ def test_math_matmul(
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
             NUM_FACES(num_faces, num_faces_A, num_faces_B),
             UNPACK_TRANS_FACES(transpose),
-            UNPACK_TRANS_WITHING_FACE(transpose),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
             PARTIAL_FACE(
                 partial_a=matmul_config.face_layout_config.partial_face_A,
                 partial_face_pack=matmul_config.face_layout_config.partial_face_A,

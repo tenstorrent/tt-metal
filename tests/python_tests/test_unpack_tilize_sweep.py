@@ -24,7 +24,7 @@ from helpers.test_variant_parameters import (
     STOCHASTIC_ROUNDING,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.utils import passed_test
 
@@ -134,7 +134,7 @@ def test_unpack_tilize_comprehensive(
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHING_FACE(transpose),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
             NARROW_TILE(narrow_tile),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),

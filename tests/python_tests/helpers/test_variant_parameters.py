@@ -17,12 +17,14 @@ from .llk_params import (
     DataCopyType,
     DestSync,
     EltwiseBinaryReuseDestType,
+    FastMode,
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     NarrowTile,
     PerfRunType,
     ReducePool,
+    StableSort,
     StochasticRounding,
     Tilize,
     Transpose,
@@ -57,60 +59,58 @@ class RuntimeParameter:
 
 @dataclass
 class THROTTLE_LEVEL(TemplateParameter):
-    level: int = 0
+    throttle_level: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr int THROTTLE_LEVEL = {self.level};"
+        return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
 
 
 @dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
-    do_or_not: Transpose
+    math_transpose_faces: Transpose
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool MATH_TRANSPOSE_FACES = {str(self.do_or_not.value).lower()};"
+        return f"constexpr bool MATH_TRANSPOSE_FACES = {str(self.math_transpose_faces.value).lower()};"
 
 
 @dataclass
 class STOCHASTIC_ROUNDING(TemplateParameter):
-    type: StochasticRounding
+    stochastic_rounding: StochasticRounding
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr auto STOCHASTIC_RND = ckernel::{self.type.value};"
+        return f"constexpr auto STOCHASTIC_RND = ckernel::{self.stochastic_rounding.value};"
 
 
 @dataclass
 class DATA_COPY_TYPE(TemplateParameter):
-    type: DataCopyType
+    data_copy_type: DataCopyType
 
     def covert_to_cpp(self) -> str:
-        return (
-            f"constexpr auto DATA_COPY_TYPE = ckernel::DataCopyType::{self.type.value};"
-        )
+        return f"constexpr auto DATA_COPY_TYPE = ckernel::DataCopyType::{self.data_copy_type.value};"
 
 
 @dataclass
 class BROADCAST_TYPE(TemplateParameter):
-    type: BroadcastType
+    broadcast_type: BroadcastType
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.type.value};"
+        return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
 
 
 @dataclass
 class ACC_TO_DEST(TemplateParameter):
-    value: bool
+    acc_to_dest: bool
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool ACC_TO_DEST = {str(self.value).lower()};"
+        return f"constexpr bool ACC_TO_DEST = {str(self.acc_to_dest).lower()};"
 
 
 @dataclass
 class REUSE_DEST_TYPE(TemplateParameter):
-    type: EltwiseBinaryReuseDestType
+    reuse_dest_type: EltwiseBinaryReuseDestType
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::{self.type.name};"
+        return f"constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::{self.reuse_dest_type.name};"
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
@@ -174,74 +174,102 @@ class MATH_OP(TemplateParameter):
 
 @dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
-    value: bool
+    disable_src_zero_flag: bool
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool disable_src_zero_flag = {str(self.value).lower()};"
+        return f"constexpr bool disable_src_zero_flag = {str(self.disable_src_zero_flag).lower()};"
 
 
 @dataclass
 class MATH_FIDELITY(TemplateParameter):
-    fidelity: MathFidelity
+    math_fidelity: MathFidelity
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t MATH_FIDELITY = {self.fidelity.value};"
+        return f"constexpr std::uint32_t MATH_FIDELITY = {self.math_fidelity.value};"
 
 
 @dataclass
 class APPROX_MODE(TemplateParameter):
-    mode: ApproximationMode = ApproximationMode.No
+    approx_mode: ApproximationMode = ApproximationMode.No
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool APPROX_MODE = {self.mode.value};"
+        return f"constexpr bool APPROX_MODE = {self.approx_mode.value};"
+
+
+@dataclass
+class ITERATIONS(TemplateParameter):
+    iterations: int = 8
+
+    def covert_to_cpp(self) -> str:
+        return f"constexpr int ITERATIONS = {self.iterations};"
+
+
+@dataclass
+class FAST_MODE(TemplateParameter):
+    fast_mode: FastMode = FastMode.No
+
+    def covert_to_cpp(self) -> str:
+        return f"constexpr bool FAST_MODE = {str(self.fast_mode.value).lower()};"
+
+
+@dataclass
+class STABLE_SORT(TemplateParameter):
+    stable_sort: StableSort = StableSort.No
+
+    def covert_to_cpp(self) -> str:
+        return f"constexpr bool STABLE_SORT = {str(self.stable_sort.value).lower()};"
 
 
 @dataclass
 class DEST_SYNC(TemplateParameter):
-    mode: DestSync = DestSync.Half
+    dest_sync: DestSync = DestSync.Half
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr auto dest_sync = ckernel::DstSync::Sync{self.mode.name};"
+        return (
+            f"constexpr auto dest_sync = ckernel::DstSync::Sync{self.dest_sync.name};"
+        )
 
 
 @dataclass
 class TILIZE(TemplateParameter):
-    choice: Tilize = Tilize.No
+    tilize: Tilize = Tilize.No
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool tilize_en = {str(self.choice.value).lower()};"
+        return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
 
 
 @dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
-    data: ImpliedMathFormat = ImpliedMathFormat.No
+    implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool IMPLIED_MATH_FORMAT = {self.data.value};"
+        return f"constexpr bool IMPLIED_MATH_FORMAT = {self.implied_math_format.value};"
 
 
 @dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
-    type: UnpackerEngine = UnpackerEngine.UnpA
+    unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr uint UNPACKER_ENGINE_SEL = p_unpacr::{self.type.value};"
+        return f"constexpr uint UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
 
 
 @dataclass
 class PERF_RUN_TYPE(TemplateParameter):
-    type: PerfRunType
+    perf_run_type: PerfRunType
 
     def covert_to_cpp(self) -> str:
-        return f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.type.name};"
+        return (
+            f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
+        )
 
 
 @dataclass
 class REDUCE_POOL_TYPE(TemplateParameter):
-    type: ReducePool
+    reduce_pool_type: ReducePool
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.type.value};"
+        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
 
 
 @dataclass
@@ -275,10 +303,10 @@ class INPUT_DIMENSIONS(TemplateParameter):
 
 @dataclass
 class ADD_TOP_ROW(TemplateParameter):
-    do_or_dont: bool
+    add_top_row: bool
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool ADD_TOP_ROW = {str(self.do_or_dont).lower()};"
+        return f"constexpr bool ADD_TOP_ROW = {str(self.add_top_row).lower()};"
 
 
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
@@ -286,10 +314,10 @@ class ADD_TOP_ROW(TemplateParameter):
 
 @dataclass
 class LOOP_FACTOR(RuntimeParameter):
-    factor: int = 1
+    loop_factor: int = 1
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr int LOOP_FACTOR = {self.factor};"
+        return f"constexpr int LOOP_FACTOR = {self.loop_factor};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int LOOP_FACTOR;", "i"
@@ -297,21 +325,21 @@ class LOOP_FACTOR(RuntimeParameter):
 
 @dataclass
 class UNPACK_TRANS_FACES(RuntimeParameter):
-    do_or_not: Transpose = Transpose.No
+    unpack_transpose_faces: Transpose = Transpose.No
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool UNPACK_TRANSPOSE_FACES = {str(self.do_or_not.value).lower()};"
+        return f"constexpr bool UNPACK_TRANSPOSE_FACES = {str(self.unpack_transpose_faces.value).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"bool UNPACK_TRANSPOSE_FACES;", "?"
 
 
 @dataclass
-class UNPACK_TRANS_WITHING_FACE(RuntimeParameter):
-    do_or_not: Transpose = Transpose.No
+class UNPACK_TRANS_WITHIN_FACE(RuntimeParameter):
+    unpack_transpose_within_face: Transpose = Transpose.No
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {str(self.do_or_not.value).lower()};"
+        return f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {str(self.unpack_transpose_within_face.value).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"bool UNPACK_TRANSPOSE_WITHIN_FACE;", "?"
@@ -319,10 +347,10 @@ class UNPACK_TRANS_WITHING_FACE(RuntimeParameter):
 
 @dataclass
 class NARROW_TILE(RuntimeParameter):
-    is_or_isnt: NarrowTile = NarrowTile.No
+    narrow_tile: NarrowTile = NarrowTile.No
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr bool NARROW_TILE = {str(self.is_or_isnt.value).lower()};"
+        return f"constexpr bool NARROW_TILE = {str(self.narrow_tile.value).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"bool NARROW_TILE;", "?"
@@ -330,10 +358,10 @@ class NARROW_TILE(RuntimeParameter):
 
 @dataclass
 class DEST_INDEX(RuntimeParameter):
-    index: int = 0
+    dst_index: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr int DST_INDEX = {self.index};"
+        return f"constexpr int DST_INDEX = {self.dst_index};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int DST_INDEX;", "i"
@@ -341,10 +369,10 @@ class DEST_INDEX(RuntimeParameter):
 
 @dataclass
 class TILE_COUNT(RuntimeParameter):
-    count: int = 0
+    tile_cnt: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr int TILE_CNT = {self.count};"
+        return f"constexpr int TILE_CNT = {self.tile_cnt};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int TILE_CNT;", "i"
@@ -352,10 +380,10 @@ class TILE_COUNT(RuntimeParameter):
 
 @dataclass
 class SRCA_REUSE_COUNT(RuntimeParameter):
-    count: int = 0
+    srca_reuse_count: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr int SRCA_REUSE_COUNT = {self.count};"
+        return f"constexpr int SRCA_REUSE_COUNT = {self.srca_reuse_count};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int SRCA_REUSE_COUNT;", "i"
@@ -498,10 +526,10 @@ class IN_TILE_DIMS(RuntimeParameter):
 
 @dataclass
 class RELU_CONFIG(RuntimeParameter):
-    config: int = 0
+    relu_config: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr int RELU_CONFIG = {self.config};"
+        return f"constexpr int RELU_CONFIG = {self.relu_config};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int RELU_CONFIG;", "i"
@@ -509,10 +537,10 @@ class RELU_CONFIG(RuntimeParameter):
 
 @dataclass
 class NUM_ROWS_TO_PACK(RuntimeParameter):
-    num_rows: int = 0
+    num_rows_to_pack: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr uint32_t NUM_ROWS_TO_PACK = {self.num_rows};"
+        return f"constexpr uint32_t NUM_ROWS_TO_PACK = {self.num_rows_to_pack};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "uint32_t NUM_ROWS_TO_PACK;", "I"

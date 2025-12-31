@@ -32,7 +32,7 @@ from helpers.test_variant_parameters import (
     STOCHASTIC_ROUNDING,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -160,7 +160,7 @@ def test_unpack_matmul(math_fidelity, matmul_config, workers_tensix_coordinates)
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
             NUM_FACES(num_faces, num_faces_A, num_faces_B),
             UNPACK_TRANS_FACES(transpose),
-            UNPACK_TRANS_WITHING_FACE(transpose),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
             PARTIAL_FACE(
                 partial_a=partial_face_A,
                 partial_face_pack=partial_face_A,
