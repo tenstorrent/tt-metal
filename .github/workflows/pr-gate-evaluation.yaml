@@ -1,0 +1,68 @@
+name: ZZ Evaluation PR Gate 
+run-name: ${{ format('ZZ Evaluation PR Gate | {0}', github.sha) }} 
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  merge_group:
+    types:
+      - checks_requested
+      - destroyed
+  push:
+    branches:
+      - pr-gate-eval-image
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}-
+    ${{ inputs.build-type || 'default' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
+jobs:
+  asan-build:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/build-evaluation-image.yaml
+    secrets: inherit
+    with:
+      buildkit: true
+      evaluation-image-tag: ${{ github.sha }}-${{ github.run_id }}-asan
+      build-args: |
+        BUILD_METAL_ARGS=--build-type ASanCoverage --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake --build-metal-tests --build-ttnn-tests --build-programming-examples
+
+  build:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/build-evaluation-image.yaml
+    secrets: inherit
+    with:
+      buildkit: true
+      evaluation-image-tag: ${{ github.sha }}-${{ github.run_id }}-release
+      build-args: |
+        BUILD_METAL_ARGS=--build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --without-distributed --build-metal-tests --build-ttnn-tests --build-programming-examples
+
+  find-changed-files:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+      tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
+      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
