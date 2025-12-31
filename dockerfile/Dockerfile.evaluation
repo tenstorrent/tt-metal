@@ -26,8 +26,8 @@ RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/cca
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
     rm /tmp/ccache.tar.xz
 
-# Install slurmd
-RUN apt update && apt install -y slurmd && rm -rf /var/lib/apt/lists/*
+# Install clang-20 for Asan compatibility
+RUN apt update && apt install -y clang-20 && rm -rf /var/lib/apt/lists/*
 
 # Build & install Metal
 COPY . .
