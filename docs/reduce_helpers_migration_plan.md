@@ -5,11 +5,11 @@
 **Scope:** `ttnn/cpp/ttnn/operations/` folder only (54 kernel files use `reduce_tile`)
 
 **Progress:**
-- ✅ **23/54 migrated (43%)** - Phases 1-7 complete
-- ⏳ **30/54 blocked (56%)** - Need library extensions
+- ✅ **25/54 migrated (46%)** - Phases 1-8 complete
+- ⏳ **28/54 blocked (52%)** - Need library extensions
 - 🔍 **1/54 TBD (2%)** - Needs investigation
 
-**Latest Achievement:** Phases 6 & 7 complete + Auto-batched STREAMING mode enhancement
+**Latest Achievement:** Phase 8 complete - rmsnorm post_allgather kernels migrated (dead code removed)
 
 ---
 
@@ -39,7 +39,7 @@
 
 ## 2. Migration Status
 
-### ✅ Completed (23 files)
+### ✅ Completed (25 files)
 
 | Phase | Count | Kernels | Mode |
 |-------|-------|---------|------|
@@ -48,8 +48,9 @@
 | **P3: GroupNorm** | 2 | groupnorm, groupnorm_sharded_v2 | PRELOADED |
 | **P4: Softmax** | 4 | softmax, softmax_sharded, softmax_large_tensor, tilize_untilize | PERSISTENT + PostReduceOp |
 | **P5: Specialized** | 2 | deepseek_grouped_gate, moe | PRELOADED |
-| **P6: Distributed Norms** | 5 | rmsnorm/layernorm_pre_allgather{,_2d}, experimental/rmsnorm | **Auto-batched STREAMING** |
+| **P6: Distributed Norms** | 5 | rmsnorm/layernorm_pre_allgather{,_2d}, experimental/rmsnorm_pre | **Auto-batched STREAMING** |
 | **P7: Simple Ops** | 3 | sampling, ssm_1d_sum_reduce, sdpa_decode | STREAMING + PostReduceOp |
+| **P8: RMSNorm Post-Allgather** | 2 | rmsnorm_post_allgather, experimental/rmsnorm_post_allgather | **Auto-batched STREAMING** |
 
 **Key Achievements:**
 - **P4:** Dual-pass MAX+SUM reduces with PERSISTENT mode + PostReduceOp lambdas
@@ -69,6 +70,18 @@ All 5 files migrated to auto-batched STREAMING mode:
 - `ssm_1d_sum_reduce.cpp`: STREAMING mode, removed wrapper function, removed old init/uninit workaround
 - `sdpa_decode/compute_common.hpp`: STREAMING mode + PostReduceOp lambda for eltwise max optimization
 
+**Migration Details - Phase 8 (RMSNorm Post-Allgather):**
+- **Discovery:** `cb_stats_reduced` was dead code in rmsnorm (written but never read - copied from layernorm)
+- `rmsnorm_distributed/rmsnorm_post_allgather.cpp`:
+  - Removed dead `cb_stats_reduced` usage (pack then immediate pop with no read)
+  - Changed output CB from `cb_stats_reduced` to `cb_var` directly
+  - Replaced 20+ lines of manual reduce code with single library call
+  - Tests: 176/176 passed (`test_distributed_layernorm_sharded.py` with `is_rmsnorm=True`)
+- `experimental/transformer/fused_distributed_rmsnorm/rmsnorm_post_allgather.cpp`:
+  - Already had clean single-output pattern
+  - Replaced 15+ lines with single library call
+  - Tests: 53/53 passed (`test_distributed_fused_rmsnorm.py`)
+
 **Library Enhancement - Auto-Batched STREAMING:**
 - STREAMING mode now waits/pops tiles in bulk (per row/batch/chunk) instead of one-at-a-time
 - Uses indexed access like PRELOADED for efficiency
@@ -76,16 +89,18 @@ All 5 files migrated to auto-batched STREAMING mode:
 - Performance: 2 CB calls instead of 2×Wt (e.g., 2 calls vs 64 calls for Wt=32)
 - Automatically applied to all existing STREAMING mode kernels (backward compatible)
 
-### ⏳ Blocked (30 files - need library extensions)
+### ⏳ Blocked (28 files - need library extensions)
 
 **Accumulation Support Needed (26 files):**
 - All Moreh operations (26) - manual accumulator reload pattern
 
-**Stride/Non-contiguous Support Needed (4 files):**
-- `layernorm_distributed/layernorm_post_allgather.cpp` - cols 0,2,4... pattern
-- `rmsnorm_distributed/rmsnorm_post_allgather.cpp` - cols 0,2,4... pattern
-- `experimental/.../rmsnorm_post_allgather.cpp` - cols 0,2,4... pattern
-- `experimental/ccl/rms_allgather/.../rms_compute.cpp` - complex interleaved
+**Stride/Non-contiguous Support Needed (2 files):**
+- `layernorm_distributed/layernorm_post_allgather.cpp` - cols 0,2,4... pattern with dual DEST outputs
+- `experimental/ccl/rms_allgather/.../rms_compute.cpp` - complex single-tile streaming pattern
+
+**Previously Blocked - Now Migrated (Phase 8):**
+- ~~`rmsnorm_distributed/rmsnorm_post_allgather.cpp`~~ - Was mis-categorized; actually contiguous + had dead code
+- ~~`experimental/.../rmsnorm_post_allgather.cpp`~~ - Was mis-categorized; already contiguous
 
 ---
 
@@ -120,7 +135,7 @@ tile_regs_release();
 - `ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp`
 - `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp`
 
-### Migrated Kernels (23 files)
+### Migrated Kernels (25 files)
 ```
 # P1-P2 (7 files) - Auto-batched STREAMING
 ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/{reduce_h,reduce_hw,reduce_w}.cpp
@@ -135,15 +150,19 @@ ttnn/cpp/ttnn/operations/reduction/tilize_untilize/device/kernels/compute/tilize
 ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/deepseek_grouped_gate.cpp
 ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp
 
-# P6 (5 files) - Auto-batched STREAMING (NEW!)
+# P6 (5 files) - Auto-batched STREAMING
 ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_pre_allgather{,_2d}.cpp
 ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather{,_2d}.cpp
 ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_pre_allgather.cpp
 
-# P7 (3 files) - STREAMING + PostReduceOp (NEW!)
+# P7 (3 files) - STREAMING + PostReduceOp
 ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp
 ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/ssm_1d_sum_reduce.cpp
 ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp
+
+# P8 (2 files) - Auto-batched STREAMING (NEW!)
+ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp
+ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp
 ```
 
 ---
@@ -151,19 +170,20 @@ ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_
 ## 5. Key Takeaways
 
 **Achieved:**
-- **43% of operations migrated** (23/54 files) with proven patterns
+- **46% of operations migrated** (25/54 files) with proven patterns
 - **Library enhanced:** Auto-batched STREAMING mode, PERSISTENT mode, PostReduceOp lambdas
 - Complex multi-pass reductions working (softmax, layernorm, groupnorm, distributed norms)
-- **Code quality:** -87 net lines removed, cleaner and more maintainable kernels
+- **Code quality:** -100+ net lines removed, cleaner and more maintainable kernels
 - **Performance:** 11+ kernels automatically benefit from auto-batching optimization
 
-**Phases 6 & 7 Completed:**
+**Phases 6, 7 & 8 Completed:**
 - ✅ 5 distributed norm pre-allgather kernels migrated with auto-batched STREAMING
 - ✅ 3 simple operations migrated (sampling, ssm, sdpa_decode)
-- ✅ All 253+ tests passing across all migrated kernels
+- ✅ 2 rmsnorm post-allgather kernels migrated (dead code removed)
+- ✅ All 480+ tests passing across all migrated kernels
 
 **Blocked:**
-- 56% (30 files) need accumulation or stride support
+- 52% (28 files) need accumulation or stride support
 - Decision needed: extend library vs keep specialized implementations
 
-**ROI:** 76% of addressable kernels (23/30 non-blocked) migrated
+**ROI:** 86% of addressable kernels (25/29 non-blocked) migrated

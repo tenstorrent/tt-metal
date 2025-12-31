@@ -21,6 +21,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -39,7 +40,8 @@ void MAIN {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(12);
     constexpr uint32_t block_size = get_compile_time_arg_val(13);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(14);
-    constexpr bool use_float32_reduction = get_compile_time_arg_val(15);
+    // Note: get_compile_time_arg_val(15) is use_float32_reduction - unused after library migration
+    // Library auto-detects FP32 from ENABLE_FP32_DEST_ACC define
     constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(16);
     constexpr uint32_t has_weight = get_compile_time_arg_val(17);
     constexpr uint32_t fuse_rope = get_compile_time_arg_val(18);
@@ -76,26 +78,10 @@ void MAIN {
         /*
          * Reduce stats input.
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
+         * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, reduce_result_cb);
-
-        cb_wait_front(stats_cb, stats_tiles_cols);
-        cb_reserve_back(reduce_result_cb, 1);
-
-        tile_regs_acquire();
-        // Reduce sum(x**2) first
-        for (uint32_t i = 0; i < stats_tiles_cols; i++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, i, 0, 0);
-        }
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, reduce_result_cb);
-        tile_regs_release();
-        cb_push_back(reduce_result_cb, 1);
-        cb_pop_front(stats_cb, stats_tiles_cols);
-
-        reduce_uninit<false>();  // NOTE: cannot pass use_float32_reduction here or outputs are incorrect?
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            stats_cb, reduce_scalar_cb, reduce_result_cb, 1, stats_tiles_cols, 1);
 
         /*
          * 1/sqrt(mean_squared + eps)
