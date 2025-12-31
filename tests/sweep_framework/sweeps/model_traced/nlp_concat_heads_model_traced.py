@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -61,7 +60,6 @@ def run(
     # So we need to compute the expected output shape
     if len(shape) == 4:
         batch, num_heads, seq_len, head_dim = shape
-        expected_output_shape = (batch, 1, seq_len, num_heads * head_dim)
         # Reshape input to match expected output for comparison
         torch_output_tensor = (
             torch_input_tensor_a.permute(0, 2, 1, 3)

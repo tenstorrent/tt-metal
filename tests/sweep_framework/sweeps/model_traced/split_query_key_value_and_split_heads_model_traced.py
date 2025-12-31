@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -102,11 +101,9 @@ def run(
     # Check if input has sharded memory - if so, convert to interleaved first
     # The operation internally uses create_qkv_heads which requires tile-aligned shard shapes
     # If traced config has non-tile-aligned shards, convert to interleaved
-    needs_conversion = False
     if hasattr(input_tensor_a, "memory_config"):
         mem_config = input_tensor_a.memory_config()
         if mem_config.is_sharded():
-            needs_conversion = True
             input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
 
     start_time = start_measuring_time()

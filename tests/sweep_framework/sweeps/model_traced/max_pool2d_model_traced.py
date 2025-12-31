@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -58,11 +57,6 @@ def run(
     torch.manual_seed(0)
 
     # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
-
     # All parameters must be extracted from JSON - no fallbacks
     if batch_size is None or input_h is None or input_w is None or channels is None:
         raise ValueError(
@@ -130,7 +124,7 @@ def run(
     start_time = start_measuring_time()
     # applied_shard_scheme must be extracted from JSON - no fallbacks
     if applied_shard_scheme is None:
-        raise ValueError(f"Missing applied_shard_scheme from JSON")
+        raise ValueError("Missing applied_shard_scheme from JSON")
 
     if applied_shard_scheme == "BLOCK_SHARDED":
         applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED

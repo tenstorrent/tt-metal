@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -45,8 +44,6 @@ def invalidate_vector(test_vector):
     Validate that the output memory config is sharded.
     interleaved_to_sharded requires a sharded output memory config.
     """
-    from typing import Tuple, Optional
-
     output_memory_config = test_vector.get("output_memory_config")
 
     # Check if output is sharded

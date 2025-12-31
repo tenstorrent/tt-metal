@@ -2,16 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, List
-import os
-import itertools
-import random
-import torch
-
-import ttnn
-
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
+from typing import Optional, Tuple
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,

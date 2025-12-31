@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -62,7 +61,7 @@ def run(
 
     # scale_factor must be extracted from JSON - no fallbacks
     if scale_factor is None:
-        raise ValueError(f"Missing scale_factor from JSON")
+        raise ValueError("Missing scale_factor from JSON")
 
     # Handle scale_factor - can be int or list [H, W]
     if isinstance(scale_factor, list):
@@ -79,8 +78,7 @@ def run(
 
     # mode must be extracted from JSON - no fallbacks
     if mode is None:
-        raise ValueError(f"Missing mode from JSON")
-    upsample_mode = mode
+        raise ValueError("Missing mode from JSON")
 
     torch_output_tensor = ttnn.get_golden_function(ttnn.upsample)(torch_input_tensor_a, scale_factor=scale_factor)
 
