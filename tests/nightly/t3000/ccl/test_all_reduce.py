@@ -54,6 +54,7 @@ from tests.nightly.tg.ccl.test_all_reduce_async import (
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_ring_all_reduce_post_commit(
     mesh_device,
     num_devices,
@@ -115,6 +116,7 @@ def test_ring_all_reduce_post_commit(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_ring_all_reduce_post_commit_2chip(
     mesh_device,
     num_devices,
