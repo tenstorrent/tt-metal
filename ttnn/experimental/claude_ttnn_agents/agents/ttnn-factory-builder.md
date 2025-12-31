@@ -115,6 +115,13 @@ The scaffolder creates these files:
 - **Test**: `test_dev/test_stage6_kernel_compilation.py`
 - **Pass when**: Operation runs, output has correct shape
 
+### Stage 7: Kernel Correctness *(Delegatable)*
+- **Goal**: Implement actual computation logic so kernels produce correct results
+- **Files**: Same kernel files from Stage 6 (reader, writer, compute)
+- **Test**: `test_dev/test_stage7_kernel_correctness.py`
+- **Pass when**: Output values match expected results (within tolerance)
+- **Note**: This stage is self-contained and designed for future delegation to a separate agent
+
 ---
 
 ## Reference Material
@@ -156,12 +163,12 @@ For each stage:
 - [ ] Build succeeds
 - [ ] Ready for next stage
 
-### Final Deliverables
+### Final Deliverables (Stages 4-6)
 Report:
 1. Files created (list paths)
 2. Test results (all stages 4-6)
 3. Any deviations from spec (with rationale)
-4. Ready for kernel implementation (Phase 4a-c)
+4. Ready for Stage 7 (kernel correctness)
 
 ---
 
@@ -172,6 +179,7 @@ Report:
 - **Stage 4 fail**: Verify `select_program_factory` returns `ProgramFactory{}`
 - **Stage 5 fail**: Check CB creation, work distribution with `split_work_to_cores`
 - **Stage 6 fail**: Check kernel paths, compile-time arg indices, runtime args
+- **Stage 7 fail**: Check compute kernel math, data formats, tolerance thresholds
 
 For detailed debugging guidance, load the "## Debugging" section from the reference file.
 
@@ -184,3 +192,70 @@ Kernel names reflect RISC-V core assignment, not necessarily function:
 - "writer" → RISCV_1 (NCRISC), typically NOC1
 
 Both can READ and WRITE. Check spec's "Kernel Data Movement" table for actual functions.
+
+---
+
+## Stage 7: Kernel Correctness (Self-Contained)
+
+This section is intentionally self-contained for future delegation to a separate agent.
+
+### Prerequisites
+- Stages 4-6 complete and passing
+- Operation runs end-to-end with correct output shape (passthrough)
+
+### Goal
+Replace stub kernel logic with actual computation so output values are correct.
+
+### Input from Spec
+Read these sections from `{operation_name}_spec.md`:
+- **Compute Logic**: Mathematical operations to perform
+- **Data Flow**: How data moves through circular buffers
+- **Kernel Pseudocode**: Step-by-step algorithm for each kernel
+
+### Kernel Helper Library (Use First)
+
+**ALWAYS check `ttnn/cpp/ttnn/kernel_lib/` first** for existing helpers before writing custom kernel logic. This library is growing and provides optimized, tested implementations.
+
+**Available helpers** (include via `#include "ttnn/cpp/ttnn/kernel_lib/<helper>.hpp"`):
+
+| Helper | Function | Description |
+|--------|----------|-------------|
+| `dest_helpers.hpp` | `get_dest_limit()`, `DEST_AUTO_LIMIT` | Auto-detect DEST register capacity |
+| `reduce_helpers.hpp` | `reduce<type, dim>()` | Unified reduce (ROW/COL/SCALAR) with STREAMING/PRELOADED modes |
+| `tilize_helpers.hpp` | `tilize<>()` | Unified tilize (simple/activation/fast/DT patterns) |
+| `untilize_helpers.hpp` | `untilize<width, icb, ocb>()` | Auto-dispatch untilize based on width and data type |
+
+**All helpers require** `compute_kernel_hw_startup()` before use.
+
+**Note**: DeepWiki does not know about this library yet. Read the header files directly for full API documentation.
+
+### Implementation Reference
+
+**For test templates and code patterns**: Load `## Stage 7: Kernel Correctness` section from `.claude/references/factory-builder-stages.md`
+
+Key topics covered in reference:
+- Test template with correctness verification
+- Common compute API patterns (unary, binary operations)
+- CB synchronization patterns
+- Tolerance guidelines for bfloat16
+
+### TDD Cycle
+1. Write `test_dev/test_stage7_kernel_correctness.py` (from reference template)
+2. Run test → confirm it fails (RED) - values wrong but shape correct
+3. Modify compute kernel with actual logic
+4. Run test → confirm it passes (GREEN)
+
+### Pass Criteria
+- Output values match expected (within tolerance)
+- Typical tolerance: `rtol=1e-2, atol=1e-2` for bfloat16
+
+### Debugging Stage 7 Failures
+- **Wrong values**: Check compute API usage, operation order
+- **NaN/Inf**: Check for division by zero, overflow
+- **Tolerance failures**: Adjust rtol/atol for complex operations
+
+### Deliverables
+Report:
+1. Modified kernel files (list which kernels changed)
+2. Test results (Stage 7 passing)
+3. Tolerance used and rationale
