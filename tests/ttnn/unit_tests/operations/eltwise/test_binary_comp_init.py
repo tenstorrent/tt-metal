@@ -149,7 +149,7 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
     golden_tensor = golden_tensor.int()
 
     output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
-
+    output_tensor = update_for_unsigned_single(output_tensor)
     are_equal = torch.equal(output_tensor, golden_tensor)
     assert are_equal
 
