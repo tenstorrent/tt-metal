@@ -9,6 +9,7 @@
 
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 constexpr uint32_t ONE_TILE = 1;
 
@@ -20,26 +21,6 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 
     transpose_wh_init_short(cb_in);
     transpose_wh_tile(cb_in, 0, 0);
-
-    cb_reserve_back(cb_out, ONE_TILE);
-    pack_tile(0, cb_out);
-
-    tile_regs_commit();
-    tile_regs_release();
-
-    cb_push_back(cb_out, ONE_TILE);
-    cb_pop_front(cb_in, ONE_TILE);
-}
-
-FORCE_INLINE void reduce(uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out) {
-    cb_wait_front(cb_in, ONE_TILE);
-
-    tile_regs_acquire();
-    tile_regs_wait();
-
-    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_in, cb_scalar, cb_out);
-    reduce_tile(cb_in, cb_scalar, 0, 0, 0);
-    reduce_uninit();
 
     cb_reserve_back(cb_out, ONE_TILE);
     pack_tile(0, cb_out);
@@ -64,8 +45,6 @@ void MAIN {
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(5);
 
     compute_kernel_hw_startup(input_cb_id, scalar_cb_id, intermed_cb_id1);
-    reduce_init(input_cb_id, scalar_cb_id, intermed_cb_id1);
-    reduce_uninit();  // Required or else the first tile is wrong
 
     for (uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++) {
         cb_wait_front(scalar_cb_id, ONE_TILE);
@@ -76,7 +55,8 @@ void MAIN {
                 pack_reconfig_data_format(output_cb_id, intermed_cb_id0);
                 transpose(input_cb_id, intermed_cb_id0);  // 32 x B
                 reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
-                reduce(intermed_cb_id0, scalar_cb_id, intermed_cb_id1);  // 1 x B
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    intermed_cb_id0, scalar_cb_id, intermed_cb_id1, 1, 1, 1);  // 1 x B
             }
             // Get full tile back from writer and transpose it
             pack_reconfig_data_format(intermed_cb_id0, output_cb_id);
