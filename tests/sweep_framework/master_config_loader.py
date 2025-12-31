@@ -944,6 +944,22 @@ class MasterConfigLoader:
                 scalar_if_false_list = [] if self._matches_operation(operation_name, "where") else None
                 # multiply_ specific parameters (scalar multiply)
                 scalar_value_list = [] if self._matches_operation(operation_name, "multiply_") else None
+                # New operation parameters
+                exponent_list = [] if self._matches_operation(operation_name, "pow") else None
+                min_list = [] if self._matches_operation(operation_name, "clamp") else None
+                max_list = [] if self._matches_operation(operation_name, "clamp") else None
+                # dim parameter is used by multiple operations
+                dim_list = (
+                    []
+                    if (
+                        self._matches_operation(operation_name, "argmax")
+                        or self._matches_operation(operation_name, "sum")
+                        or self._matches_operation(operation_name, "std")
+                        or self._matches_operation(operation_name, "softmax")
+                    )
+                    else None
+                )
+                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
 
                 invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
@@ -984,8 +1000,17 @@ class MasterConfigLoader:
                     # Parse dtype/layout strings to ttnn objects
                     input_a_dtypes.append(self.parse_dtype(cfg["dtype"]))
                     input_a_layouts.append(self.parse_layout(cfg["layout"]))
-                    input_a_memory_configs.append(cfg["memory_config"])
-                    output_memory_configs.append(cfg["output_memory_config"])
+                    # Parse memory configs to ttnn objects (for proper serialization)
+                    # Check if already a MemoryConfig object (from some extractors)
+                    mem_config = cfg["memory_config"]
+                    if isinstance(mem_config, dict):
+                        mem_config = self.parse_memory_config(mem_config, cfg["shape"])
+                    input_a_memory_configs.append(mem_config)
+
+                    out_mem_config = cfg["output_memory_config"]
+                    if isinstance(out_mem_config, dict):
+                        out_mem_config = self.parse_memory_config(out_mem_config, cfg["shape"])
+                    output_memory_configs.append(out_mem_config)
                     storage_types.append(cfg.get("storage_type", "StorageType::DEVICE"))
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
@@ -1073,6 +1098,29 @@ class MasterConfigLoader:
                     if self._matches_operation(operation_name, "multiply_"):
                         if "scalar_value" in cfg:
                             scalar_value_list.append(cfg["scalar_value"])
+                    # Extract pow parameters
+                    if self._matches_operation(operation_name, "pow"):
+                        if "exponent" in cfg:
+                            exponent_list.append(cfg["exponent"])
+                    # Extract clamp parameters
+                    if self._matches_operation(operation_name, "clamp"):
+                        if "min" in cfg:
+                            min_list.append(cfg["min"])
+                        if "max" in cfg:
+                            max_list.append(cfg["max"])
+                    # Extract dimension parameters (for argmax, sum, std, softmax)
+                    if (
+                        self._matches_operation(operation_name, "argmax")
+                        or self._matches_operation(operation_name, "sum")
+                        or self._matches_operation(operation_name, "std")
+                        or self._matches_operation(operation_name, "softmax")
+                    ):
+                        if "dim" in cfg:
+                            dim_list.append(cfg["dim"])
+                    # Extract repeat shape parameter
+                    if self._matches_operation(operation_name, "repeat"):
+                        if "shape" in cfg:
+                            repeat_shape_list.append(cfg["shape"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1210,6 +1258,34 @@ class MasterConfigLoader:
                     if scalar_value_list:
                         param_names.append("scalar_value")
                         param_lists.append(scalar_value_list)
+                # Add pow parameters
+                if self._matches_operation(operation_name, "pow"):
+                    if exponent_list:
+                        param_names.append("exponent")
+                        param_lists.append(exponent_list)
+                # Add clamp parameters
+                if self._matches_operation(operation_name, "clamp"):
+                    if min_list:
+                        param_names.append("min")
+                        param_lists.append(min_list)
+                    if max_list:
+                        param_names.append("max")
+                        param_lists.append(max_list)
+                # Add dimension parameters (for argmax, sum, std, softmax)
+                if (
+                    self._matches_operation(operation_name, "argmax")
+                    or self._matches_operation(operation_name, "sum")
+                    or self._matches_operation(operation_name, "std")
+                    or self._matches_operation(operation_name, "softmax")
+                ):
+                    if dim_list:
+                        param_names.append("dim")
+                        param_lists.append(dim_list)
+                # Add repeat shape parameter
+                if self._matches_operation(operation_name, "repeat"):
+                    if repeat_shape_list:
+                        param_names.append("shape")
+                        param_lists.append(repeat_shape_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")

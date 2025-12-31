@@ -2722,6 +2722,342 @@ def example_custom_operation_setup():
     pass
 
 
+# ============================================================================
+# Extractors for newly added operations
+# ============================================================================
+
+
+def _extract_pow_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for pow operation"""
+    try:
+        params = {}
+        tensor_config = None
+        exponent = 2.0  # default
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract exponent from arg1
+                elif "arg1" in arg:
+                    exponent_str = str(arg["arg1"])
+                    try:
+                        exponent = float(exponent_str)
+                    except ValueError:
+                        exponent = 2.0
+
+                # Extract output memory_config from arg2
+                elif "arg2" in arg and isinstance(arg["arg2"], dict):
+                    if "MemoryConfig" in arg["arg2"]:
+                        output_memory_config = arg["arg2"]["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["exponent"] = exponent
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_clamp_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for clamp operation"""
+    try:
+        params = {}
+        tensor_config = None
+        min_val = -10.0
+        max_val = 10.0
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract min from arg1
+                elif "arg1" in arg:
+                    try:
+                        min_val = float(str(arg["arg1"]))
+                    except ValueError:
+                        pass
+
+                # Extract max from arg2
+                elif "arg2" in arg:
+                    try:
+                        max_val = float(str(arg["arg2"]))
+                    except ValueError:
+                        pass
+
+                # Extract output memory_config from arg3
+                elif "arg3" in arg and isinstance(arg["arg3"], dict):
+                    if "MemoryConfig" in arg["arg3"]:
+                        output_memory_config = arg["arg3"]["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["min"] = min_val
+            params["max"] = max_val
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_argmax_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for argmax operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = -1
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1
+                elif "arg1" in arg:
+                    try:
+                        dim = int(str(arg["arg1"]))
+                    except ValueError:
+                        dim = -1
+
+                # Extract output memory_config from arg2 or arg3
+                elif ("arg2" in arg or "arg3" in arg) and isinstance(list(arg.values())[0], dict):
+                    arg_value = list(arg.values())[0]
+                    if "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_sum_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for sum operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = None
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1 (may be optional)
+                elif "arg1" in arg:
+                    dim_str = str(arg["arg1"])
+                    if dim_str and dim_str != "None" and dim_str != "nullopt":
+                        try:
+                            dim = int(dim_str)
+                        except ValueError:
+                            dim = None
+
+                # Extract output memory_config from later args
+                elif any(k.startswith("arg") for k in arg.keys()):
+                    arg_value = list(arg.values())[0]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_std_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for std operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = None
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1 (may be optional)
+                elif "arg1" in arg:
+                    dim_str = str(arg["arg1"])
+                    if dim_str and dim_str != "None" and dim_str != "nullopt":
+                        try:
+                            dim = int(dim_str)
+                        except ValueError:
+                            dim = None
+
+                # Extract output memory_config from later args
+                elif any(k.startswith("arg") for k in arg.keys()):
+                    arg_value = list(arg.values())[0]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_softmax_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for softmax operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = -1
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1
+                elif "arg1" in arg:
+                    try:
+                        dim = int(str(arg["arg1"]))
+                    except ValueError:
+                        dim = -1
+
+                # Extract output memory_config from later args
+                elif any(k.startswith("arg") for k in arg.keys()):
+                    arg_value = list(arg.values())[0]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_repeat_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for repeat operation"""
+    try:
+        params = {}
+        tensor_config = None
+        shape = [1, 1, 2, 1]  # default repetition vector
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract repetition vector from arg1
+                elif "arg1" in arg:
+                    shape_str = str(arg["arg1"])
+                    # Try to parse as list
+                    if "[" in shape_str:
+                        try:
+                            shape = eval(shape_str)
+                        except:
+                            pass
+
+                # Extract output memory_config from arg2
+                elif "arg2" in arg and isinstance(arg["arg2"], dict):
+                    if "MemoryConfig" in arg["arg2"]:
+                        output_memory_config = arg["arg2"]["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["shape"] = shape
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+# Register the new extractors
+OperationParameterExtractors.register_extractor("pow", extract_func=_extract_pow_parameters)
+OperationParameterExtractors.register_extractor("ttnn::pow", extract_func=_extract_pow_parameters)
+
+OperationParameterExtractors.register_extractor("clamp", extract_func=_extract_clamp_parameters)
+OperationParameterExtractors.register_extractor("ttnn::clamp", extract_func=_extract_clamp_parameters)
+
+OperationParameterExtractors.register_extractor("argmax", extract_func=_extract_argmax_parameters)
+OperationParameterExtractors.register_extractor("ttnn::argmax", extract_func=_extract_argmax_parameters)
+
+OperationParameterExtractors.register_extractor("sum", extract_func=_extract_sum_parameters)
+OperationParameterExtractors.register_extractor("ttnn::sum", extract_func=_extract_sum_parameters)
+
+OperationParameterExtractors.register_extractor("std", extract_func=_extract_std_parameters)
+OperationParameterExtractors.register_extractor("ttnn::std", extract_func=_extract_std_parameters)
+
+OperationParameterExtractors.register_extractor("softmax", extract_func=_extract_softmax_parameters)
+OperationParameterExtractors.register_extractor("ttnn::softmax", extract_func=_extract_softmax_parameters)
+
+OperationParameterExtractors.register_extractor("repeat", extract_func=_extract_repeat_parameters)
+OperationParameterExtractors.register_extractor("ttnn::repeat", extract_func=_extract_repeat_parameters)
+
+
 if __name__ == "__main__":
     # Demo: List registered operations
     print("Registered Operations:")
