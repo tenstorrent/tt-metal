@@ -550,7 +550,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
 
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
-                CoreCoord termination_master_logical_core = all_worker_cores[link * num_workers_per_direction];
+                CoreCoord termination_master_logical_core =
+                    all_worker_cores[dir * num_links * num_workers_per_direction + link * num_workers_per_direction];
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
