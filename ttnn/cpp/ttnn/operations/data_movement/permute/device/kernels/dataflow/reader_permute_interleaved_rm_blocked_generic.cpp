@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <algorithm>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");

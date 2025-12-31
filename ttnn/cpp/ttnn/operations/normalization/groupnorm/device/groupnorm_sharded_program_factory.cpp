@@ -400,7 +400,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     }
     for (uint32_t i = 0; i < num_cores; ++i) {
         // not found in mcast sender
-        if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges.end()) {
+        if (!mcast_sender_core_ranges.contains(CoreRange(core_coords[i]))) {
             mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
         }
     }
@@ -414,7 +414,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     int group_index = -1;
     if (is_height_sharding) {
         for (uint32_t i = 0; i < num_cores; ++i) {
-            if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges.end()) {
+            if (mcast_sender_core_ranges.contains(CoreRange(core_coords[i]))) {
                 group_index += 1;
             }
             if (group_index >= static_cast<int>(mcast_groups.size())) {
@@ -425,7 +425,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     } else {
         for (size_t i = 0; i < core_coords2D.size(); ++i) {
             for (size_t j = 0; j < core_coords2D[i].size(); ++j) {
-                if (mcast_sender_core_ranges.find(CoreRange(core_coords2D[i][j])) != mcast_sender_core_ranges.end()) {
+                if (mcast_sender_core_ranges.contains(CoreRange(core_coords2D[i][j]))) {
                     group_index += 1;
                 }
                 if (group_index >= static_cast<int>(mcast_groups.size())) {

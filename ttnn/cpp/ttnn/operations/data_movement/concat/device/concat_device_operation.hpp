@@ -45,19 +45,16 @@ struct ConcatDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
-        std::int64_t dim,
-        unsigned int groups,
-        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
 }  // namespace ttnn::operations::data_movement::concat
 
 namespace ttnn::prim {
-constexpr auto concat =
-    ttnn::register_operation<"ttnn::prim::concat", ttnn::operations::data_movement::concat::ConcatDeviceOperation>();
+ttnn::operations::data_movement::concat::ConcatDeviceOperation::tensor_return_value_t concat(
+    const std::vector<Tensor>& input_tensors,
+    std::int64_t dim,
+    unsigned int groups,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement {

@@ -141,7 +141,9 @@ private:
     // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
     std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_unsafe();
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_safe();
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
@@ -153,7 +155,7 @@ private:
 
 public:
     MeshDevice(
-        std::shared_ptr<ScopedDevices> scoped_devices,
+        std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;

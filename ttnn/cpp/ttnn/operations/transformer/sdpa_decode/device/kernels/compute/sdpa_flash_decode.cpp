@@ -213,7 +213,6 @@ void MAIN {
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
-
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
          ******************************************************************************/
@@ -476,7 +475,7 @@ void MAIN {
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     // */
-                    correction_block<scale_fp32, (int)VectorMode::C>(
+                    correction_block<scale_fp32, vector_mode>(
                         cb_m_in,        // cb worker max
                         cb_prev_sum_2,  // cb worker sum
                         cb_cur_max,

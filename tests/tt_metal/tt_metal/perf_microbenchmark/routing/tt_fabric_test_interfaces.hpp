@@ -41,6 +41,7 @@ public:
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;
+    virtual uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const = 0;
 
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
@@ -107,9 +108,14 @@ public:
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
+    virtual std::optional<FabricNodeId> get_neighbor_node_id_or_nullopt(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
+        const FabricNodeId& src_node_id) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
+    virtual void validate_single_hop(const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
 };
 
 class IDistributedContextManager {

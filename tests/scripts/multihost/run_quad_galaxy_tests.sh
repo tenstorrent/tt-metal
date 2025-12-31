@@ -15,11 +15,12 @@ run_quad_galaxy_unit_tests() {
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   # TODO: Currently failing
   #mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path cabling_descriptor.textproto --deployment-descriptor-path deployment_descriptor.textproto ; fail+=$?
+  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
 
@@ -33,7 +34,7 @@ run_quad_galaxy_unit_tests() {
   fi
 }
 
-run_quad_galaxy_deepseekv3_tests() {
+run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     fail=0
 
     # Run dual galaxy tests on quad galaxy since this is the only available machine
@@ -51,11 +52,10 @@ run_quad_galaxy_deepseekv3_tests() {
     fi
 
     local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
+    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     local MESH_DEVICE="DUAL"
 
-    # TODO: For now we just test a single module, we should add all of them here eventually
-    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass[run_test_forward_pass_mla2d-model.layers.0.self_attn-device_params0-decode-1-32]"
+    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
@@ -69,7 +69,7 @@ run_quad_galaxy_deepseekv3_tests() {
 
 run_quad_galaxy_tests() {
   run_quad_galaxy_unit_tests
-  run_quad_galaxy_deepseekv3_tests
+  run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
 }
 
 fail=0

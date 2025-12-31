@@ -10,6 +10,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <limits>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>

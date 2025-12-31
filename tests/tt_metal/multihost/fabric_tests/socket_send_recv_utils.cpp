@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <vector>
 
@@ -120,7 +119,7 @@ bool test_socket_send_recv(
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
-                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                if (mesh_core_coords.contains(connection.sender_core)) {
                     continue;
                 }
                 mesh_core_coords.insert(connection.sender_core);

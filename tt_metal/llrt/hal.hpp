@@ -82,7 +82,7 @@ public:
 };
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
-static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 8;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -253,6 +253,8 @@ public:
     virtual std::string common_flags(const Params& params) const = 0;
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
+    // Returns a string of linker flags to be added to linker command line.
+    virtual std::string linker_flags(const Params& params) const = 0;
     // Returns true if firmware should be linked into the kernel as an object.
     virtual bool firmware_is_kernel_object(const Params& params) const = 0;
     // Returns the target name for the build.
@@ -434,6 +436,7 @@ public:
     uint32_t get_alignment(HalMemType memory_type) const;
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
+    uint32_t get_dma_alignment() const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -605,6 +608,14 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
     uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_write_alignments_.size());
     return this->mem_write_alignments_[index];
+}
+
+inline uint32_t Hal::get_dma_alignment() const {
+    switch (arch_) {
+        case tt::ARCH::WORMHOLE_B0: return 4;
+        // Only Wormhole B0 devices support DMA transfers today.
+        default: return 1;
+    }
 }
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import math
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
 
@@ -62,7 +63,14 @@ parameters = {
             [1, 512, 25, 25, 12, 12, 1, 1, 6, 6, 1, 1, False],  # 12x12 kernel
         ],
     },
-    "mem_config_tests": {
+    "in_mem_config_tests": {
+        "cores": [[8, 7]],  # N300 core grid
+        "input_specs": [
+            # trace from openpdn_mnist test, no work on core 47 for 8x7 N300 grid
+            [2, 32, 78, 78, 3, 3, 3, 3, 0, 0, 1, 1, False],
+        ],
+    },
+    "out_mem_config_tests": {
         "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
             [1, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
@@ -183,11 +191,11 @@ def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
     )
 
 
-@pytest.mark.parametrize("input_spec", parameters["mem_config_tests"]["input_specs"])
-@pytest.mark.parametrize("in_dtype", parameters["mem_config_tests"]["in_dtype"])
-@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("input_spec", parameters["out_mem_config_tests"]["input_specs"])
+@pytest.mark.parametrize("in_dtype", parameters["out_mem_config_tests"]["in_dtype"])
+@pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_mem_config(device, in_dtype, input_spec, memory_config, tensor_map):
+def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, tensor_map):
     (
         in_n,
         in_c,
@@ -213,7 +221,7 @@ def test_max_pool2d_mem_config(device, in_dtype, input_spec, memory_config, tens
         device,
         tensor_map,
         in_dtype,
-        memory_config=memory_config,
+        out_memory_config=out_memory_config,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         nightly_skips=False,
@@ -256,5 +264,61 @@ def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_ma
         ceil_mode=ceil_mode,
         output_layout=output_layout,
         out_dtype=out_dtype,
+        nightly_skips=False,
+    )
+
+
+@pytest.mark.parametrize("input_spec", parameters["in_mem_config_tests"]["input_specs"])
+@pytest.mark.parametrize("cores", parameters["in_mem_config_tests"]["cores"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
+
+    (cores_x, cores_y) = cores
+
+    # shard shape calculations are only accurate for height sharded tensors
+    shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    in_nhw = in_n * in_h * in_w
+    num_cores = cores_x * cores_y
+    # we use tile shape to mimic tile based tensors passed from other ops like conv2d
+    shard_height = math.ceil(math.ceil(in_nhw / num_cores) / 32) * 32
+    shard_width = math.ceil(in_c / 32) * 32
+
+    in_memory_config = ttnn.MemoryConfig(
+        memory_layout=shard_scheme,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores_x - 1, cores_y - 1))}),
+            [shard_height, shard_width],
+            shard_orientation,
+        ),
+    )
+
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
+        device,
+        tensor_map,
+        ttnn.bfloat16,
+        in_memory_config=in_memory_config,
+        ceil_mode=ceil_mode,
         nightly_skips=False,
     )

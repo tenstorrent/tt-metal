@@ -68,6 +68,8 @@ namespace tt::tt_metal {
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
+    std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
+
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
@@ -100,10 +102,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/tt-1xx");
-        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole");
-        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines");
-        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/noc");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines");
+        includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
 

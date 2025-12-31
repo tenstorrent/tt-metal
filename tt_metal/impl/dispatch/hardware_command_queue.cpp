@@ -83,7 +83,7 @@ HWCommandQueue::HWCommandQueue(
     NOC /*noc_index*/,
     uint32_t completion_queue_reader_core) :
     id_(id),
-    size_B_(0),
+
     completion_queue_reader_core_(completion_queue_reader_core),
     manager_(device->sysmem_manager()),
     cq_shared_state_(std::move(cq_shared_state)),

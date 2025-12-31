@@ -10,6 +10,9 @@ Usage:
 Description:
     Provides dispatcher data noc locations on devices.
     Data include firmware path, kernel path, kernel offset, etc.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
@@ -211,14 +214,14 @@ class DispatcherData:
                 if value is None:
                     mailboxes = self._mailboxes_cache.get(location)
                     if mailboxes is None:
-                        mailboxes = self.read_mailboxes(location, risc_name)
+                        mailboxes = self.read_mailboxes(location)
                         self._mailboxes_cache[location] = mailboxes
                     value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
                     self._core_data_cache[key] = value
         return value
 
-    def read_mailboxes(self, location: OnChipCoordinate, risc_name: str) -> ElfVariable:
-        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
+        l1_mem_access = MemoryAccess.get_l1(location)
         if location.device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
@@ -230,7 +233,7 @@ class DispatcherData:
             fw_elf = self._active_erisc_elf
         else:
             raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
-        return fw_elf.read_global("mailboxes", loc_mem_access)
+        return fw_elf.read_global("mailboxes", l1_mem_access)
 
     def get_core_data(
         self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
@@ -257,7 +260,7 @@ class DispatcherData:
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
         if mailboxes is None:
-            mailboxes = self.read_mailboxes(location, risc_name)
+            mailboxes = self.read_mailboxes(location)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr

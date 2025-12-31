@@ -8,6 +8,7 @@
 
 #include "gather.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <cstring>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
@@ -116,14 +117,6 @@ std::vector<GatherTransfer> generate_gather_transfers(
     return transfers;
 }
 
-// Compute the inclusive block range touched by a segment [start_col, start_col+length)
-inline std::pair<uint32_t, uint32_t> compute_block_span(uint32_t start_col, uint32_t length, uint32_t block_size) {
-    const uint32_t end_col = start_col + length - 1;
-    const uint32_t start_block = start_col / block_size;
-    const uint32_t end_block = end_col / block_size;
-    return {start_block, end_block};
-}
-
 }  // namespace
 
 /**
@@ -228,18 +221,67 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
     auto low_level_transfers = lower_gather_transfers(
         transfers, B, C, HW, input_cores, num_output_cores, element_size_bytes, output_shard_width);
 
-    // Group transfers by which column blocks they write to
+    // Group transfers by which column blocks they write to, splitting transfers that cross boundaries
     for (size_t i = 0; i < transfers.size(); i++) {
         const auto& transfer = transfers[i];
         const auto& low_level = low_level_transfers[i];
 
         const uint32_t start_col = transfer.dst_offset;
-        auto [start_block, end_block] = compute_block_span(start_col, transfer.length, block_size);
+        const uint32_t end_col = start_col + transfer.length - 1;
+        const uint32_t start_block = start_col / block_size;
+        const uint32_t end_block = end_col / block_size;
 
-        // Add this transfer to all column blocks it touches
+        // Split transfer across blocks if it spans multiple blocks
         for (uint32_t block_idx = start_block; block_idx <= end_block; block_idx++) {
+            // Calculate the portion of this transfer that belongs to this block
+            uint32_t block_start_col = block_idx * block_size;
+            uint32_t block_end_col = std::min(block_start_col + block_size, output_shard_width);
+
+            // Calculate the overlap between the transfer and this block
+            uint32_t overlap_start = std::max(start_col, block_start_col);
+            uint32_t overlap_end = std::min(end_col + 1, block_end_col);
+
+            if (overlap_start >= overlap_end) {
+                continue;  // No overlap
+            }
+
+            uint32_t overlap_length = overlap_end - overlap_start;
+
+            // Calculate source offset: how many elements into the original transfer
+            uint32_t src_offset_in_transfer = overlap_start - start_col;
+
+            // Extract channel (row) from the original absolute destination offset
+            // Original: dst_absolute_offset = (channel * output_shard_width) + dst_offset
+            // So: channel = dst_absolute_offset / output_shard_width
+            uint32_t channel = low_level.dst_offset / output_shard_width;
+
+            // Calculate column offset within the block
+            uint32_t block_local_col = overlap_start - block_start_col;
+
+            // Calculate destination offset within cb_in_batch buffer
+            // cb_in_batch layout: [C x block_size] in row-major order
+            // Offset = (channel * block_size + block_local_col) * element_size_bytes
+            // This offset is relative to the block buffer start and includes both channel and column
+            uint32_t dst_offset_in_block = (channel * block_size + block_local_col) * element_size_bytes;
+
+            // Create a split transfer for this block
+            // dst_offset_bytes is calculated relative to block buffer start (channel * block_size + column)
+            // The kernel uses this offset directly without modulo
+            LowLevelGatherTransfer split_transfer(
+                low_level.src_shard_idx,
+                low_level.src_offset + src_offset_in_transfer,  // Adjust source offset
+                low_level.dst_shard_idx,
+                block_local_col,  // Destination offset in elements (column offset within block, for test compatibility)
+                overlap_length,   // Length of this split
+                low_level.src_noc_x,
+                low_level.src_noc_y,
+                (low_level.src_offset + src_offset_in_transfer) * element_size_bytes,  // Source offset in bytes
+                dst_offset_in_block,  // Destination offset in bytes (relative to block buffer start: channel *
+                                      // block_size + column)
+                overlap_length * element_size_bytes);  // Transfer size in bytes
+
             auto key = std::make_pair(transfer.dst_core_idx, block_idx);
-            groups[key].push_back(low_level);
+            groups[key].push_back(split_transfer);
         }
     }
 
@@ -260,19 +302,28 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
             return a.dst_block_idx < b.dst_block_idx;
         });
 
-    // Count unique column block indices to determine actual number of logical blocks
+    // Calculate number of logical blocks per core
+    // Each core processes blocks 0 through (output_shard_width / block_size - 1)
+    // Since all cores have the same padded output_shard_width, they all have the same number of blocks
+    const uint32_t num_logical_blocks_per_core = tt::div_up(output_shard_width, block_size);
+
+    // Count unique column block indices for validation/debugging
     std::set<uint32_t> unique_block_indices;
     for (const auto& group : blocked_groups) {
         unique_block_indices.insert(group.dst_block_idx);
     }
 
-    log_debug(
-        tt::LogType::LogOp,
-        "group_transfers_by_output_column_blocks: {} transfer groups, {} logical blocks",
-        blocked_groups.size(),
-        unique_block_indices.size());
+    // Validate that unique block indices match expected per-core count
+    if (unique_block_indices.size() != num_logical_blocks_per_core) {
+        TT_FATAL(
+            false,
+            "Mismatch: expected {} blocks per core, but found {} unique block indices across all cores. "
+            "This may indicate uneven block distribution.",
+            num_logical_blocks_per_core,
+            unique_block_indices.size());
+    }
 
-    return {std::move(blocked_groups), static_cast<uint32_t>(unique_block_indices.size())};
+    return {std::move(blocked_groups), num_logical_blocks_per_core};
 }
 
 std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(

@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     FromWeightConfig,
+    KvCacheConfig,
     LinearConfig,
     MeshDeviceStub,
     ReduceScatterAsyncMinimalConfig,
@@ -712,9 +713,19 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         caches: Sequence[torch.Tensor] | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> ModelState:
-        kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
-        cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
+        if kv_cache_override is None:
+            kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+            cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
+        else:
+            kv_cache_shape = kv_cache_override.kv_cache_shape
+            cache_shape = (
+                kv_cache_shape[0] * mesh_device.shape[1],
+                kv_cache_shape[1],
+                kv_cache_shape[2],
+                kv_cache_shape[3],
+            )
 
         assert (
             caches is None
@@ -723,7 +734,6 @@ class MLA1D(AbstractModule):
         )
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
-
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
@@ -738,14 +748,19 @@ class MLA1D(AbstractModule):
         caches: tuple[torch.Tensor, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        return ttnn.as_tensor(
-            torch.concatenate(caches),
-            dtype=ttnn.bfloat8_b,
+        def to_device(
+            weight,
+            device,
+            mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
-        )
+        ):
+            weight = ttnn.from_torch(weight, device=device, mesh_mapper=mesh_mapper)
+            return ttnn.to_layout(weight, dtype=dtype, layout=layout, memory_config=memory_config)
+
+        caches = torch.concatenate(caches)
+        return to_device(caches, mesh_device, ttnn.ShardTensorToMesh(mesh_device, 0))
 
     @classmethod
     def forward_decode(
@@ -957,9 +972,6 @@ class MLA1D(AbstractModule):
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
-        ttnn.synchronize_device(cfg["mesh_device"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])

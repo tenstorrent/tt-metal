@@ -4,9 +4,9 @@
 
 #include "build_env_manager.hpp"
 
-#include <limits.h>
+#include <climits>
 #include <enchantum/enchantum.hpp>
-#include <math.h>
+#include <cmath>
 #include <tracy/Tracy.hpp>
 #include <bitset>
 #include <cstddef>
@@ -176,7 +176,7 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    TT_ASSERT(device_id_to_build_env_.count(device_id) != 0, "Couldn't find build env for device {}.", device_id);
+    TT_ASSERT(device_id_to_build_env_.contains(device_id), "Couldn't find build env for device {}.", device_id);
     return device_id_to_build_env_[device_id];
 }
 
@@ -196,7 +196,7 @@ JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
     auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class);
     const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
-    return {kernel_build_states.begin() + b_id, count};
+    return {kernel_build_states.begin() + b_id, static_cast<size_t>(count)};
 }
 
 BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(

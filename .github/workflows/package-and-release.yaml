@@ -1,4 +1,4 @@
-name: Package and release
+name: "Package and release"
 on:
   workflow_dispatch:
     inputs:
@@ -263,6 +263,10 @@ jobs:
     outputs:
       should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Check release conditions and existing assets
         id: check-release-conditions
         env:

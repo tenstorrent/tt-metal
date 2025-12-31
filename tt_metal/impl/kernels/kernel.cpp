@@ -112,8 +112,7 @@ Kernel::Kernel(
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
-    common_runtime_args_count_(0),
-    max_runtime_args_per_core_(0),
+
     core_with_max_runtime_args_({0, 0}),
     defines_(defines) {
     this->register_kernel_with_watcher();
@@ -400,7 +399,7 @@ RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtim
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
-    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
+    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     uint32_t expected_max_rt_args = 0;
 

@@ -1,7 +1,7 @@
 # SqueezeBERT
 
 ## Platforms:
-    Grayskull (e150), Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 SqueezeBERT is a bidirectional transformer similar to the BERT model. The key difference between the BERT architecture and the SqueezeBERT architecture is that SqueezeBERT uses grouped convolutions instead of fully-connected layers for the Q, K, V and FFN layers.
