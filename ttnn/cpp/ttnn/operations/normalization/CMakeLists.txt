@@ -64,8 +64,10 @@ target_sources(
         layernorm/layernorm.cpp
         layernorm_distributed/device/layernorm_post_all_gather_device_operation.cpp
         layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp
+        layernorm_distributed/device/layernorm_post_all_gather_welford_program_factory.cpp
         layernorm_distributed/device/layernorm_pre_all_gather_device_operation.cpp
         layernorm_distributed/device/layernorm_pre_all_gather_program_factory.cpp
+        layernorm_distributed/device/layernorm_pre_all_gather_welford_program_factory.cpp
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp

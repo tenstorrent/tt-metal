@@ -5,11 +5,12 @@
 #pragma once
 
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
+#include "layernorm_pre_all_gather_welford_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::normalization::program {
 
-// Shared variables for 1D program factories (normal and Welford)
+// Shared variables for 1D program factory (normal)
 struct LayerNormPreAllGatherSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
@@ -44,23 +45,6 @@ struct LayerNormPreAllGatherProgramFactory {
 // Program factory for 2D core grid operation
 struct LayerNormPreAllGather2DProgramFactory {
     using shared_variables_t = LayerNormPreAllGather2DSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
-        Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const LayerNormPreAllGatherOperationAttributes& operation_attributes,
-        const LayerNormPreAllGatherTensorArgs& tensor_args,
-        Tensor& output);
-};
-
-// Program factory for Welford algorithm (layernorm only)
-struct LayerNormPreAllGatherWelfordProgramFactory {
-    using shared_variables_t = LayerNormPreAllGatherSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_post_all_gather_program_factory.hpp"
+#include "layernorm_post_all_gather_welford_program_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -48,11 +48,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-// =============================================================================
-// LayerNormPostAllGatherProgramFactory - Normal (non-Welford) operation
-// =============================================================================
-
-LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherProgramFactory::create(
+LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGatherWelfordProgramFactory::create(
     const LayerNormPostAllGatherOperationAttributes& operation_attributes,
     const LayerNormPostAllGatherTensorArgs& tensor_args,
     LayerNormPostAllGatherTensorReturnValue& output) {
@@ -83,6 +79,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
     uint32_t num_tile_rows = NC * Ht;
 
+    log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
@@ -96,6 +93,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+
+    uint32_t block_size =
+        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
@@ -130,19 +130,71 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t cb_length = Wt;
 
-    // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    if (static_cast<double>(cb_length * in_single_tile_size) > static_cast<double>(available_L1) * 0.95) {
+        cb_length = static_cast<uint32_t>(static_cast<double>(available_L1) * 0.95 / in_single_tile_size) / 7;
     }
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
-    }
+    const uint32_t in0_tiles = cb_length;
+    const uint32_t in1_tiles = stats_tiles_cols;
+    const uint32_t in2_tiles = cb_length;
+    const uint32_t in3_tiles = cb_length;
+    const uint32_t in4_tiles = 1;  // epsilon
+    const uint32_t in5_tiles = 1;  // reduce scalar
 
-    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
-    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
+    const uint32_t intermed0_tiles = tile_cols_per_device;
+    const uint32_t intermed1_tiles = 1;
+    const uint32_t intermed2_tiles = 1;
+    const uint32_t intermed3_tiles = 1;
+    const uint32_t intermed4_tiles = 1;
+    const uint32_t intermed5_tiles = cb_length;
+    const uint32_t intermed6_tiles = cb_length;
+    const uint32_t intermed7_tiles = cb_length;
+    const uint32_t out0_tiles = cb_length;
+
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        in2_tiles % block_size == 0,
+        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in2_tiles,
+        block_size);
+    TT_FATAL(
+        in3_tiles % block_size == 0,
+        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in3_tiles,
+        block_size);
+    TT_FATAL(
+        out0_tiles % block_size == 0,
+        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        out0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed5_tiles % block_size == 0,
+        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed5_tiles,
+        block_size);
+    TT_FATAL(
+        intermed6_tiles % block_size == 0,
+        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed6_tiles,
+        block_size);
+    TT_FATAL(
+        intermed7_tiles % block_size == 0,
+        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed7_tiles,
+        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_cores_y = grid_size.y;
@@ -203,32 +255,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
-    uint32_t block_size = fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
-                                           : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
-    uint32_t cb_length = tiles_per_core_y;
-
-    const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if ((!(operation_attributes.use_2d_core_grid.has_value() && *operation_attributes.use_2d_core_grid)) &&
-        (cb_length * in_single_tile_size > available_L1 * 0.95)) {
-        cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
-    }
-    const uint32_t in0_tiles = cb_length;
-    const uint32_t in1_tiles = stats_tiles_cols;
-    const uint32_t in2_tiles = cb_length;
-    const uint32_t in3_tiles = cb_length;
-    const uint32_t in4_tiles = 1;  // epsilon
-    const uint32_t in5_tiles = 1;  // reduce scalar
-
-    const uint32_t intermed0_tiles = tile_cols_per_device;
-    const uint32_t intermed1_tiles = 1;
-    const uint32_t intermed2_tiles = 1;
-    const uint32_t intermed3_tiles = 1;
-    const uint32_t intermed4_tiles = 1;
-    const uint32_t intermed5_tiles = cb_length;
-    const uint32_t intermed6_tiles = cb_length;
-    const uint32_t intermed7_tiles = cb_length;
-    const uint32_t out0_tiles = cb_length;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
@@ -264,7 +290,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)cb_length);
-    reader_compile_time_args.push_back((std::uint32_t)tiles_per_core_y);
+    reader_compile_time_args.push_back((std::uint32_t)Wt);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
@@ -299,29 +325,21 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    // Get program config
-    LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config);
-    }
-
-    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {
         tiles_per_core_y,
+        W,
         block_size,
         stats_tiles_cols,
         gamma.has_value(),
         beta.has_value(),
         fp32_dest_acc_en,
-        float32_reduction ? 1 : 0,
-        program_config.legacy_rsqrt ? 1 : 0,
         cb_length};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_post_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-                     "layernorm_post_allgather.cpp";
+                     "layernorm_post_allgather_welford.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -518,7 +536,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = cores}};
 }
 
-void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
+void LayerNormPostAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const LayerNormPostAllGatherOperationAttributes& operation_attributes,
     const LayerNormPostAllGatherTensorArgs& tensor_args,
