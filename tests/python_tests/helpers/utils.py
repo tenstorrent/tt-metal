@@ -170,6 +170,7 @@ def passed_test(
     output_data_format: DataFormat = DataFormat.Float16_b,
     L1_to_L1_iterations: int = 1,
     print_erros: bool = True,
+    print_pcc: bool = False,
 ):
     Tolerance = namedtuple("Tolerance", ["atol", "rtol"])
 
@@ -250,6 +251,10 @@ def passed_test(
                 )
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
+
+    if print_pcc:
+        print("PCC:", pcc)
+
     target_pcc = 0.99
     # Once we iterate L1-L1 more than once the loss in precision is accumulated because the result from the first run is transferred as input to the next run
     # We don't have a robust accuracy model to determine exact precision loss from each run and accumulate as such per test, so we use a heuristic
