@@ -57,7 +57,6 @@ Tensor strided_all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis,
-    const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     const std::optional<uint32_t>& mm_cores_y,
