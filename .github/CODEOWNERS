@@ -371,7 +371,7 @@ docs/source/tt-metalium/tt_metal/apis/kernel_apis* @bbradelTT @pavlejosipovic @a
 docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 
 # misc
-dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+dockerfile/** @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # tt-train
 # primary owners
