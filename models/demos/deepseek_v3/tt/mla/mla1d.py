@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     LinearConfig,
     MeshDeviceStub,
     PermuteConfig,
-    ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
     SavedWeight,
     SliceConfig,
@@ -101,11 +100,39 @@ class MLA1D(AbstractModule):
                 ),
             }
             for hf_name, ttnn_name, shape, mesh_dims in [
-                ("q_a_proj", "wq_a", (q_lora_rank, dim), (0, -2)),
                 ("q_b_proj", "wq_b", (num_heads * q_head_dim, q_lora_rank), (0, -1)),
-                ("kv_a_proj_with_mqa", "wkv_a", (kv_lora_rank + qk_rope_head_dim, dim), (0, -2)),
                 ("o_proj", "wo", (dim, num_heads * v_head_dim), (0, -1)),
             ]
+        }
+
+        # Fused wq_a and wkv_a weights: concatenated along output dimension
+        # Output order: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
+        wq_a_weight = dequantize(
+            get_state_dicts(state_dicts, "q_a_proj.weight", (q_lora_rank, dim), dtype=torch.float8_e4m3fn),
+            get_state_dicts(state_dicts, "q_a_proj.weight_scale_inv", dtype=torch.float32),
+            (1, weight_block_height, weight_block_width),
+        )
+        wkv_a_weight = dequantize(
+            get_state_dicts(
+                state_dicts,
+                "kv_a_proj_with_mqa.weight",
+                (kv_lora_rank + qk_rope_head_dim, dim),
+                dtype=torch.float8_e4m3fn,
+            ),
+            get_state_dicts(state_dicts, "kv_a_proj_with_mqa.weight_scale_inv", dtype=torch.float32),
+            (1, weight_block_height, weight_block_width),
+        )
+        # Concatenate: [num_shards, q_lora_rank + kv_lora_rank + qk_rope_head_dim, dim]
+        wq_kv_a_weight = torch.cat([wq_a_weight, wkv_a_weight], dim=-2)
+        fused_weight_configs = {
+            "wq_kv_a": {
+                "input_tensor_b": cls._convert_weight(
+                    output_path / "wq_kv_a.input_tensor_b",
+                    wq_kv_a_weight,
+                    (0, -2),  # Shard along input dim
+                    mesh_device,
+                ),
+            },
         }
 
         # wkv_b (Needs Special handling!!)
@@ -128,6 +155,7 @@ class MLA1D(AbstractModule):
         return {
             **norm_weight_configs,
             **linear_weight_configs,
+            **fused_weight_configs,
             "wkv_b1": {
                 "input_tensor_b": cls._convert_weight(
                     output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
@@ -178,6 +206,7 @@ class MLA1D(AbstractModule):
 
         # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
+        q_lora_rank = hf_config.q_lora_rank
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -188,19 +217,14 @@ class MLA1D(AbstractModule):
 
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-        wq_a_config = LinearConfig(
+        # Fused wq_a and wkv_a config
+        wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
         )
 
         wq_b_config = LinearConfig(
-            input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
-        )
-
-        wkv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=None,
@@ -269,30 +293,15 @@ class MLA1D(AbstractModule):
 
         # Set up CCLs
 
-        # Q
-        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
-            cluster_axis=1,
-            dim=3,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-        )
-        wq_a_ag_config = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_device.shape),
-            cluster_axis=1,
-            dim=3,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-        )
-
-        # KV
-        wkv_a_ag_config = AllGatherAsyncConfig(
+        # Fused wq_kv_a: AG + local reduce (since sub-tile RS not supported for new shapes)
+        wq_kv_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        wkv_a_r_config = {
+        wq_kv_a_r_config = {
             "dims": [1],
             "output": None,
             "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
@@ -322,25 +331,23 @@ class MLA1D(AbstractModule):
 
         return {
             "num_heads": num_heads,
+            "q_lora_rank": q_lora_rank,
             "kv_lora_rank": kv_lora_rank,
             "qk_nope_head_dim": qk_nope_head_dim,
             "qk_rope_head_dim": qk_rope_head_dim,
             "qk_head_dim": qk_head_dim,
             "v_head_dim": v_head_dim,
             "input_memory_config": input_memory_config,
-            "wq_a": wq_a_config,
+            "wq_kv_a": wq_kv_a_config,
             "wq_b": wq_b_config,
-            "wkv_a": wkv_a_config,
             "wkv_b1": wkv_b1_config,
             "wkv_b2": wkv_b2_config,
             "wo": wo_config,
             "flash_mla": flash_mla_config,
             "q_norm": q_norm_config,
             "kv_norm": kv_norm_config,
-            "wq_a_rs_prefill": wq_a_rs_config,
-            "wq_a_ag_prefill": wq_a_ag_config,
-            "wkv_a_ag_prefill": wkv_a_ag_config,
-            "wkv_a_r_prefill": wkv_a_r_config,
+            "wq_kv_a_ag_prefill": wq_kv_a_ag_config,
+            "wq_kv_a_r_prefill": wq_kv_a_r_config,
             "wkv_b2_ag_prefill": wkv_b2_ag_config,
             "wo_ag_prefill": wo_ag_config,
             "mesh_device": mesh_device,
@@ -367,6 +374,7 @@ class MLA1D(AbstractModule):
 
         # Extract dimensions from HF config
         num_heads = hf_config.num_attention_heads
+        q_lora_rank = hf_config.q_lora_rank
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -385,7 +393,8 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.WIDTH,
         )
 
-        wq_a_config = LinearConfig(
+        # Fused wq_a and wkv_a config
+        wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=None,
@@ -394,12 +403,6 @@ class MLA1D(AbstractModule):
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=None,
-        )
-
-        wkv_a_config = LinearConfig(
-            input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=None,
         )
 
@@ -566,26 +569,25 @@ class MLA1D(AbstractModule):
 
         # Set up CCLs
 
-        # Q
-        wq_a_rs_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, 192), core_grid=ttnn.CoreGrid(y=1, x=6), strategy=ttnn.ShardStrategy.WIDTH
-        )
-        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
-            cluster_axis=1,
-            dim=3,
-            memory_config=wq_a_rs_out_mem_config,
-            topology=ttnn.Topology.Linear,
-        )
-        wq_a_ag_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, 1536), core_grid=ttnn.CoreGrid(y=2, x=8), strategy=ttnn.ShardStrategy.WIDTH
-        )
-        wq_a_ag_config = AllGatherAsyncConfig(
+        # Fused wq_kv_a: AG + local reduce (since sub-tile RS not supported for new shapes)
+        wq_kv_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
             cluster_axis=1,
-            dim=3,
-            memory_config=wq_a_ag_out_mem_config,
+            dim=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
+        wq_kv_a_r_config = {
+            "dims": [1],
+            "output": None,
+            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
+        }
 
         # Q all-to-all
         wq_a2a_config = AllToAllAsyncGenericConfig(
@@ -603,30 +605,24 @@ class MLA1D(AbstractModule):
             memory_config=wq_a2a_reshard_out_mem_config,
         )  # 1,4,128,576, height sharded 8x8 [32,576]
 
-        # KV
-        wkv_a_ag_config = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
-            cluster_axis=1,
-            dim=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+        # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
+        # Q slice: width sharded for Q norm (1536 width on 8x2 grid = 96 per core)
+        q_slice_mem_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW, q_lora_rank), core_grid=ttnn.CoreGrid(y=2, x=8), strategy=ttnn.ShardStrategy.WIDTH
         )
-        wkv_a_r_config = {
-            "dims": [1],
-            "output": None,
-            "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            ),
-            "memory_config": ttnn.L1_MEMORY_CONFIG,
-        }
-        wkv_a_rs_config = ReduceScatterAsyncMinimalConfig(
-            cluster_axis=1,
-            dim=1,
+        q_slice_config = SliceConfig(
+            memory_config=q_slice_mem_config,
+        )
+        # KV nope slice: width sharded for KV norm (512 width on 8x2 grid = 32 per core)
+        kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
+            shape=(USERS_PER_ROW, kv_lora_rank), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
+        )
+        kv_nope_slice_config = SliceConfig(
+            memory_config=kv_nope_slice_mem_config,
+        )
+        # KV rope slice: interleaved since it goes through permute/reshard anyway
+        kv_rope_slice_config = SliceConfig(
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
         )
 
         flash_mla_a2a_config = AllToAllAsyncGenericConfig(
@@ -646,24 +642,17 @@ class MLA1D(AbstractModule):
             topology=ttnn.Topology.Linear,
         )
 
-        kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, 1, USERS_PER_ROW, 512), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
-        )
-        kv_nope_slice_config = SliceConfig(
-            memory_config=kv_nope_slice_mem_config,
-        )
-
         return {
             "num_heads": num_heads,
+            "q_lora_rank": q_lora_rank,
             "kv_lora_rank": kv_lora_rank,
             "qk_nope_head_dim": qk_nope_head_dim,
             "qk_rope_head_dim": qk_rope_head_dim,
             "qk_head_dim": qk_head_dim,
             "v_head_dim": v_head_dim,
             "input_memory_config": input_memory_config,
-            "wq_a": wq_a_config,
+            "wq_kv_a": wq_kv_a_config,
             "wq_b": wq_b_config,
-            "wkv_a": wkv_a_config,
             "wkv_b1": wkv_b1_config,
             "wkv_b2": wkv_b2_config,
             "wo": wo_config,
@@ -681,18 +670,16 @@ class MLA1D(AbstractModule):
             "flash_mla_out_reshard": flash_mla_out_reshard_config,
             "q_norm": q_norm_config,
             "kv_norm": kv_norm_config,
-            "wq_a_rs_decode": wq_a_rs_config,
-            "wq_a_ag_decode": wq_a_ag_config,
+            "wq_kv_a_ag_decode": wq_kv_a_ag_config,
+            "wq_kv_a_r_decode": wq_kv_a_r_config,
+            "q_slice_decode": q_slice_config,
+            "kv_nope_slice_decode": kv_nope_slice_config,
+            "kv_rope_slice_decode": kv_rope_slice_config,
             "wq_a2a_decode": wq_a2a_config,
             "wq_a2a_reshard_decode": wq_a2a_reshard_config,
-            "wkv_a_ag_decode": wkv_a_ag_config,
-            "wkv_a_r_decode": wkv_a_r_config,
-            "wkv_a_rs_decode": wkv_a_rs_config,
             "flash_mla_a2a_decode": flash_mla_a2a_config,
             "wo_ag_decode": wo_ag_config,
             "mesh_device": mesh_device,
-            "kv_nope_slice": kv_nope_slice_config,
-            "kv_rope_slice": kv_rope_slice_config,
         }
 
     @classmethod
@@ -852,6 +839,7 @@ class MLA1D(AbstractModule):
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
+        q_lora_rank = cfg["q_lora_rank"]
         kv_lora_rank = cfg["kv_lora_rank"]
         qk_nope_head_dim = cfg["qk_nope_head_dim"]
         qk_rope_head_dim = cfg["qk_rope_head_dim"]
@@ -864,51 +852,36 @@ class MLA1D(AbstractModule):
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
 
-        ###################################
-        ### Linear + AR: wq_a and wkv_a ###
-        ###################################
+        ##############################################
+        ### Fused Linear + AR: wq_kv_a (wq_a + wkv_a) ###
+        ##############################################
 
-        # wq_a
+        # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
-        tt_q = ttnn.linear(x, **cfg["wq_a"])
-        # 1,1,32,1536 width sharded 4x6 [32,64]
+        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+        # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
 
-        # wkv_a
-        # 1,1,32,896, width sharded 7x4 [32,32]
-        tt_kv = ttnn.linear(x, **cfg["wkv_a"])
-        # 1,1,32,576 width sharded 6x3 [32,576]
+        # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
+        tt_q_kv = ttnn.experimental.all_gather_async(
+            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_decode"])
+        )  # [1, num_devices, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(
+            tt_q_kv,
+            **cfg["wq_kv_a_r_decode"],
+        )  # [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
 
-        # AR q_a
-        # 1,1,32,1536 width sharded 4x6 [32,64]
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
-        )
-        # 1,1,32,192 width sharded 6x1 [32,32]
-        tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
-        # 1,1,32,1536, width sharded 8x2 [32,96]
-
-        # AR kv_a
-        # AG + Reduce b/c sub-tile RS not supported
-        # 1,1,32,576 width sharded 6x3 [32,576]
-        tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
-        )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
-        # 1,8,32,576 height sharded 1x1 [256,576]
-        tt_kv = ttnn.experimental.fast_reduce_nc(
-            tt_kv,
-            **cfg["wkv_a_r_decode"],
-        )  # [1, 1, bsz, kv_lora_rank + qk_rope_head_dim]
-        # 1,1,32,576 height sharded 1x1 [32,576]
-
+        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
+        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, bsz, q_lora_rank], **cfg["q_slice_decode"])
         tt_kv_nope = ttnn.slice(
-            tt_kv, [0, 0, 0, 0], [1, 1, bsz, kv_lora_rank], **cfg["kv_nope_slice"]
-        )  # TODO: file issue that Number of shards along width 18 must not exceed number of cores 16 assert uses input shape instead of output shape!
-        # 1,1,32,512 8x2 [32,32]
-        tt_kv_rope = ttnn.slice(
-            tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, bsz, kv_lora_rank + qk_rope_head_dim], **cfg["kv_rope_slice"]
+            tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, bsz, q_lora_rank + kv_lora_rank], **cfg["kv_nope_slice_decode"]
         )
-        # 1,1,32,64 L1 interleaved
-        ttnn.deallocate(tt_kv)
+        tt_kv_rope = ttnn.slice(
+            tt_q_kv,
+            [0, 0, 0, q_lora_rank + kv_lora_rank],
+            [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            **cfg["kv_rope_slice_decode"],
+        )
+        ttnn.deallocate(tt_q_kv)
 
         #####################
         ### Norm and Rope ###
@@ -1123,6 +1096,7 @@ class MLA1D(AbstractModule):
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
+        q_lora_rank = cfg["q_lora_rank"]
         kv_lora_rank = cfg["kv_lora_rank"]
         qk_nope_head_dim = cfg["qk_nope_head_dim"]
         qk_rope_head_dim = cfg["qk_rope_head_dim"]
@@ -1134,14 +1108,32 @@ class MLA1D(AbstractModule):
 
         seq_len = x.shape[2]
 
-        # wq_a and wq_b
-        tt_q = ttnn.linear(x, **cfg["wq_a"])
+        ##############################################
+        ### Fused Linear + AR: wq_kv_a (wq_a + wkv_a) ###
+        ##############################################
 
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
+        # Fused wq_kv_a matmul
+        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+
+        # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
+        tt_q_kv = ttnn.experimental.all_gather_async(
+            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
+        )  # [1, num_devices, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(
+            tt_q_kv, **cfg["wq_kv_a_r_prefill"]
+        )  # [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+
+        # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
+        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, seq_len, q_lora_rank])
+        tt_kv_nope = ttnn.slice(tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, seq_len, q_lora_rank + kv_lora_rank])
+        tt_kv_rope = ttnn.slice(
+            tt_q_kv,
+            [0, 0, 0, q_lora_rank + kv_lora_rank],
+            [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
         )
-        tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
+        ttnn.deallocate(tt_q_kv)
 
+        # Q path: norm + wq_b
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
@@ -1165,20 +1157,6 @@ class MLA1D(AbstractModule):
 
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
-
-        # KVPE Stuff
-        tt_kv = ttnn.linear(x, **cfg["wkv_a"])
-
-        tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_prefill"])
-        )  # [1, 1, seq_len / num_devices, kv_lora_rank + qk_rope_head_dim]
-        tt_kv = ttnn.experimental.fast_reduce_nc(
-            tt_kv, **cfg["wkv_a_r_prefill"]
-        )  # [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim]
-
-        tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len, kv_lora_rank])
-        tt_kv_rope = ttnn.slice(tt_kv, [0, 0, 0, kv_lora_rank], [1, 1, seq_len, kv_lora_rank + qk_rope_head_dim])
-        ttnn.deallocate(tt_kv)
 
         # KV Norm
         tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
