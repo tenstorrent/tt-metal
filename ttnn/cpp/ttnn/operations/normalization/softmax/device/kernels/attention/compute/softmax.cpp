@@ -266,9 +266,10 @@ void MAIN {
 
         // SUM reduce with reciprocal operation using PERSISTENT mode
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
+        // Use max_batch_tiles=1 for one-at-a-time mode to maintain numerical precision
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, Wt, 1, 0, 0, []() {
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, Wt, 1, 0, 0, 1, []() {
                     recip_tile_init();
                     recip_tile(0);
                 });

@@ -72,8 +72,8 @@ void MAIN {
          */
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        // Auto-batched STREAMING: library handles wait/pop automatically
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_reduce, cb_out, 1, Wt, 1);
+        // STREAMING with batching: All Wt tiles already in CB (see cumulative wait above)
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_reduce, cb_out, 1, Wt, 1, 0, 0, Wt);
         cb_pop_front(cb_inp, Wt);
         cb_pop_front(cb_reduce, 1);
     }
