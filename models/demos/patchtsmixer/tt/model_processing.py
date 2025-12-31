@@ -182,3 +182,16 @@ def preprocess_forecast_head(state_dict, base: str, device):
     b_tt = ttnn.from_torch(b.view(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     return w_tt, b_tt
+
+
+def preprocess_embedding_proj(state_dict, base: str, device):
+    # base = "patch_embed"
+    w = state_dict[f"{base}.proj.weight"]  # (d_model, patch_len)
+    b = state_dict[f"{base}.proj.bias"]  # (d_model,)
+
+    # transpose to (patch_len, d_model)
+    w = w.transpose(0, 1).contiguous()
+
+    w_tt = ttnn.from_torch(w.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b.view(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return w_tt, b_tt
