@@ -952,24 +952,20 @@ class MLA1D(AbstractModule):
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], **cfg["kv_concat"])
         # 1,1,32,576 L1 interleaved
 
-        # TODO: try to use scatter here
-
-        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # TODO: do we need this?
-        # 1,32,32,576 L1 interleaved
-        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
-
-        # 1,32,32,576 L1 interleaved
-        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
+        tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+        # 1,32,1(32),576 L1 interleaved
+        tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))
+        # 1,32,1(32),576 L1 interleaved
+        tt_kvpe = ttnn.mesh_partition(
+            tt_kvpe,
+            dim=1,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # 1,4,32,576 L1 interleaved
-        tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
-        # 1,4,1,576 L1 interleaved
-        tt_kvpe = tt_kvpe * scale  # Scale the input tensor
-        # 1,4,32,576 L1 interleaved
+        # 1,4,1(32),576 L1 interleaved
 
         tt_kvpe = ttnn.to_memory_config(tt_kvpe, **cfg["kvpe_reshard"])
-        # 1,4,32,576 height sharded 1x4 [32,576]
+        # 1,4,1(32),576 height sharded 1x4 [32,576]
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)
 
@@ -978,7 +974,7 @@ class MLA1D(AbstractModule):
         ##########################
 
         # Update KVPE Cache
-        # 1,4,32,576 height sharded 1x4 [32,576]
+        # 1,4,1(32),576 height sharded 1x4 [32,576]
         ttnn.experimental.paged_update_cache(
             kvpe_cache,
             tt_kvpe,
