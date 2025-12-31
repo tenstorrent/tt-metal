@@ -53,107 +53,24 @@ pytest {operation_dir}/test_dev/test_stage3_registration.py -v
 
 You MUST follow patterns from `ttnn/cpp/ttnn/operations/examples/example/`. Key patterns:
 
-**IMPORTANT**: The scaffolder creates these files you will modify:
-- `device/{operation_name}_op.hpp` - Device operation header with `ProgramFactory` struct
-- `device/{operation_name}_op.cpp` - Device operation implementation (already has stub `ProgramFactory::create`)
-- `device/{operation_name}_program_factory.hpp` - Shared variables struct (`{OperationName}SharedVariables`)
-- `device/{operation_name}_program_factory.cpp` - Program factory function stub (you implement this)
-
 ### Program Factory Structure (Created by Scaffolder)
-```cpp
-// In device/{operation_name}_program_factory.hpp (created by scaffolder)
-namespace ttnn::operations::{operation_name}::detail {
 
-struct {OperationName}SharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle compute_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> cores;
-};
+The scaffolder creates these files:
+- `device/{operation_name}_op.hpp` - `ProgramFactory` struct and `select_program_factory`
+- `device/{operation_name}_op.cpp` - `ProgramFactory::create` and `override_runtime_arguments`
+- `device/{operation_name}_program_factory.hpp` - `{OperationName}SharedVariables` struct
+- `device/{operation_name}_program_factory.cpp` - `{operation_name}_single_core()` stub (you implement)
 
-ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation_name}_single_core(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
-    /* operation-specific params */);
+**For detailed structure examples**: Load Stage 4 section from reference file (grep pattern: `## Stage 4: Device Operation`).
 
-}  // namespace ttnn::operations::{operation_name}::detail
-```
+### Official Code Patterns
 
-```cpp
-// In device/{operation_name}_op.hpp (created by scaffolder)
-struct {OperationName}DeviceOperation {
-    struct ProgramFactory {
-        using shared_variables_t = detail::{OperationName}SharedVariables;
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+**For all code patterns** (Work Distribution, Circular Buffers, Kernel Creation): Load `## Official TTNN Patterns Reference` section from reference file (grep pattern: `## Official TTNN Patterns Reference`, ~106 lines).
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-    };
-    using program_factory_t = std::variant<ProgramFactory>;
-};
-```
-
-### Work Distribution Pattern
-```cpp
-// Use split_work_to_cores for even distribution
-#include <tt-metalium/work_split.hpp>
-
-auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-uint32_t num_cores_y = compute_with_storage_grid_size.y;
-auto [num_cores, all_cores, core_group_1, core_group_2,
-      num_work_per_core_group_1, num_work_per_core_group_2] =
-    tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work_units);
-```
-
-### Circular Buffer Pattern
-```cpp
-// Standard CB indices
-uint32_t cb_input_idx = tt::CBIndex::c_0;    // Input CB
-uint32_t cb_output_idx = tt::CBIndex::c_2;   // Output CB
-// Additional CBs: c_1, c_3, c_4, etc.
-
-// Double-buffered CB (2 tiles)
-uint32_t num_tiles = 2;
-tt::tt_metal::CircularBufferConfig cb_config =
-    tt::tt_metal::CircularBufferConfig(
-        num_tiles * single_tile_size, {{cb_idx, cb_data_format}})
-        .set_page_size(cb_idx, single_tile_size);
-tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-```
-
-### Kernel Creation Pattern
-```cpp
-// Reader kernel (RISCV_0 / BRISC / NOC0)
-tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/{category}/{operation}/device/kernels/dataflow/reader_{operation}.cpp",
-    all_cores,
-    tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-// Writer kernel (RISCV_1 / NCRISC / NOC1)
-tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/{category}/{operation}/device/kernels/dataflow/writer_{operation}.cpp",
-    all_cores,
-    tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-// Compute kernel (optional)
-tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/{category}/{operation}/device/kernels/compute/{operation}_compute.cpp",
-    all_cores,
-    tt::tt_metal::ComputeConfig{
-        .math_fidelity = MathFidelity::HiFi4,
-        .compile_args = compute_compile_time_args});
-```
+**Key APIs to know:**
+- `split_work_to_cores()` - Distributes work evenly across cores
+- `CircularBufferConfig` - Creates double-buffered CBs (typically 2 tiles)
+- `CreateKernel()` - Creates reader/writer/compute kernels with compile-time args
 
 ### TensorAccessor Pattern
 
@@ -168,76 +85,13 @@ tt::tt_metal::CreateKernel(
 
 ### Stub Kernel Pattern (Passthrough with TensorAccessor)
 
-**Important**: Use TensorAccessor instead of the deprecated InterleavedAddrGenFast. TensorAccessor:
-- Works with both DRAM and L1 (interleaved and sharded tensors)
-- Handles bank addressing automatically
-- Provides flexible compile-time vs runtime argument configuration
+**For full kernel templates**: Load `### Kernel Stub Templates` section from reference file (grep pattern: `### Kernel Stub Templates`, ~69 lines).
 
-```cpp
-// Reader stub: Read tiles and push to CB
-// kernels/dataflow/reader_{operation}.cpp
-#include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    // Compile-time args
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr auto src_tensor_args = TensorAccessorArgs<1>();  // Starts at index 1
-
-    // Runtime args
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-
-    const uint32_t tile_bytes = get_tile_size(cb_id);
-
-    // Create TensorAccessor from args
-    const auto s = TensorAccessor(src_tensor_args, src_addr, tile_bytes);
-
-    uint32_t tile_id = start_id;
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_reserve_back(cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-        // Use get_noc_addr + noc_async_read (or noc_async_read_page helper)
-        noc_async_read(s.get_noc_addr(tile_id), l1_write_addr, tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_id, 1);
-        tile_id++;
-    }
-}
-
-// Writer stub: Pop from CB and write tiles
-// kernels/dataflow/writer_{operation}.cpp
-#include <stdint.h>
-#include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
-    // Compile-time args
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr auto dst_tensor_args = TensorAccessorArgs<1>();  // Starts at index 1
-
-    // Runtime args
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-
-    const uint32_t tile_bytes = get_tile_size(cb_id);
-
-    // Create TensorAccessor from args
-    const auto d = TensorAccessor(dst_tensor_args, dst_addr, tile_bytes);
-
-    uint32_t tile_id = start_id;
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        cb_wait_front(cb_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
-        // Use get_noc_addr + noc_async_write (or noc_async_write_page helper)
-        noc_async_write(l1_read_addr, d.get_noc_addr(tile_id), tile_bytes);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id, 1);
-        tile_id++;
-    }
-}
-```
+**Key pattern**:
+- **Reader**: `cb_reserve_back` → `noc_async_read(s.get_noc_addr(tile_id), ...)` → `cb_push_back`
+- **Writer**: `cb_wait_front` → `noc_async_write(..., d.get_noc_addr(tile_id))` → `cb_pop_front`
+- **Compute**: `copy_tile(cb_in, 0, cb_out)` for passthrough stubs
+- Use TensorAccessor instead of deprecated InterleavedAddrGenFast
 
 ---
 
