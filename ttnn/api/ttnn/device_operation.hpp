@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <random>
+#include <ranges>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -344,12 +345,9 @@ void launch_operation_with_adapter(
 
 // Returns true if the tensor is fully replicated, false otherwise.
 inline bool is_fully_replicated(const Tensor& tensor) {
-    for (const auto& placement : tensor.tensor_topology().placements()) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(tensor.tensor_topology().placements(), [](const auto& placement) {
+        return !std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    });
 }
 
 // Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
@@ -483,8 +481,15 @@ ttnn::MeshDevice* get_mesh_device(
     return mesh_device;
 }
 
+/**
+ * Launch an operation on a mesh device.
+ *
+ * @param operation_attributes The operation attributes.
+ * @param tensor_args The tensor arguments.
+ * @return Outputs are allocated but values are not immediately available till the operation is complete.
+ */
 template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_return_value_t launch_on_device(
+typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
@@ -492,7 +497,7 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     tt::tt_metal::GraphTracker::instance().track_function_start(
-        get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
+        detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (first_tensor.has_value()) [[likely]] {
@@ -504,7 +509,7 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
-    ttnn::MeshDevice* mesh_device = get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
@@ -549,7 +554,7 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
         }
     }
 
-    launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
+    detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
@@ -562,9 +567,11 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    return launch_on_device<device_operation_t>(operation_attributes, tensor_args);
+    return launch<device_operation_t>(operation_attributes, tensor_args);
 }
 
 }  // namespace detail
+
+using ttnn::device_operation::detail::launch;
 
 }  // namespace ttnn::device_operation

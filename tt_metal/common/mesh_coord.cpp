@@ -322,6 +322,7 @@ bool MeshCoordinateRange::intersects(const MeshCoordinateRange& range) const {
     // Fallback: iterate over the smaller range and test containment to cover wrap semantics.
     const MeshCoordinateRange& smaller = (range.shape().mesh_size() <= this->shape().mesh_size()) ? range : *this;
     const MeshCoordinateRange& larger = (&smaller == this) ? range : *this;
+    // NOLINTNEXTLINE(readability-use-anyofallof)
     for (const auto& c : smaller) {
         if (larger.contains(c)) {
             return true;

@@ -478,7 +478,7 @@ ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using OperationType = ttnn::operations::transformer::sdpa::SDPAOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
             .output_mem_config = output_mem_config,

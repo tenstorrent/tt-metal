@@ -12,6 +12,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <vector>
@@ -548,13 +549,7 @@ void print_help() {
 }
 
 bool has_flag(const std::vector<std::string>& input_args, const std::string& flag) {
-    for (const auto& arg : input_args) {
-        if (arg == flag) {
-            return true;
-        }
-    }
-
-    return false;
+    return std::ranges::any_of(input_args, [&flag](const auto& arg) { return arg == flag; });
 }
 
 std::optional<int> get_device_id_from_args(const std::vector<std::string>& input_args) {

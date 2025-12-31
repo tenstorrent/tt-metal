@@ -81,7 +81,7 @@ ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tenso
     const tt::tt_metal::MemoryConfig& output_mem_config,
     int64_t dim) {
     using OperationType = ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_mem_config = output_mem_config,
             .dim = dim,
