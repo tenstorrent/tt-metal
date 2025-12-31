@@ -83,6 +83,9 @@ class MathOperation(Enum):
         "relu_max", MathOpType.SFPU_UNARY
     )  # ReLU_max(x, U) = max(0, min(x, U))
     ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)  # ReLU_min(x, L) = max(x, L)
+    TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
+    TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
+    TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
@@ -94,6 +97,9 @@ class MathOperation(Enum):
     SfpuElwsub = OpSpec("SUB", MathOpType.SFPU_BINARY)
     SfpuXlogy = OpSpec("XLOGY", MathOpType.SFPU_BINARY)
     SfpuAddTopRow = OpSpec("ADD_TOP_ROW", MathOpType.SFPU_BINARY)
+    SfpuElwdiv = OpSpec("DIV", MathOpType.SFPU_BINARY)
+    SfpuElwrsub = OpSpec("RSUB", MathOpType.SFPU_BINARY)
+    SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
@@ -238,6 +244,16 @@ class DestSync(Enum):
 class Tilize(Enum):
     Yes = True
     No = False
+
+
+class FastMode(Enum):
+    Yes = "true"
+    No = "false"
+
+
+class StableSort(Enum):
+    Yes = "true"
+    No = "false"
 
 
 class Mailbox(Enum):

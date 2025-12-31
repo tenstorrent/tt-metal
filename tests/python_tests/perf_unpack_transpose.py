@@ -10,7 +10,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 
 
@@ -54,7 +54,7 @@ def test_perf_unpack_transpose(
         runtimes=[
             TILE_COUNT(tile_count),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
-            UNPACK_TRANS_WITHING_FACE(unpack_transpose_within_face),
+            UNPACK_TRANS_WITHIN_FACE(unpack_transpose_within_face),
         ],
         variant_stimuli=StimuliConfig(
             None,

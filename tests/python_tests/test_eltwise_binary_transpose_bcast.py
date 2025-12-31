@@ -30,7 +30,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tilize_untilize import tilize, tilize_block
 from helpers.utils import passed_test
@@ -126,7 +126,7 @@ def test_eltwise_binary_transpose_bcast(
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_srca),
-            UNPACK_TRANS_WITHING_FACE(transpose_srca),
+            UNPACK_TRANS_WITHIN_FACE(transpose_srca),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(4),
         ],

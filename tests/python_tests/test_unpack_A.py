@@ -37,7 +37,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.utils import passed_test
 
@@ -461,7 +461,7 @@ def test_unpack_comprehensive(
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose_of_faces),
-            UNPACK_TRANS_WITHING_FACE(within_face_16x16_transpose),
+            UNPACK_TRANS_WITHIN_FACE(within_face_16x16_transpose),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(face_r_dim=face_r_dim),

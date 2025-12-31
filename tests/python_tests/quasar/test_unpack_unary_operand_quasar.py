@@ -36,7 +36,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHING_FACE,
+    UNPACK_TRANS_WITHIN_FACE,
     UNPACKER_ENGINE_SEL,
 )
 from helpers.utils import passed_test
@@ -181,7 +181,7 @@ def test_unpack_unary_operand_quasar(
             ),
             DEST_SYNC(),
             UNPACK_TRANS_FACES(transpose_en),
-            UNPACK_TRANS_WITHING_FACE(transpose_en),
+            UNPACK_TRANS_WITHIN_FACE(transpose_en),
         ],
         runtimes=[
             TEST_FACE_DIMS(),

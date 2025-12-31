@@ -9,11 +9,10 @@
 #include "ckernel_sfpu_binary.h"
 #include "llk_sfpu_types.h"
 
-using namespace ckernel;
-using namespace ckernel::sfpu;
-
 namespace test_utils
 {
+using namespace ckernel;
+using namespace ckernel::sfpu;
 
 /**
  * Template function to call SFPU operations with parameterized iteration count
@@ -25,7 +24,7 @@ namespace test_utils
  * @param operation The SFPU operation type to execute
  * @param math_format Optional math format for operations that need format-specific behavior
  */
-template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool FAST_MODE = false, bool STABLE_SORT = false>
 void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
 {
     switch (operation)
@@ -60,8 +59,8 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
             _calculate_exp2_<APPROX_MODE, ITERATIONS>();
             break;
         case SfpuType::exponential:
-            _init_exponential_<APPROX_MODE, false /*fast_mode*/, 0x3F800000 /* exp_base_scale_factor */>();
-            _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, false /* fast_approx */, false /* skip_positive_check */>(
+            _init_exponential_<APPROX_MODE, FAST_MODE, 0x3F800000 /* exp_base_scale_factor */>();
+            _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */>(
                 p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
             break;
         case SfpuType::fill:
@@ -103,7 +102,7 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
             break;
         case SfpuType::rsqrt:
             _init_rsqrt_<APPROX_MODE>();
-            _calculate_rsqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, false>(ITERATIONS);
+            _calculate_rsqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>(ITERATIONS);
             break;
         case SfpuType::silu:
             _calculate_silu_<APPROX_MODE, ITERATIONS>();
@@ -113,7 +112,7 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
             break;
         case SfpuType::sqrt:
             _init_sqrt_<APPROX_MODE>();
-            _calculate_sqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, false>(ITERATIONS);
+            _calculate_sqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>(ITERATIONS);
             break;
         case SfpuType::square:
             _calculate_square_<APPROX_MODE, ITERATIONS>();
@@ -121,11 +120,32 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
         case SfpuType::threshold:
             _calculate_threshold_<APPROX_MODE, ITERATIONS>(5.0f, 10.0f);
             break;
+        case SfpuType::topk_local_sort:
+            _bitonic_topk_phases_steps<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
+                /* idir */ 0,
+                /* i_end_phase */ 5,
+                /* i_start_phase */ 0,
+                /* i_end_step */ 10,
+                /* i_start_step */ 0);
+            break;
+        case SfpuType::topk_merge:
+            _bitonic_topk_merge<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
+                /* m_iter */ 5,
+                /* k */ 10);
+            break;
+        case SfpuType::topk_rebuild:
+            _bitonic_topk_rebuild<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
+                /* idir */ 0,
+                /* m_iter */ 5,
+                /* k */ 10,
+                /* logk */ 3,
+                /* skip_second */ 0);
+            break;
         case SfpuType::relu_max:
-            ckernel::sfpu::_relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
+            _relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
             break;
         case SfpuType::relu_min:
-            ckernel::sfpu::_relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
+            _relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
             break;
         default:
             return; // Unsupported op – should never happen
@@ -140,7 +160,10 @@ void call_binary_sfpu_operation(const uint dst_index_in0 = 0, const uint dst_ind
         case BinaryOp::ADD:
         case BinaryOp::SUB:
         case BinaryOp::MUL:
+        case BinaryOp::DIV:
+        case BinaryOp::RSUB:
         case BinaryOp::XLOGY:
+        case BinaryOp::POW:
             _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
             _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
             break;

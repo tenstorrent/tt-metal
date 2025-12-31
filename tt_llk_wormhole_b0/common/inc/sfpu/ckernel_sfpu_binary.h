@@ -75,7 +75,11 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
         v_if (pow_rounded == pow)
         {
             // if pow is odd integer, set result to negative
-            v_if (pow_int & 0x1)
+            // Check if odd by dividing by 2 and comparing with floor
+            sfpi::vFloat half_pow         = pow_rounded * 0.5f;
+            sfpi::vInt half_pow_int       = sfpi::float_to_int16(half_pow, 0);
+            sfpi::vFloat half_pow_floored = sfpi::int32_to_float(half_pow_int, 0);
+            v_if (half_pow != half_pow_floored)
             {
                 result = sfpi::setsgn(result, 1);
             }

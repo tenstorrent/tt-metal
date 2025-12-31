@@ -126,7 +126,7 @@ constexpr FormatConfig get_data_formats(DataFormat unpack_in, DataFormat unpack_
  * Uses the global constexpr:
  *   - UNPACKING_TO_DEST: Indicates whether unpacking targets the destination register.
  */
-template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC>
+template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC, bool unpack_to_dest>
 constexpr DataFormat infer_unpack_out()
 {
     if constexpr (INPUT == DataFormat::Float32 && !unpack_to_dest)
@@ -157,7 +157,7 @@ constexpr DataFormat infer_unpack_out()
  *
  * @return FormatConfig struct containing all formats
  */
-template <DataFormat INPUT, DataFormat OUTPUT, DataFormat unpack_out, bool FP32_ACC>
+template <DataFormat INPUT, DataFormat OUTPUT, DataFormat unpack_out, bool FP32_ACC, bool unpack_to_dest>
 constexpr DataFormat infer_pack_in()
 {
     if constexpr (is_wormhole && FP32_ACC && OUTPUT == DataFormat::Float16)
@@ -210,7 +210,7 @@ constexpr DataFormat infer_pack_in()
     return FP32_ACC ? OUTPUT : INPUT;
 }
 
-template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC>
+template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC, bool unpack_to_dest>
 constexpr FormatConfig infer_data_formats()
 {
     // The following two formats are hard-coded for this test case
@@ -218,12 +218,14 @@ constexpr FormatConfig infer_data_formats()
     constexpr DataFormat pack_out  = OUTPUT; // The final desired output format after packing (format in L1 after leaving the pipeline)
 
     // Determine the intermediate formats
-    constexpr DataFormat unpack_out = infer_unpack_out<INPUT, OUTPUT, FP32_ACC>(); // output format for Unpacker, desired format in src register(s)
+    constexpr DataFormat unpack_out =
+        infer_unpack_out<INPUT, OUTPUT, FP32_ACC, unpack_to_dest>(); // output format for Unpacker, desired format in src register(s)
     constexpr DataFormat math =
         unpack_out; // The data format used for mathematical computations, desired format in dest register (typically matches unpack_out)
     constexpr DataFormat pack_in =
-        infer_pack_in<INPUT, OUTPUT, unpack_out, FP32_ACC>(); // input to the packing stage, determines what gasket can convert from dest register
-                                                              // potentially different from unpack_out and pack_out depending on FP32 accumulation
+        infer_pack_in<INPUT, OUTPUT, unpack_out, FP32_ACC, unpack_to_dest>(); // input to the packing stage, determines what gasket can convert from dest
+                                                                              // register potentially different from unpack_out and pack_out depending on FP32
+                                                                              // accumulation
 
     // Return a FormatConfig struct capturing all the inferred formats needed for this stage
     return get_data_formats(unpack_in, unpack_out, math, pack_in, pack_out);
@@ -263,12 +265,11 @@ constexpr std::array<FormatConfig, N> build_data_formats(std::index_sequence<Is.
  *
  * @return A constexpr std::array of FormatConfig objects of length N.
  */
-template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC, size_t N>
+template <DataFormat INPUT, DataFormat OUTPUT, bool FP32_ACC, bool unpack_to_dest, size_t N>
 constexpr std::array<FormatConfig, N> data_formats()
 {
-    constexpr auto intermediate_config = infer_data_formats<INPUT, INPUT, FP32_ACC>();
-    constexpr auto final_config        = infer_data_formats<INPUT, OUTPUT, FP32_ACC>();
-
+    constexpr auto intermediate_config = infer_data_formats<INPUT, INPUT, FP32_ACC, unpack_to_dest>();
+    constexpr auto final_config        = infer_data_formats<INPUT, OUTPUT, FP32_ACC, unpack_to_dest>();
     return build_data_formats<N>(std::make_index_sequence<N> {}, intermediate_config, final_config);
 }
 #endif
