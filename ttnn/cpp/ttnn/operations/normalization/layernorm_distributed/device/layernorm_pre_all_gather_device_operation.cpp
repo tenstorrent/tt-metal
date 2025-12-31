@@ -4,6 +4,7 @@
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -90,25 +91,27 @@ LayerNormPreAllGatherDeviceOperation::tensor_return_value_t LayerNormPreAllGathe
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<
-    LayerNormPreAllGatherDeviceOperation::operation_attributes_t,
-    LayerNormPreAllGatherDeviceOperation::tensor_args_t>
-LayerNormPreAllGatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn::prim {
+
+Tensor layer_norm_pre_all_gather(
     const Tensor& input,
-    LayerNormDistributedType norm_type,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const LayerNormProgramConfig& program_config,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .norm_type = norm_type,
             .dtype = dtype,
             .compute_kernel_config = compute_kernel_config,
             .program_config = program_config,
             .use_2d_core_grid = use_2d_core_grid,
         },
-        tensor_args_t{.input = input}};
+        OperationType::tensor_args_t{.input = input});
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

@@ -10,9 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "layernorm_post_all_gather_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "layernorm_post_all_gather_device_operation_types.hpp"
 
 namespace ttnn::operations::normalization {
@@ -36,25 +33,23 @@ struct LayerNormPostAllGatherDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const Tensor& stats,
-        LayerNormDistributedType norm_type,
-        float eps,
-        const std::optional<const Tensor>& gamma,
-        const std::optional<const Tensor>& beta,
-        const MemoryConfig& memory_config,
-        const DeviceComputeKernelConfig& compute_kernel_config,
-        const std::optional<DataType>& dtype,
-        const std::optional<bool>& use_2d_core_grid,
-        const LayerNormProgramConfig& program_config);
 };
 
 }  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {
-constexpr auto layer_norm_post_all_gather = ttnn::register_operation<
-    "ttnn::prim::layer_norm_post_all_gather",
-    ttnn::operations::normalization::LayerNormPostAllGatherDeviceOperation>();
+
+Tensor layer_norm_post_all_gather(
+    const Tensor& input,
+    const Tensor& stats,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    float eps,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const MemoryConfig& memory_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<DataType>& dtype,
+    const std::optional<bool>& use_2d_core_grid,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config);
+
 }  // namespace ttnn::prim

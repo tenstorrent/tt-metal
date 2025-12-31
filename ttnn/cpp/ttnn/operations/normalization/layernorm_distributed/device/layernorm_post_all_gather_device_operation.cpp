@@ -4,6 +4,7 @@
 
 #include "layernorm_post_all_gather_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -182,13 +183,14 @@ LayerNormPostAllGatherDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<
-    LayerNormPostAllGatherDeviceOperation::operation_attributes_t,
-    LayerNormPostAllGatherDeviceOperation::tensor_args_t>
-LayerNormPostAllGatherDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn::prim {
+
+Tensor layer_norm_post_all_gather(
     const Tensor& input,
     const Tensor& stats,
-    LayerNormDistributedType norm_type,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
     float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -196,9 +198,10 @@ LayerNormPostAllGatherDeviceOperation::invoke(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const LayerNormProgramConfig& program_config) {
-    return {
-        operation_attributes_t{
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config) {
+    using OperationType = ttnn::operations::normalization::LayerNormPostAllGatherDeviceOperation;
+    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+        OperationType::operation_attributes_t{
             .norm_type = norm_type,
             .eps = eps,
             .memory_config = memory_config,
@@ -207,11 +210,11 @@ LayerNormPostAllGatherDeviceOperation::invoke(
             .use_2d_core_grid = use_2d_core_grid,
             .program_config = program_config,
         },
-        tensor_args_t{
+        OperationType::tensor_args_t{
             .input = input,
             .stats = stats,
             .gamma = gamma.has_value() ? std::make_optional(gamma.value()) : std::nullopt,
-            .beta = beta.has_value() ? std::make_optional(beta.value()) : std::nullopt}};
+            .beta = beta.has_value() ? std::make_optional(beta.value()) : std::nullopt});
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

@@ -9,7 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "layernorm_pre_all_gather_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
 
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
 
@@ -34,28 +33,18 @@ struct LayerNormPreAllGatherDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        LayerNormDistributedType norm_type,
-        const std::optional<tt::tt_metal::DataType>& dtype,
-        const DeviceComputeKernelConfig& compute_kernel_config,
-        const LayerNormProgramConfig& program_config,
-        const std::optional<bool>& use_2d_core_grid);
 };
 
-// Plain function to invoke the device operation
-inline Tensor layer_norm_pre_all_gather(
+}  // namespace ttnn::operations::normalization
+
+namespace ttnn::prim {
+
+Tensor layer_norm_pre_all_gather(
     const Tensor& input,
-    LayerNormDistributedType norm_type,
+    ttnn::operations::normalization::LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const LayerNormProgramConfig& program_config,
-    const std::optional<bool>& use_2d_core_grid) {
-    auto [operation_attributes, tensor_args] = LayerNormPreAllGatherDeviceOperation::invoke(
-        input, norm_type, dtype, compute_kernel_config, program_config, use_2d_core_grid);
-    return ttnn::device_operation::detail::invoke<LayerNormPreAllGatherDeviceOperation>(
-        operation_attributes, tensor_args);
-}
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const std::optional<bool>& use_2d_core_grid);
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim
