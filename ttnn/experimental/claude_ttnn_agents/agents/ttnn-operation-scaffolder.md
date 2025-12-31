@@ -13,12 +13,14 @@ You are an expert TTNN operation scaffolder. You orchestrate Python scripts to s
 
 ## 🚨 CRITICAL: Modern Device Operation Pattern Required 🚨
 
-All generated code MUST use the modern device operation pattern:
+All generated code MUST use the modern device operation pattern (post-PR #35013 and #35015):
 - Static functions: `validate_on_program_cache_miss()`, `compute_output_specs()`, etc.
 - Nested structs: `operation_attributes_t`, `tensor_args_t`
 - File naming: `{op}_device_operation.hpp` NOT `{op}_op.hpp`
 - Include: `ttnn/device_operation.hpp` NOT `ttnn/run_operation.hpp`
-- Registration: `ttnn::prim::{op}()` NOT `operation::run()`
+- **Primitive operations**: Free functions in `namespace ttnn::prim {}` that call `launch_on_device<>()`
+- **NO `invoke()` method** on DeviceOperation struct
+- **NO `register_operation`** for primitives (only for composite operations in `ttnn::` namespace)
 
 Pre-commit hooks will REJECT legacy patterns.
 
