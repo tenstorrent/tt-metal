@@ -6,7 +6,9 @@
 #include <emmintrin.h>
 #include <cerrno>
 #include <fmt/base.h>
+#if TT_METAL_ENABLE_AVX
 #include <immintrin.h>
+#endif
 #include <smmintrin.h>
 #include <cstdlib>
 #include <tt-metalium/allocator.hpp>
@@ -75,6 +77,18 @@ void* align(void* ptr, std::size_t max_alignment) {
 
 #define INNER_LOOP 8
 
+constexpr uint32_t kSseAlignmentBytes = sizeof(__m128);
+constexpr uint32_t kSseBlockBytes = INNER_LOOP * sizeof(__m128);
+#if TT_METAL_ENABLE_AVX
+constexpr uint32_t kMemcpyAlignmentBytes = sizeof(__m256i);
+constexpr uint32_t kStreamingAlignmentBytes = sizeof(__m256);
+constexpr uint32_t kStreamingBlockBytes = INNER_LOOP * sizeof(__m256);
+#else
+constexpr uint32_t kMemcpyAlignmentBytes = sizeof(__m128i);
+constexpr uint32_t kStreamingAlignmentBytes = kSseAlignmentBytes;
+constexpr uint32_t kStreamingBlockBytes = kSseBlockBytes;
+#endif
+
 template <bool stream_load, bool aligned_load>
 void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     size_t num_lines = n / (INNER_LOOP * sizeof(__m128i));
@@ -109,6 +123,9 @@ void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size
 
 template <bool stream_load, bool aligned_load>
 void nt_memcpy_256b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
+#if !TT_METAL_ENABLE_AVX
+    nt_memcpy_128b<stream_load, aligned_load>(dst, src, n);
+#else
     size_t num_lines = n / (INNER_LOOP * sizeof(__m256i));
     constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m256i);
     size_t i;
@@ -138,6 +155,7 @@ void nt_memcpy_256b(uint8_t* __restrict dst, const uint8_t* __restrict src, size
     if (num_lines > 0) {
         tt_driver_atomics::sfence();
     }
+#endif
 }
 
 int main(int argc, char** argv) {
@@ -150,7 +168,7 @@ int main(int argc, char** argv) {
     bool simulate_write_ptr_update = false;
     uint32_t write_ptr_readback_interval = 0;
     uint32_t copy_mode = 0;
-    constexpr uint32_t memcpy_alignment = sizeof(__m256i);
+    constexpr uint32_t memcpy_alignment = kMemcpyAlignmentBytes;
     std::size_t addr_align = memcpy_alignment;
 
     try {
@@ -223,20 +241,19 @@ int main(int argc, char** argv) {
         if (copy_mode >= 2 && copy_mode <= 7) {
             if (copy_mode == 2 || copy_mode == 3) {
                 TT_ASSERT(
-                    addr_align % sizeof(__m128) == 0,
+                    addr_align % kSseAlignmentBytes == 0,
                     "Address alignment must be a multiple of 16 when using nt_memcpy");
             } else if (copy_mode == 5 || copy_mode == 6) {
                 TT_ASSERT(
-                    addr_align % sizeof(__m256) == 0,
+                    addr_align % kStreamingAlignmentBytes == 0,
                     "Address alignment must be a multiple of 32 when using nt_memcpy");
             }
             if (copy_mode >= 2 && copy_mode <= 4) {
                 TT_ASSERT(
-                    transfer_size % (INNER_LOOP * sizeof(__m128)) == 0,
-                    "Each copy to hugepage must be mod32==0 when using nt_memcpy");
+                    transfer_size % kSseBlockBytes == 0, "Each copy to hugepage must be mod32==0 when using nt_memcpy");
             } else if (copy_mode >= 5 && copy_mode <= 7) {
                 TT_ASSERT(
-                    transfer_size % (INNER_LOOP * sizeof(__m256)) == 0,
+                    transfer_size % kStreamingBlockBytes == 0,
                     "Each copy to hugepage must be mod64==0 when using nt_memcpy");
             }
         }
