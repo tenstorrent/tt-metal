@@ -180,13 +180,6 @@ def run_with_cache_comparison(
     if getattr(config, "measure_device_perf", False):
         device_perf_cached = gather_single_test_perf(device, status_cached)
 
-    # Capture peak memory if enabled (after both runs complete)
-    peak_memory_dict = None
-    if getattr(config, "measure_memory", False):
-        from sweep_utils.memory_utils import capture_peak_memory_with_cache_comparison
-
-        peak_memory_dict = capture_peak_memory_with_cache_comparison(test_module, test_vector, device)
-
     # Determine combined status and message
     if not status_uncached:
         if status_cached:
