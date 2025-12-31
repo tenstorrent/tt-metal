@@ -31,6 +31,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <chrono>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -38,6 +39,8 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+static constexpr uint32_t trace_iters = 10;
 
 struct MeshDescriptor {
     // If specified, the fixture will open a mesh device with the specified shape and offset.
@@ -49,7 +52,7 @@ struct MeshDescriptor {
 
     int num_cqs = 1;
     uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
-    uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
+    uint32_t trace_region_size = 1u << 20;  // statically allocate 1 MiB for trace region
     uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
 };
 
@@ -231,14 +234,15 @@ int main() {
     uint32_t link_to_use = links[0];
 
     CoreCoord receiver_coord = dst_dev->worker_core_from_logical_core(fabric_desc.receiver_core);
+    uint32_t fabric_max_packet_size = static_cast<uint32_t>(tt_fabric::get_tt_fabric_max_payload_size_bytes());
     std::vector<uint32_t> writer_rta = {
-        (uint32_t)dst_buf->address(),        // 0: dst_base (receiver DRAM offset)
-        (uint32_t)fabric_desc.mesh_id,       // 1: dst_mesh_id (logical)
-        (uint32_t)fabric_desc.dst_chip,      // 2: dst_dev_id  (logical)
-        (uint32_t)receiver_coord.x,          // 3: receiver_noc_x
-        (uint32_t)receiver_coord.y,          // 4: receiver_noc_y
-        (uint32_t)cur_global_sema.address()  // 5: receiver L1 semaphore addr
-    };
+        (uint32_t)dst_buf->address(),         // 0: dst_base (receiver DRAM offset)
+        (uint32_t)fabric_desc.mesh_id,        // 1: dst_mesh_id (logical)
+        (uint32_t)fabric_desc.dst_chip,       // 2: dst_dev_id  (logical)
+        (uint32_t)receiver_coord.x,           // 3: receiver_noc_x
+        (uint32_t)receiver_coord.y,           // 4: receiver_noc_y
+        (uint32_t)cur_global_sema.address(),  // 5: receiver L1 semaphore addr
+        fabric_max_packet_size};
     // Append fabric args (encapsulate routing , link identifiers for fabric traffic)
     tt_fabric::append_fabric_connection_rt_args(
         src_fabric_node,
@@ -255,10 +259,23 @@ int main() {
     sender_workload.add_program(distributed::MeshCoordinateRange(src_mesh_coord), std::move(sender_program));
     receiver_workload.add_program(distributed::MeshCoordinateRange(dst_mesh_coord), std::move(receiver_program));
 
+    // warm-up run
     distributed::EnqueueMeshWorkload(cq, receiver_workload, /*blocking=*/false);
-    distributed::EnqueueMeshWorkload(cq, sender_workload, /*blocking=*/false);
+    distributed::EnqueueMeshWorkload(cq, sender_workload, /*blocking=*/true);
 
+    // trace iteration
+    auto trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    for (uint32_t i = 0; i < trace_iters; ++i) {
+        distributed::EnqueueMeshWorkload(cq, receiver_workload, /*blocking=*/false);
+        distributed::EnqueueMeshWorkload(cq, sender_workload, /*blocking=*/false);
+    }
+    mesh_device->end_mesh_trace(cq.id(), trace_id);
+
+    auto t0 = std::chrono::steady_clock::now();
+    mesh_device->replay_mesh_trace(cq.id(), trace_id, /*blocking=*/false);
     distributed::Finish(cq);
+    auto t1 = std::chrono::steady_clock::now();
+    mesh_device->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> rx_written_data(num_words, 0u);
     distributed::ReadShard(cq, rx_written_data, dst_buf, dst_mesh_coord, /*blocking=*/true);
@@ -274,4 +291,20 @@ int main() {
     // Teardown mesh device
     mesh_device->close();
     mesh_device.reset();
+
+    // Print performance metrics
+    const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
+    const double e2e_sec = (trace_iters > 0) ? (e2e_sec_total / static_cast<double>(trace_iters)) : 0.0;
+    const uint64_t bytes = static_cast<uint64_t>(buffer_size);
+    const double GB = static_cast<double>(bytes) / 1e9;          // gigabytes
+    const double GB_s = (e2e_sec > 0.0) ? (GB / e2e_sec) : 0.0;  // GB per second
+    const double ms = e2e_sec * 1000.0;
+
+    log_info(tt::LogTest, "=== Performance Metrics ===");
+    log_info(tt::LogTest, "  Buffer Size:         {} bytes ({:.6f} GB)", bytes, GB);
+    log_info(tt::LogTest, "  Iterations:          {}", trace_iters);
+    log_info(tt::LogTest, "  Total Time:          {:.6f} sec", e2e_sec_total);
+    log_info(tt::LogTest, "  Avg Time/Iteration:  {:.6f} sec ({:.3f} ms)", e2e_sec, ms);
+    log_info(tt::LogTest, "  Throughput:          {:.3f} GB/s", GB_s);
+    log_info(tt::LogTest, "===========================");
 }
