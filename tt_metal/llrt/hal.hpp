@@ -11,7 +11,6 @@
 
 #include <sys/types.h>
 #include <cstddef>
-#include <ranges>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/enum.hpp>
@@ -68,7 +67,12 @@ public:
         return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
     }
     bool empty() const {
-        return std::ranges::all_of(masks_, [](const auto& mask) { return mask == 0; });
+        for (const auto& mask : masks_) {
+            if (mask != 0) {
+                return false;
+            }
+        }
+        return true;
     }
     // Returns the bitmask of processors for the given core type.
     // Bit i set <=> processor index i is in the set.
