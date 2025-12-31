@@ -1,3 +1,5 @@
+import torch
+
 import ttnn
 
 
@@ -25,7 +27,7 @@ class TtPatchTSMixerPositionalEncoding:
         pe: stored as (1, 1, N_p, D) TTNN tensor for broadcast
     """
 
-    def __init__(self, device, base_address: str, parameters: dict):
+    def __init__(self, device, base_address: str, parameters: dict, *, num_patches: int, d_model: int):
         self.device = device
         self.base = base_address
         self.pe = parameters[f"{self.base}.pe"]
@@ -467,9 +469,10 @@ class TtPatchTSMixerForecastHead:
         self.weight = parameters[f"{self.base}.proj.weight"]
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
 
-    def __call__(self, x, *, B=None, C=None, Np=None, D=None):
+    def __call__(self, x):
         # x: (B, C, Np, D)
         # flatten last two dims -> (B, C, 1, Np*D)
+        B, C, Np, D = x.shape
         x = ttnn.reshape(x, (B, C, 1, Np * D))
 
         # linear over last dim -> (B, C, 1, H)
@@ -478,5 +481,203 @@ class TtPatchTSMixerForecastHead:
 
         # (B, C, 1, H) -> (B, H, C)
         y = ttnn.permute(y, (0, 3, 2, 1))  # (B, H, 1, C)
+
+        return y
+
+
+class TtPatchTSMixerPatchify:
+    """
+    Bring-up version:
+      - patchify/unfold done on host (torch)
+      - output moved to device as a TTNN tensor
+
+    Later do a full port to TTNN.
+
+    Input torch shape expected: (B, L, C)  (HF-style)
+    Output TTNN tensor: (B, C, N_patches, patch_length)
+    """
+
+    def __init__(self, *, context_length, patch_length, patch_stride):
+        self.context_length = context_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+        new_len = patch_length + patch_stride * (self.num_patches - 1)
+        self.sequence_start = context_length - new_len
+
+    def __call__(self, x_torch: torch.Tensor, *, device, dtype=ttnn.bfloat16):
+        # x_torch: (B, L, C)
+        B, L, C = x_torch.shape
+        if L != self.context_length:
+            raise ValueError(f"Expected sequence length {self.context_length}, got {L}")
+
+        # crop left side if needed
+        x = x_torch[:, self.sequence_start :, :]  # (B, new_len, C)
+
+        # unfold along time
+        patches = x.unfold(dimension=1, size=self.patch_length, step=self.patch_stride)
+        # patches: (B, N_patches, C, patch_length)
+
+        # transpose to (B, C, N_patches, patch_length)
+        patches = patches.transpose(1, 2).contiguous()
+
+        # move to device
+        return ttnn.from_torch(patches, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+
+class TtPatchTSMixerEmbedding:
+    """
+    TTNN equivalent of PatchTSMixerEmbedding.
+
+    Input torch:  past_values already transposed to (B, C, L) in the model.
+    Output TTNN:  (B, C, Np, d_model)
+    """
+
+    def __init__(
+        self, device, base_address: str, parameters: dict, *, context_length, patch_length, patch_stride, d_model
+    ):
+        self.device = device
+        self.base = base_address
+        self.context_length = context_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+        self.d_model = d_model
+
+        self.patchify = TtPatchTSMixerPatchify(
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+        )
+
+        # proj weight/bias
+        self.weight = parameters[f"{self.base}.proj.weight"]
+        self.bias = parameters.get(f"{self.base}.proj.bias", None)
+
+    def __call__(self, x_torch: torch.Tensor, *, dtype=ttnn.bfloat16):
+        """
+        x_torch: (B, C, L) torch tensor (host)
+        returns: TTNN tensor (B, C, Np, d_model)
+        """
+        # (B,C,L) -> (B,L,C) for patchify logic
+        x_lc = x_torch.transpose(1, 2).contiguous()
+
+        # patchify on host, move to device
+        patches_tt = self.patchify(x_lc, device=self.device, dtype=dtype)  # (B,C,Np,patch_len) on device
+
+        # linear over last dim patch_len -> d_model
+        # reshape to rank-4 already, so we can call ttnn.linear directly:
+        # (B,C,Np,patch_len) @ (patch_len,d_model) => (B,C,Np,d_model)
+        out = ttnn.linear(patches_tt, self.weight, bias=self.bias)
+        return out
+
+
+class TtPatchTSMixerModelForForecasting:
+    def __init__(
+        self,
+        device,
+        base_address: str,
+        parameters: dict,
+        *,
+        context_length: int,
+        prediction_length: int,
+        patch_length: int,
+        patch_stride: int,
+        num_channels: int,
+        d_model: int,
+        num_layers: int,
+        mode: str = "common_channel",
+        expansion: int = 2,
+        use_gated_attn: bool = False,
+        eps: float = 1e-5,
+    ):
+        self.device = device
+        self.base = base_address
+
+        self.context_length = context_length
+        self.prediction_length = prediction_length
+        self.patch_length = patch_length
+        self.patch_stride = patch_stride
+        self.num_channels = num_channels
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.mode = mode
+        self.expansion = expansion
+        self.use_gated_attn = use_gated_attn
+        self.eps = eps
+
+        # HF-compatible num_patches
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+
+        # 1) patch embedding
+        self.patch_embed = TtPatchTSMixerEmbedding(
+            device=device,
+            base_address=f"{self.base}.patch_embed",
+            parameters=parameters,
+            context_length=context_length,
+            patch_length=patch_length,
+            patch_stride=patch_stride,
+            d_model=d_model,
+        )
+
+        # 2) positional encoding
+        self.pos_enc = TtPatchTSMixerPositionalEncoding(
+            device=device,
+            base_address=f"{self.base}.pos_enc",
+            parameters=parameters,  # depends on your PE design (buffer/param)
+            num_patches=self.num_patches,
+            d_model=d_model,
+        )
+
+        # 3) mixer stack
+        layer_kwargs = dict(
+            num_patches=self.num_patches,
+            d_model=d_model,
+            num_channels=num_channels,
+            mode=mode,
+            expansion=expansion,
+            use_gated_attn=use_gated_attn,
+            eps=eps,
+        )
+        self.mixer_block = TtPatchTSMixerBlock(
+            device=device,
+            base_address=f"{self.base}.mixer_block",
+            parameters=parameters,
+            num_layers=num_layers,
+            layer_kwargs=layer_kwargs,
+            norm_type="LayerNorm",  # or pass through if you support BN dispatch
+        )
+
+        # 4) head
+        self.head = TtPatchTSMixerForecastHead(
+            device=device,
+            base_address=f"{self.base}.head",
+            parameters=parameters,
+            prediction_length=prediction_length,
+        )
+
+    def __call__(self, past_values: torch.Tensor, *, dtype=ttnn.bfloat16):
+        """
+        past_values: torch tensor (B, L, C)
+        returns: TTNN tensor (B, H, 1, C)  (squeeze dim=2 in torch)
+        """
+        B, L, C = past_values.shape
+        assert L == self.context_length
+        assert C == self.num_channels
+
+        # match PyTorch: (B, L, C) -> (B, C, L) for embedding
+        x_bcl = past_values.transpose(1, 2).contiguous()
+
+        # 1) embedding: returns TT (B, C, Np, D)
+        x = self.patch_embed(x_bcl, dtype=dtype)
+
+        # 2) PE: (B, C, Np, D)
+        x = self.pos_enc(x)
+
+        # 3) mixer block
+        x, _ = self.mixer_block(x, output_hidden_states=False)
+
+        # 4) head: returns TT (B, H, 1, C)
+        y = self.head(x)
 
         return y
