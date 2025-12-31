@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 /******************************************************************************
  *                                                                             *
@@ -67,31 +68,34 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     // If do_eltwise_max == true, prev_cb has `rows` produced.
     // Postcondition: out_cb has `rows` produced.
 
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
-
-    max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
+    uint32_t row_idx = 0;
 
-    for (uint32_t r = 0; r < rows; ++r) {
-        acquire_dst();
-        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-        for (uint32_t c = 0; c < cols; ++c) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
-        }
-        reduce_uninit();
+    // PostReduceOp lambda: conditionally applies max operation before packing
+    auto post_reduce = [&]() {
         if (do_eltwise_max) {
+            // DST[0] contains reduced value - do max with previous value before packing
             copy_tile_to_dst_init_short(prev_cb);
-            copy_tile(prev_cb, r, prev_max_dst_idx);
+            copy_tile(prev_cb, row_idx, prev_max_dst_idx);
             max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
         }
-        pack_tile(reduce_dst_idx, out_cb);
-        release_dst();
+        row_idx++;
+    };
+
+    if (do_eltwise_max) {
+        cb_wait_front(prev_cb, rows);
+        max_tile_init();
     }
-    cb_push_back(out_cb, rows);
+
+    // Single reduce call with conditional PostReduceOp
+    compute_kernel_lib::reduce<
+        pool_type,
+        reduce_dim,
+        compute_kernel_lib::ReduceInputMode::STREAMING,
+        true,
+        true,
+        decltype(post_reduce)>(in0_cb, scale_cb, out_cb, rows, cols, 1, 0, 0, post_reduce);
 }
 
 #ifdef TRISC_MATH
