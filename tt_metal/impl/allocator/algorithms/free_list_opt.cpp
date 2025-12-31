@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -640,12 +641,8 @@ void FreeListOpt::insert_block_to_alloc_table(DeviceAddr address, size_t block_i
 }
 bool FreeListOpt::is_address_in_alloc_table(DeviceAddr address) const {
     size_t bucket = hash_device_address(address);
-    for (const auto& [addr, block_index] : allocated_block_table_[bucket]) {
-        if (addr == address) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(
+        allocated_block_table_[bucket], [address](const auto& entry) { return entry.first == address; });
 }
 std::optional<size_t> FreeListOpt::get_and_remove_from_alloc_table(DeviceAddr address) {
     size_t bucket = hash_device_address(address);
