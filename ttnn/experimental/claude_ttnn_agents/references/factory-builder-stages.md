@@ -11,10 +11,10 @@
 | Stage 4 (device op, validation) | `## Stage 4: Device Operation` | 137 |
 | Stage 5 (program factory, CBs) | `## Stage 5: Program Factory Structure` | 179 |
 | Stage 6 (kernel compilation) | `## Stage 6: Kernel Compilation` | 310 |
-| Stage 7 (kernel correctness) | `## Stage 7: Kernel Correctness` | 240 |
+| Stage 7 (kernel correctness) | `## Stage 7: Kernel Correctness` | 269 |
 | Kernel stub templates | `### Kernel Stub Templates` | 108 |
 | Debugging guidance | `## Debugging` | 28 |
-| Execution logging template | `## Execution Logging (Optional)` | 191 |
+| Execution logging template | `## Execution Logging (Optional)` | 192 |
 
 ---
 
@@ -863,14 +863,43 @@ Expected: Shape correct but values wrong (passthrough ≠ expected operation).
 
 ### Step 7.2: Implement Actual Compute Logic (GREEN)
 
-**Priority: Check kernel_lib first** (`ttnn/cpp/ttnn/kernel_lib/`):
-- `reduce_helpers.hpp` - For reduce operations
-- `tilize_helpers.hpp` - For tilize operations
-- `untilize_helpers.hpp` - For untilize operations
+**🚨 CRITICAL: Check kernel_lib FIRST - Helpers Replace Entire Code Patterns**
 
-**If no helper exists**, implement using compute APIs.
+The `ttnn/cpp/ttnn/kernel_lib/` library provides **COMPLETE, HIGH-LEVEL implementations** that internally handle:
+- ✅ All `cb_wait_front()` / `cb_pop_front()` / `cb_reserve_back()` / `cb_push_back()` calls
+- ✅ All `tile_regs_acquire()` / `commit()` / `wait()` / `release()` calls
+- ✅ Operation `init()` / `uninit()` calls
+- ✅ `pack_tile()` calls to write output
 
-### Common Compute Patterns
+**Available Helpers:**
+- `reduce_helpers.hpp` - `reduce<type, dim>()` processes ALL tiles, handles ALL CB sync
+- `tilize_helpers.hpp` - `tilize<>()` converts entire block, manages both CBs
+- `untilize_helpers.hpp` - `untilize<>()` converts tiles to row-major with auto path selection
+
+**How to Use:**
+1. **Read the helper header file** - Docstring shows what it abstracts ("This library hides the complexity of:")
+2. **Call the helper once** - It processes all tiles internally
+3. **Do NOT write manual CB sync** - If the helper handles it, don't duplicate
+
+**Anti-Pattern ❌:**
+```cpp
+// WRONG: Manual loops around helper
+for (uint32_t i = 0; i < N; i++) {
+    cb_wait_front(cb_in, 1);        // ❌ Helper does this internally
+    reduce_tile(cb_in, ...);
+    cb_pop_front(cb_in, 1);         // ❌ Helper does this internally
+}
+```
+
+**Correct Pattern ✅:**
+```cpp
+// RIGHT: One helper call replaces entire pattern
+compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+```
+
+**If no helper exists**, implement using low-level compute APIs below.
+
+### Common Compute Patterns (Low-Level - Use Only If No Helper Exists)
 
 **Unary operation** (single input, e.g., relu, exp, sqrt):
 ```cpp
