@@ -4,6 +4,11 @@ run-name: "Profiler CI"
 on:
   workflow_call:
     inputs:
+      debug_build:
+        description: "Run ALL profiler jobs using a debug build (RelWithDebInfo) instead of Release."
+        required: false
+        type: boolean
+        default: false
       run_t3k_profiler:
         description: "T3K profiler"
         required: false
@@ -46,6 +51,7 @@ jobs:
   build-artifact-profiler:
     if: >-
       ${{
+        inputs.debug_build ||
         inputs.run_t3k_profiler ||
         inputs.run_galaxy_profiler ||
         inputs.run_blackhole_profiler ||
@@ -57,6 +63,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.debug_build && 'RelWithDebInfo' || 'Release' }}
       tracy: true
       build-wheel: true
       version: "22.04"
@@ -64,6 +71,7 @@ jobs:
   t3k-profiler-tests:
     if: >-
       ${{
+        inputs.debug_build ||
         inputs.run_t3k_profiler
       }}
     needs: build-artifact-profiler
@@ -79,6 +87,7 @@ jobs:
   galaxy-profiler-tests:
     if: >-
       ${{
+        inputs.debug_build ||
         inputs.run_galaxy_profiler
       }}
     needs: build-artifact-profiler
@@ -94,6 +103,7 @@ jobs:
   blackhole-profiler:
     if: >-
       ${{
+        inputs.debug_build ||
         inputs.run_blackhole_profiler
       }}
     needs: build-artifact-profiler
@@ -114,6 +124,7 @@ jobs:
   n300-profiler:
     if: >-
       ${{
+        inputs.debug_build ||
         inputs.run_n300_profiler
       }}
     needs: build-artifact-profiler
@@ -134,6 +145,7 @@ jobs:
   n150-profiler:
     if: >-
       ${{
+        inputs.debug_build ||
         inputs.run_n150_profiler
       }}
     needs: build-artifact-profiler
