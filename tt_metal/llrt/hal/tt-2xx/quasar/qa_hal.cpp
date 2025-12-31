@@ -210,6 +210,7 @@ public:
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
+        includes.push_back("tt_metal/hw/inc/internal");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");

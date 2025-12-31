@@ -7,7 +7,7 @@
 #include "firmware_common.h"
 #include "risc_common.h"
 #include <tensix.h>
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
