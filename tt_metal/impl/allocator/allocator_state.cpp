@@ -8,7 +8,6 @@
 #include <enchantum/enchantum.hpp>
 
 #include <algorithm>
-#include <ranges>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -135,11 +134,14 @@ bool AllocatorState::BufferTypeState::is_compatible_with(const BufferTypeState& 
         return false;
     }
 
-    return std::ranges::all_of(bank_id_to_bank_offset, [&other](const auto& entry) {
-        const auto& [bank_id, offset] = entry;
+    for (const auto& [bank_id, offset] : bank_id_to_bank_offset) {
         auto it = other.bank_id_to_bank_offset.find(bank_id);
-        return it != other.bank_id_to_bank_offset.end() && it->second == offset;
-    });
+        if (it == other.bank_id_to_bank_offset.end() || it->second != offset) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 DeviceAddr AllocatorState::BufferTypeState::total_allocated_size() const {
