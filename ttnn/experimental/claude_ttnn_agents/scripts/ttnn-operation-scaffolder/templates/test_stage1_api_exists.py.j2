@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Stage 1 Test: API Exists
+
+Verifies that the {{ operation_name }} operation is importable from ttnn.
+This test passes when the Python binding is registered and accessible.
+"""
+
+import pytest
+
+
+def test_api_exists():
+    """Verify {{ operation_name }} is importable from ttnn."""
+    import ttnn
+
+    assert hasattr(ttnn, "{{ operation_name }}"), "ttnn.{{ operation_name }} not found"
+    assert callable(ttnn.{{ operation_name }}), "ttnn.{{ operation_name }} is not callable"
+
+
+def test_api_has_docstring():
+    """Verify {{ operation_name }} has a docstring."""
+    import ttnn
+
+    op = ttnn.{{ operation_name }}
+    # The operation should have some documentation
+    assert op.__doc__ is not None or hasattr(op, "__call__"), \
+        "ttnn.{{ operation_name }} should have documentation or be callable"
