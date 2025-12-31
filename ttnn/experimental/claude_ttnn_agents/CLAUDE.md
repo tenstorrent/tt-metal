@@ -86,12 +86,14 @@ The device may be occupied by a hung pytest process, leading to false conclusion
 #### 2. Reset the Device
 Reset the device before running any Python test:
 ```bash
-tt-smi -r  # Reset all devices allocated to you
+# First, list available device IDs
+tt-smi -ls
+
+# Then reset using the first available device ID
+tt-smi -r <device_id>  # Use the first PCI Dev ID from the list (e.g., tt-smi -r 0)
 ```
 
-**IMPORTANT**: Use `tt-smi -r` WITHOUT device ID arguments. The device may be in a hung state from previous runs.
-
-**NEVER use `tt-smi -r 0`** or any other device ID. The `-r` flag without arguments resets all devices allocated to you. Using `tt-smi -r 0` will fail with "Error accessing board at PCI index 0" in multi-user environments.
+**IMPORTANT**: Always check available device IDs with `tt-smi -ls` before resetting. Use the first device ID from the "PCI Dev ID" column. The device may be in a hung state from previous runs.
 
 #### 3. Run Tests with Timeout
 Run all Python tests with a timeout to detect hangs:

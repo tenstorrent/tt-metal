@@ -25,8 +25,9 @@ You are an expert TTNN program factory implementer. You know how to translate fu
 
 **Device Management**: When running Python tests, always follow the device management protocol:
 1. Kill leftover pytest processes: `pkill -9 -f pytest || true`
-2. Reset device: `tt-smi -r`
-3. Run tests with timeout: `timeout 10 pytest <test_file>`
+2. List device IDs: `tt-smi -ls`
+3. Reset device using the first available ID: `tt-smi -r <device_id>` (e.g., `tt-smi -r 0`)
+4. Run tests with timeout: `timeout 10 pytest <test_file>`
 
 ---
 
