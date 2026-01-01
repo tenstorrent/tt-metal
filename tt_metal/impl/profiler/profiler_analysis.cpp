@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -129,6 +130,22 @@ static uint64_t choose_quantized_bucket_size(uint64_t min_ns, uint64_t max_ns, u
 
     if (static_cast<__int128>(bucket_size) * static_cast<__int128>(buckets) < static_cast<__int128>(span)) {
         bucket_size = ((needed + quantum_ns - 1) / quantum_ns) * quantum_ns;
+    }
+    bucket_size = std::max<uint64_t>(quantum_ns, bucket_size);
+
+    for (;;) {
+        const uint64_t start = (min_ns / bucket_size) * bucket_size;
+        if (static_cast<__int128>(start) + static_cast<__int128>(bucket_size) * static_cast<__int128>(buckets) >
+            static_cast<__int128>(max_ns)) {
+            break;
+        }
+        const __int128 covering = (static_cast<__int128>(max_ns) - start) / buckets + 1;
+        const __int128 widened = ((covering + quantum_ns - 1) / quantum_ns) * quantum_ns;
+        if (widened > static_cast<__int128>(std::numeric_limits<uint64_t>::max())) {
+            bucket_size = std::numeric_limits<uint64_t>::max();
+            break;
+        }
+        bucket_size = static_cast<uint64_t>(widened);
     }
 
     return std::max<uint64_t>(1, bucket_size);
