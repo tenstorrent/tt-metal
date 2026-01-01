@@ -174,6 +174,15 @@ sfpi_inline void _clear_previous_output_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+sfpi_inline void _seed_previous_output_()
+{
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    _ema_load_current_input_<0, 0>();
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, 0);
+}
+
 /**
  * @brief Calculates the Exponential Moving Average (EMA) for the input tile in dst 0.
  *
