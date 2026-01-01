@@ -547,8 +547,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 for (uint32_t d = 0; d < ring_size; d++) {
                     reader_rt_args.push_back(device_k_block_counts[d]);
                     reader_rt_args.push_back(device_chunk_widths[d].size());
-                    for (unsigned int width : device_chunk_widths[d]) {
-                        reader_rt_args.push_back(width);
+                    for (uint32_t c = 0; c < device_chunk_widths[d].size(); c++) {
+                        reader_rt_args.push_back(device_chunk_widths[d][c]);
                     }
                 }
                 if (fuse_op) {
@@ -635,8 +635,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 for (uint32_t d = 0; d < ring_size; d++) {
                     writer_rt_args.push_back(device_k_block_counts[d]);
                     writer_rt_args.push_back(device_chunk_widths[d].size());
-                    for (unsigned int width : device_chunk_widths[d]) {
-                        writer_rt_args.push_back(width);
+                    for (uint32_t c = 0; c < device_chunk_widths[d].size(); c++) {
+                        writer_rt_args.push_back(device_chunk_widths[d][c]);
                     }
                 }
                 detail::strided_fabric_mux_connection_rt_args(
