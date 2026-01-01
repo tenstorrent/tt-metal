@@ -65,9 +65,9 @@ TEST(FreeListOptTest, AllocationAndDeallocation) {
     std::vector<std::optional<tt::tt_metal::DeviceAddr>> allocations(10);
 
     // Deallocate in order
-    for(size_t i = 0; i < allocations.size(); i++) {
-        allocations[i] = allocator.allocate(1_KiB);
-        ASSERT_TRUE(allocations[i].has_value());
+    for(auto & allocation : allocations) {
+        allocation = allocator.allocate(1_KiB);
+        ASSERT_TRUE(allocation.has_value());
     }
 
     for(size_t i = allocations.size(); i > 0; i--) {
@@ -75,13 +75,13 @@ TEST(FreeListOptTest, AllocationAndDeallocation) {
     }
 
     // Deallocate in reverse order
-    for(size_t i = 0; i < allocations.size(); i++) {
-        allocations[i] = allocator.allocate(1_KiB);
-        ASSERT_TRUE(allocations[i].has_value());
+    for(auto & allocation : allocations) {
+        allocation = allocator.allocate(1_KiB);
+        ASSERT_TRUE(allocation.has_value());
     }
 
-    for(size_t i = 0; i < allocations.size(); i++) {
-        allocator.deallocate(allocations[i].value());
+    for(auto & allocation : allocations) {
+        allocator.deallocate(allocation.value());
     }
 }
 
