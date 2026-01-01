@@ -504,8 +504,9 @@ def test_fused_activation_falls_back(device, expect_error):
     """A fused activation is outside the multi-core pipeline: opted in with 2 workers per bank, the call runs
     the single-reader program with 2 readers (Blackhole) and matches its 1-reader result; Wormhole has no
     multi-reader program and rejects it."""
-    case = _bank_case(device, 4096, 4096)
-    x, w = _operands(device, 4096, 4096, "bfp8", "bf16", case[5], case[6])
+    n = 512 * device.dram_grid_size().x if is_blackhole() else 4096
+    case = _bank_case(device, 4096, n)
+    x, w = _operands(device, 4096, n, "bfp8", "bf16", case[5], case[6])
     kw = dict(out_mc=_out(device, case[7], case[8]), out_dtype="bf16", per_core_n=case[8], fidelity="HiFi2")
     silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
     if not is_blackhole():
@@ -522,8 +523,9 @@ def test_pipeline_needs_the_opt_in(device, expect_error):
     its 2-reader variant splits each bank's columns over two readers with the same compute in the same K
     order, so its output is bitwise the 1-reader output, while the opted-in call runs the multi-core
     pipeline, whose output differs; Wormhole has no multi-reader program and rejects the call."""
-    case = _bank_case(device, 4096, 4096)
-    x, w = _operands(device, 4096, 4096, "bfp8", "bf16", case[5], case[6])
+    n = 512 * device.dram_grid_size().x if is_blackhole() else 4096
+    case = _bank_case(device, 4096, n)
+    x, w = _operands(device, 4096, n, "bfp8", "bf16", case[5], case[6])
     kw = dict(out_mc=_out(device, case[7], case[8]), out_dtype="bf16", per_core_n=case[8], fidelity="HiFi2")
     if not is_blackhole():
         with expect_error(RuntimeError, "supported only on Blackhole"):
@@ -534,4 +536,4 @@ def test_pipeline_needs_the_opt_in(device, expect_error):
     assert torch.equal(two, one)
     pipeline = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=2, use_multicore_pipeline=True, **kw))
     assert not torch.equal(pipeline, one)
-    _check(pipeline.reshape(32, -1), _reference(x, w, 4096), "bf16")
+    _check(pipeline.reshape(32, -1), _reference(x, w, n), "bf16")
