@@ -14,10 +14,20 @@ No device / ttnn needed — runs anywhere torch is available.
 import torch
 
 from models.demos.minimax_m3.reference.model import DictWeights, MiniMaxM3Config, MiniMaxM3TextModel
+from models.demos.minimax_m3.utils.model_variant import load_config, with_layer_schedule
 
-# Reduced config — copied verbatim from tests/unit/test_model_vs_ref.py (the validated golden).
-HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
-INTER, SHARED_INTER, E, TOPK, SCALE, ALPHA, LIMIT, V = 512, 512, 8, 2, 2.0, 1.702, 7.0, 2048
+# Dims, RoPE, routing and activation from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL;
+# utils/model_variant.py); intermediate widths, expert count and vocab reduced.
+_CFG = load_config()
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+SCALE, ALPHA, LIMIT = _CFG["routed_scaling_factor"], _CFG["swiglu_alpha"], _CFG["swiglu_limit"]
+INTER, SHARED_INTER, E, TOPK, V = 512, 512, 8, 2, 2048
 SCHEDULE = [0, 1]  # 0 -> dense layer, 1 -> MoE layer
 
 
@@ -175,24 +185,8 @@ def test_reference_matches_validated_golden():
                 state[p + f"block_sparse_moe.experts.{e}.w3.weight"] = w3
                 state[p + f"block_sparse_moe.experts.{e}.w2.weight"] = w2
 
-    cfg = MiniMaxM3Config(
-        hidden_size=HIDDEN,
-        num_hidden_layers=len(SCHEDULE),
-        num_attention_heads=NQ,
-        num_key_value_heads=NKV,
-        head_dim=HEAD_DIM,
-        rotary_dim=ROTARY_DIM,
-        rope_theta=THETA,
-        rms_norm_eps=EPS,
-        vocab_size=V,
-        num_local_experts=E,
-        num_experts_per_tok=TOPK,
-        routed_scaling_factor=SCALE,
-        swiglu_alpha=ALPHA,
-        swiglu_limit=LIMIT,
-        moe_layer_freq=list(SCHEDULE),
-        sparse_attention_freq=[0, 0],
-    )
+    reduced = dict(vocab_size=V, num_local_experts=E, num_experts_per_tok=TOPK)
+    cfg = MiniMaxM3Config.from_hf_config(with_layer_schedule(load_config(**reduced), SCHEDULE, [0] * len(SCHEDULE)))
     model = MiniMaxM3TextModel(cfg, DictWeights(state, dtype=torch.float32))
     kv, logits = model.forward_hidden(x.float(), compute_logits=True)
 
@@ -204,22 +198,25 @@ def test_reference_matches_validated_golden():
 
 def _sparse_layer_model(block_size, topk_blocks, *, hidden=64, nq=8, nkv=2, hd=8, rotary=4, idx=8, inter=32):
     """A 1-layer model with an MSA sparse-attention layer (+ trivial dense MLP), random weights."""
-    cfg = MiniMaxM3Config(
-        hidden_size=hidden,
-        num_hidden_layers=1,
-        num_attention_heads=nq,
-        num_key_value_heads=nkv,
-        head_dim=hd,
-        rotary_dim=rotary,
-        vocab_size=4,
-        moe_layer_freq=[0],
-        sparse_attention_freq=[1],
+    base = load_config()
+    sparse = dict(
+        base["sparse_attention_config"],
         sparse_index_dim=idx,
         sparse_num_index_heads=nkv,
         sparse_block_size=block_size,
         sparse_topk_blocks=topk_blocks,
-        sparse_local_block=1,
     )
+    reduced = dict(
+        hidden_size=hidden,
+        num_attention_heads=nq,
+        num_key_value_heads=nkv,
+        head_dim=hd,
+        rotary_dim=rotary,
+        partial_rotary_factor=rotary / hd,
+        vocab_size=4,
+        sparse_attention_config=sparse,
+    )
+    cfg = MiniMaxM3Config.from_hf_config(with_layer_schedule(dict(base, **reduced), [0], [1]))
     p = "model.layers.0."
     state = {
         p + "input_layernorm.weight": torch.randn(hidden) * 0.1,

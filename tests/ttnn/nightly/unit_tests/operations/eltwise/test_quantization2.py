@@ -51,9 +51,8 @@ def calculate_scale_zero_point_per_channel(input_tensor, axis, q_min, q_max):
 # PCC can't catch the case that the output tensor is all zeros (or any other constant)
 # Torch.allclose is sensitive to outliers (e.g. quant-dequant of 3e-5 when most other values are around 1e-1)
 # Instead, we assert that over 98% of the elements in the tensors are close enough
-def check_match_ratio(golden, other, check_dtype):
-    min_match_ratio = 0.98
-
+# min_match_ratio, rtol and atol can be tightened per test. atol defaults to 2% of the largest golden value.
+def check_match_ratio(golden, other, check_dtype, min_match_ratio=0.98, rtol=0.02, atol=None):
     if check_dtype == ttnn.float32:
         golden = golden.to(torch.float32)
     elif check_dtype == ttnn.bfloat16:
@@ -61,9 +60,10 @@ def check_match_ratio(golden, other, check_dtype):
     else:
         golden = golden.int_repr()
 
-    deduced_atol = 0.02 * torch.max(torch.abs(golden)).item()
-    ratio = torch.count_nonzero(torch.isclose(golden, other, rtol=0.02, atol=deduced_atol)) / torch.numel(golden)
-    assert ratio > min_match_ratio
+    if atol is None:
+        atol = 0.02 * torch.max(torch.abs(golden)).item()
+    ratio = torch.count_nonzero(torch.isclose(golden, other, rtol=rtol, atol=atol)) / torch.numel(golden)
+    assert ratio >= min_match_ratio
 
 
 # TODO: remove this once the accuracy issue of the composite op fallback is fixed (per-tensor & per-channel)

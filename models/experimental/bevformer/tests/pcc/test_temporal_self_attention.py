@@ -10,9 +10,7 @@ from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTempor
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
 
 
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
-)
+from models.experimental.bevformer.tests.common import PRESETS
 
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
@@ -50,6 +48,8 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
     ],
 )
 @pytest.mark.parametrize("seed", [0])
+# The TT module also takes sequence-first features; the reference always runs batch-first.
+@pytest.mark.parametrize("batch_first", [True, False], ids=["batch_first", "seq_first"])
 def test_temporal_self_attention_forward(
     device,
     config_name,
@@ -62,21 +62,18 @@ def test_temporal_self_attention_forward(
     expected_rel_error,
     expected_high_error_ratio,
     seed,
+    batch_first,
 ):
     """Test TTTemporalSelfAttention against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
 
     # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    model_config = preset_config.model_config
+    config = PRESETS[config_name]
 
     # Extract parameters from configs
-    embed_dims = model_config.embed_dims
-    num_heads = model_config.num_heads
-    num_points = model_config.num_points
+    embed_dims = config.embed_dims
+    num_heads = config.num_heads
+    num_points = config.tsa_num_points
     num_queries = bev_h * bev_w
 
     # BEV spatial shapes - single level for temporal self attention
@@ -98,9 +95,14 @@ def test_temporal_self_attention_forward(
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
     # Convert tensors to ttnn format for ttnn model
-    tt_current_bev = ttnn.from_torch(current_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_current_bev = ttnn.from_torch(
+        current_bev if batch_first else current_bev.permute(1, 0, 2),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
     tt_reference_points_2d = ttnn.from_torch(
-        reference_points_2d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        reference_points_2d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
     )
 
     # --------------------------------------------------------------------------- #
@@ -119,11 +121,7 @@ def test_temporal_self_attention_forward(
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
-    tt_parameters = create_temporal_self_attention_parameters(
-        torch_model=ref_model,
-        device=device,
-        dtype=ttnn.bfloat16,
-    )
+    tt_parameters = create_temporal_self_attention_parameters(ref_model, device, dtype=ttnn.bfloat16)
 
     # Create ttnn model with preprocessed parameters using extracted parameters
     tt_model = TTTemporalSelfAttention(
@@ -134,7 +132,7 @@ def test_temporal_self_attention_forward(
         num_levels=num_levels,
         num_points=num_points,
         num_bev_queue=num_bev_queue,
-        batch_first=True,
+        batch_first=batch_first,
         spatial_shapes=bev_spatial_shapes,
     )
 
@@ -143,13 +141,12 @@ def test_temporal_self_attention_forward(
     # --------------------------------------------------------------------------- #
 
     # Forward pass with PyTorch reference model
+    # The upstream reference takes one set of points per stacked BEV map; without a previous BEV
+    # both maps are the query, sampled at the same points.
     ref_model_output = ref_model(
         query=current_bev,
-        reference_points=reference_points_2d,
+        reference_points=torch.stack([reference_points_2d] * num_bev_queue, 1).flatten(0, 1),
         spatial_shapes=bev_spatial_shapes,
-        level_start_index=level_start_index,
-        bev_h=bev_h,
-        bev_w=bev_w,
     )
 
     # Forward pass with ttnn model
@@ -157,6 +154,8 @@ def test_temporal_self_attention_forward(
         query=tt_current_bev,
         reference_points=tt_reference_points_2d,
     )
+    if not batch_first:
+        tt_model_output = ttnn.permute(tt_model_output, (1, 0, 2))
 
     # --------------------------------------------------------------------------- #
     # Output Comparison                                                           #

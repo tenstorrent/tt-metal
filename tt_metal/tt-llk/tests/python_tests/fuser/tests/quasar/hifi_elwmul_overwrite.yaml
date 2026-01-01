@@ -1,14 +1,16 @@
-# Quasar copy of ../hifi_elwmul_overwrite.yaml, still on Float16: Quasar allows HiFi4 only when
-# SrcA and SrcB are both wide (Float16, Tf32 or Float32), so the Wormhole copy's Float16_b cannot
-# run here.
-# Temporary: remove with #60920.
+# Quasar copy of ../hifi_elwmul_overwrite.yaml on Float32: Quasar allows HiFi4 only when SrcA and
+# SrcB are both wide (Float16, Tf32 or Float32), so the Wormhole copy's Float16_b cannot run here.
+# Float32 needs the 32-bit Dest (dest_acc). The first-phase overwrite this guards (#57344) depends
+# only on HiFi with acc_to_dest false, not on the format.
 supported_archs: [quasar]
 
+dest_acc: true
+
 operands:
-  - {name: seed, dims: [32, 32], format: Float16}
-  - {name: a, dims: [32, 32], format: Float16}
-  - {name: b, dims: [32, 32], format: Float16}
-  - {name: out, dims: [32, 32], format: Float16}
+  - {name: seed, dims: [32, 32], format: Float32}
+  - {name: a, dims: [32, 32], format: Float32}
+  - {name: b, dims: [32, 32], format: Float32}
+  - {name: out, dims: [32, 32], format: Float32}
 
 operations:
   - dest_sync: SyncFull

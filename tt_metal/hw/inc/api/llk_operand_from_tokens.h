@@ -27,6 +27,8 @@ template <>
 inline constexpr bool binding_token_with_llk_metadata<ScratchpadBindingToken> = true;
 template <uint32_t Cta, uint32_t Addr>
 inline constexpr bool binding_token_with_llk_metadata<tensor_accessor::TensorBindingToken<Cta, Addr>> = true;
+template <uint32_t Cta, uint32_t Addr>
+inline constexpr bool binding_token_with_llk_metadata<tensor_accessor::PerNodeTensorBindingToken<Cta, Addr>> = true;
 
 // Helper struct to instantiate the LLKOperand type from a BindingToken.
 template <const auto& Token>

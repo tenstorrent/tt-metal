@@ -158,9 +158,9 @@ ProgramDescriptor build_program_descriptor(
     const auto& temp_tensor = tensor_args.buffer_tensor;
     auto& output_tensor = tensor_return_value;
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a device buffer");
-    TT_FATAL(temp_tensor.buffer() != nullptr, "Buffer tensor must be allocated in a device buffer");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in a device buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a device buffer");
+    TT_FATAL(temp_tensor.is_allocated(), "Buffer tensor must be allocated in a device buffer");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in a device buffer");
 
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a MeshDevice");

@@ -1,20 +1,49 @@
 # MiniMax-M3 — Prefill bring-up
 
-TTNN implementation of **MiniMax-M3** prefill inference for Tenstorrent Blackhole.
+TTNN implementation of **MiniMax-M3** and **MiniMax-M3.1** prefill inference for Tenstorrent Blackhole.
 Target: one Blackhole Galaxy (8×4 mesh) running **SP=8 × TP=4 + EP=32**.
-Config: [`configs/MiniMax-M3/config.json`](configs/MiniMax-M3/config.json).
+Configs: [`configs/MiniMax-M3/config.json`](configs/MiniMax-M3/config.json),
+[`configs/MiniMax-M3.1/config.json`](configs/MiniMax-M3.1/config.json) (see [Model variants](#model-variants)).
 
 ## Architecture
 
 | | |
 |---|---|
-| Decoder layers | 60 (hybrid schedule; layers **0–2 dense**, **3–59 sparse/MoE**) |
+| Decoder layers | 60; MLP: layers **0–2 dense**, **3–59 MoE** (`moe_layer_freq`); attention: M3 **0–2 dense, 3–59 MSA**, M3.1 **MSA on all 60** (`sparse_attention_freq`). Every layer takes its type from the config. |
 | Hidden / MoE intermediate | 6144 / 3072 (dense MLP intermediate 12288) |
-| Attention | GQA: 64 q / 4 kv heads, head_dim 128, **partial RoPE** (rotary_dim 64), θ=5e6, QK-norm |
-| Sparse attention (MSA, layers 3–59) | block_size 128, top-16 blocks, 4 index heads, index_dim 128, forced-local block |
-| MoE (layers 3–59) | 128 experts / top-4 + 1 always-on shared expert |
+| Attention | GQA: 64 q / 4 kv heads, head_dim 128, **partial RoPE** (rotary_dim 64), θ=5e6 (M3) / 1e7 (M3.1), per-head gemma QK-norm |
+| Sparse attention (MSA) | block_size 128, top-16 blocks, 4 index heads, index_dim 128, forced-local block |
+| MoE (layers 3–59) | 128 experts / top-4 (sigmoid + correction bias, routed scale 2.0) + 1 always-on shared expert |
 | Activation | clamped **swigluoai** (gpt-oss): α=1.702, clamp limit=7.0 |
 | Vocab | 200064 |
+
+## Model variants
+
+Both releases share the architecture and this implementation; each has its own repo config (the checkpoint's
+`text_config`, flattened) and default paths ([`utils/model_variant.py`](utils/model_variant.py)):
+
+| | MiniMax-M3 | MiniMax-M3.1 |
+|---|---|---|
+| Repo config | [`configs/MiniMax-M3/config.json`](configs/MiniMax-M3/config.json) | [`configs/MiniMax-M3.1/config.json`](configs/MiniMax-M3.1/config.json) |
+| Text architecture | `MiniMaxM3SparseForCausalLM` | `MiniMaxM3TinyForCausalLM` |
+| RoPE θ | 5e6 | 1e7 |
+| MSA layers | 3–59 (0–2 dense attention) | all 60 |
+| Checkpoint format | bf16 | MXFP8 linears + NVFP4 routed experts (dequantized to bf16 at load) |
+| Checkpoint (weka) | `/mnt/weka/model-weights/llm/minimax/MiniMax-M3` | `/mnt/weka/model-weights/llm/minimax/m3` |
+| Tilized cache root | `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill` | `/mnt/weka/model-cache/scratch/minimax/m3-cache/prefill` |
+| Golden traces | `<cache root>/golden` | `<cache root>/golden` |
+
+Selection:
+
+- With a checkpoint (`HF_MODEL`), its `config.json` decides: the text config's `architectures` entry, else an exact
+  match of the model-defining fields. The model always runs on the checkpoint's own config values.
+- Without one (random-weight unit tests, `ModelArgs(dummy_weights=True)`, harness defaults), `M3_MODEL_VARIANT`
+  picks the repo config: `MiniMax-M3` (default) or `MiniMax-M3.1`. Setting it to a variant that contradicts
+  `HF_MODEL` is an error.
+- Config values the kernels or code fix (routed-expert swigluoai α/limit, sigmoid routing, one shared expert,
+  per-head QK-norm, MSA forced-local block / no init block / max score / one index head per KV head / index dim =
+  head dim, untied LM head, plain RoPE, no index value branch or KV share) are checked on load
+  (`utils/checkpoint.py::check_supported_config`); anything else fails with the offending field.
 
 ## Deployment path (Galaxy, 8×4)
 
@@ -28,7 +57,7 @@ All ttnn C++ ops and fabric mesh descriptors this model uses are upstreamed and 
 
 ## Status
 
-Verified on a Blackhole Galaxy against the torch golden KV-cache, per-layer, **race-free** (3 runs bit-identical):
+MiniMax-M3 verified on a Blackhole Galaxy against the torch golden KV-cache, per-layer, **race-free** (3 runs bit-identical):
 
 | Run | min PCC across 60 layers (K / V / index_k) |
 |---|---|
@@ -40,7 +69,7 @@ Decode is not part of this bring-up.
 
 ## Run
 
-MiniMax-M3 is a `trust_remote_code` model: install a `transformers` new enough to carry the `minimax_m3_vl` modeling code, and download the checkpoint (safetensors weights + `config.json` + tokenizer) from the official MiniMax-M3 release (HuggingFace / GitHub) into a local dir that `HF_MODEL` points at. A tilized weight cache (`M3_WEIGHTS_FROM_CACHE=1`) avoids re-conversion after the first load.
+MiniMax-M3 is a `trust_remote_code` model: install a `transformers` new enough to carry the `minimax_m3_vl` modeling code, and download the checkpoint (safetensors weights + `config.json` + tokenizer) into a local dir that `HF_MODEL` points at. A tilized weight cache (`M3_WEIGHTS_FROM_CACHE=1`) avoids re-conversion after the first load.
 
 ```bash
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
@@ -61,7 +90,47 @@ PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=1024 PREFILL_FORWARD_TOKENS_BUDGET=4096 PRE
   python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 ```
 
-Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/).
+Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](tests/unit/); golden generation is in [`scripts/`](scripts/). The unit tests that model real dims (RoPE θ, MoE routing, MSA parameters) read them from the selected variant's config, so `M3_MODEL_VARIANT=MiniMax-M3.1 pytest ...` runs them for M3.1; tests that need particular layer types set an explicit schedule (`utils/model_variant.with_layer_schedule`).
+
+### Compute precision
+
+Two switches ([`tt/compute_configs.py`](tt/compute_configs.py)), each on for MiniMax-M3.1 and off for MiniMax-M3 by
+default, and set either way with `=1` / `=0`:
+
+- `M3_PRECISE_MATMULS`: the non-expert matmuls (QKV, index_q/k, o_proj, dense MLP, shared expert) run HiFi3 with
+  fp32 accumulation, and o_proj takes the bf16 attention output instead of a bf8 cast.
+- `M3_PRECISE_NORMS`: every RMSNorm computes its statistics in fp32.
+
+Off, they run ttnn's default configs. The residual adds are bf16 either way. The routed experts keep their kernels'
+own configs (`unified_routed_expert_moe` is fixed at LoFi with bf16 accumulation).
+
+### MiniMax-M3.1 and quantized checkpoints (MXFP8 / NVFP4)
+
+The MiniMax-M3.1 checkpoint's `config.json` carries an MXFP8 `quantization_config` (MXFP8 linears, block
+[1, 32]; compressed-tensors NVFP4 routed experts, group 16). It loads through the same path:
+`ModelArgs.load_state_dict` and the torch reference (`reference/model.py`) dequantize every weight to bf16 on
+read ([`utils/checkpoint.py`](utils/checkpoint.py)), and the tilized cache is then built from those bf16 weights
+exactly as for the bf16 checkpoint. The MoE router tensors are stored fp32 and stay fp32 on the host: the gate
+weight is rounded to bf16 for the device, and the correction bias is cached fp32 and mean-centered
+(`mlp/router/e_score_correction_bias_centered*`; see [`tt/topk.py`](tt/topk.py)). Each variant's default checkpoint dir defaults to its own cache root; any
+other checkpoint needs `TT_CACHE_PATH` (cache files do not record their source, so a checkpoint never shares
+another's cache):
+
+```bash
+# MiniMax-M3.1 from its default checkpoint / cache root / golden dir (HF_MODEL unset; a bare trace name
+# resolves under the golden dir)
+M3_MODEL_VARIANT=MiniMax-M3.1 PREFILL_CHUNKED=1 PREFILL_TRACE_DIR=longbook_10240 \
+  python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+
+# any other checkpoint of the architecture
+HF_MODEL=/path/to/checkpoint TT_CACHE_PATH=/path/to/fresh-cache-root \
+  PREFILL_CHUNKED=1 PREFILL_TRACE_DIR=/path/to/golden/<trace> \
+  python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
+```
+
+The first run reads and dequantizes the source and populates the cache (as slow as the bf16 first run); later
+runs load from the cache. The golden trace must come from the same checkpoint
+(`scripts/generate_golden_kv_cache.py` records the variant and RoPE θ in its `metadata.json`).
 
 ### Environment variables
 
@@ -76,11 +145,12 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 
 | Variable | Default | Effect |
 |---|---|---|
-| `HF_MODEL` | unset (required) | MiniMax-M3 checkpoint dir (safetensors + `config.json` + tokenizer); also the tilized-cache root unless `TT_CACHE_PATH` is set. `PREFILL_HF_MODEL` overrides it in the production runner. |
-| `TT_CACHE_PATH` | `$HF_MODEL` | Root for the tilized weight cache `tensor_cache_bfp8_MeshShape([sp, tp])`. Point it at a dir you own when the checkpoint dir is read-only. |
+| `HF_MODEL` | unset (required by `ModelArgs`; the KV-PCC harness, golden script and production runner default to the variant's checkpoint dir) | MiniMax-M3 / MiniMax-M3.1 checkpoint dir (bf16 or MXFP8/NVFP4 safetensors + `config.json` + tokenizer); its config decides the variant. Also the tilized-cache root unless `TT_CACHE_PATH` is set. `PREFILL_HF_MODEL` overrides it in the production runner. |
+| `M3_MODEL_VARIANT` | `MiniMax-M3` | Model variant when no checkpoint config is given: `MiniMax-M3` or `MiniMax-M3.1`. Picks the repo config for random-weight tests / `ModelArgs(dummy_weights=True)` and the default checkpoint, cache root and golden dir (see [Model variants](#model-variants)). With `HF_MODEL` set it must agree with the checkpoint (or is only used when the checkpoint config is not recognized). |
+| `TT_CACHE_PATH` | variant cache root / `$HF_MODEL` | Root for the tilized weight cache `tensor_cache_bfp8_MeshShape([sp, tp])`. Point it at a dir you own when the checkpoint dir is read-only. A variant's default checkpoint dir falls back to that variant's shared cache root on weka; any other checkpoint to its own dir. |
 | `EXPERT_DTYPE` | `bf4` | MoE routed-expert weight dtype: `bf4` or `bf8` (~20% more memory, higher PCC). |
-| `M3_WEIGHTS_FROM_CACHE` | unset | `1` = load every tilized weight from the cache and skip the bf16 source read (also automatic when the cache is complete for the requested layers). |
-| `M3_FORCE_LOAD_WEIGHTS` | unset | `1` = read the bf16 source even if the cache is complete (cache populate / refresh). |
+| `M3_WEIGHTS_FROM_CACHE` | unset | `1` = load every tilized weight from the cache and skip the source read (also automatic when the cache is complete for the requested layers). |
+| `M3_FORCE_LOAD_WEIGHTS` | unset | `1` = read the source weights even if the cache is complete (cache populate / refresh). |
 | `M3_LOAD_NLAYERS` | unset (all) | Read only the safetensors shards holding layers `[M3_LOAD_LAYER_START, +N)` plus embed/norm/lm_head. Set by the harnesses from `PREFILL_NUM_LAYERS` / `PROFILE_NUM_LAYERS` / `NLAYERS`. |
 | `M3_LOAD_LAYER_START` | `0` | First global layer of the `M3_LOAD_NLAYERS` window (a pipeline rank's adapter sets its `first_layer_idx`). |
 | `M3_SHARDED_RESIDUAL` | `1` | Residual-stream layout (`tt/residual.py`): `1` = `emb/tp`-sharded per TP column (attention and the MLPs close with a reduce-scatter only); `0` = full-emb replicated (the layout older baselines were measured on, kept for bisects). |
@@ -106,7 +176,7 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
+| `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check), or a bare trace name under the variant's golden dir. In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
 | `PREFILL_CHUNKED` | `0` | `1` = chunked prefill (exercises the cache-read path); `0` = one-shot. |
 | `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk: whole 128-token MSA blocks per SP rank (a multiple of 1024 at SP=8). |
 | `PREFILL_FORWARD_TOKENS_BUDGET` | `PREFILL_CHUNK_SIZE` | Chunked mode: tokens per forward, a multiple of the chunk size. Each forward packs `PREFILL_FORWARD_TOKENS_BUDGET / PREFILL_CHUNK_SIZE` consecutive chunks of the prompt (`TtPrefillRuntime.prefill_forward`); the last forward ends in empty chunks. |
@@ -119,7 +189,7 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 | `PREFILL_STANDALONE_CHUNKED_RECORD_ONLY` | `0` | `1` = record PCCs without asserting (`prefill_kv_validation.py`). |
 | `GOLDEN_DIR`, `SRC_TRACE`, `LOGDIR`, `PERF_WORKDIR` | see script header | `run_prefill_perf.sh` trace synthesis and logging paths. |
 | `PREFILL_RUNS` | unset | Multi-run mode: load weights once, then run many specs against the resident model. `<file>` (one spec per line, batch), `-` (stdin) or `fifo:<path>` (FIFO server; `quit` exits). Spec keys: `trace= isl= capacity= iters= skip_pcc= expected_tps= perf_margin= pcc_threshold= label=`. Chunked only. |
-| `PREFILL_GOLDEN_ROOT` | `dirname(PREFILL_TRACE_DIR)` | Directory bare `trace=` names resolve under. |
+| `PREFILL_GOLDEN_ROOT` | `dirname(PREFILL_TRACE_DIR)`, else the variant's golden dir | Directory bare `trace=` names resolve under. |
 | `PREFILL_MAX_SEQ_LEN` | unset (fit) | Multi-run only: pin the KV-cache capacity for runs without `capacity=`; unset fits the cache to each run's padded length (re-allocates cache + rebuilds RoPE, no weight reload). On a 1D fabric the MSA index_k gather moves close to the whole slot capacity per chunk, so an over-sized cache costs time. |
 | `PREFILL_ISL` | trace length | Prefill N tokens: the trace's real tokens tiled cyclically (truncated if shorter). KV PCC still checks the first `min(N, trace)` tokens. Per-spec `isl=` overrides. |
 | `PREFILL_WARMUP_ITERS` | `0` | Untimed whole-sequence passes before the timed iterations (iteration 0 carries the per-ISL JIT). |
@@ -139,7 +209,7 @@ short aliases (`CHUNK`, `CACHE`, `LAYERS`, `LAYER_IDS`, `LEVEL`, `STAGES`, `STAG
 |---|---|---|
 | `NUM_GEN`, `TARGET_LEN`, `NLAYERS`, `FORCE_DENSE`, `EP_SEQ_PER_CHIP`, `NO_SP` | `tests/galaxy_generate_m3.py` | Tokens to generate, prompt length (`5120`), layers to build, all-dense attention (`1`), per-chip EP token count, disable SP (`1`). |
 | `PERF_SEQ`, `PERF_LAYERS`, `PERF_EXPERTS`, `PERF_REPS`, `REAL`, `TRACE_REGION` | `tests/perf/test_model_perf.py` | Synthetic model perf test shape / repetitions / real-weights switch / trace region bytes. |
-| `M3_CKPT` | `tests/unit/test_msa_layer_vs_ref.py` | Checkpoint dir for the real-weights MSA test (falls back to `HF_MODEL`; the test skips without either). |
+| `M3_CKPT` | `tests/unit/test_msa_layer_vs_ref.py` | Checkpoint dir for the real-weights MSA test (falls back to `HF_MODEL`; the test skips without either). Its config picks the variant whose dims / RoPE the test uses. |
 | `RUN_INDEXER_ACCURACY` | `tests/unit/test_indexer_score_msa_accuracy.py` | `1` = run the opt-in indexer accuracy sweep. |
 | `REF_ATTN_Q_CHUNK`, `REF_FFN_TOKEN_CHUNK` | `reference/model.py` | Torch reference chunking (`256` query rows, `4096` FFN tokens) to bound host memory. |
 | `OFFLOAD_DIR` | `tests/golden_hf_first_token.py` | HF `accelerate` offload dir for the first-token golden (`/tmp/m3_offload`). |
@@ -157,7 +227,7 @@ reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
 scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
 docs/             multi-galaxy pipeline-parallel prefill running & testing
-configs/MiniMax-M3/config.json    dims only (modeling code loaded from the checkpoint via HF_MODEL)
+configs/<variant>/config.json     MiniMax-M3 / MiniMax-M3.1 text configs (modeling code loaded from the checkpoint via HF_MODEL)
 tests/unit/       module-by-module PCC tests
 tests/            galaxy harnesses (prefill KV-cache PCC, first-token, smoke)
 ```

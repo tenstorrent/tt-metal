@@ -29,6 +29,7 @@ namespace {
 using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalTensorParameter;
+using test_helpers::MakePerNodeTensorParameter;
 using test_helpers::MakeRunArgsForMinimalSpec;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ProgramRunArgsTestGen1;
@@ -98,6 +99,26 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorSpecMismatchFails) {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
 
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "TensorArgument for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
+}
+
+// The allocation mode is part of the TensorSpec match. The reverse direction (a per-node tensor bound to a
+// lockstep TensorParameter) is not tested: allocating a per-node tensor needs the HYBRID allocator, which
+// unit_tests_api does not run with.
+TEST_F(ProgramRunArgsTestGen1, CPU_PerNodeTensorParameterWithLockstepTensorFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakePerNodeTensorParameter("input_tensor", /*num_cores=*/1)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    // Identical to the parameter except for the allocation mode.
+    MeshTensor tensor = MeshTensor::allocate_on_device(
+        *mesh_device_, MakePerNodeTensorParameter("input_tensor", /*num_cores=*/1, /*per_node=*/false).spec);
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {{TensorParamName{"input_tensor"}, TensorArgument{tensor}}};
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(

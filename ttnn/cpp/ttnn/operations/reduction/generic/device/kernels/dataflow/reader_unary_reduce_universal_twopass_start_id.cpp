@@ -12,8 +12,8 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    std::uint32_t num_tiles = get_arg(args::num_tiles);
-    std::uint32_t start_id = get_arg(args::start_id);
+    const std::uint32_t num_tiles = get_arg(args::num_tiles);
+    const std::uint32_t start_id = get_arg(args::start_id);
 
     constexpr std::uint32_t Wt = get_arg(args::Wt);
 
@@ -22,7 +22,7 @@ void kernel_main() {
     const std::uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     auto tensor_accessor = TensorAccessor(tensor::src);
-    Noc noc;
+    const Noc noc;
 
 #ifndef WELFORD_TWO_PASS_L1_REPLAY
     std::uint32_t stream_write_page = 0;
@@ -30,7 +30,7 @@ void kernel_main() {
 
     const std::uint32_t num_rows = num_tiles / Wt;
     for (std::uint32_t row = 0; row < num_rows; ++row) {
-        const std::uint32_t row_start_id = start_id + row * Wt;
+        const std::uint32_t row_start_id = start_id + (row * Wt);
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         // The compute kernel keeps this complete row in the enlarged input CB and
         // indexes it twice, so DRAM is traversed only once.
@@ -61,7 +61,7 @@ void kernel_main() {
                 const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
                 const std::uint32_t read_batch =
                     std::min(std::min(max_read_batch, pass_end - wt_base), contiguous_pages);
-                dfb_in0.reserve_back(read_batch);
+                dfb_in0.reserve_back(static_cast<uint16_t>(read_batch));
                 for (std::uint32_t wt = 0; wt < read_batch; ++wt) {
                     noc.async_read(
                         tensor_accessor,
@@ -71,7 +71,7 @@ void kernel_main() {
                         {.offset_bytes = wt * tile_bytes});
                 }
                 noc.async_read_barrier();
-                dfb_in0.push_back(read_batch);
+                dfb_in0.push_back(static_cast<uint16_t>(read_batch));
                 wt_base += read_batch;
                 stream_write_page = (stream_write_page + read_batch) % max_read_batch;
             }

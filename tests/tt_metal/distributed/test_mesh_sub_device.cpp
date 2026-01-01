@@ -204,7 +204,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto all_cores = syncer_core.merge(datacopy_core);
     auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
-    Program sync_and_incr_program = CreateProgram();
+    Program sync_and_incr_program = CreateProgram(*this->mesh_device_);
     auto sync_kernel = CreateKernel(
         sync_and_incr_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_increment.cpp",
@@ -213,7 +213,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     std::array<uint32_t, 3> sync_rt_args = {global_sem.address(), datacopy_core_phys.x, datacopy_core_phys.y};
     SetRuntimeArgs(sync_and_incr_program, sync_kernel, syncer_core, sync_rt_args);
 
-    Program datacopy_program = CreateProgram();
+    Program datacopy_program = CreateProgram(*this->mesh_device_);
     auto datacopy_kernel = CreateKernel(
         datacopy_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_datacopy.cpp",
@@ -338,7 +338,7 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
         {SubDevice(std::array{cores_1}), SubDevice(std::array{cores_0})}, k_local_l1_size);
     mesh_device_->load_sub_device_manager(sub_device_manager_0);
 
-    Program delay_program = CreateProgram();
+    Program delay_program = CreateProgram(*this->mesh_device_);
     auto delay_kernel = CreateKernel(
         delay_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",

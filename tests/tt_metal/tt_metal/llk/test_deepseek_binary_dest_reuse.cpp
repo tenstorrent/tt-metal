@@ -31,7 +31,7 @@ void run_deepseek_binary_dest_reuse(
     const auto output_tile_bytes = output_tile.get_tile_size(format);
     const std::uint32_t input_tile_elements = tile_height * 32;
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = bytes},

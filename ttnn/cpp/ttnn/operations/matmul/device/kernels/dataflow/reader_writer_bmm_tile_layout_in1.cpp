@@ -184,7 +184,7 @@ void kernel_main() {
         }
         // The M blocks of a batch are consecutive rows, and the next batch's rows follow the last one
         out_tensor_start_tile_id +=
-            last_m_block_of_batch ? MtNt - (m_blocks_per_batch - 1) * out_m_block_stride : out_m_block_stride;
+            last_m_block_of_batch ? MtNt - ((m_blocks_per_batch - 1) * out_m_block_stride) : out_m_block_stride;
 #endif  // OUT_SHARDED
         m_block = last_m_block_of_batch ? 0 : m_block + 1;
     }

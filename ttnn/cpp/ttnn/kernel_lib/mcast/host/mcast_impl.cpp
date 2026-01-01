@@ -502,6 +502,9 @@ void McastImpl::prepare_arguments_() const {
     layout_.sender_mcast_mode =
         uniform_sender_mcast_mode && first_sender_mcast_mode ? *first_sender_mcast_mode : SenderMcastMode::Unknown;
     prepared_arch_ = device_.get().arch();
+    TT_FATAL(
+        !(prepared_arch_ == tt::ARCH::QUASAR && cfg_.noc == tt::tt_metal::NOC::NOC_1),
+        "Quasar has one NoC; configure the multicast NoC as NOC_0");
     prepared_device_grid_ = device_.get().compute_with_storage_grid_size();
     generic_metadata_ = {.mcast = layout_};
     if (transfer_mode == TransferMode::Multicast) {
@@ -516,7 +519,7 @@ void McastImpl::prepare_arguments_() const {
 }
 
 void McastImpl::require_arguments_prepared_() const {
-    TT_FATAL(arguments_prepared_, "McastImpl: attach or call append_semaphores() before requesting arguments");
+    TT_FATAL(arguments_prepared_, "McastImpl: attach before requesting arguments");
 }
 const McastImpl::Group* McastImpl::group_for_core_(const CoreCoord& core) const {
     for (const auto& group : groups_) {

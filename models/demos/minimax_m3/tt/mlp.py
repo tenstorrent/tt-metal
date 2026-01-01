@@ -10,6 +10,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 """
 
 import ttnn
+from models.demos.minimax_m3.utils.checkpoint import ROUTED_EXPERT_SWIGLU
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -100,10 +101,11 @@ class MLP:
         # substate presence (which is empty in this mode). See tt/weight_cache.py.
         cache_only = not state_dict
 
-        # M3: always-on shared expert (block_sparse_moe.shared_experts.{gate,up,down}_proj), a plain
+        # Always-on shared expert (block_sparse_moe.shared_experts.{gate,up,down}_proj), a plain
         # clamped-swigluoai FFN at shared_intermediate_size. Its output is ADDED to the routed-expert
         # output (the routed side already carries routed_scaling_factor from the router). Reuses DenseMLP.
-        # M3 MoE layers always have a shared expert -> build it from cache in cache-only mode.
+        # n_shared_experts is 1 (check_supported_config) -> build it from cache in cache-only mode.
+        assert hf_config.n_shared_experts == 1, f"n_shared_experts={hf_config.n_shared_experts}: exactly one is built"
         shared_state_dict = substate(state_dict, "shared_experts")
         self.shared_expert = (
             DenseMLP(
@@ -184,8 +186,13 @@ class MLP:
         self.overlap_shared = overlap_shared_expert and self.shared_expert is not None
         self.fuse_shared_rs = fuse_shared_rs_enabled() and self.shared_expert is not None
 
-        # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with
-        # M3's clamped swigluoai activation (baked alpha=1.702 / limit=7.0). See TtMiniMaxMoE.
+        # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with the
+        # clamped swigluoai activation, whose alpha / limit are baked into the kernel. See TtMiniMaxMoE.
+        assert (hf_config.swiglu_alpha, hf_config.swiglu_limit) == ROUTED_EXPERT_SWIGLU, (
+            f"config swiglu alpha/limit {(hf_config.swiglu_alpha, hf_config.swiglu_limit)} != the routed-expert "
+            f"kernel's {ROUTED_EXPERT_SWIGLU}"
+        )
+        assert hf_config.scoring_func == "sigmoid", f"scoring_func={hf_config.scoring_func!r}: the gate is sigmoid-only"
         self.experts = TtMiniMaxMoE(
             mesh_device=mesh_device,
             dispatch_group_size=dgs,
@@ -204,10 +211,9 @@ class MLP:
             num_links=ccl_manager.num_links,
             routed_expert_weights_dtype=expert_weight_dtype,
             weight_cache_path=_ep_cache_dir(tensor_cache_path),
-            # Must match the model's routed_scaling_factor (2.0), not the 1.0 default: the internal gate
-            # applies it to the top-k weights, so a stale 1.0 silently halves every routed contribution
-            # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
-            route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
+            # The model's routed_scaling_factor: the internal gate applies it to the top-k weights whenever
+            # gate_fallback_mode selects it over the caller-supplied topk.
+            route_scale=hf_config.routed_scaling_factor,
             reduce_scatter_fn=moe_reduce_scatter,
             overlap_shared_expert=self.overlap_shared,
         )

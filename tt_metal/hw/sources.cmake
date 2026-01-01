@@ -4,6 +4,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
+    inc/api/circular_buffer_constants.h
     inc/api/tile_constants.h
     inc/api/remote_circular_buffer.h
     inc/api/semaphore.h
@@ -187,6 +188,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
+    inc/api/compute/moe_gate_sqrt_softplus.h
     inc/api/compute/mul_int_sfpu.h
     inc/api/compute/nextafter.h
     inc/api/compute/pack.h

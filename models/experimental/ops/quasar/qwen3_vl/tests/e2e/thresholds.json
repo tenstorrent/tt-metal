@@ -1,0 +1,13 @@
+{
+  "default": {
+    "vision.block*": 0.99,
+    "vision.deepstack*": 0.99,
+    "vision.merger": 0.99,
+    "text.layer*": 0.99,
+    "text.norm": 0.99,
+    "text.logits.prefill": 0.98,
+    "text.logits.decode*": 0.98
+  },
+  "tiny": {},
+  "demo": {}
+}

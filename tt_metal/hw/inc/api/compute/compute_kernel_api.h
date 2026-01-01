@@ -478,6 +478,10 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
  *
  * Note: This version of the function is for int32 datatype
  *
+ * On Wormhole, this operation records replay slots 0-2 and relies on the
+ * ADDR_MOD_6 programmed by *abs_tile_init*. Callers sharing the replay buffer
+ * with other SFPU operations must reinitialize it as needed.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
@@ -878,6 +882,9 @@ ALWI void max_reduce_with_indices_init() {
  *
  * Only 32x32 tile dimensions are supported.
  * All tile indices must reference valid tiles within the DST register.
+ * Int32 assumes a native Int32 tile brought into DST by unpack-to-dest (a two's-complement word). A
+ * sign-magnitude DST, as produced by promoting an Int8 tile through the FPU with a 32-bit DST, is only
+ * correct for non-negative values.
  *
  * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|

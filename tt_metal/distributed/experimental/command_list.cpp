@@ -976,6 +976,10 @@ void CommandListBuilderImpl::resolve_parameters(
                     if (handle.tensor_parameter_name != *info.param_name) {
                         continue;
                     }
+                    TT_FATAL(
+                        !handle.is_per_node,
+                        "TensorParameter '{}' is per-node allocated, which command lists cannot patch",
+                        info.param_name);
                     bound = true;
                     auto binding = std::make_shared<const TensorPatchBinding>(TensorPatchBinding{
                         .binding = handle, .expected_spec = *expected_spec, .relaxations = relaxations});

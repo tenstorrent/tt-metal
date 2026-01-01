@@ -35,13 +35,27 @@ from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgr
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import parametrize_mesh_with_fabric
 
 # M3 attention dims (text_config).
-HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
-NIDX, INDEX_DIM = 4, 128  # MSA indexer: 4 index q-heads, 1 shared index-k head, dim 128
+# Dims and RoPE from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL; utils/model_variant.py).
+_CFG = load_config()
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+# MSA indexer: one index q-head per KV head, one shared index-k head.
+_SPARSE = _CFG["sparse_attention_config"]
+NIDX, INDEX_DIM = _SPARSE["sparse_num_index_heads"], _SPARSE["sparse_index_dim"]
+MSA = dict(
+    msa_block_size=_SPARSE["sparse_block_size"], msa_topk_blocks=_SPARSE["sparse_topk_blocks"], msa_index_dim=INDEX_DIM
+)
 
 
 def _rotate_half(x):
@@ -186,11 +200,10 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
         head_dim=HEAD_DIM,
         rotary_dim=ROTARY_DIM,
         rms_norm_eps=EPS,
-        use_qk_norm=True,
-        use_gemma_norm=True,
         max_seq_len=max(seq_len, 128),
         max_local_batch_size=1,
         is_sparse=is_sparse,
+        **(MSA if is_sparse else {}),
         sequence_parallel=True,
     )
     attn = Attention(

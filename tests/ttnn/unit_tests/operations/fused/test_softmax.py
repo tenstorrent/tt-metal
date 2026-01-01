@@ -13,15 +13,18 @@ from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
+LARGE_SOFTMAX_NIGHTLY_SHAPES = [
+    (1, 128, 128000, -1),
+    (1, 32, 128000, -1),
+    (1, 2048, 32000, -1),
+    (1, 512, 32000, -1),
+]
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
     [
-        (1, 128, 128000, -1),
-        (1, 32, 128000, -1),
-        (1, 2048, 32000, -1),
-        (1, 512, 32000, -1),
         (1, 32, 32000, -1),  # base case
         (1, 24, 42, -1),
     ],
@@ -871,6 +874,15 @@ def test_softmax_large_non_divisible_width(device, Wt):
     _run_softmax_non_divisible_width(device, Wt, fp32_acc_en=True, numeric_stable=True)
 
 
+# Large-kernel masked cases that run nightly only (tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py):
+# the Wt=637 pad=15 one is 2.5 min on the simulator (#62486).
+SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES = [
+    (1, False, 1001, 0),
+    # large kernel with a mask and a padded last tile
+    (1, False, 637, 15),
+]
+
+
 @pytest.mark.parametrize(
     "batch, causal, Wt, pad",
     [
@@ -883,17 +895,15 @@ def test_softmax_large_non_divisible_width(device, Wt):
         (16, True, 5, 0),
         (16, True, 7, 0),
         (16, True, 13, 0),
-        # wide enough to select the streaming large kernel, which pads c_4 per pass
+        # wide enough to select the streaming large kernel, which pads c_4 per pass; the other large-kernel
+        # cases are in SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES
         (1, False, 637, 0),
-        (1, False, 1001, 0),
         # W not a multiple of 32: the mask's zero tile padding must not reach the row sum
         (64, False, 1, 15),
         (64, False, 4, 30),
         (64, False, 7, 15),
         (16, True, 2, 15),
         (16, True, 4, 30),
-        # large kernel with a mask and a padded last tile
-        (1, False, 637, 15),
     ],
 )
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
@@ -1332,11 +1342,14 @@ def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
     assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
 
 
+ROW_MAJOR_MASK_NIGHTLY_WIDTHS = [2048]
+
+
 # The documented unsharded ROW_MAJOR mask form [B, 1, W/32, 32] must give the same result as the same mask as a
 # TILE [B, 1, 1, W] tensor. The in-place path used to hand it to the interleaved factory, which reads every mask
 # page as a tile (wrong result); for W < 1024 the mask height also made mask_Ht zero, a host divide-by-zero that
 # killed the process.
-@pytest.mark.parametrize("W", [384, 1024, 2048])
+@pytest.mark.parametrize("W", [384, 1024])  # W=2048 runs nightly (ROW_MAJOR_MASK_NIGHTLY_WIDTHS)
 @pytest.mark.parametrize("api", ["scale_mask_softmax_in_place", "attention_softmax_"])
 def test_scale_mask_softmax_in_place_row_major_mask(device, W, api):
     torch.manual_seed(0)

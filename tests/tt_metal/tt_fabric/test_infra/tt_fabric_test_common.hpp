@@ -528,6 +528,8 @@ public:
 
     tt::ARCH get_arch() const { return mesh_device_->arch(); }
 
+    tt::tt_metal::distributed::MeshDevice& get_mesh_device() const { return *mesh_device_; }
+
     uint32_t get_max_connections_per_device() const override {
         auto arch = get_arch();
         switch (arch) {

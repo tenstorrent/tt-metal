@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -123,7 +124,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     });
 
     if (use_local_cache) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
+        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         spec.scratchpads.push_back(ScratchpadSpec{

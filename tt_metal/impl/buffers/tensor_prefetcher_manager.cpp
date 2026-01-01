@@ -21,7 +21,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <optional>
@@ -1456,10 +1458,11 @@ void TensorPrefetcherManager::queue(
             req.sender_pages = std::move(sender_pages);
             req.target_devices = target_devices;
             req.target_sender_indices = target_sender_indices;
+            auto shared_req = std::make_shared<const Request>(std::move(req));
             if (recording_trace_id.has_value()) {
-                trace_requests_[*recording_trace_id].push_back(std::move(req));
+                trace_requests_[*recording_trace_id].push_back(std::move(shared_req));
             } else {
-                pending_.push_back(std::move(req));
+                pending_.push_back(std::move(shared_req));
                 has_pending_.store(true);
             }
         }
@@ -1555,8 +1558,8 @@ void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
             // No prefetcher requests were captured during this trace's capture.
             return;
         }
-        // Copy (not move) so the captured requests survive for the next replay. Pushed in
-        // capture order so fifo_wr_ptr continuity matches the original Queue calls.
+        // Copy the handles (not the requests) so the captured requests survive for the next replay.
+        // Pushed in capture order so fifo_wr_ptr continuity matches the original Queue calls.
         pending_.insert(pending_.end(), it->second.begin(), it->second.end());
         has_pending_.store(true);
     }
@@ -1664,7 +1667,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
 
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
-        pending_.push_back(std::move(req));
+        pending_.push_back(std::make_shared<const Request>(std::move(req)));
         has_pending_.store(true);
     }
     queue_cv_.notify_one();
@@ -1680,10 +1683,16 @@ void TensorPrefetcherManager::worker_loop() {
     // 8 consecutive pages in one write bring that to ~0.12 us a page, and longer runs gain little while
     // holding back the publish that lets the senders start.
     constexpr uint32_t kMaxPagesPerSocketWrite = 8;
+    // Requests spread over the per-socket queues per pass. A trace replay hands the worker every request
+    // it captured at once; spreading only the next few lets the first pages go out without waiting for
+    // the rest of the burst to be spread, while still giving each socket a full write per pass. The bound
+    // is per pass rather than on requests not yet fully written: a socket with no room must not hold back
+    // other sockets' requests, as its sender's consumers may be waiting on theirs.
+    constexpr size_t kMaxRequestsTakenPerPass = 2 * kMaxPagesPerSocketWrite;
 
     // A request taken off pending_, with the number of its socket pages not yet written.
     struct TakenRequest {
-        Request request;
+        std::shared_ptr<const Request> request;
         size_t unsent_pages = 0;
     };
     struct UnsentPage {
@@ -1697,9 +1706,9 @@ void TensorPrefetcherManager::worker_loop() {
     std::vector<std::deque<UnsentPage>> unsent(sockets_.size());
     std::deque<TakenRequest> taken;
 
-    const auto take_request = [&](Request&& request) {
+    const auto take_request = [&](std::shared_ptr<const Request>&& request) {
         TakenRequest& taken_request = taken.emplace_back(TakenRequest{.request = std::move(request)});
-        const Request& req = taken_request.request;
+        const Request& req = *taken_request.request;
         // PREFETCH targets only the sender cores of its pipes. STOP / WAIT_CQ / DRAIN leave
         // target_sender_indices empty and broadcast to every provisioned sender.
         const bool fanout_all_senders = req.target_sender_indices.empty();
@@ -1743,14 +1752,15 @@ void TensorPrefetcherManager::worker_loop() {
         }
     };
 
-    std::deque<Request> incoming;
+    std::deque<std::shared_ptr<const Request>> incoming;
     std::array<const uint8_t*, kMaxPagesPerSocketWrite> run{};
     std::vector<distributed::H2DSocket*> staged;
     staged.reserve(sockets_.size());
     while (true) {
-        // A pass that starts with nothing unsent writes one page per socket, so that a request on its own,
-        // or the first of a burst, is published without waiting for the pages behind it.
-        const bool starting_idle = std::ranges::all_of(unsent, [](const auto& pages) { return pages.empty(); });
+        // A pass that starts with nothing left to send writes one page per socket, so that a request on its
+        // own, or the first of a burst, is published without waiting for the pages behind it.
+        const bool starting_idle =
+            incoming.empty() && std::ranges::all_of(unsent, [](const auto& pages) { return pages.empty(); });
         if (starting_idle || has_pending_.load()) {
             std::unique_lock<std::mutex> lk(queue_mu_);
             if (starting_idle) {
@@ -1761,13 +1771,19 @@ void TensorPrefetcherManager::worker_loop() {
                     return;
                 }
             }
-            incoming.swap(pending_);
+            if (incoming.empty()) {
+                incoming.swap(pending_);
+            } else {
+                std::ranges::move(pending_, std::back_inserter(incoming));
+                pending_.clear();
+            }
             has_pending_.store(false);
         }
-        for (Request& req : incoming) {
-            take_request(std::move(req));
+        for (size_t taken_this_pass = 0; taken_this_pass < kMaxRequestsTakenPerPass && !incoming.empty();
+             ++taken_this_pass) {
+            take_request(std::move(incoming.front()));
+            incoming.pop_front();
         }
-        incoming.clear();
 
         // Stage each socket's next pages in one write, then publish them all with one pair of fences.
         const uint32_t max_pages = starting_idle ? 1u : kMaxPagesPerSocketWrite;
@@ -1843,9 +1859,9 @@ void TensorPrefetcherManager::stop() {
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
         for (auto& drain : drains) {
-            pending_.push_back(std::move(drain));
+            pending_.push_back(std::make_shared<const Request>(std::move(drain)));
         }
-        pending_.push_back(std::move(sentinel));
+        pending_.push_back(std::make_shared<const Request>(std::move(sentinel)));
         has_pending_.store(true);
         stop_requested_.store(true);
     }

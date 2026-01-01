@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blocks shared across the port: the LayerNorm helper that passes the module's eps, used by the
-encoder and the decoder, and the conv the ResNet101-DCN backbone and the FPN share.
+"""Blocks shared across the port: the LayerNorm helper, the encoder's and decoder's FFN, and the conv
+the ResNet101-DCN backbone and the FPN share.
 
-The conv's weights are prepared once, in the constructor, for one interleaved DRAM input dtype
+conv2d lays the conv's weights out once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
 activation lives in DRAM runs as a matmul; a spatial conv there runs in a fixed
 number of width slices.
@@ -14,6 +14,13 @@ number of width slices.
 import math
 
 import ttnn
+
+try:
+    from tracy import signpost
+except ModuleNotFoundError:  # Tracy is only installed for profiling.
+
+    def signpost(header, message=None):
+        pass
 
 
 def layer_norm(x, params, residual=None):
@@ -27,7 +34,31 @@ def layer_norm(x, params, residual=None):
     )
 
 
-class TtnnConv2D:
+class TTFFN:
+    """The encoder's and decoder's FFN, Linear-ReLU-Linear, without the residual: the layer adds it
+    inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``."""
+
+    def __init__(self, params):
+        self.params = params
+
+    def __call__(self, x):
+        p = self.params
+        y = ttnn.linear(x, p.linear1.weight, bias=p.linear1.bias, activation="relu")
+        return ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
+
+
+def is_pointwise(conv):
+    """Whether ``conv``, anything with a conv's geometry, is a 1x1 stride-1 conv without padding or
+    groups: a matmul over channels."""
+    return (
+        tuple(conv.kernel_size) == (1, 1)
+        and tuple(conv.stride) == (1, 1)
+        and tuple(conv.padding) == (0, 0)
+        and conv.groups == 1
+    )
+
+
+class TTConv2D:
     """``conv`` carries the conv's geometry and its input's batch, height and width.
 
     Most convs run through conv2d. ``input_dtype`` and ``input_layout`` describe the
@@ -35,8 +66,10 @@ class TtnnConv2D:
     input, so they are prepared here against it and a forward does no host work, and a
     call with a different input fails instead of running on mismatched weights.
     With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
-    takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``;
-    a spatial conv keeps conv2d and runs in ``dram_conv_slices`` width slices.
+    takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``; its
+    ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
+    ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
+    ``dram_conv_slices`` width slices.
 
     ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
     halo has read it; the DRAM input itself is never freed.
@@ -79,7 +112,7 @@ class TtnnConv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         # conv2d gets no dilation, nor does the slice count below account for one.
-        assert tuple(conv.dilation) == (1, 1), f"TtnnConv2D supports dilation (1, 1) only, got {conv.dilation}"
+        assert tuple(conv.dilation) == (1, 1), f"TTConv2D supports dilation (1, 1) only, got {conv.dilation}"
         self.groups = conv.groups
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -105,12 +138,7 @@ class TtnnConv2D:
         self.weight = conv_pth.weight
 
         self.weights_dtype = weights_dtype
-        self.is_pointwise = (
-            tuple(self.kernel_size) == (1, 1)
-            and tuple(self.stride) == (1, 1)
-            and tuple(self.padding) == (0, 0)
-            and self.groups == 1
-        )
+        self.is_pointwise = is_pointwise(conv)
         self.input_height = conv.input_height
         self.input_width = conv.input_width
         self.batch_size = conv.batch_size
@@ -136,15 +164,13 @@ class TtnnConv2D:
         if not (self.dram_activation and self.is_pointwise):
             self._prepare_conv_weights()
         else:
-            weight = ttnn.to_torch(self.weight).reshape(self.out_channels, self.in_channels).t().contiguous()
-            self.linear_weight = ttnn.from_torch(
-                weight, dtype=self.weights_dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            linear_shape = (self.in_channels, self.out_channels)
+            assert tuple(self.weight.shape) == linear_shape and self.weight.dtype == weights_dtype, (
+                f"a DRAM 1x1 conv takes a {weights_dtype} {linear_shape} Linear weight, got "
+                f"{self.weight.dtype} {tuple(self.weight.shape)}"
             )
-            if self.bias is not None:
-                bias = ttnn.to_torch(self.bias).reshape(1, self.out_channels)
-                self.linear_bias = ttnn.from_torch(
-                    bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-                )
+            self.linear_weight = ttnn.to_device(self.weight, self.device)
+            self.linear_bias = None if self.bias is None else ttnn.to_device(self.bias, self.device)
 
     def _prepare_conv_weights(self):
         # conv2d lays its weights out for the input it sees and prepares them on the host on

@@ -18,7 +18,7 @@
       timeout: 15
   team: ttnn
   budget_type: merge_gate
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
 
 # Codegen-path coverage for every op that has one. `-k codegen` picks the tests that force the
 # codegen kernels and check them against a golden (torch for pad); a new op joins by appending its

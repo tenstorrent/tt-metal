@@ -28,7 +28,7 @@ void RunActiveEthKernels(const std::shared_ptr<distributed::MeshDevice>& mesh_de
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr int loop_size = 200;
     constexpr int enqueue_times = 2;

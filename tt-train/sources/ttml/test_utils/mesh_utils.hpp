@@ -77,4 +77,32 @@ protected:
     }
 };
 
+// A 1x2 mesh opened once for the whole suite instead of once per test. Each test still starts on an empty program
+// cache, as on a freshly opened mesh. GTEST_SKIP() in SetUpTestSuite does not skip the tests, so the suite opens the
+// mesh only if the system can hold it, and SetUp skips each test otherwise.
+class Mesh1x2SuiteFixture : public ::testing::Test {
+protected:
+    static tt::tt_metal::distributed::MeshShape mesh_shape() {
+        return tt::tt_metal::distributed::MeshShape(1, 2);
+    }
+
+    static void SetUpTestSuite() {
+        if (system_supports_mesh(mesh_shape())) {
+            ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(mesh_shape().mesh_size()));
+            ttml::autograd::ctx().open_device(mesh_shape());
+        }
+    }
+
+    static void TearDownTestSuite() {
+        if (system_supports_mesh(mesh_shape())) {
+            ttml::autograd::ctx().close_device();
+        }
+    }
+
+    void SetUp() override {
+        SKIP_UNLESS_MESH_SUPPORTED(mesh_shape());
+        ttml::autograd::ctx().get_device().clear_program_cache();
+    }
+};
+
 }  // namespace ttml::test_utils

@@ -27,7 +27,7 @@ void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, ui
     const auto& logical_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    TT_FATAL(input_tensor.is_allocated(), "Fold: Expect input tensor to be allocated on a device buffer.");
     // Guard before any modulo/div on stride; both sharded and unsharded branches SIGFPE on zero stride.
     TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h ({}) and stride_w ({}) must be > 0.", stride_h, stride_w);
     if (is_sharded) {

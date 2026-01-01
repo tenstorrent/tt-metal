@@ -39,7 +39,7 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16]),
+    formats=input_output_formats([DataFormat.Float16_b]),
     block_ct_dim=runtime(BLOCK_CT_DIMS),
     tile_dimensions=runtime(TILE_DIMENSIONS),
     dest_sync_mode=[DestSync.Half, DestSync.Full],

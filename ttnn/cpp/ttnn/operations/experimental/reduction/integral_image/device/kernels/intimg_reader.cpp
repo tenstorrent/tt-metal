@@ -17,7 +17,7 @@ FORCE_INLINE void zero_buffer(const Noc& noc, const DFB& cb, uint32_t bytes) {
 
 template <typename input_number_t, typename DFB>
 FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(const Noc& noc, const DFB& cb, uint32_t tile_size) {
-    WriteCBGuard start_cb_guard{cb.get_id(), ONE_TILE};
+    const WriteCBGuard start_cb_guard{cb.get_id(), ONE_TILE};
 
     zero_buffer(noc, cb, tile_size * sizeof(input_number_t));
 }
@@ -59,10 +59,10 @@ void kernel_main() {
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
-    const uint32_t my_channel = core_y * ctas.cores_x + core_x;
+    const uint32_t my_channel = (core_y * ctas.cores_x) + core_x;
 
-    Noc noc;
-    DataflowBuffer start_cb(dfb::start);
+    const Noc noc;
+    const DataflowBuffer start_cb(dfb::start);
 
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
@@ -72,7 +72,7 @@ void kernel_main() {
                 prepare_start_tile_for_cumsum_axis_2<input_number_type>(
                     noc, start_cb, ctas.tile_height * ctas.tile_width);
                 const uint32_t block_depth =
-                    std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
+                    std::min(ctas.input_depth - (column_block_i * ctas.block_depth), ctas.block_depth);
                 send_block(
                     input_addr_gtor,
                     dfb::input,

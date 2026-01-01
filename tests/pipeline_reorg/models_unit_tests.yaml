@@ -808,8 +808,9 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
+    # Host-only tests have no mesh id; run them here: chunk layout, model variants / config checks, checkpoint
+    # dequant, router precision, compute configs and the shared-expert 2D blocking.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config"
   model: minimax-m3
   skus:
     bh_p150:
@@ -1664,7 +1665,7 @@
     export TT_METAL_WATCHER=45
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
+    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "i2v and is_fsdp1"
   # NOTE! The -k filtering above is a hack! We ideally should test both is_fsdp0 and is_fsdp1
   # but wh_galaxies error with OOM right now for fsdp0. This workaround lets tests pass on wh_galaxy.
   model: wan-2.2-i2v
@@ -1781,7 +1782,7 @@
     # No is_fsdp1 filter here: that is a wh_galaxy workaround for an OOM on is_fsdp0, and Blackhole
     # has the DRAM headroom to run both.
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py
+      python3 -m pytest --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k i2v
   model: wan-2.2-i2v
   model_family: Wan
   skus:

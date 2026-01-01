@@ -40,7 +40,7 @@ void run_hadamard_reconfiguration(
     const auto output_bytes = face.get_tile_size(tt::DataFormat::Bfp8_b);
     const auto copy_bytes = full_tile.get_tile_size(tt::DataFormat::Float16_b);
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto& cq = mesh.mesh_command_queue();
     auto buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(

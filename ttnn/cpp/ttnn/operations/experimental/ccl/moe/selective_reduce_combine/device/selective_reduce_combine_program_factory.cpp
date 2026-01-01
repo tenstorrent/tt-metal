@@ -165,17 +165,16 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     };
 }
 
-// Fabric Mux V2 memory map fit: the largest per-channel buffer count whose mux L1 map ends at or below
-// usable_l1_end_address (the lowest occupied L1 address, or the floor of L1_SMALL).
-std::pair<tt::tt_fabric::FabricMuxV2Config, uint8_t> get_fabric_mux_config(
+// Fabric Mux V2 memory map fit: the largest per-channel buffer count whose mux L1 map, starting at
+// l1_unreserved_base_address, ends at or below usable_l1_end_address (the lowest occupied L1 address, or the floor
+// of L1_SMALL).
+uint8_t get_fabric_mux_num_buffers_per_channel(
     const MeshDevice& mesh_device,
     const uint8_t num_channels,
     uint8_t num_buffers_per_channel,
     const size_t channel_buffer_size_bytes,
     const uint32_t l1_unreserved_base_address,
     const size_t usable_l1_end_address) {
-    // Each candidate is sized without a ceiling, so this loop does the shrinking; the returned config carries the
-    // ceiling and its constructor asserts the fit.
     while (true) {
         TT_FATAL(
             num_buffers_per_channel > 0,
@@ -184,19 +183,10 @@ std::pair<tt::tt_fabric::FabricMuxV2Config, uint8_t> get_fabric_mux_config(
         const tt::tt_fabric::FabricMuxV2Config candidate(
             mesh_device, num_channels, num_buffers_per_channel, channel_buffer_size_bytes, l1_unreserved_base_address);
         if (candidate.get_memory_map_end_address() <= usable_l1_end_address) {
-            break;
+            return num_buffers_per_channel;
         }
         --num_buffers_per_channel;
     }
-    return {
-        tt::tt_fabric::FabricMuxV2Config(
-            mesh_device,
-            num_channels,
-            num_buffers_per_channel,
-            channel_buffer_size_bytes,
-            l1_unreserved_base_address,
-            usable_l1_end_address),
-        num_buffers_per_channel};
 }
 
 struct MuxCorePlacement {
@@ -208,6 +198,7 @@ struct MuxCorePlacement {
 // Plans Fabric Mux V2 cores without pushing kernels. Kernels are added later, after the writer, so the
 // writer index stays reader+1 (each mux core contributes a forwarder and a manager).
 auto plan_mux_workers(
+    tt::tt_metal::ProgramDescriptor& desc,
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,
     const std::vector<ttnn::MeshCoordinate>& neighbors,
@@ -231,47 +222,33 @@ auto plan_mux_workers(
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    // The mux carves raw L1 growing up from l1_unreserved_base_address, outside the allocator, so the
-    // allocator never learns those bytes are taken and may hand them to a later allocation. That is
-    // survivable for a tensor -- its producer rewrites it every iteration -- but not for a GlobalSemaphore,
-    // whose value is written once at allocation and thereafter only incremented by the kernels that read
-    // it. One clobber of a carried counter is unrecoverable, which is the #56769 hang.
-    //
-    // The fix is to keep semaphores out of the mux's reach entirely: with l1_small_size > 0 they are
-    // allocated from L1_SMALL, which sits at the *top* of L1, and the ceiling below pins the mux beneath
-    // it. Without an L1_SMALL region there is nowhere safe to put them, and we cannot detect the collision
-    // later -- at this point the semaphores do not exist yet, so an occupancy check cannot see them.
-    const auto l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    TT_FATAL(
-        l1_small_bank_size > 0,
-        "The fabric mux reserves raw L1 on cores {} outside the allocator, but this device was opened with "
-        "l1_small_size = 0. GlobalSemaphores then fall back to BufferType::L1 and can be allocated inside the "
-        "mux's region, which silently overwrites them and hangs (#56769). Open the mesh device with "
-        "l1_small_size > 0 (16384 is sufficient) so semaphores are placed in L1_SMALL, above the mux.",
-        mux_core_range_set.str());
-
-    // Keep the mux below the floor of the L1_SMALL region, where carried semaphores live (#56769), and
-    // below whatever the allocator has already handed out in L1. A live occupancy reading is always the
-    // tighter of the two -- the L1 bank sits entirely below L1_SMALL -- but it is only a build-time
-    // snapshot, and with nothing allocated yet the static floor is all there is to go on.
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores, placed below), so it stays clear
+    // of persistent L1 there, and the program's L1 validation at every enqueue keeps it clear of L1 buffers such as
+    // carried GlobalSemaphores (#56769). The buffer count is still sized to fit below the floor of the L1_SMALL
+    // region and whatever the allocator has already handed out in L1, counting from l1_unreserved_base, where
+    // program-local L1 starts on a core without persistent L1.
     const size_t usable_l1_end_address =
         mesh_device.lowest_occupied_compute_l1_address().value_or(ttnn::ccl::l1_small_floor_address(mesh_device));
-
-    auto [mux_config, num_buffers_per_channel] = get_fabric_mux_config(
+    const uint8_t num_buffers_per_channel = get_fabric_mux_num_buffers_per_channel(
         mesh_device,
         static_cast<uint8_t>(num_workers_per_link),
         initial_num_buffers_per_channel,
         channel_buffer_size_bytes,
         l1_unreserved_base_address,
         usable_l1_end_address);
+    tt::tt_fabric::FabricMuxV2Config mux_config(
+        mesh_device,
+        static_cast<uint8_t>(num_workers_per_link),
+        num_buffers_per_channel,
+        channel_buffer_size_bytes,
+        /*base_l1_address=*/0);
     log_debug(
         tt::LogOp,
-        "selective_reduce_combine fabric mux v2: {} channels x {} buffers x {} B, memory map [{}, {}) under {}, {} "
-        "mux cores (num_links={} x neighbors={})",
+        "selective_reduce_combine fabric mux v2: {} channels x {} buffers x {} B, memory map of {} B, sized under {}, "
+        "{} mux cores (num_links={} x neighbors={})",
         num_workers_per_link,
         num_buffers_per_channel,
         channel_buffer_size_bytes,
-        l1_unreserved_base_address,
         mux_config.get_memory_map_end_address(),
         usable_l1_end_address,
         num_links * neighbors.size(),
@@ -294,6 +271,7 @@ auto plan_mux_workers(
         mux_core_range_set.str());
 
     const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
+    mux_config.place_in_program_local_l1(desc, needed_mux_core_range_set);
 
     std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
@@ -361,8 +339,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    // Carried counters: keep them above the mux's ceiling where an L1_SMALL region exists. This op
-    // also TT_FATALs below if there is none, so the general-L1 fallback never reaches a mux.
+    // Carried counters: prefer L1_SMALL over general L1.
     const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
@@ -768,8 +745,8 @@ void append_selective_reduce_combine_to_descriptor(
         operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     // Plan mux cores now; their kernels are pushed after the writer so the writer index stays stable.
-    const auto [mux_config, mux_neigbor_core_maps, mux_placements] = detail::plan_mux_workers(
-        *mesh_device, mux_core_range_set, neighbors, num_links, num_worker_cores);
+    const auto [mux_config, mux_neigbor_core_maps, mux_placements] =
+        detail::plan_mux_workers(desc, *mesh_device, mux_core_range_set, neighbors, num_links, num_worker_cores);
 
     // launch writer kernel
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
@@ -883,7 +860,7 @@ void append_selective_reduce_combine_to_descriptor(
         mux_connection_args.push_back(link_sync_virtual_core.y);
 
         // This worker is logical channel link_worker_idx on each mux of its link. append_client_connection_rt_args
-        // serializes the 11 args FabricMuxV2Sender::build_from_args consumes.
+        // serializes the 12 args FabricMuxV2Sender::build_from_args consumes.
         for (std::size_t d = 0; d < neighbors.size(); ++d) {
             const auto& mux_virtual_core = core_map_iter->at(neighbors[d]);
             mux_config.append_client_connection_rt_args(

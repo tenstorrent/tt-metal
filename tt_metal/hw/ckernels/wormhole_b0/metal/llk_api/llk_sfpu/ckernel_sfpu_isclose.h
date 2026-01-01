@@ -4,11 +4,19 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_binary_comp.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
+
+// Constant-register contents shared by isclose_init and calculate_sfpu_isclose.
+// vConstIntPrgm0: sign-clear mask, x & kIscloseAbsMask is the |x| bit pattern.
+// vConstIntPrgm1: abs(+inf) bit pattern.
+constexpr std::int32_t kIscloseAbsMask = 0x7FFFFFFF;
+constexpr std::int32_t kIscloseInfBits = 0x7F800000;
 
 // Compute isclose element-wise: result = |a - b| <= atol + rtol * |b|
 //
@@ -34,7 +42,9 @@ inline void calculate_sfpu_isclose(
     // IEEE-754 abs(+inf). abs_bits == inf_bits -> +-Inf; abs_bits > inf_bits -> NaN
     // (NaN has exp == 0xFF and a non-zero mantissa, irrespective of sign or
     // quiet/signaling bit). One comparison classifies both special cases.
-    constexpr int32_t inf_bits = 0x7F800000;
+    // vConstIntPrgm1 holds kIscloseInfBits, programmed in isclose_init, so the hot loop
+    // reads it as a register operand instead of re-materialising it per use.
+    const sfpi::vInt inf_bits = sfpi::vConstIntPrgm1;
 
     const sfpi::vFloat atol = Converter::as_float(atol_bits);
     const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
@@ -45,15 +55,18 @@ inline void calculate_sfpu_isclose(
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         // Integer views of a, b and their abs bit patterns. Two constraints: the abs
-        // bits must stay vInt (a vFloat against inf_bits binds to the float overload,
-        // converting it to 2139095040.0f), and the mask cannot be replaced by
+        // bits must stay vInt so the compares against inf_bits below are integer
+        // compares on the raw bit patterns, and the mask cannot be replaced by
         // bit-casting sfpi::abs() because SFPABS float mode leaves -NaN sign-set.
-        // vConstIntPrgm0 holds 0x7FFFFFFF, programmed in isclose_init.
+        // vConstIntPrgm0 holds kIscloseAbsMask, programmed in isclose_init.
         sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
         sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
         sfpi::vInt a_abs_bits = a_bits & sfpi::vConstIntPrgm0;
         sfpi::vInt b_abs_bits = b_bits & sfpi::vConstIntPrgm0;
-        sfpi::vFloat b_abs = sfpi::abs(b);
+        // |b| for the tolerance is the same sign-cleared pattern, so reuse it rather than
+        // spend an SFPABS. The two differ only for b = -NaN (SFPABS keeps the sign), a lane
+        // the special-value fix-up below overwrites whatever the tolerance compare returned.
+        sfpi::vFloat b_abs = sfpi::as<sfpi::vFloat>(b_abs_bits);
 
         // abs(a - b) via sign-bit clear.
         sfpi::vFloat abs_diff = sfpi::abs(a - b);
@@ -96,8 +109,11 @@ inline void calculate_sfpu_isclose(
     }
 }
 
-// Programs the sign-clear mask into a constant register so the hot loop does not
-// rebuild it with a per-element SFPLOADI inside the replay block.
-inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
+// Programs the sign-clear mask and the abs(+inf) bit pattern into constant registers so
+// the hot loop does not rebuild them with per-element SFPLOADIs inside the replay block.
+inline void isclose_init() {
+    sfpi::vConstIntPrgm0 = kIscloseAbsMask;
+    sfpi::vConstIntPrgm1 = kIscloseInfBits;
+}
 
 }  // namespace ckernel::sfpu

@@ -94,7 +94,7 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         dispatched_shape[2],
         metadata_shape[2]);
     TT_FATAL(
-        counter_shape[-1] % operation_attributes.experts_per_chip == 0,
+        operation_attributes.experts_per_chip > 0 && counter_shape[-1] % operation_attributes.experts_per_chip == 0,
         "counter last dim (num_routed_experts={}) must be divisible by experts_per_chip={}",
         counter_shape[-1],
         operation_attributes.experts_per_chip);

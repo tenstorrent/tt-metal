@@ -1,332 +1,306 @@
 # BEVFormer
 
-This directory holds the BEVFormer-base image backbone (ResNet101-DCN) and FPN neck, the BEVFormer encoder, the detection decoder, and the detection head with its NMS-free box coder.
+## Platforms:
+    Blackhole (p100)
 
-BEVFormer Encoder is a transformer-based 3D object detection model that creates Bird's-Eye-View (BEV) representations from multi-camera images. The encoder uses spatiotemporal transformers to learn unified BEV representations by combining spatial cross-attention for feature extraction from camera views and temporal self-attention for modeling temporal dependencies.
+## Introduction
+This directory runs BEVFormer-base end to end on device: six camera images through the
+ResNet101-DCN backbone and FPN, the perception transformer around the BEVFormer encoder, the
+detection decoder and the head with its NMS-free box coder, ending in 3D boxes.
 
-## Model Architecture
+BEVFormer learns a Bird's-Eye-View representation from multi-camera images with spatiotemporal
+transformers: a spatial cross-attention into the cameras and a temporal self-attention into the
+previous frame's BEV.
+https://arxiv.org/abs/2203.17270
 
-The BEVFormer Encoder consists of several key components:
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-- **Spatial Cross-Attention**: Projects multi-camera features into BEV space using multi-scale deformable attention
-- **Temporal Self-Attention**: Models temporal dependencies between consecutive frames using deformable attention
-- **Multi-Scale Deformable Attention**: Core attention mechanism that samples features at multiple scales and locations
-- **Point Sampling (3D to 2D)**: Projects 3D reference points to 2D camera coordinates for spatial attention
-- **BEVFormer Layer**: Single transformer layer combining spatial and temporal attention with feed-forward network
-- **BEVFormer Encoder**: Multi-layer encoder processing BEV queries through transformer layers
+## How to Run
+- Use the following command to run the detector end to end over two frames against the reference:
+```sh
+pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
 
-The model processes:
-- **Multi-camera Features**: Feature maps from multiple cameras at different scales
-- **BEV Queries**: Initial bird's-eye view query features
-- **Previous BEV Features**: Temporal context from previous timesteps
-- **Camera Metadata**: Intrinsic/extrinsic parameters for 3D-2D projection
+### Performance
+- For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
+  `stop` signposts:
+```sh
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+```
+- The per-stage harnesses in `tests/perf/` (`test_backbone_fpn_perf.py`, `test_decoder_perf.py`,
+  `test_head_perf.py`) capture a trace and replay it once; add `--tracing-mode` to `tt-perf-report`.
+  `test_encoder_perf.py`, `test_encoder_layer_perf.py` and `test_fused_msda_perf.py` run live.
 
-The model outputs:
-- **BEV Features**: Unified bird's-eye view representations combining spatial and temporal information
-
-### Image Backbone and FPN
-
-The multi-camera features the encoder reads come from BEVFormer-base's image backbone and neck:
-
-- **ResNet101-DCN** (`tt/tt_resnet.py`): caffe-style ResNet101 with DCNv2 (modulated deformable convolution, `tt/tt_modulated_deform_conv.py`) in layer3 and layer4. It emits C3, C4 and C5 at strides 8, 16 and 32.
-- **FPN** (`tt/tt_fpn.py`): maps C3-C5 to four 256-channel levels, the fourth from an extra stride-2 conv on the last output.
-
-It runs 6 cameras at 1600x900, padded to 1600x928. Weights are prepared in the constructors (`tt/model_preprocessing_backbone.py` preprocesses them), so the forward runs on device only.
-
-### Detection Decoder
-
-`tt/tt_decoder.py` ports BEVFormer's `DetectionTransformerDecoder` (shared by tiny and base):
-six DETR layers of self-attention, single-level deformable cross-attention over the BEV map
-(`TTMSDeformableAttention`) and an FFN, with 900 object queries. After each layer the
-`reg_branches` output refines the (x, y, z) reference points.
-
-- The reference points stay float32 through the refinement and into the fused MSDA op, which
-  forms the sampling location from them in fp32. In bfloat16 a point moves in steps of up to
-  0.8 px on the 200x200 base BEV grid, and the error compounds through the refinement. The
-  forward runs on device only.
-- Parameters come from `tt/model_preprocessing_decoder.py`.
-- Inputs and outputs are sequence-first by default, as in the reference; `batch_first=True` takes
-  and returns batch-first tensors and skips the permutes.
-- Besides the layer outputs and refined points, it returns each layer's box codes, the
-  `reg_branches` raw output, which the head builds its box predictions from. The branches come
-  from `create_reg_branch_parameters`, three Linears each.
-
-### Detection Head and Box Coder
-
-`tt/tt_head.py` ports the part of BEVFormer's `BEVFormerHead` on top of the encoder's
-`(bs, bev_h * bev_w, 256)` BEV features: it runs the decoder batch-first over the object queries
-and, per decoder layer, the classification branch.
-
-- The object queries, their positional embeddings and the initial reference points depend on
-  the weights only, so `tt/model_preprocessing_head.py` computes them once. The parameters also
-  carry the head's BEV shape and `pc_range`.
-- The box predictions are the decoder's box codes with cx, cy and cz replaced by its refined
-  float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, as the
-  coder's exact re-rank needs.
-- The encoder side of BEVFormer's `PerceptionTransformer` (BEV queries, positional encoding, can
-  bus, previous BEV) is not part of the head.
-
-`tt/tt_nms_free_coder.py` ports `NMSFreeCoder`: the top 300 (query, class) pairs of the last
-layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and the
-range and score filters.
-
-- The top-k and the decoding run on device, and the top-k is exact. On Blackhole a float32
-  top-k over all 9000 scores is far slower than a bfloat16 one, so the exact k-th logit is found
-  first: a bfloat16 top-k gives it rounded, and a bisection on counts narrows that to the float32
-  value. A bfloat16 top-k of the logits minus it then selects exactly the top 300, and a float32
-  top-k sorts them.
-- The range and score tests, upstream's lowering of the score threshold when no score passes it
-  included, run on device as a validity mask over the 300 boxes. Only dropping the invalid boxes
-  runs on host: it leaves a data-dependent number of boxes and ends the pipeline.
-- cz stays at the box's gravity center; upstream `get_bboxes` moves it to the bottom face after
-  the coder.
+## Testing
+- Use the following command to run every PCC test:
+```sh
+pytest --disable-warnings models/experimental/bevformer/tests/pcc/
+```
+- `test_resnet.py`: the ResNet101-DCN backbone's bottlenecks and layers against the reference.
+- `test_fpn.py`: the FPN neck on random C3-C5 in the dtypes the backbone emits.
+- `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
+- `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module and the fused MSDA op.
+- `test_point_sampling_3d_2d.py`: the BEV pillars' projection into the cameras and the visibility mask.
+- `test_temporal_self_attention.py`: the temporal self-attention, batch-first and sequence-first.
+- `test_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch.
+- `test_encoder.py`: the encoder on several presets and layer counts.
+- `test_perception_transformer.py`: the encoder's glue over consecutive frames with ego motion.
+- `test_decoder.py`: the six-layer detection decoder and its reference-point refinement.
+- `test_head.py`: the detection head, and the coder on its outputs.
+- `test_nms_free_coder.py`: the box coder's exact top-k, decoding and filters.
+- `test_bevformer.py`: the detector end to end over two frames.
 
 ## Project Structure
 
 ```
 models/experimental/bevformer/
-├── config/             # Configuration files and model parameters
-│   └── encoder_config/ # Encoder-specific configurations
+├── model_config.py     # BEVFormer-base's configuration and the port's precision and memory choices
 ├── reference/          # PyTorch reference implementation
-├── tests/              # All tests together
-│   └── pcc/            # Unit tests for individual components
-└── tt/                 # TTNN optimized implementation
+├── tests/
+│   ├── common.py       # Test helpers: camera rigs, dataset presets, dummy weights, random inputs
+│   ├── pcc/            # Unit tests for individual components
+│   └── perf/           # Device-perf harnesses, one per stage and one for the detector
+└── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters
 ```
 
-## Section 1: Test Files
+## Model Structure
 
-The test suite validates the image backbone, the FPN, the individual components of the BEVFormer encoder, the detection decoder, and the detection head and box coder, ensuring correctness of both reference and TTNN implementations.
+BEVFormer-base's PyTorch reference (`reference/bevformer.py`, `build_bevformer_base(200, 200)`), the
+repeated bottlenecks folded.
 
-### PCC (Pearson Correlation Coefficient) Tests
-
-Located in `models/experimental/bevformer/tests/pcc/`, these tests validate the accuracy of TTNN implementations against PyTorch reference models using PCC metrics.
-
-#### test_resnet.py
-Tests the ResNet101-DCN backbone block by block.
-
-**What it tests:**
-- The first bottleneck of layer1, layer3 (DCN) and layer4 (DCN, two 256-channel sampling chunks)
-- The whole of layer1 and layer2
-- The dtype each block emits
-
-The whole backbone is checked in `test_backbone_fpn.py`.
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_resnet.py
+```
+BEVFormer(
+  (img_backbone): ResNet(
+    (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+    (bn1): BatchNorm2d(64)
+    (relu): ReLU(inplace=True)
+    (maxpool): MaxPool2d(kernel_size=3, stride=2, padding=1)
+    (layer1): ResLayer(
+      (0-2): 3 x Bottleneck(
+        (conv1): Conv2d(256, 64, kernel_size=(1, 1), bias=False)  (64 in block 0)
+        (conv2): Conv2d(64, 64, kernel_size=(3, 3), padding=(1, 1), bias=False)
+        (conv3): Conv2d(64, 256, kernel_size=(1, 1), bias=False)
+        (bn1-3): BatchNorm2d
+        (downsample): Conv2d(64, 256, kernel_size=(1, 1)) + BatchNorm2d  (block 0)
+      )
+    )
+    (layer2): ResLayer(
+      (0-3): 4 x Bottleneck(
+        (conv1): Conv2d(512, 128, kernel_size=(1, 1), bias=False)  (256 in, stride 2 in block 0)
+        (conv2): Conv2d(128, 128, kernel_size=(3, 3), padding=(1, 1), bias=False)
+        (conv3): Conv2d(128, 512, kernel_size=(1, 1), bias=False)
+        (downsample): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d  (block 0)
+      )
+    )
+    (layer3): ResLayer(
+      (0-22): 23 x Bottleneck(
+        (conv1): Conv2d(1024, 256, kernel_size=(1, 1), bias=False)  (512 in, stride 2 in block 0)
+        (conv2): ModulatedDeformConv2dPack(
+          (conv_offset): Conv2d(256, 27, kernel_size=(3, 3), padding=(1, 1))
+        )
+        (conv3): Conv2d(256, 1024, kernel_size=(1, 1), bias=False)
+        (downsample): Conv2d(512, 1024, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d  (block 0)
+      )
+    )
+    (layer4): ResLayer(
+      (0-2): 3 x Bottleneck(
+        (conv1): Conv2d(2048, 512, kernel_size=(1, 1), bias=False)  (1024 in, stride 2 in block 0)
+        (conv2): ModulatedDeformConv2dPack(
+          (conv_offset): Conv2d(512, 27, kernel_size=(3, 3), padding=(1, 1))
+        )
+        (conv3): Conv2d(512, 2048, kernel_size=(1, 1), bias=False)
+        (downsample): Conv2d(1024, 2048, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d  (block 0)
+      )
+    )
+  )
+  (img_neck): FPN(
+    (lateral_convs): ModuleList(
+      (0): ConvModule((conv): Conv2d(512, 256, kernel_size=(1, 1)))
+      (1): ConvModule((conv): Conv2d(1024, 256, kernel_size=(1, 1)))
+      (2): ConvModule((conv): Conv2d(2048, 256, kernel_size=(1, 1)))
+    )
+    (fpn_convs): ModuleList(
+      (0-2): 3 x ConvModule((conv): Conv2d(256, 256, kernel_size=(3, 3), padding=(1, 1)))
+      (3): ConvModule((conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1)))
+    )
+  )
+  (transformer): PerceptionTransformer(
+    (encoder): BEVFormerEncoder(
+      (layers): ModuleList(
+        (0-5): 6 x BEVFormerLayer(
+          (attentions): ModuleList(
+            (0): TemporalSelfAttention(
+              (sampling_offsets): Linear(in_features=512, out_features=128, bias=True)
+              (attention_weights): Linear(in_features=512, out_features=64, bias=True)
+              (value_proj): Linear(in_features=256, out_features=256, bias=True)
+              (output_proj): Linear(in_features=256, out_features=256, bias=True)
+            )
+            (1): SpatialCrossAttention(
+              (deformable_attention): MSDeformableAttention3D(
+                (sampling_offsets): Linear(in_features=256, out_features=512, bias=True)
+                (attention_weights): Linear(in_features=256, out_features=256, bias=True)
+                (value_proj): Linear(in_features=256, out_features=256, bias=True)
+              )
+              (output_proj): Linear(in_features=256, out_features=256, bias=True)
+            )
+          )
+          (ffns): ModuleList(
+            (0): FFN(
+              (layers): Sequential(
+                (0): Sequential(
+                  (0): Linear(in_features=256, out_features=512, bias=True)
+                  (1): ReLU(inplace=True)
+                )
+                (1): Linear(in_features=512, out_features=256, bias=True)
+              )
+            )
+          )
+          (norms): ModuleList(
+            (0-2): 3 x LayerNorm((256,), eps=1e-05)
+          )
+        )
+      )
+    )
+    (can_bus_mlp): Sequential(
+      (0): Linear(in_features=18, out_features=128, bias=True)
+      (1): ReLU(inplace=True)
+      (2): Linear(in_features=128, out_features=256, bias=True)
+      (3): ReLU(inplace=True)
+      (norm): LayerNorm((256,), eps=1e-05)
+    )
+  )
+  (head): BEVFormerHead(
+    (query_embedding): Embedding(900, 512)
+    (reference_points): Linear(in_features=256, out_features=3, bias=True)
+    (decoder): DetectionTransformerDecoder(
+      (layers): ModuleList(
+        (0-5): 6 x DetrTransformerDecoderLayer(
+          (attentions): ModuleList(
+            (0): MultiheadAttention(
+              (attn): MultiheadAttention(
+                (out_proj): Linear(in_features=256, out_features=256, bias=True)
+              )
+            )
+            (1): MSDeformableAttention(
+              embed_dims=256, num_heads=8, num_levels=1, num_points=4
+              (value_proj): Linear(in_features=256, out_features=256, bias=True)
+              (sampling_offsets): Linear(in_features=256, out_features=64, bias=True)
+              (attention_weights): Linear(in_features=256, out_features=32, bias=True)
+              (output_proj): Linear(in_features=256, out_features=256, bias=True)
+            )
+          )
+          (ffns): ModuleList(
+            (0): FFN(...)
+          )
+          (norms): ModuleList(
+            (0-2): 3 x LayerNorm((256,), eps=1e-05)
+          )
+        )
+      )
+    )
+    (cls_branches): ModuleList(
+      (0-5): 6 x Sequential(
+        (0): Linear(in_features=256, out_features=256, bias=True)
+        (1): LayerNorm((256,), eps=1e-05)
+        (2): ReLU(inplace=True)
+        (3): Linear(in_features=256, out_features=256, bias=True)
+        (4): LayerNorm((256,), eps=1e-05)
+        (5): ReLU(inplace=True)
+        (6): Linear(in_features=256, out_features=10, bias=True)
+      )
+    )
+    (reg_branches): ModuleList(
+      (0-5): 6 x Sequential(
+        (0): Linear(in_features=256, out_features=256, bias=True)
+        (1): ReLU()
+        (2): Linear(in_features=256, out_features=256, bias=True)
+        (3): ReLU()
+        (4): Linear(in_features=256, out_features=10, bias=True)
+      )
+    )
+  )  (box coder)
+  (bev_embedding): Embedding(40000, 256)
+  (positional_encoding): LearnedPositionalEncoding(
+    (row_embed): Embedding(200, 128)
+    (col_embed): Embedding(200, 128)
+  )
+)
 ```
 
-#### test_fpn.py
-Tests the FPN neck on its own, fed random C3-C5 in the dtypes the backbone emits.
+Indented under each file are the modules from the tree it implements, with the class in parentheses.
 
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_fpn.py
+```
+tt/tt_bevformer.py
+    BEVFormer (TTBEVFormer)
+
+tt/tt_resnet.py
+    img_backbone (TTResNet)
+    img_backbone.layer1-4 (TTResLayer)
+    img_backbone.layer1-4 Bottleneck (TTBottleneck)
+    img_backbone.layer3-4.conv2 (TTModulatedDeformConv2dPack)
+
+tt/tt_modulated_deform_conv.py
+    img_backbone.layer3-4.conv2 (TTModulatedDeformConv2dDevice)
+
+tt/tt_fpn.py
+    img_neck (TTFPN)
+    img_neck.lateral_convs (TTConvModule)
+    img_neck.fpn_convs (TTConvModule)
+
+tt/tt_perception_transformer.py
+    transformer (TTPerceptionTransformer)
+    transformer.can_bus_mlp (TTPerceptionTransformer)
+
+tt/tt_encoder.py
+    transformer.encoder (TTBEVFormerEncoder)
+    transformer.encoder layers (TTBEVFormerLayer)
+    encoder FFN (TTBEVFormerLayer)
+
+tt/tt_temporal_self_attention.py
+    TemporalSelfAttention (TTTemporalSelfAttention)
+
+tt/tt_spatial_cross_attention.py
+    SpatialCrossAttention (TTSpatialCrossAttention)
+
+tt/tt_ms_deformable_attention.py
+    encoder MSDeformableAttention3D (TTMSDeformableAttention)
+    decoder MSDeformableAttention (TTMSDeformableAttention)
+
+tt/tt_common.py
+    decoder FFN (TTFFN)
+    encoder norms (layer_norm)
+    decoder norms (layer_norm)
+
+tt/tt_head.py
+    head (TTBEVFormerHead)
+    head.cls_branches (TTBEVFormerHead)
+
+tt/tt_decoder.py
+    head.decoder (TTDetectionTransformerDecoder)
+    head.decoder layers (TTDetrTransformerDecoderLayer)
+    MultiheadAttention (TTMultiheadAttention)
+    head.reg_branches (_reg_branch)
+
+tt/tt_nms_free_coder.py
+    box coder (TTNMSFreeCoder)
+
+tt/model_preprocessing.py
+    img_backbone.bn1, folded into conv1
+    Bottleneck bn1-3, folded into conv1-3
+    head.query_embedding, uploaded once
+    bev_embedding, uploaded once
+    head.reference_points, computed once
+    positional_encoding, computed once
 ```
 
-#### test_backbone_fpn.py
-Runs camera images through the backbone and the FPN, end to end.
-
-**What it tests:**
-- The backbone's C3-C5 against the reference
-- The FPN's four outputs against the reference
-- The hand-off between the two (layout, dtype, memory)
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_backbone_fpn.py
-```
-
-The backbone and FPN tests use seeded random weights (`tests/backbone_weights.py`), tuned to the output statistics of the trained backbone, and assert PCC 0.99.
-
-#### test_decoder.py
-Tests the six-layer detection decoder.
-
-**What it tests:**
-- The tiny (50x50) and base (200x200) BEV grids, a non-square 50x100 grid, batch size 2, and
-  batch size 2 with `batch_first=True`
-- PCC 0.99 on every layer's output and refined reference points, and per channel on the box
-  codes; per-layer PCC of the refinement steps and the refined points' error in BEV pixels are
-  logged
-- Traced runs: capture proves the forward has no host reads or writes, and the replay runs on new
-  inputs
-- That a second eager run adds no programs to the program cache
-
-It uses seeded random weights (`tests/decoder_common.py`): BEVFormer's sampling-offset grid init
-with random weights on top, scaled to what the BEVFormer-base checkpoint's decoder shows on the
-same BEV features: the sampling offsets and the cross- and self-attention logits, and in the reg
-branches' last Linear the reference-point refinements and the other box channels' spread. The BEV
-features are random but spatially smooth, as the encoder's are, and the reference points include
-the grid edges. bfloat16 error grows through the reference-point refinement, faster on the 200x200
-grid.
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_decoder.py
-```
-
-#### test_head.py
-Tests the detection head, and the coder on the head's outputs.
-
-**What it tests:**
-- The tiny grid, a traced run on new BEV features, batch size 2, and the base 200x200 grid
-- PCC 0.99 on the class logits and, channel by channel, on the box predictions, over all layers
-  and on the last one; a joint PCC would be carried by the metre-scale centers alone
-- The box centers within a mean and a max error in metres (`tests/head_common.py`), which PCC
-  over the 102.4 m axes does not bound
-- That the coder, on the head's outputs, selects pairs within twice the score error of the reference
-  head's top 300, with scores and boxes that match the reference's at those pairs by PCC
-
-The decoder and reg branches use `tests/decoder_common.py`'s dummy-weight init, and the reference
-points BEVFormer's xavier init (`tests/head_common.py`).
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_head.py
-```
-
-#### test_nms_free_coder.py
-Tests the box coder on head-shaped inputs.
-
-**What it tests:**
-- Distinct logits, so the top 300 labels and queries must match the reference exactly, spread
-  evenly and in a background-dominated shape whose dense band defeats a bfloat16 top-k without
-  the pivot
-- The decoded boxes channel by channel, yaw through its sine and cosine, and the scores to a few
-  float32 ulps
-- The kept boxes, with no score threshold, one some scores pass, and one none passes so the
-  threshold is lowered, and that a second call only hits the program cache
-- The top-k and the validity mask captured as a trace, which fails on any host operation
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_nms_free_coder.py
-```
-
-#### test_encoder.py
-Tests the complete BEVFormer encoder implementation.
-
-**What it tests:**
-- Full BEVFormer encoder forward pass correctness against PyTorch reference
-- Multi-layer transformer processing with spatial and temporal attention
-- BEV query processing through transformer layers
-- Integration of all encoder components
-
-**Key test cases:**
-- Single and multi-layer encoder configurations
-- Different BEV grid sizes and feature dimensions
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_encoder.py
-```
-
-#### test_spatial_cross_attention.py
-Tests the spatial cross-attention mechanism for projecting camera features to BEV space.
-
-**What it tests:**
-- Spatial cross-attention forward pass correctness
-- Multi-scale deformable attention for spatial feature extraction
-- 3D-2D point projection and sampling
-- Camera mask handling and feature aggregation
-
-**Key features:**
-- Validates camera coordinate transformations
-- Tests different numbers of cameras and feature levels
-- Precision and memory layout compatibility
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_spatial_cross_attention.py
-```
-
-#### test_temporal_self_attention.py
-Tests the temporal self-attention mechanism for modeling frame-to-frame dependencies.
-
-**What it tests:**
-- Temporal self-attention forward pass correctness
-- Deformable attention for temporal feature aggregation
-- Previous BEV feature integration
-- Temporal shift handling for camera motion
-
-**Key test parameters:**
-- Different sequence lengths and temporal configurations
-- Various BEV grid resolutions
-- Memory length and temporal context settings
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
-```
-
-#### test_ms_deformable_attention.py
-Tests the core multi-scale deformable attention mechanism.
-
-**What it tests:**
-- Multi-scale deformable attention forward pass
-- Attention weight computation and normalization
-- Sampling point generation and feature aggregation
-- Different scales and sampling point configurations
-
-**Key features:**
-- Tests with various input resolutions and scales
-- Validates offset and mask generation
-- Tests attention weight distributions
-- Memory layout and precision handling
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_ms_deformable_attention.py
-```
-
-#### test_point_sampling_3d_2d.py
-Tests the 3D to 2D point projection functionality.
-
-**What it tests:**
-- 3D reference point generation for BEV grid
-- Point projection from 3D space to camera coordinates
-- Camera intrinsic/extrinsic matrix handling
-- Visibility mask computation for projected points
-
-**Key test cases:**
-- Different BEV grid sizes and point cloud ranges
-- Various camera configurations and projection matrices
-- Edge cases for points outside camera field of view
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_point_sampling_3d_2d.py
-```
-
-## Running All Tests
-To run the complete test suite:
-
-**Usage**
-```bash
-# Run all PCC tests
-pytest models/experimental/bevformer/tests/pcc/
-```
-
-## Expected Outputs
-
-All tests generate:
-- **Console logs**: Detailed PCC comparisons and validation results
-- **Tensor comparisons**: Element-wise accuracy analysis
-
-
-## Configuration
-
-The model supports flexible configuration through dataclass-based config objects:
-
-- **AttentionConfig**: Base configuration for attention modules
-- **DeformableAttentionConfig**: Multi-scale deformable attention parameters
-- **SpatialCrossAttentionConfig**: Spatial attention with camera setup
-- **TemporalSelfAttentionConfig**: Temporal attention with memory configuration
-
-Default configurations are provided for common datasets like nuScenes with typical parameters:
-- embed_dims: 256
-- num_heads: 8
-- num_levels: 4
-- num_points: 4
-- num_cams: 6
-- pc_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0] (nuScenes default)
+## Details
+- Entry point for the model is `TTBEVFormer` in `models/experimental/bevformer/tt/tt_bevformer.py`;
+  `tt/model_preprocessing.py` prepares its parameters from the reference.
+- Batch size: 1
+- Input: 6 cameras at 1600x900, padded to 1600x928
+- BEV grid: 200x200; 900 object queries; up to 300 boxes per frame
+- The encoder reads the cameras' visibility on the host inside its forward, so the detector runs
+  live, not under a trace.

@@ -13,14 +13,11 @@ add/subtract are bf16-FPU. The metal_v2 / DFB tensor-scalar path is arch-portabl
 Wormhole/Blackhole, overlay-backed on Quasar -- and the is_scalar gate admits interleaved + sharded
 scalar ops to it with no arch check, so these tests run on all three.
 
-Routing: on Quasar a PASS implicitly proves v2 routing, because the descriptor path cannot run at all
-(DataMovementKernel/ComputeKernel hard-throw on Quasar). On WH/BH both factories run, and nothing here
-asserts which one was chosen -- there is no Python-visible factory signal. In particular the program-cache
-test below does NOT distinguish them: this op's operation_attributes_t::attribute_values() already
-includes `scalar` (unlike production binary_ng, which excludes it and patches it as a runtime arg), and
-the adapter's default compute_program_hash folds the whole attribute tuple, so a distinct scalar mints a
-distinct program on EITHER factory. What that test does guard is the property that makes the v2 path safe:
-the packed scalar is baked into the program, so it must participate in the cache key.
+Routing: every case here runs the v2 factory; an op outside its slice throws. The program-cache test below
+guards the property that makes the v2 path safe: the packed scalar is baked into the program, so it must
+participate in the cache key. This op's operation_attributes_t::attribute_values() includes `scalar` (unlike
+production binary_ng, which excludes it and patches it as a runtime arg), and the adapter's default
+compute_program_hash folds the whole attribute tuple, so a distinct scalar mints a distinct program.
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
@@ -35,11 +32,8 @@ import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _run_scalar,
-    _block_sharded_config,
     _height_sharded_config,
-    _dram_height_sharded_config,
 )
-from tt_py_test_utils_common.utility_functions import is_quasar
 
 
 @pytest.mark.parametrize("op_name", ["add", "subtract"])
@@ -81,8 +75,8 @@ def test_scalar_fp32_interleaved(device, op_name, scalar):
     # admit int32 add/multiply (their RHS derives to int32 == a, and add_int_sfpu / mul_int_sfpu are in
     # the SFPU scalar kernel), the int32 SFPU tile ops do NOT produce correct results on the Quasar DFB
     # compute path (empirically: scalar add/mul return all-zero tiles, int32 tensor-tensor returns
-    # garbage) -- a compute/sim-level gap, not a format issue. The gate keeps every int32 op on the
-    # descriptor, so this stays out of the DFB suite until the int32 DFB compute path is fixed.
+    # garbage) -- a compute/sim-level gap, not a format issue. The gate refuses every int32 op, so
+    # this stays out of the suite until the int32 DFB compute path is fixed.
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.float32, [2, 1, 64, 128], scalar)
 
 
@@ -109,64 +103,6 @@ def test_scalar_sharded_lhs(device, op_name):
     # handles a sharded operand correctly even though nothing is borrowed. add takes the FPU compute
     # kernel, multiply the SFPU kernel -- both exercised sharded.
     _run_scalar(device, op_name, _SCALAR_LHS_HEIGHT, ttnn.bfloat16, _SCALAR_LHS_SHAPE, 3.5)
-
-
-# bfloat8_b keeps a tensor-scalar op on the descriptor ProgramFactory (the DFB gate admits only bf16/fp32),
-# which borrows a sharded `a` and output as CBs whenever is_native_L1_sharding holds. CBs can alias only L1,
-# and per-core work comes from a's shard, so a DRAM shard or an output shard spec that differs from a's must
-# decline to the TensorAccessor path. The descriptor path cannot run on Quasar.
-_SCALAR_ROUTER_SHAPE = [1, 1, 128, 128]
-_SCALAR_ROUTER_L1 = _height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
-# One shard spec, two layouts: HEIGHT puts the second [64, 128] shard on (1, 0), BLOCK on (0, 1).
-_SCALAR_ROUTER_GRID_2X2 = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})
-_SCALAR_ROUTER_HEIGHT_2X2 = _height_sharded_config([64, 128], _SCALAR_ROUTER_GRID_2X2)
-_SCALAR_ROUTER_BLOCK_2X2 = _block_sharded_config([64, 128], _SCALAR_ROUTER_GRID_2X2)
-# 32x32 shards round-robin over 4 cores, which has no legacy ShardSpec equivalent, so the config stays ND-only
-# (an ND config that maps to a legacy shard spec, e.g. 32x128 height shards, is converted back to one).
-_SCALAR_ROUTER_ND = ttnn.MemoryConfig(
-    buffer_type=ttnn.BufferType.L1,
-    nd_shard_spec=ttnn.NdShardSpec(
-        shard_shape=[1, 1, 32, 32],
-        grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    ),
-)
-
-
-@pytest.mark.skipif(is_quasar(), reason="bfloat8_b tensor-scalar routes to the descriptor path, which Quasar lacks")
-@pytest.mark.parametrize(
-    "a_mem,out_mem",
-    [
-        pytest.param(_SCALAR_ROUTER_L1, None, id="l1_same_spec"),
-        pytest.param(
-            _dram_height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))})),
-            None,
-            id="dram_sharded",
-        ),
-        pytest.param(
-            _SCALAR_ROUTER_L1,
-            _height_sharded_config([64, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))})),
-            id="l1_output_on_other_grid",
-        ),
-        pytest.param(_SCALAR_ROUTER_HEIGHT_2X2, _SCALAR_ROUTER_BLOCK_2X2, id="same_shard_spec_different_layout"),
-        pytest.param(_SCALAR_ROUTER_ND, None, id="nd_sharded_inferred_output"),
-    ],
-)
-def test_scalar_sharded_native_routing(device, a_mem, out_mem):
-    # With no output override, memory_config is omitted so the op infers the output config from a's.
-    _run_scalar(
-        device,
-        "add",
-        a_mem,
-        ttnn.bfloat8_b,
-        _SCALAR_ROUTER_SHAPE,
-        5.0,
-        # bfloat8_b rounds the output to a shared exponent per block, which costs up to 4 ULP at bfloat16
-        # resolution on every case here. A misplaced or stale shard is off by hundreds of ULP, not a few.
-        ulp_threshold=4,
-        out_mem=out_mem,
-        infer_output_config=out_mem is None,
-    )
 
 
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
@@ -203,10 +139,8 @@ def test_scalar_participates_in_program_cache_key(device):
     #   - repeating the SAME scalar   -> program-cache HIT   (+0 entries)
     #   - a DISTINCT scalar           -> a distinct program  (+1 entry)
     # This holds because operation_attributes_t::attribute_values() includes `scalar` and the adapter's
-    # default compute_program_hash folds the whole tuple (binary_ng_device_operation.hpp). Note this is
-    # NOT a factory-routing assertion: the descriptor path hashes the same attributes, so both factories
-    # satisfy it. Routing is proven on Quasar by the fact that the descriptor path throws there; on WH/BH
-    # it is not observable from Python. Requires the program cache (the `device` fixture enables it, as in
+    # default compute_program_hash folds the whole tuple (binary_ng_device_operation.hpp). Requires the
+    # program cache (the `device` fixture enables it, as in
     # test_binary_ng_resnet_add.py / test_binary_ng_descriptor_cache_hit.py). _run_scalar PCC-checks every
     # call, so a stale-scalar reuse would fail on the value, not just the count.
     shape = [1, 1, 32, 32]

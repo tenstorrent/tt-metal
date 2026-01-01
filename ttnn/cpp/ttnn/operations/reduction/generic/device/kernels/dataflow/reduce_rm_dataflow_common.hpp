@@ -24,27 +24,27 @@ RM_DF_ALWI uint32_t get_tilized_idx(uint32_t h_idx, uint32_t w_idx) {
     constexpr uint32_t half_tile_width = tile_width / 2;
 
     if (h_idx < half_tile_height && w_idx < half_tile_width) {
-        return h_idx * half_tile_width + w_idx;
+        return (h_idx * half_tile_width) + w_idx;
     }
     if (h_idx < half_tile_height && w_idx >= half_tile_width) {
-        return h_idx * half_tile_width + (w_idx % half_tile_width) + half_tile_height * half_tile_width;
+        return (h_idx * half_tile_width) + (w_idx % half_tile_width) + (half_tile_height * half_tile_width);
     }
     if (h_idx >= half_tile_height && w_idx < half_tile_width) {
-        return (h_idx % half_tile_height) * half_tile_width + w_idx + half_tile_height * tile_width;
+        return ((h_idx % half_tile_height) * half_tile_width) + w_idx + (half_tile_height * tile_width);
     }
-    return (h_idx % half_tile_height) * half_tile_width + (w_idx % half_tile_width) +
-           half_tile_height * (tile_width + half_tile_width);
+    return ((h_idx % half_tile_height) * half_tile_width) + (w_idx % half_tile_width) +
+           (half_tile_height * (tile_width + half_tile_width));
 }
 
 // Same packing convention as pool_kernels_common fill_with_val: repeat uint16 `val` for n uint16 slots.
 RM_DF_ALWI void rm_fill_with_val_bf16(uint32_t begin_addr, uint32_t num_u16, uint16_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    uint32_t value = static_cast<uint32_t>(val) | (static_cast<uint32_t>(val) << 16);
-    uint32_t num_pairs = num_u16 / 2;
+    const uint32_t value = static_cast<uint32_t>(val) | (static_cast<uint32_t>(val) << 16);
+    const uint32_t num_pairs = num_u16 / 2;
     for (uint32_t i = 0; i < num_pairs; ++i) {
         ptr[i] = value;
     }
-    if (num_u16 & 1) {
+    if ((num_u16 & 1) != 0) {
         volatile tt_l1_ptr uint16_t* ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
         ptr16[num_u16 - 1] = val;
     }
@@ -97,7 +97,7 @@ rm_compute_w_chunk_bytes(uint32_t wt_base, uint32_t wt_in_chunk, uint32_t valid_
         const uint32_t remaining = valid_row_bytes - chunk_start_bytes;
         valid_bytes = remaining < chunk_bytes ? remaining : chunk_bytes;
     }
-    return {chunk_bytes, chunk_start_bytes, valid_bytes};
+    return {.chunk_bytes = chunk_bytes, .chunk_start_bytes = chunk_start_bytes, .valid_bytes = valid_bytes};
 }
 
 // Fill a freshly reserved dfb::rm region with the padding-identity template (0 / -inf / +inf as
@@ -114,7 +114,7 @@ RM_DF_ALWI void rm_fill_page_with_clear_template(
     uint32_t region_bytes,
     const ClearTemplateSrc& clear_template_src,
     uint32_t clear_template_bytes) {
-    UnicastEndpoint self_ep;
+    const UnicastEndpoint self_ep;
     uint32_t pad_offset = 0;
     while (pad_offset < region_bytes) {
         const uint32_t copy_bytes =

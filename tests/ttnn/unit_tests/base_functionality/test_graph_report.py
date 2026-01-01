@@ -17,6 +17,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -60,6 +61,45 @@ def _make_report(
     if python_io is not None:
         report["python_io"] = python_io
     return report
+
+
+def _minimal_single_op_graph(op_name="ttnn.relu"):
+    """Graph with one top-level operation and nothing else."""
+    return [
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+        {
+            "counter": 1,
+            "node_type": "function_start",
+            "params": {"name": op_name},
+            "connections": [],
+            "input_tensors": [],
+        },
+        {
+            "counter": 2,
+            "node_type": "function_end",
+            "params": {"name": op_name},
+            "connections": [],
+            "duration_ns": 100,
+        },
+        {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
+
+
+def _write_reports(report_dir, reports):
+    """Write (filename, report dict) pairs as JSON files into report_dir, creating it."""
+    report_dir.mkdir(parents=True, exist_ok=True)
+    for filename, report_dict in reports:
+        with open(report_dir / filename, "w") as f:
+            json.dump(report_dict, f)
+
+
+def _query_db(db_path, sql):
+    """Run one query against an imported DB and return all rows."""
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(sql).fetchall()
+    finally:
+        conn.close()
 
 
 def _import_to_db(report_dict, tmp_path):
@@ -428,42 +468,18 @@ class TestSubDeviceExecutionImport:
 class TestImportReportMultiFileOperationIds:
     """import_report over multiple JSON files: UNIQUE(operation_id, rank) and per-rank file stride."""
 
-    @staticmethod
-    def _minimal_single_op_graph(op_name="ttnn.relu"):
-        return [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": op_name},
-                "connections": [],
-                "input_tensors": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_end",
-                "params": {"name": op_name},
-                "connections": [],
-                "duration_ns": 100,
-            },
-            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-
     def _import_report_dir(self, reports, tmp_path):
         """Write JSON reports into a directory and run import_report on that directory."""
         report_dir = tmp_path / "reports_in"
-        report_dir.mkdir()
-        for filename, report_dict in reports:
-            with open(report_dir / filename, "w") as f:
-                json.dump(report_dict, f)
+        _write_reports(report_dir, reports)
         db_path = graph_report.import_report(report_dir, tmp_path / "output")
         conn = sqlite3.connect(db_path)
         return conn, conn.cursor()
 
     def test_same_numeric_operation_id_for_different_ranks(self, tmp_path):
         """Two captures with different ranks may both assign operation_id 1 (disambiguated by rank)."""
-        r0 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 0})
-        r1 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 1})
+        r0 = _make_report(_minimal_single_op_graph(), metadata={"rank": 0})
+        r1 = _make_report(_minimal_single_op_graph(), metadata={"rank": 1})
         conn, cursor = self._import_report_dir([("first.json", r0), ("second.json", r1)], tmp_path)
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (1, 1)]
@@ -471,8 +487,8 @@ class TestImportReportMultiFileOperationIds:
 
     def test_second_json_same_rank_shifts_operation_ids(self, tmp_path):
         """Two JSON files for the same rank: second file uses base_operation_id = stride (10000)."""
-        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
-        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
+        r_a = _make_report(_minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
+        r_b = _make_report(_minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
         conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b)], tmp_path)
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY operation_id")
@@ -482,13 +498,519 @@ class TestImportReportMultiFileOperationIds:
 
     def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
         """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
-        r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
-        r0b = _make_report(self._minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
-        r1 = _make_report(self._minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
+        r0a = _make_report(_minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
+        r0b = _make_report(_minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
+        r1 = _make_report(_minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
         conn, cursor = self._import_report_dir([("a.json", r0a), ("b.json", r0b), ("c.json", r1)], tmp_path)
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+
+
+def _rank_capture(rank, world_size, filename=None):
+    """(filename, report) for 0-based ``rank`` of ``world_size``, named as the pytest fixture names it by default."""
+    report = _make_report(_minimal_single_op_graph(), metadata={"rank": rank, "world_size": world_size})
+    return filename or graph_report._rank_capture_name(rank, world_size), report
+
+
+class TestImportReportRankCompleteness:
+    """import_report over graph_capture_<r>_of_<N>.json: every rank of one run, each exactly once.
+
+    Ranks here are 0-based distributed ranks, as in the capture metadata; file names number them from 1.
+    """
+
+    def test_all_ranks_present_imports_every_rank(self, tmp_path):
+        """With the python_io sidecars real runs write beside each capture, which must not count as captures."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [
+                _rank_capture(0, 2),
+                _rank_capture(1, 2),
+                ("graph_capture_1_of_2.python_io.json", []),
+                ("graph_capture_2_of_2.python_io.json", []),
+            ],
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations ORDER BY rank") == [(0,), (1,)]
+
+    def test_missing_rank_raises_and_names_missing_file(self, tmp_path, expect_error):
+        """Ranks 1 and 3 aren't visible, as when their report directory is local to another host."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 4), _rank_capture(2, 4)])
+        with expect_error(ValueError, r"2 of 4 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert "graph_capture_2_of_4.json, graph_capture_4_of_4.json" in str(excinfo.value)
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_missing_rank_leaves_an_existing_db_untouched(self, tmp_path, expect_error):
+        """A failed import must not pass off an earlier run's DB as its own, nor change it."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        (report_dir / "graph_capture_2_of_2.json").unlink()
+        with expect_error(ValueError, r"1 of 2 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    @pytest.mark.parametrize("unlisted", [0, 1, 2])
+    def test_missing_ranks_listed_are_capped(self, tmp_path, expect_error, unlisted):
+        """Missing names are listed up to the cap and counted past it, so a bogus world size in a file name can't
+        build a huge message."""
+        listed = graph_report._MAX_MISSING_CAPTURES_LISTED
+        world_size = 1 + listed + unlisted
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, world_size)])
+        with expect_error(ValueError, rf"{listed + unlisted} of {world_size} ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        message = str(excinfo.value)
+        assert message.count(f"_of_{world_size}.json") == listed
+        assert (f"and {unlisted} more" in message) == (unlisted > 0)
+
+    def test_mixed_world_sizes_raises(self, tmp_path, expect_error):
+        """A stale capture from an earlier run with a different world size is left in the directory."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2), _rank_capture(0, 4)])
+        with expect_error(ValueError, r"different world sizes \[2, 4\]"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    @pytest.mark.parametrize("stray_name", ["graph_capture_3_of_2.json", "graph_capture_0_of_2.json"])
+    def test_rank_outside_the_run_raises(self, tmp_path, expect_error, stray_name):
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2), _rank_capture(1, 2, stray_name)])
+        with expect_error(ValueError, rf"ranks outside 1\.\.2: {stray_name}"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    def test_rank_named_twice_raises(self, tmp_path, expect_error):
+        """graph_capture_01_of_2 and graph_capture_1_of_2 both name rank 0, which would otherwise import it twice."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [_rank_capture(0, 2), _rank_capture(0, 2, "graph_capture_01_of_2.json"), _rank_capture(1, 2)],
+        )
+        with expect_error(
+            ValueError, r"same rank more than once: graph_capture_01_of_2\.json and graph_capture_1_of_2\.json"
+        ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    @pytest.mark.parametrize(
+        "metadata_rank, metadata_world_size",
+        [(0, 2), (1, 4)],
+        ids=["rank_disagrees", "world_size_disagrees"],
+    )
+    def test_metadata_disagreeing_with_file_name_raises(
+        self, tmp_path, expect_error, metadata_rank, metadata_world_size
+    ):
+        """A capture copied or renamed into another rank's file name would otherwise be merged as that rank."""
+        report_dir = tmp_path / "reports_in"
+        copied = _make_report(
+            _minimal_single_op_graph(), metadata={"rank": metadata_rank, "world_size": metadata_world_size}
+        )
+        _write_reports(report_dir, [_rank_capture(0, 2), ("graph_capture_2_of_2.json", copied)])
+        expected_name = f"graph_capture_{metadata_rank + 1}_of_{metadata_world_size}\\.json"
+        with expect_error(
+            ValueError,
+            rf"graph_capture_2_of_2\.json holds the capture of {expected_name} according to its metadata "
+            rf"\(rank {metadata_rank} of world size {metadata_world_size}\)",
+        ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_failure_during_the_import_leaves_an_existing_db_unchanged(self, tmp_path, expect_error):
+        """The mismatch is found after the import has opened the existing DB and imported the first capture into it;
+        nothing is committed, so the DB is left as it was, and the error says so."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        copied = _make_report(_minimal_single_op_graph("ttnn.other"), metadata={"rank": 0, "world_size": 2})
+        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+        with expect_error(ValueError, "according to its metadata") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    def test_unsupported_version_of_a_rank_capture_raises(self, tmp_path, expect_error):
+        """Skipping it, as a loose capture is skipped, would leave that rank out of a merge that passed the check."""
+        report_dir = tmp_path / "reports_in"
+        name, report = _rank_capture(1, 2)
+        report["version"] = 99
+        _write_reports(report_dir, [_rank_capture(0, 2), (name, report)])
+        with expect_error(ValueError, r"graph_capture_2_of_2\.json has version 99"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_rank_captures_are_imported_in_numeric_order(self, tmp_path, monkeypatch):
+        """graph_capture_10_of_10 is imported last, not between _1_ and _2_ as a plain string sort would put it.
+
+        The DB keys every row by rank rather than by import order, so the order is only visible from inside the
+        import loop, here through the per-file _report_rank call.
+        """
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(rank, 10) for rank in range(10)])
+        imported_names = []
+        report_rank = graph_report._report_rank
+
+        def _recording_report_rank(report, path):
+            imported_names.append(path.name)
+            return report_rank(report, path)
+
+        monkeypatch.setattr(graph_report, "_report_rank", _recording_report_rank)
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert imported_names == [f"graph_capture_{n}_of_10.json" for n in range(1, 11)]
+
+    def test_single_rank_capture_file_imports_alone(self, tmp_path):
+        """Pointing import_report at one rank's file imports just that rank: only a directory is checked for
+        completeness."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 4)])
+        db_path = graph_report.import_report(report_dir / "graph_capture_1_of_4.json", tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(0,)]
+
+    def test_files_without_rank_suffix_are_not_checked(self, tmp_path):
+        """Loose *.json captures carry no world size, so there is nothing to check them against."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir, [("graph_capture.json", _make_report(_minimal_single_op_graph(), metadata={"rank": 3}))]
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(3,)]
+
+
+class TestGraphReportFixtureMultiRankTeardown:
+    """Teardown of the graph report pytest fixture on a two-rank run, with ttnn's capture and distributed calls
+    replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
+
+    @staticmethod
+    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size, distributed=True):
+        calls = []
+        capture_active = [False]
+
+        def begin_graph_capture(run_mode):
+            capture_active[0] = True
+
+        def end_graph_capture_to_file(path):
+            capture_active[0] = False
+            calls.append(("end", Path(path).name))
+            Path(path).write_text("{}")
+
+        config = SimpleNamespace(
+            enable_graph_report=True,
+            enable_comparison_mode=False,
+            enable_detailed_buffer_report=True,
+            report_path=str(tmp_path / "report"),
+        )
+        monkeypatch.setattr(ttnn, "CONFIG", config)
+        monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: capture_active[0])
+        monkeypatch.setattr(ttnn.graph, "begin_graph_capture", begin_graph_capture)
+        monkeypatch.setattr(ttnn.graph, "end_graph_capture_to_file", end_graph_capture_to_file)
+        monkeypatch.setattr(ttnn.graph, "enable_detailed_buffer_tracing", lambda: calls.append("enable_tracing"))
+        monkeypatch.setattr(ttnn.graph, "disable_detailed_buffer_tracing", lambda: calls.append("disable_tracing"))
+        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: distributed)
+        monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+        monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
+        monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
+        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append(("config", Path(path).name)))
+        return calls
+
+    @staticmethod
+    def _run_fixture():
+        """Run the fixture's setup, then its teardown, with no test body in between."""
+        request = SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+        fixture = graph_report._run_pytest_graph_report_fixture(request)
+        next(fixture)
+        next(fixture, None)
+
+    def test_rank_0_import_error_still_releases_the_other_ranks(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("Graph capture files for 1 of 2 ranks are missing")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "1 of 2 ranks are missing"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        # Left for diagnosing the failed import.
+        assert (tmp_path / "report" / "graph_capture_1_of_2.json").exists()
+
+    def test_rank_0_imports_then_removes_the_captures(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+        (tmp_path / "report").mkdir()
+        (tmp_path / "report" / "graph_capture_2_of_2.json").write_text("{}")
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        assert not list((tmp_path / "report").glob("graph_capture_*_of_*.json"))
+
+    def test_single_process_needs_no_barriers(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=1, distributed=False)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("import failed")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "import failed"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture.json"),
+            "import",
+            "disable_tracing",
+            ("config", "config.json"),
+        ]
+
+    def test_other_ranks_skip_the_import_and_reach_both_barriers(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_2_of_2.json"),
+            "barrier",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_2_of_2.json"),
+        ]
+
+
+class TestDeallocateTensorLookup:
+    """A top-level buffer_deallocate becomes a ttnn::deallocate operation whose input is the tensor living at the freed
+    address when it is freed; one inside an operation lifts that tensor into the operation's inputs."""
+
+    L1 = 1
+    DRAM = 0
+
+    @staticmethod
+    def _graph(events):
+        """Graph of these events, in order (a buffer_type or device_id of None is left out of the node, as older
+        captures did):
+        - ("tensor", tensor_id, address, buffer_type[, device_id])
+        - ("dealloc", address, buffer_type[, device_id])
+        - ("alloc", address, buffer_type, device_id): a buffer_allocate
+        - ("dealloc_of_last_alloc",): a buffer_deallocate with no params, connected to the latest buffer_allocate
+        - ("start", name) / ("end", name): a function_start / function_end with no input tensors
+        """
+        nodes = []
+        last_alloc = None
+        for i, event in enumerate(events, start=1):
+            kind, *fields = event
+            node = {"counter": i, "params": {}, "connections": []}
+            if kind in ("start", "end"):
+                node["node_type"] = "function_start" if kind == "start" else "function_end"
+                node["params"] = {"name": fields[0]}
+                if kind == "start":
+                    node["input_tensors"] = []
+            elif kind == "dealloc_of_last_alloc":
+                node["node_type"] = "buffer_deallocate"
+                node["connections"] = [last_alloc]
+            else:
+                if kind == "tensor":
+                    tensor_id, address, buffer_type, *device = fields
+                    node["params"] = {"tensor_id": str(tensor_id), "address": str(address), "storage_type": "DEVICE"}
+                else:
+                    address, buffer_type, *device = fields
+                    node["params"] = {"address": str(address)}
+                    if kind == "alloc":
+                        node["params"].update({"size": "2048", "page_size": "2048"})
+                        last_alloc = i
+                node["node_type"] = {
+                    "tensor": "tensor",
+                    "dealloc": "buffer_deallocate",
+                    "alloc": "buffer_allocate",
+                }[kind]
+                if buffer_type is not None:
+                    node["params"]["buffer_type"] = str(buffer_type)
+                if device and device[0] is not None:
+                    node["params"]["device_id"] = str(device[0])
+            nodes.append(node)
+        end = len(events) + 1
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, end]},
+            *nodes,
+            {"counter": end, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    @classmethod
+    def _operation_inputs(cls, events, tmp_path):
+        """(name, input tensor) for each operation, in operation order; None for one with no input."""
+        conn, cursor = _import_to_db(_make_report(cls._graph(events)), tmp_path)
+        try:
+            cursor.execute(
+                """SELECT o.name, it.tensor_id FROM operations o
+                   LEFT JOIN input_tensors it ON it.operation_id = o.operation_id AND it.rank = o.rank
+                   ORDER BY o.operation_id"""
+            )
+            return cursor.fetchall()
+        finally:
+            conn.close()
+
+    @classmethod
+    def _deallocated_tensor_ids(cls, events, tmp_path):
+        """The input tensor of each ttnn::deallocate operation, in operation order (None for one with no input)."""
+        return [tensor_id for name, tensor_id in cls._operation_inputs(events, tmp_path) if name == "ttnn::deallocate"]
+
+    def test_reused_address_is_credited_to_the_tensor_living_there(self, tmp_path):
+        """Tensor 2 reuses tensor 1's freed address; freeing it again must not be credited to tensor 1."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_dram_and_l1_tensors_at_the_same_address_are_told_apart(self, tmp_path):
+        events = [
+            ("tensor", 1, 8192, self.L1),
+            ("tensor", 2, 8192, self.DRAM),
+            ("dealloc", 8192, self.L1),
+            ("dealloc", 8192, self.DRAM),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_deallocate_without_buffer_type_takes_the_latest_tensor_at_the_address(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, None),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_tensor_without_buffer_type_still_matches_a_typed_deallocate(self, tmp_path):
+        """Captures that predate the tensor's buffer_type still credit the deallocation."""
+        events = [("tensor", 1, 4096, None), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1]
+
+    def test_freed_tensor_is_not_credited_with_a_later_free_at_its_address(self, tmp_path):
+        """A scratch buffer that reuses tensor 1's freed address is freed in turn: tensor 1 is already gone."""
+        events = [("tensor", 1, 4096, self.L1), ("dealloc", 4096, self.L1), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, None]
+
+    def test_same_address_on_two_devices_is_credited_per_device(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, self.L1, 0),
+            ("tensor", 2, 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 0),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2, 1]
+
+    def test_address_with_no_tensor_has_no_input(self, tmp_path):
+        """A scratch buffer that no tensor node ever named: the operation is kept, with no input tensor."""
+        events = [("tensor", 1, 4096, self.L1), ("dealloc", 12288, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_tensor_seen_at_a_live_slot_takes_over_the_deallocation(self, tmp_path):
+        """Tensor 2 shows up at tensor 1's address before any free there (a view, or a free the capture missed): the
+        free goes to tensor 2, the one living there now."""
+        events = [("tensor", 1, 4096, self.L1), ("tensor", 2, 4096, self.L1), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2]
+
+    def test_typed_deallocate_does_not_credit_a_tensor_of_another_type(self, tmp_path):
+        events = [("tensor", 1, 4096, self.DRAM), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_deallocate_on_an_unknown_device_credits_no_tensor(self, tmp_path):
+        """Tensor and free nodes both carry device_id in captures that carry address; a free without one names no
+        device, so it is not matched to a tensor recorded on one."""
+        events = [("tensor", 1, 4096, self.L1, 0), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_deallocate_without_address_uses_its_allocation(self, tmp_path):
+        """A free with no params of its own takes address, buffer type and device from the buffer_allocate it is
+        connected to."""
+        events = [
+            ("tensor", 1, 8192, self.L1, 0),
+            ("tensor", 2, 8192, self.DRAM, 0),
+            ("alloc", 8192, self.DRAM, 0),
+            ("dealloc_of_last_alloc",),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2]
+
+    def test_free_inside_an_operation_is_lifted_into_its_inputs(self, tmp_path):
+        """A free inside a function_start/function_end pair (Python-level ttnn.deallocate) takes the tensor living at
+        the address, as a top-level free does, and the operation gets it as its input; a later top-level free at the
+        same address finds nothing left there."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("start", "ttnn.deallocate"),
+            ("dealloc", 4096, self.L1),
+            ("end", "ttnn.deallocate"),
+            ("dealloc", 4096, self.L1),
+        ]
+        assert self._operation_inputs(events, tmp_path) == [
+            ("ttnn::deallocate", 1),
+            ("ttnn.deallocate", 2),
+            ("ttnn::deallocate", None),
+        ]
+
+    def test_reused_address_gives_each_tensor_its_own_deallocate_operation(self):
+        """What the visualizer shows: each tensor's lifetime ends at the free of its own buffer."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+        ]
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.cursor()
+            graph_report.create_database_schema(cursor)
+            graph_report.import_graph(cursor, self._graph(events), record_tensor_lifetime=True)
+            lifetimes = cursor.execute(
+                "SELECT tensor_id, deallocate_operation_id FROM tensor_lifetime ORDER BY tensor_id"
+            ).fetchall()
+            deallocations = [
+                operation_id
+                for (operation_id,) in cursor.execute(
+                    "SELECT operation_id FROM operations WHERE name = 'ttnn::deallocate' ORDER BY operation_id"
+                )
+            ]
+        finally:
+            conn.close()
+        assert lifetimes == [(1, deallocations[0]), (2, deallocations[1])]
+
+    def test_free_keeps_live_buffers_of_another_type_or_device_in_the_snapshot(self, tmp_path):
+        """The per-operation buffer snapshot drops only the freed buffer, not every buffer at its address."""
+        events = [
+            ("alloc", 4096, self.L1, 0),
+            ("alloc", 4096, self.DRAM, 0),
+            ("alloc", 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 0),
+        ]
+        conn, cursor = _import_to_db(_make_report(self._graph(events)), tmp_path)
+        try:
+            live = cursor.execute(
+                "SELECT device_id, buffer_type FROM buffers WHERE operation_id = "
+                "(SELECT MAX(operation_id) FROM operations) ORDER BY device_id, buffer_type"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert live == [(0, self.DRAM), (1, self.L1)]
 
 
 @pytest.fixture
@@ -4552,8 +5074,6 @@ def test_resnet50_e2e_graph_capture(
     mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
 ):
     """Run ResNet50 inference, capture graph, import to DB, and validate structural properties."""
-    import shutil
-
     from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
 
     report_path = tmp_path / "resnet50_report.json"
@@ -4572,8 +5092,6 @@ def test_resnet50_e2e_graph_capture(
     output_dir = tmp_path / "output"
     db_path = graph_report.import_report(report_path, output_dir)
     assert db_path.exists(), "Imported DB should be created"
-
-    shutil.copy2(db_path, "/tmp/db.sqlite")
 
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
@@ -6923,6 +7441,13 @@ def test_multihost_graph_report(request):
     for op_name in op_names:
         expected = {r: 1 for r in range(world_size)}
         assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
-    # Assumes every rank opens the same number of devices, as each half of the T3K two-rank binding does.
-    expected = {r: mesh_device.get_num_devices() for r in range(world_size)}
-    assert device_counts == expected, f"device count per rank {device_counts}, expected {expected}"
+    # Each rank records only its own local devices: get_num_devices() counts the whole mesh across all ranks, while
+    # get_device_ids() lists this rank's local ones. Assumes every rank owns the same number of devices, as each half
+    # of the T3K two-rank binding does.
+    # TODO(tenstorrent/ttnn-visualizer#2225): the count matches only because the MeshDevice's id 0 collides with chip 0
+    # in the report's devices list. Fixing that adds the mesh as its own entry, and this expectation has to change.
+    expected = {r: len(mesh_device.get_device_ids()) for r in range(world_size)}
+    assert device_counts == expected, (
+        f"device count per rank {device_counts}, expected {expected} "
+        "(if the MeshDevice id collision is fixed, see tenstorrent/ttnn-visualizer#2225)"
+    )

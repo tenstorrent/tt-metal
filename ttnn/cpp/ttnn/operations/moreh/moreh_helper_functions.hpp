@@ -261,6 +261,10 @@ uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim);
 
 void expand_to_max_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
 
+inline uint32_t get_ht_need_bcast(const ttsl::SmallVector<uint32_t>& need_bcast_dim) {
+    return need_bcast_dim.size() > 1 ? need_bcast_dim[1] : 0u;
+}
+
 void validate_input_with_dim(const Tensor& input, const int64_t& dim);
 
 void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim);

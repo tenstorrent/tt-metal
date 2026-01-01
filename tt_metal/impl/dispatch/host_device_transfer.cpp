@@ -5,6 +5,7 @@
 #include "impl/dispatch/host_device_transfer.hpp"
 
 #include <cstring>
+#include <set>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -51,6 +52,7 @@ void WriteToDeviceSharded(
     TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     const bool can_write_page_ranges = buffer.aligned_page_size() == page_size;
+    std::set<CoreCoord> written_l1_cores;
 
     auto write_pages = [&](uint32_t core_id, uint32_t device_page, uint32_t host_page, uint32_t num_pages) {
         if (num_pages == 0) {
@@ -73,7 +75,13 @@ void WriteToDeviceSharded(
                                         (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-                cluster.write_core(device->id(), core_coordinates, page, absolute_address);
+                cluster.write_core(
+                    page.data(),
+                    page.size(),
+                    tt_cxy_pair(device->id(), core_coordinates),
+                    absolute_address,
+                    tt::umd::IoOrdering::Relaxed);
+                written_l1_cores.insert(core_coordinates);
             } else {
                 auto bank_local_address = buffer.address() + (write_device_page * buffer.aligned_page_size()) + offset;
                 WriteToDeviceDRAMChannel(*device, bank_id, bank_local_address, page);
@@ -103,6 +111,10 @@ void WriteToDeviceSharded(
             }
         }
     }
+
+    // L1 data above is written Relaxed for throughput. The barrier makes it land before this returns, so it is
+    // ordered before anything the caller does next.
+    cluster.l1_barrier(device->id(), written_l1_cores);
 }
 
 DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint64_t bank_index, uint64_t page_index) {
@@ -145,6 +157,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
     TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
+    std::set<CoreCoord> written_l1_cores;
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
@@ -156,8 +169,15 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
                 case BufferType::DRAM: WriteToDeviceDRAMChannel(*device, bank_index, address + offset, page); break;
                 case BufferType::L1:
                 case BufferType::L1_SMALL: {
-                    CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
-                    detail::WriteToDeviceL1(device, logical_core, address + offset, page, CoreType::WORKER);
+                    const CoreCoord worker_core = device->worker_core_from_logical_core(
+                        buffer.allocator()->get_logical_core_from_bank_id(bank_index));
+                    cluster.write_core(
+                        page.data(),
+                        page.size(),
+                        tt_cxy_pair(device->id(), worker_core),
+                        address + offset,
+                        tt::umd::IoOrdering::Relaxed);
+                    written_l1_cores.insert(worker_core);
                 } break;
                 default: TT_THROW("Unsupported buffer type to write to device!");
             }
@@ -169,6 +189,9 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
         bank_index = (bank_index + 1) % num_banks;
         data_index += page_size;
     }
+
+    // Same Relaxed-then-barrier contract as WriteToDeviceSharded.
+    cluster.l1_barrier(device->id(), written_l1_cores);
 }
 
 void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
@@ -379,10 +402,6 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
 
 bool WriteToDeviceDRAMChannel(
     IDevice& device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer) {
-    if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_dram_alignment(
-            &device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceDRAMChannel");
-    }
     TT_FATAL(
         address >= device.allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -402,10 +421,6 @@ bool WriteToDeviceDRAMChannel(IDevice& device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice& device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
-    if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_dram_alignment(
-            &device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
-    }
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     metal_ctx.get_cluster().dram_barrier(device.id());
     metal_ctx.get_cluster().read_dram_vec(host_buffer.data(), host_buffer.size(), device.id(), dram_channel, address);

@@ -584,6 +584,17 @@ FORCE_INLINE void advance_q_block(uint32_t& sb, uint32_t& tile_base) {
     }
 }
 
+// Head-major tile-row `row` of a [B*H, 1, T, V] tensor -> row of the same tokens in the head-merged
+// [B, 1, T, H*V] tensor, counted in rows of Wt tiles: (b*H + h)*Ht + t -> (b*Ht + t)*H + h.
+// Ht = H = 1 is the identity.
+template <uint32_t Ht, uint32_t num_heads>
+FORCE_INLINE uint32_t head_merged_row(const uint32_t row) {
+    const uint32_t t = row % Ht;
+    const uint32_t h = (row / Ht) % num_heads;
+    const uint32_t b = row / (Ht * num_heads);
+    return (b * Ht + t) * num_heads + h;
+}
+
 /**
  * Read a 2D batch of tiles (num_rows × tiles_per_row) from DRAM into L1.
  * Uses padding: for row >= valid_num_rows or tile >= valid_tiles_per_row, reuses the last valid row/tile.

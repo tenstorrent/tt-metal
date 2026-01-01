@@ -263,7 +263,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2_global(dfb_ex2_global_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
-    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    const DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_resident(dfb_in_resident_id);
@@ -572,8 +572,8 @@ void kernel_main() {
 #ifndef TILIZE_IN
                     dfb_in0.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
 #endif
-                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
-                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
                 }
 
                 // zero out the garbage values by mult mask again
@@ -633,9 +633,9 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Disabled)>(
                     ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w), dfb_x, dfb_xmm);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
-                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
-                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
                 }
 
                 // Partial-Var(x)
@@ -764,8 +764,8 @@ void kernel_main() {
 #ifndef TILIZE_IN
                     dfb_in0.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
 #endif
-                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
-                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
                 }
 
                 // zero out the garbage values by mult mask again
@@ -794,10 +794,10 @@ void kernel_main() {
                     dfb_input_mask,
                     dfb_x);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    dfb_xmm.wait_front(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
                     dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
-                    dfb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
-                    dfb_x.push_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_x.reserve_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_x.push_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
                 }
 
                 dfb_ex2pe.wait_front(1);
@@ -831,10 +831,10 @@ void kernel_main() {
                     dfb_ex2pe,
                     dfb_xmm);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                    dfb_x.wait_front(out_block_hw_normal - out_block_hw_last);
-                    dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
-                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
-                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
                 }
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
 
@@ -861,8 +861,8 @@ void kernel_main() {
                 dfb_reread_out.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 dfb_reread_write_out.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                 for (std::uint32_t w = 0; w < block_w_curr; ++w) {
-                    const ckl::StridedTileRange input_range{w, block_w};
-                    const ckl::StridedTileRange output_range{w, block_w_curr};
+                    const ckl::StridedTileRange input_range{.base = w, .row_stride = block_w};
+                    const ckl::StridedTileRange output_range{.base = w, .row_stride = block_w_curr};
                     if (copy_or_add) {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(out_block_h_actual),
@@ -922,17 +922,17 @@ void kernel_main() {
                                     ckl::input(gamma_scalar_offset_input, ckl::BroadcastDim::Row)>{
                                     dfb_reread_write_out,
                                     dfb_gamma,
-                                    ckl::StridedTileRange{j, block_w_curr},
+                                    ckl::StridedTileRange{.base = j, .row_stride = block_w_curr},
                                     j + index_g_offset},
                                 ckl::PackTile<outgamma_strided_output>{
-                                    dfb_outgamma, ckl::StridedTileRange{j, block_w_curr}});
+                                    dfb_outgamma, ckl::StridedTileRange{.base = j, .row_stride = block_w_curr}});
                         } else {
                             ckl::eltwise_chain(
                                 ckl::IterationShape::col(out_block_h_actual),
                                 ckl::CopyTile<reread_write_out_strided_col_input>{
-                                    dfb_reread_write_out, ckl::StridedTileRange{j, block_w_curr}},
+                                    dfb_reread_write_out, ckl::StridedTileRange{.base = j, .row_stride = block_w_curr}},
                                 ckl::PackTile<outgamma_strided_output>{
-                                    dfb_outgamma, ckl::StridedTileRange{j, block_w_curr}});
+                                    dfb_outgamma, ckl::StridedTileRange{.base = j, .row_stride = block_w_curr}});
                         }
                     }
                     dfb_outgamma.push_back(static_cast<uint16_t>(out_block_hw_normal));
@@ -962,16 +962,19 @@ void kernel_main() {
                                     ckl::BinaryFpuOp::Add,
                                     inbeta_strided_col_input,
                                     ckl::input(beta_scalar_offset_input, ckl::BroadcastDim::Row)>{
-                                    dfb_inbeta, dfb_beta, ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                    dfb_inbeta,
+                                    dfb_beta,
+                                    ckl::StridedTileRange{.base = j, .row_stride = block_w_curr},
+                                    j + index_g_offset},
                                 ckl::PackTile<outbeta_strided_output>{
-                                    dfb_outbeta, ckl::StridedTileRange{j, block_w_curr}});
+                                    dfb_outbeta, ckl::StridedTileRange{.base = j, .row_stride = block_w_curr}});
                         } else {
                             ckl::eltwise_chain(
                                 ckl::IterationShape::col(out_block_h_actual),
                                 ckl::CopyTile<inbeta_strided_col_input>{
-                                    dfb_inbeta, ckl::StridedTileRange{j, block_w_curr}},
+                                    dfb_inbeta, ckl::StridedTileRange{.base = j, .row_stride = block_w_curr}},
                                 ckl::PackTile<outbeta_strided_output>{
-                                    dfb_outbeta, ckl::StridedTileRange{j, block_w_curr}});
+                                    dfb_outbeta, ckl::StridedTileRange{.base = j, .row_stride = block_w_curr}});
                         }
                     }
                     dfb_outbeta.push_back(static_cast<uint16_t>(out_block_hw_normal));

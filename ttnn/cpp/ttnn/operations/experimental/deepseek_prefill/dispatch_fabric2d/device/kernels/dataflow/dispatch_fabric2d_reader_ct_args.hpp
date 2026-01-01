@@ -55,10 +55,18 @@ struct ReaderCtArgs {
         kScratchAddr,
         kFilledAddr,
         kFreedAddr,
-        kFwdSemAddr,
+        kNumVcs,
+        kVcPages,
+        kCreditDoneAddr,
+        // The opposite-direction stream core on THIS chip. Its sender points at the chip that wrote our
+        // pages, so our credits are queued there for it to carry.
+        kCreditOutboxNocX,
+        kCreditOutboxNocY,
+        kFinalSemAddr,
         kFwdPagesPerStream,
         kNumOwn,
         kNumForward,
+        kNumFinal,
         kUntilizeSemAddr,
         kUntilizeTileRows,
         kHasPaddingConfig,
@@ -72,6 +80,17 @@ struct ReaderCtArgs {
         // and order, so a writer can place a descriptor's chunks from its own list alone.
         kInDescriptorsBase,
         kOutDescriptorsBase,
+        // One word per channel: the arrival, credit and outbox counters, then the channel a page moves
+        // into one hop on (VC_NONE when it is delivered instead). Then one word per own assignment with
+        // the channel that assignment's tokens land in downstream.
+        kVcArrivedBase,
+        kVcFreedBase,
+        kVcOutboxBase,
+        kVcNextBase,
+        kOwnVcBase,
+        // Last, the chunks the upstream chip writes straight into this chip's output, from
+        // incoming_final_descriptors: the receive count the reader waits for before it exits.
+        kFinalDescriptorsBase,
         kCount,
     };
 
@@ -98,10 +117,17 @@ struct ReaderCtArgs {
     uint32_t scratch_addr;
     uint32_t filled_addr;
     uint32_t freed_addr;
-    uint32_t fwd_sem_addr;
+    uint32_t num_vcs;
+    uint32_t vc_pages;
+    uint32_t credit_done_addr;
+    uint32_t credit_outbox_noc_x;
+    uint32_t credit_outbox_noc_y;
+    // Bumped by the upstream sender for every token it writes straight into this chip's output.
+    uint32_t final_sem_addr;
     uint32_t fwd_pages_per_stream;
     uint32_t num_own;
     uint32_t num_forward;
+    uint32_t num_final;
     // A TILE input reaches this reader through a staging buffer the untilizer pool fills. Zero
     // tile rows is the row-major path: the input accessor already points at the tokens.
     uint32_t untilize_sem_addr;
@@ -112,6 +138,12 @@ struct ReaderCtArgs {
     uint32_t assignment_base;
     uint32_t in_descriptors_base;
     uint32_t out_descriptors_base;
+    uint32_t vc_arrived_base;
+    uint32_t vc_freed_base;
+    uint32_t vc_outbox_base;
+    uint32_t vc_next_base;
+    uint32_t own_vc_base;
+    uint32_t final_descriptors_base;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -123,7 +155,9 @@ struct ReaderCtArgs {
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
         uint32_t own_count,
-        uint32_t forward_count) :
+        uint32_t forward_count,
+        const op::StreamPlacement& opposite,
+        uint32_t final_count) :
         queue_depth(QUEUE_DEPTH),
         batch(BATCH),
         token_size_bytes(token_bytes),
@@ -144,24 +178,42 @@ struct ReaderCtArgs {
         scratch_addr(l1.scratch),
         filled_addr(plan.queue_filled_addr),
         freed_addr(plan.queue_freed_addr),
-        fwd_sem_addr(plan.fwd_arrived_addr),
+        num_vcs(static_cast<uint32_t>(plan.vc_arrived_addr.size())),
+        vc_pages(plan.vc_pages),
+        credit_done_addr(plan.credit_done_addr),
+        credit_outbox_noc_x(opposite.worker_virtual.x),
+        credit_outbox_noc_y(opposite.worker_virtual.y),
+        final_sem_addr(plan.final_arrived_addr),
         fwd_pages_per_stream(plan.fwd_pages_per_stream),
         num_own(own_count),
         num_forward(forward_count),
+        num_final(final_count),
         untilize_sem_addr(plan.untilize_sem_addr),
         untilize_tile_rows(plan.untilize_tile_rows),
         has_padding_config(args.has_padding_config ? 1u : 0u),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_descriptors_base(assignment_base + own_count * ASSIGNMENT_WORDS),
-        out_descriptors_base(in_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS) {}
+        out_descriptors_base(in_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS),
+        vc_arrived_base(out_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS),
+        vc_freed_base(vc_arrived_base + num_vcs),
+        vc_outbox_base(vc_freed_base + num_vcs),
+        vc_next_base(vc_outbox_base + num_vcs),
+        own_vc_base(vc_next_base + num_vcs),
+        final_descriptors_base(own_vc_base + own_count) {}
 
-    // Scalars, then ring_chip_ids, the assignments and the two descriptor blocks, at the base
+    // Scalars, then ring_chip_ids, the assignments and the three descriptor blocks, at the base
     // indices set in the constructor.
     std::vector<uint32_t> to_ct_word_arr(
         const std::vector<uint32_t>& ring_chip_ids,
         const std::vector<uint32_t>& assignment_words,
         const std::vector<uint32_t>& in_descriptors,
-        const std::vector<uint32_t>& out_descriptors) const {
+        const std::vector<uint32_t>& out_descriptors,
+        const std::vector<uint32_t>& vc_arrived,
+        const std::vector<uint32_t>& vc_freed,
+        const std::vector<uint32_t>& vc_outbox,
+        const std::vector<uint32_t>& vc_next,
+        const std::vector<uint32_t>& own_vc,
+        const std::vector<uint32_t>& final_descriptors) const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
         std::vector<uint32_t> w(kCount, kUnset);
         w[kQueueDepth] = queue_depth;
@@ -184,10 +236,16 @@ struct ReaderCtArgs {
         w[kScratchAddr] = scratch_addr;
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
-        w[kFwdSemAddr] = fwd_sem_addr;
+        w[kNumVcs] = num_vcs;
+        w[kVcPages] = vc_pages;
+        w[kCreditDoneAddr] = credit_done_addr;
+        w[kCreditOutboxNocX] = credit_outbox_noc_x;
+        w[kCreditOutboxNocY] = credit_outbox_noc_y;
+        w[kFinalSemAddr] = final_sem_addr;
         w[kFwdPagesPerStream] = fwd_pages_per_stream;
         w[kNumOwn] = num_own;
         w[kNumForward] = num_forward;
+        w[kNumFinal] = num_final;
         w[kUntilizeSemAddr] = untilize_sem_addr;
         w[kUntilizeTileRows] = untilize_tile_rows;
         w[kHasPaddingConfig] = has_padding_config;
@@ -195,6 +253,12 @@ struct ReaderCtArgs {
         w[kAssignmentBase] = assignment_base;
         w[kInDescriptorsBase] = in_descriptors_base;
         w[kOutDescriptorsBase] = out_descriptors_base;
+        w[kVcArrivedBase] = vc_arrived_base;
+        w[kVcFreedBase] = vc_freed_base;
+        w[kVcOutboxBase] = vc_outbox_base;
+        w[kVcNextBase] = vc_next_base;
+        w[kOwnVcBase] = own_vc_base;
+        w[kFinalDescriptorsBase] = final_descriptors_base;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: reader compile-time arg {} was never assigned", i);
         }
@@ -212,10 +276,33 @@ struct ReaderCtArgs {
             in_descriptors.size(),
             out_descriptors.size(),
             num_forward * CHUNK_DESCRIPTOR_WORDS);
+        TT_FATAL(
+            final_descriptors.size() == num_final * CHUNK_DESCRIPTOR_WORDS,
+            "dispatch_fabric2d: final-write descriptor block is {} words but the kernel indexes {}",
+            final_descriptors.size(),
+            num_final * CHUNK_DESCRIPTOR_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
+        TT_FATAL(
+            vc_arrived.size() == num_vcs && vc_freed.size() == num_vcs && vc_outbox.size() == num_vcs &&
+                vc_next.size() == num_vcs && own_vc.size() == num_own,
+            "dispatch_fabric2d: channel blocks are {}/{}/{}/{} words and own_vc {} but the kernel indexes "
+            "{} channels and {} own assignments",
+            vc_arrived.size(),
+            vc_freed.size(),
+            vc_outbox.size(),
+            vc_next.size(),
+            own_vc.size(),
+            num_vcs,
+            num_own);
         w.insert(w.end(), in_descriptors.begin(), in_descriptors.end());
         w.insert(w.end(), out_descriptors.begin(), out_descriptors.end());
+        w.insert(w.end(), vc_arrived.begin(), vc_arrived.end());
+        w.insert(w.end(), vc_freed.begin(), vc_freed.end());
+        w.insert(w.end(), vc_outbox.begin(), vc_outbox.end());
+        w.insert(w.end(), vc_next.begin(), vc_next.end());
+        w.insert(w.end(), own_vc.begin(), own_vc.end());
+        w.insert(w.end(), final_descriptors.begin(), final_descriptors.end());
         return w;
     }
 #else
@@ -240,26 +327,50 @@ struct ReaderCtArgs {
         scratch_addr(get_compile_time_arg_val(kScratchAddr)),
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
-        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
+        num_vcs(get_compile_time_arg_val(kNumVcs)),
+        vc_pages(get_compile_time_arg_val(kVcPages)),
+        credit_done_addr(get_compile_time_arg_val(kCreditDoneAddr)),
+        credit_outbox_noc_x(get_compile_time_arg_val(kCreditOutboxNocX)),
+        credit_outbox_noc_y(get_compile_time_arg_val(kCreditOutboxNocY)),
+        final_sem_addr(get_compile_time_arg_val(kFinalSemAddr)),
         fwd_pages_per_stream(get_compile_time_arg_val(kFwdPagesPerStream)),
         num_own(get_compile_time_arg_val(kNumOwn)),
         num_forward(get_compile_time_arg_val(kNumForward)),
+        num_final(get_compile_time_arg_val(kNumFinal)),
         untilize_sem_addr(get_compile_time_arg_val(kUntilizeSemAddr)),
         untilize_tile_rows(get_compile_time_arg_val(kUntilizeTileRows)),
         has_padding_config(get_compile_time_arg_val(kHasPaddingConfig)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
         in_descriptors_base(get_compile_time_arg_val(kInDescriptorsBase)),
-        out_descriptors_base(get_compile_time_arg_val(kOutDescriptorsBase)) {}
+        out_descriptors_base(get_compile_time_arg_val(kOutDescriptorsBase)),
+        vc_arrived_base(get_compile_time_arg_val(kVcArrivedBase)),
+        vc_freed_base(get_compile_time_arg_val(kVcFreedBase)),
+        vc_outbox_base(get_compile_time_arg_val(kVcOutboxBase)),
+        vc_next_base(get_compile_time_arg_val(kVcNextBase)),
+        own_vc_base(get_compile_time_arg_val(kOwnVcBase)),
+        final_descriptors_base(get_compile_time_arg_val(kFinalDescriptorsBase)) {}
 #endif
 
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
 
 #ifdef KERNEL_BUILD
+    // Counters and topology of one channel. Each is a word of an appended block, so these are plain
+    // indexed loads of compile-time args rather than anything the kernel has to carry.
+    uint32_t vc_arrived_addr(uint32_t vc) const { return kernel_compile_time_args[vc_arrived_base + vc]; }
+    uint32_t vc_freed_addr(uint32_t vc) const { return kernel_compile_time_args[vc_freed_base + vc]; }
+    uint32_t vc_outbox_addr(uint32_t vc) const { return kernel_compile_time_args[vc_outbox_base + vc]; }
+    // The channel a page of `vc` lands in one hop on, or VC_NONE when that hop delivers it.
+    uint32_t vc_next(uint32_t vc) const { return kernel_compile_time_args[vc_next_base + vc]; }
+    // The channel own assignment `a`'s tokens land in downstream, or VC_NONE for the direct neighbour.
+    uint32_t own_vc(uint32_t a) const { return kernel_compile_time_args[own_vc_base + a]; }
+#endif
+
+#ifdef KERNEL_BUILD
     // The program factory appends the TensorAccessorArgs after the blocks above, in ReaderRtArg order.
     // Their base is derived from the block bases, so adding a scalar or widening a block keeps it right.
     static constexpr uint32_t accessor_base =
-        get_compile_time_arg_val(kOutDescriptorsBase) + get_compile_time_arg_val(kNumForward) * CHUNK_DESCRIPTOR_WORDS;
+        get_compile_time_arg_val(kFinalDescriptorsBase) + get_compile_time_arg_val(kNumFinal) * CHUNK_DESCRIPTOR_WORDS;
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
     static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();

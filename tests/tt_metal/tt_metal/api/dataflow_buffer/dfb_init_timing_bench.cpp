@@ -808,7 +808,7 @@ void run_benchmark_case_seven(DfbInitTimingBenchContext& ctx) {
     constexpr uint16_t NEO2 = (1u << 10);
     constexpr uint16_t NEO3 = (1u << 11);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     // -----------------------------------------------------------------------
     // 1Sx1S DFBs (IDs 0–15): STRIDED producer, STRIDED consumer, no remapper.
@@ -1032,7 +1032,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
     constexpr uint16_t NEO2 = (1u << 10);
     constexpr uint16_t NEO3 = (1u << 11);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     // -----------------------------------------------------------------------
     // 1Sx2A DFBs (IDs 0–15): STRIDED producer, ALL consumer — 16 × 1-to-2 remapper
@@ -1188,7 +1188,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
     constexpr uint16_t DM4  = (1u << 4);
     constexpr uint16_t NEO0 = (1u << 8);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     experimental::dfb::CreateDataflowBuffer(
         program,
@@ -1281,7 +1281,7 @@ void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) 
     constexpr uint16_t DM4  = (1u << 4);
     constexpr uint16_t NEO0 = (1u << 8);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*ctx.mesh_device);
 
     experimental::dfb::CreateDataflowBuffer(
         program,

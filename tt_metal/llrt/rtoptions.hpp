@@ -867,7 +867,6 @@ public:
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 

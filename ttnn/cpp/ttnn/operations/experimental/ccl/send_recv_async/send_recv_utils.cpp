@@ -10,6 +10,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::send_recv_utils {
 
@@ -23,7 +24,7 @@ uint32_t handshake_page_size(uint32_t max_alignment) { return tt::align(handshak
 tt::tt_metal::IDevice* resolve_target_device(
     const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord, const std::string& op_name) {
     TT_FATAL(coord.has_value(), "{}: the program factory requires a per-device mesh dispatch coordinate", op_name);
-    return tensor.device()->get_device(*coord);
+    return tt::tt_metal::internal::get_device(*tensor.device(), *coord);
 }
 
 uint32_t socket_max_alignment(const ttnn::Tensor& tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
