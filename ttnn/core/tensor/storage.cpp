@@ -14,6 +14,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
@@ -50,6 +51,16 @@ void validate_mesh_coordinates(
             coord,
             device.shape());
     }
+}
+
+MeshTensor reject_per_core_source(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) {
+    TT_FATAL(
+        !(owning_storage.is_allocated() &&
+          tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+              owning_storage.get_mesh_buffer().device_local_config().sharding_args)),
+        "Cannot reinterpret (view / reshape / narrow) a per-core allocated tensor: its shards have per-core "
+        "addresses, which the reinterpreted buffer cannot carry");
+    return reinterpreted_mesh_tensor;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -138,7 +149,8 @@ DeviceStorage::DeviceStorage(
 
 DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
     DeviceStorage(
-        std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
+        std::make_shared<MeshTensorHolder>(
+            CMAKE_UNIQUE_NAMESPACE::reject_per_core_source(owning_storage, std::move(reinterpreted_mesh_tensor))),
         owning_storage.coords_,
         owning_storage.get_root_mesh_tensor()) {}
 
