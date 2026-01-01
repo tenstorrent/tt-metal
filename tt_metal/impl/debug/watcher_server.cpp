@@ -310,6 +310,16 @@ void WatcherServer::Impl::create_log_file() {
     if (!f) {
         TT_THROW("Watcher failed to create log file\n");
     }
+    if (logfile_ != nullptr) {
+        // Device readers keep the logfile_ pointer, so keep that stream and point it at the new file.
+        fflush(logfile_);
+        const bool moved = dup2(fileno(f), fileno(logfile_)) != -1;
+        fclose(f);
+        if (!moved) {
+            TT_THROW("Watcher failed to create log file\n");
+        }
+        f = logfile_;
+    }
     log_info(LogLLRuntime, "Watcher log file: {}", fname);
 
     fprintf(f, "At %.3lfs starting\n", get_elapsed_secs());
