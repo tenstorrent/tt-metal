@@ -138,30 +138,6 @@ void py_graph_module(nb::module_& m) {
         nb::arg("trace"));
 
     m.def(
-        "extract_circular_buffers_peak_size_per_core",
-        [](const nb::object& py_trace) {
-            auto json_module = nb::module_::import_("json");
-            auto trace_str = std::string{nb::str(json_module.attr("dumps")(py_trace)).c_str()};
-            nlohmann::json trace = nlohmann::json::parse(trace_str);
-            return extract_circular_buffers_peak_size_per_core(trace);
-        },
-        "Extracts peak circular buffer size per core in bytes",
-        nb::arg("trace"));
-
-    m.def(
-        "extract_l1_buffer_allocation_peak_size_per_core",
-        [](const nb::object& py_trace, size_t interleaved_storage_cores) {
-            auto json_module = nb::module_::import_("json");
-            auto trace_str = std::string{nb::str(json_module.attr("dumps")(py_trace)).c_str()};
-            nlohmann::json trace = nlohmann::json::parse(trace_str);
-            return extract_l1_buffer_allocation_peak_size_per_core(trace, interleaved_storage_cores);
-        },
-        "Extracts peak L1 buffer allocation size per core. Requires interleaved_storage_cores "
-        "(get from device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y)",
-        nb::arg("trace"),
-        nb::arg("interleaved_storage_cores"));
-
-    m.def(
         "extract_output_tensors",
         [](const nb::object& py_trace) {
             auto json_module = nb::module_::import_("json");
