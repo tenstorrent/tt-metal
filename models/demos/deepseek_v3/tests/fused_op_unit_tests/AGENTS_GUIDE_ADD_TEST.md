@@ -18,7 +18,7 @@ Follow these steps to add a new fused op unit test:
 3. Create a new file for the new fused op unit test under MODEL_FOLDER/tests/fused_op_unit_tests/test_NEW_FUSED_OP_NAME.py
 4. In the fused op unit test file, create a PyTorch reference for the newly fused op based on the sequence of ttnn ops.
 	- Make sure to use the PyTorch reference as a basis here. To figure out what reference code is used, look at the containing module's test, e.g. test_mla.py for a fused op that's contained in the MLA module. Then figure out which exact portion of the reference model's code corresponds to our new fused op. It might be necessary to modify the reference code slightly to get the correct reference implementation since the exact operations used in the ttnn model and in the reference model my differer.
-	2. In the fused op unit test file, create a new reference function "NEW_FUSED_OP_reference". Inputs/outputs to the function should be PyTorch tensors and function parameters of that sequence of ops; make sure to parameterize everything that's parameterized in the module as well, no hardcoding unless it is hardcoded in the model too.
+	- In the fused op unit test file, create a new reference function "NEW_FUSED_OP_reference". Inputs/outputs to the function should be PyTorch tensors and function parameters of that sequence of ops; make sure to parameterize everything that's parameterized in the module as well, no hardcoding unless it is hardcoded in the model too.
 5. In the fused op unit test file, create a function "NEW_FUSED_OP_ttnn" containing the sequence of ttnn ops that correspond to the new fused op. Inputs and outputs correspond to the inputs/output of the sequence of ops for the new fused op; inputs/outputs should be ttnn tensors and function parameters.
 6. *Verify NEW_FUSED_OP_ttnn* by replacing the identified sequence of ops within the module code with a *function call to NEW_FUSED_OP_ttnn of the newly created test file*, and run the module test to verify that the code is running as expected and producing good outputs (no change to the baseline!). If it's not passing, debug NEW_FUSED_OP_ttnn to make it work. Add the result of this including a log file in the final summary of work. Do not proceed further in the TODOs unless this passes. If it passes, revert those changes in the module and continue.
 7. In the fused op unit test file, implement a pytest that:
@@ -29,7 +29,7 @@ Follow these steps to add a new fused op unit test:
     3. Contains a performance measurement wrapper, so that we measure device performance. See following notes on performance measurements.
     4. Supports trace mode; add a pytest parameter to turn tracing on/off
       - If it fails due to trace_region_size being too small, set the trace_region_size pytest parameter (see example test) based on the required size as printed in the log.
-    5. Contains a pytet parameter to turn program_caching on/off; use device.disable_and_clear_program_cache() for disabling, it's enabled by default
+    5. Contains a pytet parameter to turn program_caching on/off, this is only done when trace if off, with trace mode program_cache must be enabled too; use device.disable_and_clear_program_cache() for disabling, it's enabled by default
 	6. Compares PCC, ATOL, performance
 8. *Verify NEW_FUSED_OP_reference* and the test code itself by running the unit test and comparing pcc to NEW_FUSED_OP_ttnn. The PCC should typically by > 0.99, otherwise there's likely something wrong. Add the result of this including a log file in the final summary of work. Do not proceed further in the TODOs unless this passes.
 	1. Update the expected_pcc with the pcc value from the test (if it's > 0.99 otherwise, debug the test to fix it!)
@@ -39,6 +39,7 @@ Follow these steps to add a new fused op unit test:
     2. Run the module test with 1 iteration, both for prefill (same seqlen as in fused op unit test csv) and decode, copy the generated csv files into the same folder as in the last step.
     3. Compare for each op that all properties are identical, i.e. fused op unit test and module test match in terms of op input/output properties both for prefill and for decode. Take a look at compare_fused_wqkva_configs.py to see how that was done for an example fused op unit test.
 10. Print the summary for all verification steps clearly representing the results and the links to logs for all successful verification steps.
+11. List anything that was unexpected and/or any workarouds you needed to make the fused op unit test work.
 
 Notes on performance measurements:
 - Performance measurements use three metrics: e2e_duration, kernel_duration, op_to_op_latency
