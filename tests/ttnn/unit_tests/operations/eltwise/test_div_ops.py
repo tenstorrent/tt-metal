@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import ttnn
 
@@ -818,6 +819,31 @@ def test_div_no_nan_scalar_honours_memory_config(device, shape, value, requested
 # scalar sweeps also draw from [-100, 100], where the quotient is too small to hit the rounding.
 #
 # Partially addresses #51441.
+@pytest.mark.parametrize("scalar", [3.0, 7.0, 1.5, -3.0])
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_remainder_scalar_just_below_exact_multiple_fp32(scalar, sign, device):
+    n = torch.arange(1, 4097, dtype=torch.float64)
+    exact_multiples = (n * abs(scalar)).to(torch.float32)
+    torch_input_tensor = sign * torch.nextafter(exact_multiples, torch.zeros_like(exact_multiples))
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.remainder(input_tensor, scalar))
+
+    assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-3, rtol=0)
+    assert torch.all(output_tensor.abs() < abs(scalar))
+    assert torch.all((output_tensor == 0) | (torch.sign(output_tensor) == math.copysign(1.0, scalar)))
+
+
 @pytest.mark.parametrize("scalar", [3.0, 7.0, 1.5, -3.0])
 def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
     n = torch.arange(1, 4097, dtype=torch.float64)
