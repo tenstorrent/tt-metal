@@ -13,7 +13,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
-from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -353,6 +352,8 @@ def test_ds_fused_wqkva(
 
     q_a_weight = dequant_state_dict["q_a_proj.weight"]
     kv_a_weight = dequant_state_dict["kv_a_proj_with_mqa.weight"]
+
+    from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 
     weight_config = get_test_weight_config(
         MLA1D,
