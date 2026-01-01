@@ -134,6 +134,7 @@ The implementation ensures proper tensor alignment through:
 After gather execution, tensors are transformed back to original shape:
 
 ```cpp
+// For rank 1: reshape straight to the logical shape
 // For rank ≤ 4: squeeze from 4D, then transpose if needed
 output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
 if (!is_dim_last_idx) {
