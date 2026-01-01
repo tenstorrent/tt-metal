@@ -42,6 +42,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     """
     Run upsample test with parameters extracted from traced JSON.

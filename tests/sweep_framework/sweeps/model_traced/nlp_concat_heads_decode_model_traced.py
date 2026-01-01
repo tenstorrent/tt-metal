@@ -43,6 +43,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 

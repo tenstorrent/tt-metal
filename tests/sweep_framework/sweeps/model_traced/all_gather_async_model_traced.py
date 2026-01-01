@@ -217,6 +217,7 @@ def run(
     output_memory_config=None,
     *,
     device,  # unused
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     # Check if this is a model_traced run (has input_a_memory_config)
     is_model_traced = input_a_memory_config is not None
