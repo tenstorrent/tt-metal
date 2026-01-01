@@ -763,7 +763,7 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     bool illegal = (addr + len <= addr);  // zero length / wraparound
-#if defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     illegal = illegal || (addr + len > MEM_ETH_SIZE);
 #elif defined(COMPILE_FOR_DRISC)
     illegal = illegal || (addr + len > MEM_DRISC_L1_SIZE);
