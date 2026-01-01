@@ -522,50 +522,46 @@ class MasterConfigLoader:
             # Special handling for operations with complex parameter structures
             if self._matches_operation(operation_name, "conv2d"):
                 print(f"🔧 Detected conv2d operation with special parameter structure")
-                return self._get_conv2d_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
-                )
+                return self._get_conv2d_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
             elif self._matches_operation(operation_name, "linear"):
                 print(f"🔧 Detected linear operation with special parameter structure")
                 return self._get_operation_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "embedding"):
                 print(f"🔧 Detected embedding operation with special parameter structure")
                 return self._get_operation_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "concat"):
                 print(f"🔧 Detected concat operation with vector of tensors input")
-                return self._get_concat_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
-                )
+                return self._get_concat_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
             elif self._matches_operation(operation_name, "nlp_create_qkv_heads"):
                 print(f"🔧 Detected nlp_create_qkv_heads operation - extracting num_q_heads and num_kv_heads")
                 return self._get_nlp_create_qkv_heads_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "nlp_create_qkv_heads_decode"):
                 print(f"🔧 Detected nlp_create_qkv_heads_decode operation - extracting num_heads and num_kv_heads")
                 return self._get_nlp_create_qkv_heads_decode_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "create_qkv_heads"):
                 print(f"🔧 Detected create_qkv_heads operation - extracting num_heads and num_kv_heads")
                 return self._get_create_qkv_heads_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "paged_scaled_dot_product_attention_decode"):
                 print(
                     f"🔧 Detected paged_scaled_dot_product_attention_decode operation - using operation-specific extractor"
                 )
                 return self._get_operation_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "scaled_dot_product_attention_decode"):
                 print(f"🔧 Detected scaled_dot_product_attention_decode operation - using operation-specific extractor")
                 return self._get_operation_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(
                 operation_name, "scaled_dot_product_attention"
@@ -574,21 +570,22 @@ class MasterConfigLoader:
                     f"🔧 Detected scaled_dot_product_attention operation - using operation-specific extractor with is_causal and scale"
                 )
                 return self._get_scaled_dot_product_attention_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
             elif self._matches_operation(operation_name, "paged_update_cache"):
                 print(
                     f"🔧 Detected paged_update_cache operation (multi-input with non-consecutive tensors) - using operation-specific extractor"
                 )
                 return self._get_operation_suite_parameters(
-                    operation_name, configs, all_cases, deduplicate_inputs=not all_cases
+                    operation_name, configs, all_cases, deduplicate_inputs=False
                 )
 
             # Detect the number of tensor inputs
             tensor_count = self._count_tensor_inputs(configs)
 
-            # By default, deduplicate inputs unless running all_cases (Cartesian product)
-            deduplicate_inputs = not all_cases
+            # Disable deduplication for model_traced - master JSON has already deduplicated
+            # and each config has a unique config_id to prevent vector hash collisions
+            deduplicate_inputs = False
 
             if tensor_count == 0:
                 print(
@@ -1146,62 +1143,71 @@ class MasterConfigLoader:
                         if "shape" in cfg:
                             repeat_shape_list.append(cfg["shape"])
                     # Extract group_norm parameters (all 16 arguments)
+                    # NOTE: All optional parameters must be appended for EVERY config (use None if missing)
+                    # to ensure zip(*param_lists) doesn't truncate
                     if self._matches_operation(operation_name, "group_norm"):
-                        if "num_groups" in cfg:
-                            num_groups_list.append(cfg["num_groups"])
-                        if "epsilon" in cfg:
-                            epsilon_list.append(cfg["epsilon"])
-                        # Optional tensor shapes
-                        if "input_mask_shape" in cfg:
-                            input_mask_shape_list.append(tuple(cfg["input_mask_shape"]))
-                        if "input_mask_dtype" in cfg:
-                            input_mask_dtype_list.append(self.parse_dtype(cfg["input_mask_dtype"]))
-                        if "input_mask_layout" in cfg:
-                            input_mask_layout_list.append(self.parse_layout(cfg["input_mask_layout"]))
+                        num_groups_list.append(cfg.get("num_groups", None))
+                        epsilon_list.append(cfg.get("epsilon", None))
+                        # Optional tensor parameters - must append for every config
+                        input_mask_shape_list.append(
+                            tuple(cfg["input_mask_shape"]) if "input_mask_shape" in cfg else None
+                        )
+                        input_mask_dtype_list.append(
+                            self.parse_dtype(cfg["input_mask_dtype"]) if "input_mask_dtype" in cfg else None
+                        )
+                        input_mask_layout_list.append(
+                            self.parse_layout(cfg["input_mask_layout"]) if "input_mask_layout" in cfg else None
+                        )
                         if "input_mask_memory_config" in cfg:
                             mem_cfg = cfg["input_mask_memory_config"]
                             if isinstance(mem_cfg, dict):
                                 mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("input_mask_shape", []))
                             input_mask_memory_config_list.append(mem_cfg)
-                        if "weight_shape" in cfg:
-                            weight_shape_list.append(tuple(cfg["weight_shape"]))
-                        if "weight_dtype" in cfg:
-                            weight_dtype_list.append(self.parse_dtype(cfg["weight_dtype"]))
-                        if "weight_layout" in cfg:
-                            weight_layout_list.append(self.parse_layout(cfg["weight_layout"]))
+                        else:
+                            input_mask_memory_config_list.append(None)
+                        weight_shape_list.append(tuple(cfg["weight_shape"]) if "weight_shape" in cfg else None)
+                        weight_dtype_list.append(
+                            self.parse_dtype(cfg["weight_dtype"]) if "weight_dtype" in cfg else None
+                        )
+                        weight_layout_list.append(
+                            self.parse_layout(cfg["weight_layout"]) if "weight_layout" in cfg else None
+                        )
                         if "weight_memory_config" in cfg:
                             mem_cfg = cfg["weight_memory_config"]
                             if isinstance(mem_cfg, dict):
                                 mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("weight_shape", []))
                             weight_memory_config_list.append(mem_cfg)
-                        if "bias_shape" in cfg:
-                            bias_shape_list.append(tuple(cfg["bias_shape"]))
-                        if "bias_dtype" in cfg:
-                            bias_dtype_list.append(self.parse_dtype(cfg["bias_dtype"]))
-                        if "bias_layout" in cfg:
-                            bias_layout_list.append(self.parse_layout(cfg["bias_layout"]))
+                        else:
+                            weight_memory_config_list.append(None)
+                        bias_shape_list.append(tuple(cfg["bias_shape"]) if "bias_shape" in cfg else None)
+                        bias_dtype_list.append(self.parse_dtype(cfg["bias_dtype"]) if "bias_dtype" in cfg else None)
+                        bias_layout_list.append(self.parse_layout(cfg["bias_layout"]) if "bias_layout" in cfg else None)
                         if "bias_memory_config" in cfg:
                             mem_cfg = cfg["bias_memory_config"]
                             if isinstance(mem_cfg, dict):
                                 mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("bias_shape", []))
                             bias_memory_config_list.append(mem_cfg)
-                        if "reciprocals_shape" in cfg:
-                            reciprocals_shape_list.append(tuple(cfg["reciprocals_shape"]))
-                        if "reciprocals_dtype" in cfg:
-                            reciprocals_dtype_list.append(self.parse_dtype(cfg["reciprocals_dtype"]))
-                        if "reciprocals_layout" in cfg:
-                            reciprocals_layout_list.append(self.parse_layout(cfg["reciprocals_layout"]))
+                        else:
+                            bias_memory_config_list.append(None)
+                        reciprocals_shape_list.append(
+                            tuple(cfg["reciprocals_shape"]) if "reciprocals_shape" in cfg else None
+                        )
+                        reciprocals_dtype_list.append(
+                            self.parse_dtype(cfg["reciprocals_dtype"]) if "reciprocals_dtype" in cfg else None
+                        )
+                        reciprocals_layout_list.append(
+                            self.parse_layout(cfg["reciprocals_layout"]) if "reciprocals_layout" in cfg else None
+                        )
                         if "reciprocals_memory_config" in cfg:
                             mem_cfg = cfg["reciprocals_memory_config"]
                             if isinstance(mem_cfg, dict):
                                 mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("reciprocals_shape", []))
                             reciprocals_memory_config_list.append(mem_cfg)
-                        if "inplace" in cfg:
-                            inplace_list.append(cfg["inplace"])
-                        if "num_out_blocks" in cfg:
-                            num_out_blocks_list.append(cfg["num_out_blocks"])
-                        if "use_welford" in cfg:
-                            use_welford_list.append(cfg["use_welford"])
+                        else:
+                            reciprocals_memory_config_list.append(None)
+                        inplace_list.append(cfg.get("inplace", None))
+                        num_out_blocks_list.append(cfg.get("num_out_blocks", None))
+                        use_welford_list.append(cfg.get("use_welford", None))
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1370,62 +1376,58 @@ class MasterConfigLoader:
                         param_names.append("shape")
                         param_lists.append(repeat_shape_list)
                 # Add group_norm parameters (all 16 arguments)
+                # Always add all parameters (not conditionally) to ensure zip doesn't truncate
                 if self._matches_operation(operation_name, "group_norm"):
-                    if num_groups_list:
-                        param_names.append("num_groups")
-                        param_lists.append(num_groups_list)
-                    if epsilon_list:
-                        param_names.append("epsilon")
-                        param_lists.append(epsilon_list)
-                    # Optional tensor parameters
-                    if input_mask_shape_list:
-                        param_names.extend(
-                            ["input_mask_shape", "input_mask_dtype", "input_mask_layout", "input_mask_memory_config"]
-                        )
-                        param_lists.extend(
-                            [
-                                input_mask_shape_list,
-                                input_mask_dtype_list,
-                                input_mask_layout_list,
-                                input_mask_memory_config_list,
-                            ]
-                        )
-                    if weight_shape_list:
-                        param_names.extend(["weight_shape", "weight_dtype", "weight_layout", "weight_memory_config"])
-                        param_lists.extend(
-                            [weight_shape_list, weight_dtype_list, weight_layout_list, weight_memory_config_list]
-                        )
-                    if bias_shape_list:
-                        param_names.extend(["bias_shape", "bias_dtype", "bias_layout", "bias_memory_config"])
-                        param_lists.extend(
-                            [bias_shape_list, bias_dtype_list, bias_layout_list, bias_memory_config_list]
-                        )
-                    if reciprocals_shape_list:
-                        param_names.extend(
-                            [
-                                "reciprocals_shape",
-                                "reciprocals_dtype",
-                                "reciprocals_layout",
-                                "reciprocals_memory_config",
-                            ]
-                        )
-                        param_lists.extend(
-                            [
-                                reciprocals_shape_list,
-                                reciprocals_dtype_list,
-                                reciprocals_layout_list,
-                                reciprocals_memory_config_list,
-                            ]
-                        )
-                    if inplace_list:
-                        param_names.append("inplace")
-                        param_lists.append(inplace_list)
-                    if num_out_blocks_list:
-                        param_names.append("num_out_blocks")
-                        param_lists.append(num_out_blocks_list)
-                    if use_welford_list:
-                        param_names.append("use_welford")
-                        param_lists.append(use_welford_list)
+                    param_names.extend(
+                        [
+                            "num_groups",
+                            "epsilon",
+                            "input_mask_shape",
+                            "input_mask_dtype",
+                            "input_mask_layout",
+                            "input_mask_memory_config",
+                            "weight_shape",
+                            "weight_dtype",
+                            "weight_layout",
+                            "weight_memory_config",
+                            "bias_shape",
+                            "bias_dtype",
+                            "bias_layout",
+                            "bias_memory_config",
+                            "reciprocals_shape",
+                            "reciprocals_dtype",
+                            "reciprocals_layout",
+                            "reciprocals_memory_config",
+                            "inplace",
+                            "num_out_blocks",
+                            "use_welford",
+                        ]
+                    )
+                    param_lists.extend(
+                        [
+                            num_groups_list,
+                            epsilon_list,
+                            input_mask_shape_list,
+                            input_mask_dtype_list,
+                            input_mask_layout_list,
+                            input_mask_memory_config_list,
+                            weight_shape_list,
+                            weight_dtype_list,
+                            weight_layout_list,
+                            weight_memory_config_list,
+                            bias_shape_list,
+                            bias_dtype_list,
+                            bias_layout_list,
+                            bias_memory_config_list,
+                            reciprocals_shape_list,
+                            reciprocals_dtype_list,
+                            reciprocals_layout_list,
+                            reciprocals_memory_config_list,
+                            inplace_list,
+                            num_out_blocks_list,
+                            use_welford_list,
+                        ]
+                    )
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
@@ -2027,8 +2029,9 @@ class MasterConfigLoader:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, and traced_machine_info to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, traced_machine_info, and config_id to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
+                config_ids = [f"config_{idx}" for idx in range(len(input_specs_list))]
                 paired_configs = list(
                     zip(
                         input_specs_list,
@@ -2038,10 +2041,11 @@ class MasterConfigLoader:
                         config_tensors_in_dram_list,
                         traced_source_list,
                         traced_machine_info_list,
+                        config_ids,
                     )
                 )
                 return {
-                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info,config_id": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
@@ -2231,7 +2235,7 @@ class MasterConfigLoader:
                     elif clean_op_name == "linear":
                         param_names = [
                             "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_id"
                         ]
                         param_lists = [
                             [
@@ -2251,6 +2255,7 @@ class MasterConfigLoader:
                                     cfg["has_bias"],
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]

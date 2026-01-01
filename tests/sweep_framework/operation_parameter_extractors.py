@@ -864,7 +864,8 @@ class OperationParameterExtractors:
                 tensor_config = None
                 for arg in config:
                     if isinstance(arg, dict) and "arg0" in arg:
-                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+                        # Pass the whole arg dict so extract_tensor_config can handle nested structure
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                         break
 
                 if tensor_config:

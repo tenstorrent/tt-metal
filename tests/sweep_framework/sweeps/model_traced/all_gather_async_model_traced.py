@@ -40,7 +40,7 @@ FABRIC_CONFIGS_1D = [
 
 FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+    # ttnn.FabricConfig.FABRIC_2D_DYNAMIC,  # Not available in current ttnn version
 ]
 
 FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
