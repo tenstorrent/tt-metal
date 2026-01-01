@@ -9,11 +9,7 @@ Before you start, please read the example test in models/demos/deepseek_v3/tests
 Example test command for test_mla.py:
 ```
 source ../setup_metal.sh
-export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" \
-DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" \
-TT_METAL_RUNTIME_ROOT="/proj_sw/user_dev/jrock/tt-metal" \
-MESH_DEVICE=TG
-pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/ds_fused_wqkva.py::test_ds_fused_wqkva_device_perf -k "decode and 1" 2>&1 | tee $TT_METAL_HOME/logs/ds_fused_wqkva_device_perf_$(date +%Y%m%d_%H%M%S).log
+export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" && export DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" && export TT_METAL_RUNTIME_ROOT=/proj_sw/user_dev/jrock/tt-metal && export MESH_DEVICE=TG &&  pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass -k "decode" 2>&1 | tee /proj_sw/user_dev/jrock/tt-metal/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log
 ```
 
 Follow these steps to add a new fused op unit test:
@@ -24,7 +20,7 @@ Follow these steps to add a new fused op unit test:
 	- Make sure to use the PyTorch reference as a basis here. To figure out what reference code is used, look at the containing module's test, e.g. test_mla.py for a fused op that's contained in the MLA module. Then figure out which exact portion of the reference model's code corresponds to our new fused op. It might be necessary to modify the reference code slightly to get the correct reference implementation since the exact operations used in the ttnn model and in the reference model my differer.
 	2. In the fused op unit test file, create a new reference function "NEW_FUSED_OP_reference". Inputs/outputs to the function should be PyTorch tensors and function parameters of that sequence of ops; make sure to parameterize everything that's parameterized in the module as well, no hardcoding unless it is hardcoded in the model too.
 5. In the fused op unit test file, create a function "NEW_FUSED_OP_ttnn" containing the sequence of ttnn ops that correspond to the new fused op. Inputs and outputs correspond to the inputs/output of the sequence of ops for the new fused op; inputs/outputs should be ttnn tensors and function parameters.
-6. *Verify NEW_FUSED_OP_ttnn* by replacing the identified sequence of ops within the module code with a function call to NEW_FUSED_OP_ttnn and run the module test to verify that the code is running as expected and producing good outputs (no change to the baseline!). If it's not passing, debug NEW_FUSED_OP_ttnn to make it work. Add the result of this including a log file in the final summary of work. Do not proceed further in the TODOs unless this passes. If it passes, revert those changes in the module and continue.
+6. *Verify NEW_FUSED_OP_ttnn* by replacing the identified sequence of ops within the module code with a *function call to NEW_FUSED_OP_ttnn of the newly created test file*, and run the module test to verify that the code is running as expected and producing good outputs (no change to the baseline!). If it's not passing, debug NEW_FUSED_OP_ttnn to make it work. Add the result of this including a log file in the final summary of work. Do not proceed further in the TODOs unless this passes. If it passes, revert those changes in the module and continue.
 7. In the fused op unit test file, implement a pytest that:
 	1. Creates all input tensors and function parameters (based on the actual use in the module code)
       - Parameters to the ops should be variables in an easily readable section in the code
