@@ -497,7 +497,8 @@ class TtPatchTSMixerPatchify:
     Output TTNN tensor: (B, C, N_patches, patch_length)
     """
 
-    def __init__(self, *, context_length, patch_length, patch_stride):
+    def __init__(self, *, device, context_length, patch_length, patch_stride):
+        self.device = device
         self.context_length = context_length
         self.patch_length = patch_length
         self.patch_stride = patch_stride
@@ -505,25 +506,60 @@ class TtPatchTSMixerPatchify:
         self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
         new_len = patch_length + patch_stride * (self.num_patches - 1)
         self.sequence_start = context_length - new_len
+        self.new_len = new_len
 
-    def __call__(self, x_torch: torch.Tensor, *, device, dtype=ttnn.bfloat16):
-        # x_torch: (B, L, C)
-        B, L, C = x_torch.shape
+        # Cache (Np, P) indices on device
+        self.idx2 = self._build_idx2()
+
+    def _build_idx2(self):
+        P = self.patch_length
+        N_p = self.num_patches
+        S = self.patch_stride
+
+        offsets = ttnn.arange(0, P, dtype=ttnn.uint32, device=self.device)  # (P, )
+        patch_ids = ttnn.arange(0, N_p, dtype=ttnn.uint32, device=self.device)  # (Np, )
+        patch_starts = patch_ids * S  # (Np, )
+
+        idx2 = ttnn.reshape(patch_starts, (N_p, 1)) + ttnn.reshape(offsets, (1, P))  # (Np, P)
+        return idx2
+
+    def __call__(self, x):
+        # x: (B, L, C)
+        if len(x.shape) == 3:
+            B, L, C = x.shape
+            x = ttnn.reshape(x, (B, 1, L, C))
+        else:
+            B, one, L, C = x.shape
+            assert 1 == 1, f"Expected dim1=1, got {one}"
+
         if L != self.context_length:
             raise ValueError(f"Expected sequence length {self.context_length}, got {L}")
 
-        # crop left side if needed
-        x = x_torch[:, self.sequence_start :, :]  # (B, new_len, C)
+        x = ttnn.slice(x, (0, 0, self.sequence_start, 0), (B, 1, self.sequence_start + self.new_len, C))
+        # shape: (B,1,new_len,C)
 
-        # unfold along time
-        patches = x.unfold(dimension=1, size=self.patch_length, step=self.patch_stride)
-        # patches: (B, N_patches, C, patch_length)
+        # Ensure layout for gather
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        # transpose to (B, C, N_patches, patch_length)
-        patches = patches.transpose(1, 2).contiguous()
+        # Expand along patch axis because gather doesn't broadcast:
+        Np = self.num_patches
+        x = ttnn.repeat(x, (1, Np, 1, 1))  # (B, Np, new_len, C)
 
-        # move to device
-        return ttnn.from_torch(patches, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        # Build idx4 from cached idx2:
+        # idx2: (Np, P) -> idx4: (B, Np, P, C)
+        P = self.patch_length
+        idx4 = ttnn.reshape(self.idx2, (1, Np, P, 1))
+        idx4 = ttnn.repeat(idx4, (B, 1, 1, C))  # (B, Np, P, C)
+
+        # Convert index tensor to TILE_LAYOUT for gather
+        idx4 = ttnn.to_layout(idx4, ttnn.TILE_LAYOUT)
+
+        # Gather along time dimension dim=2 (the new_len axis)
+        y = ttnn.gather(x, dim=2, index=idx4)  # (B, Np, P, C)
+
+        # (B, Np, P, C) -> (B, C, Np, P)
+        y = ttnn.permute(y, (0, 3, 1, 2))
+        return y
 
 
 class TtPatchTSMixerEmbedding:
@@ -548,6 +584,7 @@ class TtPatchTSMixerEmbedding:
             context_length=context_length,
             patch_length=patch_length,
             patch_stride=patch_stride,
+            device=device,
         )
 
         # proj weight/bias
@@ -562,8 +599,11 @@ class TtPatchTSMixerEmbedding:
         # (B,C,L) -> (B,L,C) for patchify logic
         x_lc = x_torch.transpose(1, 2).contiguous()
 
-        # patchify on host, move to device
-        patches_tt = self.patchify(x_lc, device=self.device, dtype=dtype)  # (B,C,Np,patch_len) on device
+        # Convert to TTNN tensor on device
+        x_tt = ttnn.from_torch(x_lc, device=self.device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+        # patchify: (B,L,C) -> (B,C,Np,patch_len)
+        patches_tt = self.patchify(x_tt)
 
         # linear over last dim patch_len -> d_model
         # reshape to rank-4 already, so we can call ttnn.linear directly:
