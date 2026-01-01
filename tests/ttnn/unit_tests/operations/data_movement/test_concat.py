@@ -956,6 +956,29 @@ def test_sharded_concat_rank3_width_multicore(device, layout, num_inputs, shape)
     )
 
 
+@pytest.mark.parametrize("width", [8, 24])
+@pytest.mark.parametrize(
+    "a_buffer, b_buffer, out_buffer",
+    [
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+    ],
+)
+def test_concat_row_major_mixed_buffer_types(device, width, a_buffer, b_buffer, out_buffer):
+    torch.manual_seed(0)
+    torch_a = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
+    torch_b = torch.rand((1, 1, 288, width), dtype=torch.bfloat16)
+    memory_config = {
+        buffer: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer)
+        for buffer in (ttnn.BufferType.L1, ttnn.BufferType.DRAM)
+    }
+    a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[a_buffer])
+    b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[b_buffer])
+    output = ttnn.concat([a, b], dim=-2, memory_config=memory_config[out_buffer])
+    assert_equal(torch.cat([torch_a, torch_b], dim=-2), ttnn.to_torch(output))
+
+
 # Ragged height sharding: the flattened row count (prod of dims[:-1]) is not a multiple of the
 # shard height, so the last core runs a partial arg set. ConcatS2SRMProgramFactory sized that
 # from padded_shape()[-2], which under-counts as soon as the leading dims are not all 1 -- the
