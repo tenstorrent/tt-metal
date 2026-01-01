@@ -37,6 +37,9 @@ void write_mean_rstd(
     uint32_t output_tile_offset = tile_offset / num_inner;
 
     if (normalized_dims == 1) {
+        for (uint32_t r = 1; r < TILE_HEIGHT; r++) {
+            l1_ptr[get_tilized_idx(0, r)] = l1_ptr[get_tilized_idx(r, 0)];
+        }
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto output_tile_idx = output_tile_offset + outer_idx;
 
