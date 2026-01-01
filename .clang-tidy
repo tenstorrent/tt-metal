@@ -90,6 +90,7 @@ Checks: >
   -misc-use-internal-linkage,
   -modernize-avoid-bind,
   -modernize-avoid-c-arrays,
+  -modernize-loop-convert,
   -modernize-macro-to-enum,
   -modernize-pass-by-value,
   -modernize-return-braced-init-list,

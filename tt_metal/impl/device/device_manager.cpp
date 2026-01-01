@@ -200,10 +200,10 @@ void DeviceManager::init_profiler() const {
         detail::InitDeviceProfiler(dev);
         log_info(tt::LogMetal, "Profiler started on device {}", mmio_device_id);
         if (not this->skip_remote_devices_) {
-            for (const auto& tunnel : tunnels_from_mmio) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* mmio_device = get_device(mmio_controlled_device_id);
                     detail::InitDeviceProfiler(mmio_device);
                     log_info(tt::LogMetal, "Profiler started on remote device {}", mmio_device->id());
@@ -363,8 +363,8 @@ void DeviceManager::initialize_host(IDevice* dev) const {
 
 void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
     std::vector<std::shared_future<tt_metal::IDevice*>> events;
-    events.reserve(active_devices.size());
-    for (auto* dev : active_devices) {
+    for (uint32_t i = 0; i < active_devices.size(); i++) {
+        const auto& dev = active_devices[i];
         events.emplace_back(detail::async([dev]() {
             if (dev->compile_fabric()) {
                 return dev;
@@ -435,10 +435,10 @@ void DeviceManager::initialize_active_devices() {
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         populate_cq_static_args(dev);
         if (not this->skip_remote_devices_) {
-            for (const auto& tunnel : tunnels_from_mmio) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* device = get_device(mmio_controlled_device_id);
                     populate_cq_static_args(device);
                 }
@@ -459,10 +459,10 @@ void DeviceManager::initialize_active_devices() {
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         if (not this->skip_remote_devices_) {
-            for (const auto& tunnel : tunnels_from_mmio) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* device = get_device(mmio_controlled_device_id);
                     create_cq_program(device);
                 }
@@ -487,10 +487,10 @@ void DeviceManager::initialize_active_devices() {
         dev->init_command_queue_device();
         log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
         if (not this->skip_remote_devices_) {
-            for (const auto& tunnel : tunnels_from_mmio) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* device = get_device(mmio_controlled_device_id);
                     device->init_command_queue_device();
                     log_info(tt::LogMetal, "Command Queue initialized on Device {}", device->id());
@@ -711,10 +711,10 @@ void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
 
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(dev->id());
-        for (const auto& tunnel : tunnels_from_mmio) {
+        for (auto i = 0; i < tunnels_from_mmio.size(); i++) {
             // Need to poll on devices from farthest to the closest.
-            for (auto j = tunnel.size() - 1; j > 0; j--) {
-                wait_for_handshake(get_device(tunnel[j]));
+            for (auto j = tunnels_from_mmio[i].size() - 1; j > 0; j--) {
+                wait_for_handshake(get_device(tunnels_from_mmio[i][j]));
             }
         }
 

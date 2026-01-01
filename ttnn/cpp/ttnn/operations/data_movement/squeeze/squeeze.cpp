@@ -20,9 +20,9 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const tt
     auto dims = dim;
 
     // handle negative dimensions
-    for (int& dim : dims) {
-        if (dim < 0) {
-            dim += input_tensor_rank;
+    for (size_t i = 0; i < dims.size(); ++i) {
+        if (dims[i] < 0) {
+            dims[i] += input_tensor_rank;
         }
     }
     // Sort the dimensions in descending order to avoid issues with modifying new_shape in loop

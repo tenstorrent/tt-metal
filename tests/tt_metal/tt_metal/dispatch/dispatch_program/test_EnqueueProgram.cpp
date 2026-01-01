@@ -167,15 +167,16 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
 
 void initialize_dummy_semaphores(
     Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values) {
-    for (unsigned int init_value : init_values) {
-        CreateSemaphore(program, core_ranges, init_value);
+    for (uint32_t i = 0; i < init_values.size(); i++) {
+        CreateSemaphore(program, core_ranges, init_values[i]);
     }
 }
 
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (const auto& cb_config : cb_configs) {
+    for (uint32_t i = 0; i < cb_configs.size(); i++) {
+        const CBConfig& cb_config = cb_configs[i];
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -212,10 +213,10 @@ bool cb_config_successful(
                 cb_config_vector);
 
             uint32_t cb_addr = l1_unreserved_base;
-            for (const auto& config : program_config.cb_config_vector) {
-                const uint32_t index = config.cb_id * sizeof(uint32_t);
-                const uint32_t cb_num_pages = config.num_pages;
-                const uint32_t cb_size = cb_num_pages * config.page_size;
+            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
+                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
+                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
+                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
                 const bool addr_match = cb_config_vector.at(index) == cb_addr;
                 const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
