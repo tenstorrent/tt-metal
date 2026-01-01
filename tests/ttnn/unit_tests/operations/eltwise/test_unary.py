@@ -2765,3 +2765,27 @@ def test_unary_chain_rejects_bitcast_with_other_ops(device, bitcast_first, expec
     chain = [bitcast, relu] if bitcast_first else [relu, bitcast]
     with expect_error(RuntimeError, "BITCAST cannot share a chain with other ops"):
         ttnn.unary_chain(x, chain)
+
+
+@pytest.mark.parametrize("op_type", [ttnn.UnaryOpType.GELU, ttnn.UnaryOpType.ERF], ids=lambda op: op.name)
+@pytest.mark.parametrize("surface", ["unary_chain", "binary_activation", "linear"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_parameterless_activation_uses_accurate_mode(device, op_type, surface, dtype):
+    torch.manual_seed(0)
+    x = torch.empty(1, 1, 64, 128).uniform_(-5, 5)
+    tx = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(activation):
+        if surface == "unary_chain":
+            out = ttnn.unary_chain(tx, [activation])
+        elif surface == "binary_activation":
+            zeros = ttnn.from_torch(torch.zeros_like(x), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            out = ttnn.add(tx, zeros, activations=[activation])
+        else:
+            eye = ttnn.from_torch(
+                torch.eye(128).reshape(1, 1, 128, 128), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            out = ttnn.linear(tx, eye, activation=activation)
+        return ttnn.to_torch(out)
+
+    assert torch.equal(run(ttnn.UnaryWithParam(op_type)), run(ttnn.UnaryWithParam(op_type, 0.0)))
