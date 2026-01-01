@@ -715,24 +715,6 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: 📋 Display workflow configuration
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "::group::🔧 TTNN Run Sweeps - Workflow Configuration"
-          echo "┌─────────────────────────────────────────────────────────────┐"
-          echo "│                    Selected Configuration Options           │"
-          echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Sweep Name:           ${{ github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)' }}"
-          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Not specified' }}"
-          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
-          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
-          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
-          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
-          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "└─────────────────────────────────────────────────────────────┘"
-          echo "::endgroup::"
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&
@@ -1003,11 +985,6 @@ jobs:
             MEMORY_FLAG="--measure-memory"
           fi
 
-          MEMORY_FLAG=""
-          if [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
-            MEMORY_FLAG="--measure-memory"
-          fi
-
           E2E_PERF_FLAG=""
           if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
             E2E_PERF_FLAG="--perf-with-cache"
@@ -1036,9 +1013,6 @@ jobs:
 
           if [[ -n "$SUITE_NAME" ]]; then
             CMD+=(--suite-name "$SUITE_NAME")
-          fi
-          if [[ -n "$MEMORY_FLAG" ]]; then
-            CMD+=("$MEMORY_FLAG")
           fi
 
           if [[ -n "$MEMORY_FLAG" ]]; then
