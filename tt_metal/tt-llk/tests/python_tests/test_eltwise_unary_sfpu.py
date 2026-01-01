@@ -1736,3 +1736,19 @@ def test_erf_erfc_nan_input(formats, mathop, approx_mode):
     assert torch.isfinite(
         res[~nan_in]
     ).all(), f"{mathop.name}: finite inputs came out non-finite"
+
+
+def test_gelu_accurate_bf16_nonfinite_and_saturated():
+    saturated = [-5.5625, -6.0, -13.375, -100.0, -1.0e30, -3.0e38]
+    src_A = _float_tile([float("nan"), -float("nan"), -float("inf")] + saturated)
+    res = _run_unary_edge(MathOperation.Gelu, _EDGE_FORMATS[1], src_A)
+
+    delivered = src_A.to(torch.bfloat16).float()
+    nonfinite_in = ~torch.isfinite(delivered)
+    assert not torch.isfinite(
+        res[nonfinite_in]
+    ).any(), "gelu: a NaN or -inf input came out finite"
+    sat = res[torch.isfinite(delivered)]
+    assert (
+        torch.equal(sat, torch.zeros_like(sat)) and not torch.signbit(sat).any()
+    ), sat.unique().tolist()
