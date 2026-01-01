@@ -167,7 +167,7 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name model_traced.pad_model_traced \
+  --module-name model_traced.pad_model_traced
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \

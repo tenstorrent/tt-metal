@@ -768,7 +768,8 @@ class OperationParameterExtractors:
         shape = tensor_spec.get("logical_shape", [])
         # Handle both 'data_type' and 'dtype' fields
         dtype = tensor_layout.get("data_type", tensor_layout.get("dtype", ""))
-        layout = tensor_layout.get("layout", "")
+        # Layout is at top level of Tensor in new format, or inside tensor_layout in old format
+        layout = tensor_data.get("layout", tensor_layout.get("layout", ""))
         memory_config = tensor_layout.get("memory_config", {})
 
         # If layout is missing, default to TILE for linear operations
@@ -3056,6 +3057,139 @@ OperationParameterExtractors.register_extractor("ttnn::softmax", extract_func=_e
 
 OperationParameterExtractors.register_extractor("repeat", extract_func=_extract_repeat_parameters)
 OperationParameterExtractors.register_extractor("ttnn::repeat", extract_func=_extract_repeat_parameters)
+
+
+def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for group_norm operation (all 16 arguments)"""
+    try:
+        params = {}
+        tensor_config = None
+        num_groups = 32  # default
+        epsilon = 1e-6  # default
+        input_mask_config = None
+        weight_config = None
+        bias_config = None
+        reciprocals_config = None
+        output_memory_config = None
+        inplace = False
+        num_out_blocks = None
+        use_welford = False
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # arg0: Extract input tensor config
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # arg1: num_groups
+                elif "arg1" in arg:
+                    try:
+                        num_groups = int(str(arg["arg1"]))
+                    except ValueError:
+                        num_groups = 32
+
+                # arg2: epsilon
+                elif "arg2" in arg:
+                    try:
+                        epsilon = float(str(arg["arg2"]))
+                    except ValueError:
+                        epsilon = 1e-6
+
+                # arg3: input_mask tensor
+                elif "arg3" in arg and isinstance(arg["arg3"], dict) and "Tensor" in arg["arg3"]:
+                    input_mask_config = OperationParameterExtractors.extract_tensor_config(arg["arg3"])
+
+                # arg4: weight tensor
+                elif "arg4" in arg and isinstance(arg["arg4"], dict) and "Tensor" in arg["arg4"]:
+                    weight_config = OperationParameterExtractors.extract_tensor_config(arg["arg4"])
+
+                # arg5: bias tensor
+                elif "arg5" in arg and isinstance(arg["arg5"], dict) and "Tensor" in arg["arg5"]:
+                    bias_config = OperationParameterExtractors.extract_tensor_config(arg["arg5"])
+
+                # arg6: reciprocals tensor
+                elif "arg6" in arg and isinstance(arg["arg6"], dict) and "Tensor" in arg["arg6"]:
+                    reciprocals_config = OperationParameterExtractors.extract_tensor_config(arg["arg6"])
+
+                # arg7: output memory_config
+                elif "arg7" in arg:
+                    arg_value = arg["arg7"]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+                # arg10: inplace
+                elif "arg10" in arg:
+                    try:
+                        inplace = bool(int(str(arg["arg10"])))
+                    except (ValueError, TypeError):
+                        inplace = False
+
+                # arg12: num_out_blocks
+                elif "arg12" in arg:
+                    try:
+                        val = str(arg["arg12"])
+                        if val != "nullopt":
+                            num_out_blocks = int(val)
+                    except (ValueError, TypeError):
+                        pass
+
+                # arg15: use_welford
+                elif "arg15" in arg:
+                    try:
+                        use_welford = bool(int(str(arg["arg15"])))
+                    except (ValueError, TypeError):
+                        use_welford = False
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["num_groups"] = num_groups
+            params["epsilon"] = epsilon
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            params["inplace"] = inplace
+            params["use_welford"] = use_welford
+
+            # Add optional tensor configs
+            if input_mask_config:
+                params["input_mask_shape"] = input_mask_config.shape
+                params["input_mask_dtype"] = input_mask_config.dtype
+                params["input_mask_layout"] = input_mask_config.layout
+                params["input_mask_memory_config"] = input_mask_config.memory_config
+
+            if weight_config:
+                params["weight_shape"] = weight_config.shape
+                params["weight_dtype"] = weight_config.dtype
+                params["weight_layout"] = weight_config.layout
+                params["weight_memory_config"] = weight_config.memory_config
+
+            if bias_config:
+                params["bias_shape"] = bias_config.shape
+                params["bias_dtype"] = bias_config.dtype
+                params["bias_layout"] = bias_config.layout
+                params["bias_memory_config"] = bias_config.memory_config
+
+            if reciprocals_config:
+                params["reciprocals_shape"] = reciprocals_config.shape
+                params["reciprocals_dtype"] = reciprocals_config.dtype
+                params["reciprocals_layout"] = reciprocals_config.layout
+                params["reciprocals_memory_config"] = reciprocals_config.memory_config
+
+            if num_out_blocks is not None:
+                params["num_out_blocks"] = num_out_blocks
+
+            return params
+        return None
+    except Exception:
+        return None
+
+
+# Register group_norm extractor
+OperationParameterExtractors.register_extractor("group_norm", extract_func=_extract_group_norm_parameters)
+OperationParameterExtractors.register_extractor("ttnn::group_norm", extract_func=_extract_group_norm_parameters)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,8 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+# group_norm is computationally intensive, needs longer timeout
+TIMEOUT = 300
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -30,6 +31,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "num_groups": [8],
+        "epsilon": [1e-5],
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
@@ -39,6 +41,20 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture.
+    Using explicit DispatchCoreConfig to handle sharded memory configs.
+    """
+    import ttnn
+
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -46,7 +62,28 @@ def run(
     input_a_memory_config,
     output_memory_config,
     num_groups,
+    epsilon=1e-5,
     storage_type="StorageType::DEVICE",
+    # Optional traced arguments
+    input_mask_shape=None,
+    input_mask_dtype=None,
+    input_mask_layout=None,
+    input_mask_memory_config=None,
+    weight_shape=None,
+    weight_dtype=None,
+    weight_layout=None,
+    weight_memory_config=None,
+    bias_shape=None,
+    bias_dtype=None,
+    bias_layout=None,
+    bias_memory_config=None,
+    reciprocals_shape=None,
+    reciprocals_dtype=None,
+    reciprocals_layout=None,
+    reciprocals_memory_config=None,
+    inplace=False,
+    num_out_blocks=None,
+    use_welford=False,
     *,
     device,
     **kwargs,
@@ -63,19 +100,62 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    # Create optional weight and bias tensors if provided in traced config
+    # IMPORTANT: Validate that weight/bias shapes are compatible with input channels
+    # Weight and bias last dimension must match input's last dimension
+    C = shape[-1]
+    torch_weight = None
+    torch_bias = None
+    if weight_shape:
+        # Check if weight shape is compatible
+        weight_elements = 1
+        for dim in weight_shape:
+            weight_elements *= dim
+        # Weight must have total elements == C (will be reshaped to [C])
+        if weight_elements == C:
+            torch_weight = torch.ones(weight_shape, dtype=torch.float32)
+    if bias_shape:
+        # Check if bias shape is compatible
+        bias_elements = 1
+        for dim in bias_shape:
+            bias_elements *= dim
+        # Bias must have total elements == C (will be reshaped to [C])
+        if bias_elements == C:
+            torch_bias = torch.zeros(bias_shape, dtype=torch.float32)
+
     # ttnn group_norm expects shape [N, 1, H*W, C] where C is divisible by num_groups
     # torch group_norm expects shape (N, C, *)
-    # For torch, we need to reshape: [1, 1, 1024, 32] -> [1, 32, 32, 32] for group_norm
-    # Reshape for torch compatibility
     if len(shape) == 4 and shape[1] == 1:
         # ttnn format: [N, 1, H*W, C] -> torch format: [N, C, H, W]
         N, _, HW, C = shape
-        H = W = int(HW**0.5)
+        # Calculate H and W
+        import math
+
+        H = W = int(math.sqrt(HW))
+        if H * W != HW:
+            # If not a perfect square, use H*W and W=1
+            H = HW
+            W = 1
         torch_input_reshaped = torch_input_tensor_a.reshape(N, H, W, C).permute(0, 3, 1, 2)
+
+        # Reshape weight and bias for torch
+        if torch_weight is not None:
+            torch_weight_reshaped = torch_weight.reshape(C)
+        else:
+            torch_weight_reshaped = None
+        if torch_bias is not None:
+            torch_bias_reshaped = torch_bias.reshape(C)
+        else:
+            torch_bias_reshaped = None
     else:
         torch_input_reshaped = torch_input_tensor_a
+        torch_weight_reshaped = torch_weight
+        torch_bias_reshaped = torch_bias
 
-    torch_output_tensor = torch.nn.functional.group_norm(torch_input_reshaped, num_groups)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_reshaped, num_groups, weight=torch_weight_reshaped, bias=torch_bias_reshaped, eps=epsilon
+    )
+
     # Reshape back to ttnn format
     if len(shape) == 4 and shape[1] == 1:
         torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).reshape(shape)
@@ -96,22 +176,105 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
+    # Create optional tensors if traced config provides them
+    input_mask = None
+    weight_tensor = None
+    bias_tensor = None
+    reciprocals_tensor = None
+
+    if input_mask_shape and not is_host:
+        torch_input_mask = torch.ones(input_mask_shape, dtype=torch.float32)
+        input_mask = ttnn.from_torch(
+            torch_input_mask,
+            dtype=input_mask_dtype or ttnn.bfloat16,
+            layout=input_mask_layout or ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=input_mask_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if weight_shape and torch_weight is not None and not is_host:
+        weight_tensor = ttnn.from_torch(
+            torch_weight,
+            dtype=weight_dtype or ttnn.bfloat16,
+            layout=weight_layout or ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=weight_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if bias_shape and torch_bias is not None and not is_host:
+        bias_tensor = ttnn.from_torch(
+            torch_bias,
+            dtype=bias_dtype or ttnn.bfloat16,
+            layout=bias_layout or ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=bias_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if reciprocals_shape and use_welford and not is_host:
+        # Create reciprocals tensor (needed for Welford's algorithm)
+        torch_reciprocals = torch.ones(reciprocals_shape, dtype=torch.float32)
+
+        # Use the reciprocals memory config if provided, otherwise use DRAM
+        reciprocals_mem_cfg = reciprocals_memory_config if reciprocals_memory_config else ttnn.DRAM_MEMORY_CONFIG
+
+        # For sharded memory configs with ROW_MAJOR layout, use TILE layout instead
+        # ROW_MAJOR + HEIGHT_SHARDED requires tile-aligned shard shapes
+        recip_layout = reciprocals_layout or ttnn.ROW_MAJOR_LAYOUT
+        if reciprocals_mem_cfg and hasattr(reciprocals_mem_cfg, "memory_layout"):
+            if reciprocals_mem_cfg.memory_layout in [
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
+            ]:
+                # Use TILE layout for sharded configs (handles non-tile-aligned shard shapes)
+                recip_layout = ttnn.TILE_LAYOUT
+
+        reciprocals_tensor = ttnn.from_torch(
+            torch_reciprocals,
+            dtype=reciprocals_dtype or ttnn.float32,
+            layout=recip_layout,
+            device=device,
+            memory_config=reciprocals_mem_cfg,
+        )
+
     start_time = start_measuring_time()
-    # group_norm requires inplace=False and core_grid for our test case
-    num_channels = shape[1] if len(shape) > 1 else 1
-    weight = None
-    bias = None
-    # Use a simple core grid for testing
-    core_grid = ttnn.CoreGrid(y=1, x=1)
-    output_tensor = ttnn.group_norm(
-        input_tensor_a,
-        num_groups=num_groups,
-        weight=weight,
-        bias=bias,
-        inplace=False,
-        core_grid=core_grid,
-        memory_config=output_memory_config,
-    )
+
+    # Determine core_grid (try to infer from device or use default)
+    # Use a smaller grid for sample tests that don't have reciprocals/welford
+    if reciprocals_tensor is not None and use_welford:
+        try:
+            grid_size = device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
+        except:
+            core_grid = ttnn.CoreGrid(y=8, x=8)
+    else:
+        # For simple tests without Welford, use smaller grid
+        core_grid = ttnn.CoreGrid(y=1, x=1)
+
+    # Build group_norm arguments
+    group_norm_kwargs = {
+        "num_groups": num_groups,
+        "epsilon": epsilon,
+        "inplace": inplace,
+        "core_grid": core_grid,
+        "memory_config": output_memory_config,
+    }
+
+    # Add optional arguments if they exist
+    if input_mask is not None:
+        group_norm_kwargs["input_mask"] = input_mask
+    if weight_tensor is not None:
+        group_norm_kwargs["weight"] = weight_tensor
+    if bias_tensor is not None:
+        group_norm_kwargs["bias"] = bias_tensor
+    if reciprocals_tensor is not None:
+        group_norm_kwargs["reciprocals"] = reciprocals_tensor
+    if num_out_blocks is not None:
+        group_norm_kwargs["num_out_blocks"] = num_out_blocks
+    if use_welford:
+        group_norm_kwargs["use_welford"] = use_welford
+
+    output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

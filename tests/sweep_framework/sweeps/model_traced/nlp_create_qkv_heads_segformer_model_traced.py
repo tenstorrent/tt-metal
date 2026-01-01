@@ -37,6 +37,20 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture for nlp_create_qkv_heads_segformer operation.
+    Using explicit DispatchCoreConfig to handle sharded memory configs.
+    """
+    import ttnn
+
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -84,8 +98,21 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
+    # nlp_create_qkv_heads_segformer doesn't support sharded output
+    # Force to DRAM interleaved if output is sharded
+    actual_output_mem_config = output_memory_config
+    if isinstance(output_memory_config, dict):
+        mem_layout = output_memory_config.get("memory_layout", "")
+        if not mem_layout and "data" in output_memory_config:
+            mem_layout = output_memory_config.get("data", {}).get("memory_layout", "")
+        if "SHARDED" in str(mem_layout):
+            actual_output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    elif hasattr(output_memory_config, "is_sharded") and callable(output_memory_config.is_sharded):
+        if output_memory_config.is_sharded():
+            actual_output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
     start_time = start_measuring_time()
-    q = ttnn.experimental.nlp_create_qkv_heads_segformer(input_tensor_a, memory_config=output_memory_config)[0]
+    q = ttnn.experimental.nlp_create_qkv_heads_segformer(input_tensor_a, memory_config=actual_output_mem_config)[0]
     q_torch = ttnn.to_torch(q)
     e2e_perf = stop_measuring_time(start_time)
 

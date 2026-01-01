@@ -960,6 +960,28 @@ class MasterConfigLoader:
                     else None
                 )
                 repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
+                # group_norm parameters (all 16 traced arguments)
+                num_groups_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                epsilon_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                input_mask_shape_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                input_mask_dtype_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                input_mask_layout_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                input_mask_memory_config_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                weight_shape_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                weight_dtype_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                weight_layout_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                weight_memory_config_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                bias_shape_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                bias_dtype_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                bias_layout_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                bias_memory_config_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                reciprocals_shape_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                reciprocals_dtype_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                reciprocals_layout_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                reciprocals_memory_config_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                inplace_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                num_out_blocks_list = [] if self._matches_operation(operation_name, "group_norm") else None
+                use_welford_list = [] if self._matches_operation(operation_name, "group_norm") else None
 
                 invalid_configs = []
                 for idx, cfg in enumerate(paired_configs):
@@ -1121,6 +1143,63 @@ class MasterConfigLoader:
                     if self._matches_operation(operation_name, "repeat"):
                         if "shape" in cfg:
                             repeat_shape_list.append(cfg["shape"])
+                    # Extract group_norm parameters (all 16 arguments)
+                    if self._matches_operation(operation_name, "group_norm"):
+                        if "num_groups" in cfg:
+                            num_groups_list.append(cfg["num_groups"])
+                        if "epsilon" in cfg:
+                            epsilon_list.append(cfg["epsilon"])
+                        # Optional tensor shapes
+                        if "input_mask_shape" in cfg:
+                            input_mask_shape_list.append(tuple(cfg["input_mask_shape"]))
+                        if "input_mask_dtype" in cfg:
+                            input_mask_dtype_list.append(self.parse_dtype(cfg["input_mask_dtype"]))
+                        if "input_mask_layout" in cfg:
+                            input_mask_layout_list.append(self.parse_layout(cfg["input_mask_layout"]))
+                        if "input_mask_memory_config" in cfg:
+                            mem_cfg = cfg["input_mask_memory_config"]
+                            if isinstance(mem_cfg, dict):
+                                mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("input_mask_shape", []))
+                            input_mask_memory_config_list.append(mem_cfg)
+                        if "weight_shape" in cfg:
+                            weight_shape_list.append(tuple(cfg["weight_shape"]))
+                        if "weight_dtype" in cfg:
+                            weight_dtype_list.append(self.parse_dtype(cfg["weight_dtype"]))
+                        if "weight_layout" in cfg:
+                            weight_layout_list.append(self.parse_layout(cfg["weight_layout"]))
+                        if "weight_memory_config" in cfg:
+                            mem_cfg = cfg["weight_memory_config"]
+                            if isinstance(mem_cfg, dict):
+                                mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("weight_shape", []))
+                            weight_memory_config_list.append(mem_cfg)
+                        if "bias_shape" in cfg:
+                            bias_shape_list.append(tuple(cfg["bias_shape"]))
+                        if "bias_dtype" in cfg:
+                            bias_dtype_list.append(self.parse_dtype(cfg["bias_dtype"]))
+                        if "bias_layout" in cfg:
+                            bias_layout_list.append(self.parse_layout(cfg["bias_layout"]))
+                        if "bias_memory_config" in cfg:
+                            mem_cfg = cfg["bias_memory_config"]
+                            if isinstance(mem_cfg, dict):
+                                mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("bias_shape", []))
+                            bias_memory_config_list.append(mem_cfg)
+                        if "reciprocals_shape" in cfg:
+                            reciprocals_shape_list.append(tuple(cfg["reciprocals_shape"]))
+                        if "reciprocals_dtype" in cfg:
+                            reciprocals_dtype_list.append(self.parse_dtype(cfg["reciprocals_dtype"]))
+                        if "reciprocals_layout" in cfg:
+                            reciprocals_layout_list.append(self.parse_layout(cfg["reciprocals_layout"]))
+                        if "reciprocals_memory_config" in cfg:
+                            mem_cfg = cfg["reciprocals_memory_config"]
+                            if isinstance(mem_cfg, dict):
+                                mem_cfg = self.parse_memory_config(mem_cfg, cfg.get("reciprocals_shape", []))
+                            reciprocals_memory_config_list.append(mem_cfg)
+                        if "inplace" in cfg:
+                            inplace_list.append(cfg["inplace"])
+                        if "num_out_blocks" in cfg:
+                            num_out_blocks_list.append(cfg["num_out_blocks"])
+                        if "use_welford" in cfg:
+                            use_welford_list.append(cfg["use_welford"])
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1286,6 +1365,63 @@ class MasterConfigLoader:
                     if repeat_shape_list:
                         param_names.append("shape")
                         param_lists.append(repeat_shape_list)
+                # Add group_norm parameters (all 16 arguments)
+                if self._matches_operation(operation_name, "group_norm"):
+                    if num_groups_list:
+                        param_names.append("num_groups")
+                        param_lists.append(num_groups_list)
+                    if epsilon_list:
+                        param_names.append("epsilon")
+                        param_lists.append(epsilon_list)
+                    # Optional tensor parameters
+                    if input_mask_shape_list:
+                        param_names.extend(
+                            ["input_mask_shape", "input_mask_dtype", "input_mask_layout", "input_mask_memory_config"]
+                        )
+                        param_lists.extend(
+                            [
+                                input_mask_shape_list,
+                                input_mask_dtype_list,
+                                input_mask_layout_list,
+                                input_mask_memory_config_list,
+                            ]
+                        )
+                    if weight_shape_list:
+                        param_names.extend(["weight_shape", "weight_dtype", "weight_layout", "weight_memory_config"])
+                        param_lists.extend(
+                            [weight_shape_list, weight_dtype_list, weight_layout_list, weight_memory_config_list]
+                        )
+                    if bias_shape_list:
+                        param_names.extend(["bias_shape", "bias_dtype", "bias_layout", "bias_memory_config"])
+                        param_lists.extend(
+                            [bias_shape_list, bias_dtype_list, bias_layout_list, bias_memory_config_list]
+                        )
+                    if reciprocals_shape_list:
+                        param_names.extend(
+                            [
+                                "reciprocals_shape",
+                                "reciprocals_dtype",
+                                "reciprocals_layout",
+                                "reciprocals_memory_config",
+                            ]
+                        )
+                        param_lists.extend(
+                            [
+                                reciprocals_shape_list,
+                                reciprocals_dtype_list,
+                                reciprocals_layout_list,
+                                reciprocals_memory_config_list,
+                            ]
+                        )
+                    if inplace_list:
+                        param_names.append("inplace")
+                        param_lists.append(inplace_list)
+                    if num_out_blocks_list:
+                        param_names.append("num_out_blocks")
+                        param_lists.append(num_out_blocks_list)
+                    if use_welford_list:
+                        param_names.append("use_welford")
+                        param_lists.append(use_welford_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
