@@ -23,8 +23,8 @@ RowParallelLinear::RowParallelLinear(
     bool has_bias,
     bool input_is_parallel,
     std::optional<uint32_t> shard_dim) :
-    m_input_is_parallel(input_is_parallel),
-    m_shard_dim(shard_dim) {
+    m_input_is_parallel(input_is_parallel), /* input is parallel across TP axis */
+    m_shard_dim(shard_dim) /* shard dimension in the device mesh */ {
     initialize_tensors(in_features, out_features, has_bias);
 
     create_name("row_parallel_linear");
@@ -37,9 +37,7 @@ RowParallelLinear::RowParallelLinear(
 autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& tensor) {
     auto x = tensor;
     if (!m_input_is_parallel) {
-        // reduce scatter with mean
-        x = ops::distributed::reduce_scatter(x, tensor->get_rank() - 1U, m_shard_dim);
-        x = ops::mul(x, 1.F / static_cast<float>(autograd::ctx().get_device().num_devices()));
+        x = ops::distributed::scatter(x, tensor->get_rank() - 1U, m_shard_dim);
     }
     // do not pass bias
     x = ops::linear_op(x, m_weight, /* bias */ nullptr);
@@ -61,12 +59,10 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
     auto mesh_shape = device->shape();
 
     // Determine TP size based on mesh shape and shard_dim
-    uint32_t tp_size = 1U;
+    uint32_t tp_size = static_cast<uint32_t>(device->num_devices());
     if (m_shard_dim.has_value() && mesh_shape.dims() == 2) {
         // For 2D mesh with explicit shard_dim: TP size is mesh dimension specified by shard_dim
         tp_size = mesh_shape[m_shard_dim.value()];
-    } else {
-        tp_size = static_cast<uint32_t>(device->num_devices());
     }
 
     if (in_features % tp_size != 0) {
