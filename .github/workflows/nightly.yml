@@ -69,6 +69,10 @@ jobs:
     if: ${{ failure() }}
     needs: nightly-summary
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Report failure
         uses: ./.github/actions/report-failure
         with:
