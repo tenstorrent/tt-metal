@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
@@ -101,33 +100,15 @@ void py_module(nb::module_& m) {
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
-        // All reduce with optional cluster_axis
         py_distributed.def(
             "all_reduce",
             &ttml::ops::distributed::all_reduce,
             nb::arg("tensor"),
-            nb::arg("noop_backward") = false,
-            nb::arg("cluster_axis") = std::nullopt);
-        // Reduce scatter with optional cluster_axis
+            nb::arg("noop_backward") = false);
         py_distributed.def(
-            "reduce_scatter",
-            &ttml::ops::distributed::reduce_scatter,
-            nb::arg("tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = std::nullopt);
-        // All gather with optional cluster_axis
-        py_distributed.def(
-            "all_gather",
-            &ttml::ops::distributed::all_gather,
-            nb::arg("tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = std::nullopt);
-        // Broadcast with optional cluster_axis
-        py_distributed.def(
-            "broadcast",
-            &ttml::ops::distributed::broadcast,
-            nb::arg("tensor"),
-            nb::arg("cluster_axis") = std::nullopt);
+            "reduce_scatter", &ttml::ops::distributed::reduce_scatter, nb::arg("tensor"), nb::arg("dim"));
+        py_distributed.def("all_gather", &ttml::ops::distributed::all_gather, nb::arg("tensor"), nb::arg("dim"));
+        py_distributed.def("broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"));
     }
 
     {
