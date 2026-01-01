@@ -514,6 +514,28 @@ class OperationsTracingPlugin:
         signature = hashlib.md5(args_str.encode()).hexdigest()
         return signature
 
+    def _merge_source(self, existing_config, new_source):
+        """
+        Merge source into an existing configuration.
+        Converts single source string to list and appends if not already present.
+        """
+        if 'source' not in existing_config:
+            existing_config['source'] = new_source
+            return
+
+        existing_source = existing_config['source']
+
+        # Convert single string to list
+        if isinstance(existing_source, str):
+            if existing_source == new_source:
+                # Same source, no need to add
+                return
+            existing_config['source'] = [existing_source, new_source]
+        elif isinstance(existing_source, list):
+            # Already a list, append if not present
+            if new_source not in existing_source:
+                existing_source.append(new_source)
+
     def _merge_machine_info(self, existing_config, new_machine_info):
         """
         Merge machine info into an existing configuration.
@@ -695,9 +717,13 @@ class OperationsTracingPlugin:
                     master_data['operations'][op_name]["configurations"].append(config_entry)
                     new_configs_added += 1
                 else:
-                    # Configuration exists - merge machine info if needed
-                    if new_machine_info and isinstance(matching_config, dict):
-                        self._merge_machine_info(matching_config, new_machine_info)
+                    # Configuration exists - merge machine info and source if needed
+                    if isinstance(matching_config, dict):
+                        # Merge machine info
+                        if new_machine_info:
+                            self._merge_machine_info(matching_config, new_machine_info)
+                        # Merge source
+                        self._merge_source(matching_config, test_name)
 
         # Update metadata
         if test_name not in master_data['metadata']['models']:
