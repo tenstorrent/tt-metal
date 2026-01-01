@@ -1752,3 +1752,25 @@ def test_gelu_accurate_bf16_nonfinite_and_saturated():
     assert (
         torch.equal(sat, torch.zeros_like(sat)) and not torch.signbit(sat).any()
     ), sat.unique().tolist()
+
+
+@pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
+def test_xielu_below_underflow(formats):
+    near = torch.arange(-200.0, -95.0, 0.5)
+    far = -torch.arange(400000.0, 16000000.0, 31200.0)
+    src_A = _float_tile(torch.cat([near, far]))
+    res = _run_unary_edge(MathOperation.Xielu, formats, src_A)
+
+    x = src_A.to(format_dict[formats.input_format]).double()
+    alpha_n, beta = UnarySFPUGolden._XIELU_ALPHA_N, UnarySFPUGolden._XIELU_BETA
+    expected = (alpha_n * (torch.expm1(x) - x) + beta * x).float()
+    rtol = 6e-5 if formats.output_format.is_32_bit() else 1e-2
+    assert torch.allclose(
+        res, expected, rtol=rtol, atol=1e-6
+    ), f"xielu max relative error {((res - expected).abs() / expected.abs()).max().item():.3g}"
+    if formats.output_format.is_32_bit():
+        far_lanes = x < -1e5
+        off = far_lanes & (res != expected)
+        assert (
+            not off.any()
+        ), f"xielu of {x[off][:4].tolist()} returned {res[off][:4].tolist()}, expected {expected[off][:4].tolist()}"
