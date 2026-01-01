@@ -44,7 +44,7 @@ std::map<std::string, std::string> get_defines(
 static ttnn::PadValue get_tilize_pad_value(tt::tt_metal::ReduceOpMath reduce_math, tt::tt_metal::DataType dtype) {
     if (dtype == tt::tt_metal::DataType::INT32) {
         switch (reduce_math) {
-            case tt::tt_metal::ReduceOpMath::MAX: return ttnn::PadValue{uint32_t{0x80000001}};  // INT32_MIN + 1
+            case tt::tt_metal::ReduceOpMath::MAX: return ttnn::PadValue{uint32_t{0x80000000}};  // INT32_MIN
             case tt::tt_metal::ReduceOpMath::MIN: return ttnn::PadValue{uint32_t{0x7FFFFFFF}};  // INT32_MAX
             default: return ttnn::PadValue{uint32_t{0}};
         }

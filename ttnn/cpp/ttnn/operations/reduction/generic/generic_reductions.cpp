@@ -105,9 +105,7 @@ float get_pad_value(
     // ops use bit_cast<uint32_t> on the INT32 branch to recover the original int32 bits.
     if (dtype == tt::tt_metal::DataType::INT32) {
         if (reduce_type == reduction_common::ReduceType::Max) {
-            // SFPU int32 MAX reduce can return an incorrect maximum when the INT32_MIN bit pattern (0x80000000)
-            // appears in padded lanes; use INT32_MIN + 1 instead.
-            return std::bit_cast<float>(static_cast<uint32_t>(0x80000001u));  // INT32_MIN + 1
+            return std::bit_cast<float>(static_cast<uint32_t>(0x80000000u));  // INT32_MIN
         }
         if (reduce_type == reduction_common::ReduceType::Min) {
             return std::bit_cast<float>(static_cast<uint32_t>(0x7FFFFFFFu));  // INT32_MAX
