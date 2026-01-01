@@ -166,8 +166,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         std::vector<uint32_t> reader_compile_time_args;
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-        for (uint32_t dim = 0; dim < 5; dim++) {
-            index_info[dim].args.append_to(reader_compile_time_args);
+        for (const auto& info : index_info) {
+            info.args.append_to(reader_compile_time_args);
         }
         auto reader_kernel_id = CreateReadKernel(
             program,
@@ -390,8 +390,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         std::vector<uint32_t> reader_compile_time_args;
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-        for (uint32_t dim = 0; dim < 5; dim++) {
-            index_info[dim].args.append_to(reader_compile_time_args);
+        for (const auto& info : index_info) {
+            info.args.append_to(reader_compile_time_args);
         }
         auto reader_kernel_id = CreateReadKernel(
             program,

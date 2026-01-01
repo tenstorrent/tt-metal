@@ -304,10 +304,7 @@ std::vector<bool> ComputeMeshRouterBuilder::get_child_builder_variant_sender_cha
 
     // Iterate through variant's internal channels in order (0, 1, 2, ...)
     // For each variant channel, look up its corresponding router channel and get the injection flag
-    for (size_t variant_internal_ch = 0; variant_internal_ch < variant_to_router_channel_map.size();
-         ++variant_internal_ch) {
-        auto router_channel_opt = variant_to_router_channel_map.at(variant_internal_ch);
-
+    for (auto router_channel_opt : variant_to_router_channel_map) {
         if (router_channel_opt.has_value()) {
             // Channel is externally-facing, get injection status from router
             size_t router_channel_id = *router_channel_opt;

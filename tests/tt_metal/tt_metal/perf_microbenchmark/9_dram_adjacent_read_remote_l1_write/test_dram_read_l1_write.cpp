@@ -378,14 +378,13 @@ void get_optimal_dram_bank_to_reader_assignment(
 void get_l1_writer_core_coords_wormhole_b0(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     // Place writers horizontally next to DRAM readers in logical space (no column harvesting for WH)
-    for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
-        auto dram_reader_core = all_dram_reader_cores[i];
+    for (auto dram_reader_core : all_dram_reader_cores) {
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y));
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 2, dram_reader_core.y));
     }
     std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < all_cores_ordered.size(); ++i) {
-        all_cores_set.insert(CoreRange(all_cores_ordered[i]));
+    for (auto core : all_cores_ordered) {
+        all_cores_set.insert(CoreRange(core));
     }
     all_cores = CoreRangeSet(all_cores_set);
 }
@@ -394,28 +393,26 @@ void get_l1_writer_core_coords_blackhole(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     // Place writers horizontally next to DRAM readers in logical space (column harvesting enabled for BH incrementing
     // in logical space can lead to physical physical columns being skipped when placing writers next to readers)
-    for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
-        auto dram_reader_core = all_dram_reader_cores[i];
+    for (auto dram_reader_core : all_dram_reader_cores) {
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y));
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 2, dram_reader_core.y));
     }
     std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < all_cores_ordered.size(); ++i) {
-        all_cores_set.insert(CoreRange(all_cores_ordered[i]));
+    for (auto core : all_cores_ordered) {
+        all_cores_set.insert(CoreRange(core));
     }
     all_cores = CoreRangeSet(all_cores_set);
 }
 
 void get_l1_writer_core_coords_grayskull(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-    for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
-        auto dram_reader_core = all_dram_reader_cores[i];
+    for (auto dram_reader_core : all_dram_reader_cores) {
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x, dram_reader_core.y + 1));
         all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y + 1));
     }
     std::set<CoreRange> all_cores_set;
-    for (int i = 0; i < all_cores_ordered.size(); ++i) {
-        all_cores_set.insert(CoreRange(all_cores_ordered[i]));
+    for (auto core : all_cores_ordered) {
+        all_cores_set.insert(CoreRange(core));
     }
     all_cores = CoreRangeSet(all_cores_set);
 }
