@@ -32,6 +32,12 @@ bool pack_first_op_scalars(
         case UnaryOpType::MAC_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
+            if (input_dtype == DataType::BFLOAT16) {
+                packed_scalar1 =
+                    std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(packed_scalar1))));
+                packed_scalar2 =
+                    std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(packed_scalar2))));
+            }
             break;
         case UnaryOpType::LOGIT: {
             const auto eps = *op.get_param_if<float>(0);

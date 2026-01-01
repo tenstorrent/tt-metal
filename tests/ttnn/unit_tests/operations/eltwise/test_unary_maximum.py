@@ -111,13 +111,7 @@ def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device):
     [
         (0.36719, 0.5),
         (0.0034, 0.0023),
-        pytest.param(
-            0,
-            0.06719,
-            marks=pytest.mark.xfail(
-                strict=True, reason="Device truncates scalar to bf16 instead of round-to-nearest (1 ULP)"
-            ),
-        ),
+        (0, 0.06719),
         (0, 0.002),
         (3.4 * 10**38, 1.0),
         (-1, -3.4 * 10**38),
