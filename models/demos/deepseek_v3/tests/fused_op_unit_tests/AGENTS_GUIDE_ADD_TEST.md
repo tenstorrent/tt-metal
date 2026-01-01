@@ -1,11 +1,20 @@
 # Guide for adding op unit tests for new fused ops based on an existing model/module
 
 The following should be provided by the user in order to complete this task successfully:
-- The sequence of ops that comprise the new fused op
 - The name of the new fused op
+- The sequence of ops that comprise the new fused op
 - The test command for the containing module of the sequence of ops
 
 Before you start, please read the example test in models/demos/deepseek_v3/tests/fused_op_unit_tests/test_ds_fused_wqkva.py carefully. The new test should be similar to the example test, just for a different fused op.
+Example test command for test_mla.py:
+```
+source ../setup_metal.sh
+export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" \
+DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" \
+TT_METAL_RUNTIME_ROOT="/proj_sw/user_dev/jrock/tt-metal" \
+MESH_DEVICE=TG
+pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/fused_op_unit_tests/ds_fused_wqkva.py::test_ds_fused_wqkva_device_perf -k "decode and 1" 2>&1 | tee $TT_METAL_HOME/logs/ds_fused_wqkva_device_perf_$(date +%Y%m%d_%H%M%S).log
+```
 
 Follow these steps to add a new fused op unit test:
 1. Run the provided module test command to capture the baseline accuracy and verify that the test is working. If it's not working, let the user know.
