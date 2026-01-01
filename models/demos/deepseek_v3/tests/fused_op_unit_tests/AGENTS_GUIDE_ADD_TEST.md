@@ -32,7 +32,18 @@ Follow these steps to add a new fused op unit test:
 9. Done!
 
 Notes on performance measurements:
-
+- Performance measurements use three metrics: e2e_duration, kernel_duration, op_to_op_latency
+- e2e_duration: average duration of the whole fused op (sequence of ops), end to end. This is measured using profiler.start and profiler.end calls, use 10 warumup iterations and 100 measurement iterations.
+- Device performance metrics: kernel_duration, op_to_op_latency
+    - Both device performance metrics require tracy profiler to run device performance and post processing of the resulting performance table; uses run_device_profiler helper to run the test function with profiler and subsequent post processing of the results; averages each op's metrics over all iterations
+    - Warumup and measurement iterations
+        - Use 10 warumup iteration and 10 measurement iterations
+        - Signposts are used to ignore the warumup iterations in the post processing step and use the following iterations for perf measurement averages
+        - Per iteration, use the max over devices for all ops except for CCLs (AllGather, ReduceScatter, AllReduce, AllToAll) where to use the average over all devices
+        - Then average over all measurement iterations to compute the average duration per op per iteration
+    - total_kernel_duration/total_op_to_op_latency: the sum of all op's average durations per op per iteration
+    - Both total_kernel_duration and total_op_to_op_latency are printed, asserted and uploaded via benchmark_data.add_measurement
+- Decode uses trace mode for perf measurements, prefill uses non_trace mode for perf measurements
 
 Notes on using TT hardware:
 - If there's a machine issue, you'll need to reset the machine using "tt-smi -glx_reset"
