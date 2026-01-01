@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -153,7 +154,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
         auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-        auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+        auto rounded_input_page_size = round_up_to_mul32(input_unit_size) + hal::get_dram_alignment();
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0,
             .entry_size = rounded_input_page_size,
@@ -517,7 +518,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
 
-    auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+    auto rounded_input_page_size = round_up_to_mul32(input_unit_size) + hal::get_dram_alignment();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0,
         .entry_size = rounded_input_page_size,

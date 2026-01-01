@@ -205,7 +205,7 @@ void kernel_main() {
                         dfb_in1_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
-                        {.offset_bytes = 0});
+                        {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                 }
 #endif
 #ifdef HAS_INDEX1
@@ -217,7 +217,7 @@ void kernel_main() {
                         dfb_in2_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
-                        {.offset_bytes = 0});
+                        {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                 }
 #endif
 #ifdef HAS_INDEX2
@@ -229,7 +229,7 @@ void kernel_main() {
                         dfb_in3_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
-                        {.offset_bytes = 0});
+                        {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                 }
 #endif
 #ifdef HAS_INDEX3
@@ -241,11 +241,12 @@ void kernel_main() {
                         dfb_in4_obj,
                         NOC_MINIMUM_READ_SIZE,
                         {.page_id = 0, .offset_bytes = noc_offset},
-                        {.offset_bytes = 0});
+                        {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                 }
 #endif
                 noc.async_read_barrier();
 
+                index_l1_addr += same_alignment_offset(noc_offset, index_l1_addr);
                 volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
 
                 uint32_t index_dim_offset = (index_index * INDEX_SIZE - noc_offset) / INDEX_SIZE;
@@ -294,9 +295,17 @@ void kernel_main() {
 
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
+        const uint32_t l1_write_addr = dfb_in0_obj.get_write_ptr();
+        const uint32_t l1_offset = same_alignment_offset(noc_offset, l1_write_addr);
         noc.async_read(
-            s0, dfb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = 0});
+            s0, dfb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = l1_offset});
         noc.async_read_barrier();
+        if (l1_offset != 0) {
+            volatile tt_l1_ptr uint32_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
+            for (uint32_t k = 0; k < stick_size / sizeof(uint32_t); k++) {
+                l1_ptr[k] = l1_ptr[l1_offset / sizeof(uint32_t) + k];
+            }
+        }
         dfb_in0_obj.push_back(1);
     }
 }

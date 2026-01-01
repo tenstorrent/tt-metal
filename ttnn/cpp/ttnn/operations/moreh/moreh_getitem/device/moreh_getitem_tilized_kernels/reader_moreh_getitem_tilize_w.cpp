@@ -256,7 +256,7 @@ void kernel_main() {
                             dfb_in1_obj,
                             NOC_MINIMUM_READ_SIZE,
                             {.page_id = 0, .offset_bytes = noc_offset},
-                            {.offset_bytes = 0});
+                            {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                     }
 #endif
 #ifdef HAS_INDEX1
@@ -268,7 +268,7 @@ void kernel_main() {
                             dfb_in2_obj,
                             NOC_MINIMUM_READ_SIZE,
                             {.page_id = 0, .offset_bytes = noc_offset},
-                            {.offset_bytes = 0});
+                            {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                     }
 #endif
 #ifdef HAS_INDEX2
@@ -280,7 +280,7 @@ void kernel_main() {
                             dfb_in3_obj,
                             NOC_MINIMUM_READ_SIZE,
                             {.page_id = 0, .offset_bytes = noc_offset},
-                            {.offset_bytes = 0});
+                            {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                     }
 #endif
 #ifdef HAS_INDEX3
@@ -292,7 +292,7 @@ void kernel_main() {
                             dfb_in4_obj,
                             NOC_MINIMUM_READ_SIZE,
                             {.page_id = 0, .offset_bytes = noc_offset},
-                            {.offset_bytes = 0});
+                            {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                     }
 #endif
 #ifdef HAS_INDEX4
@@ -304,11 +304,12 @@ void kernel_main() {
                             dfb_in5_obj,
                             NOC_MINIMUM_READ_SIZE,
                             {.page_id = 0, .offset_bytes = noc_offset},
-                            {.offset_bytes = 0});
+                            {.offset_bytes = same_alignment_offset(noc_offset, index_l1_addr)});
                     }
 #endif
                     noc.async_read_barrier();
 
+                    index_l1_addr += same_alignment_offset(noc_offset, index_l1_addr);
                     volatile tt_l1_ptr int32_t* index_l1_ptr =
                         reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
 
@@ -364,22 +365,23 @@ void kernel_main() {
                 noc_offset += ((w_index / 8) % 2) * NOC_MINIMUM_READ_SIZE;
             }
 
+            const uint32_t l1_offset = same_alignment_offset(noc_offset, l1_write_addr);
             noc.async_read(
                 s0,
                 dfb_in0_obj,
                 NOC_MINIMUM_READ_SIZE,
                 {.page_id = noc_id, .offset_bytes = noc_offset},
-                {.offset_bytes = 0});
+                {.offset_bytes = l1_offset});
             noc.async_read_barrier();
 
             if (element_size == 4) {
                 volatile tt_l1_ptr uint32_t* index_l1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
-                index_l1_ptr[0] = index_l1_ptr[w_index % num_elements_per_alignment];
+                index_l1_ptr[0] = index_l1_ptr[l1_offset / 4 + w_index % num_elements_per_alignment];
             } else if (element_size == 2) {
                 volatile tt_l1_ptr uint16_t* index_l1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-                index_l1_ptr[0] = index_l1_ptr[w_index % num_elements_per_alignment];
+                index_l1_ptr[0] = index_l1_ptr[l1_offset / 2 + w_index % num_elements_per_alignment];
             }
 
             dfb_in0_obj.push_back(1);
