@@ -427,6 +427,7 @@ def test_mlp_2d_vs_reference(
     logger.info(f"MLP2D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
 
 
+# [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [(8, 4)],
@@ -434,19 +435,12 @@ def test_mlp_2d_vs_reference(
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (512, 32))
-def test_mlp_2d_vs_reference_from_model_args(
-    ttnn_mesh_device: ttnn.MeshDevice,
-    seq_len,
-    is_ci_env,
-    is_ci_v2_env,
-):
+def test_mlp_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     """
     Test that MLP2D class matches the HuggingFace/Meta reference model.
 
     Runs only on Galaxy (TG) devices due to Galaxy-specific CCL operations.
     """
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("CI only runs unit tests")
 
     from models.tt_transformers.tests.test_utils import get_ref_model_dype
     from models.tt_transformers.tt.ccl import TT_CCL
