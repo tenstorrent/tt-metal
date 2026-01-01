@@ -38,9 +38,9 @@ int main(int argc, char** argv) {
     // - 4 TP devices per group (tensor parallelism) along mesh dimension 
     // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd config file)
     const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(8, 4);  // 8 DP groups × 4 TP devices
-    const auto num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
-    const auto num_dp_groups = logical_mesh_shape[0];
-    const auto tp_size = logical_mesh_shape[1];
+    const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
+    const uint32_t dp_size = logical_mesh_shape[0];
+    const uint32_t tp_size = logical_mesh_shape[1];
 
     // Training hyperparameters
     const size_t training_samples_count = 100000;
@@ -58,16 +58,16 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    // Validate that batch_size is divisible by num_dp_groups
+    // Validate that batch_size is divisible by dp_size
     if (batch_size == 0) {
         fmt::print(stderr, "Error: batch_size must be > 0\n");
         return 1;
     }
-    if (batch_size % num_dp_groups != 0) {
+    if (batch_size % dp_size != 0) {
         fmt::print(stderr,
-                   "Error: batch_size ({}) must be divisible by num_dp_groups ({})\n",
+                   "Error: batch_size ({}) must be divisible by dp_size ({})\n",
                    batch_size,
-                   num_dp_groups);
+                   dp_size);
         return 1;
     }
 
@@ -130,10 +130,8 @@ int main(int argc, char** argv) {
                 // RowParallelLinear: output is always replicated (via all_reduce), so targets should be replicated
                 targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Replicate{});  // TP: replicate
             } else {
-                // ColumnParallelLinear with gather_output=true: output is replicated, so targets should be replicated
                 // ColumnParallelLinear with gather_output=false: output is sharded, so targets should be sharded
-                // For now, we'll use gather_output=false, so shard targets
-                targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{3});  // TP: shard
+                targets_config.placements.push_back(tt::tt_metal::distributed::MeshMapperConfig::Shard{3});  // TP: shard output features
             }
             targets_config.mesh_shape_override = logical_mesh_shape;
             const auto targets_mapper = ttnn::distributed::create_mesh_mapper(*device, targets_config);
@@ -160,21 +158,23 @@ int main(int argc, char** argv) {
         model = std::make_shared<ttml::modules::distributed::RowParallelLinear>(
             num_features, num_targets, /* has_bias */ bias, /* input_is_parallel */ true, /* shard_dim */ 1U);
     } else {
-        fmt::print("Using ColumnParallelLinear: shards output features, broadcasts input\n");
-        // ColumnParallelLinear: shards output features, broadcasts input
+        fmt::print("Using ColumnParallelLinear: shards output features, sharded output\n");
+        // ColumnParallelLinear: shards output features, keeps output sharded
         model = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
             num_features, num_targets, /* has_bias */ bias, /* gather_output */ false, /* shard_dim */ 1U);
     }
-    fmt::print("Batch size: {}, DP groups: {}, TP size: {}\n", batch_size, num_dp_groups, tp_size);
+    fmt::print("Batch size: {}, DP groups: {}, TP size: {}\n", batch_size, dp_size, tp_size);
 
     // Configure optimizer
     float learning_rate = 0.1F * num_targets * (batch_size / 128.F); /* Denys's lr*/
     if (!use_row_parallel) {
-        //Danik TODO: find out why this is needed
-        learning_rate *= 0.1F;
+        /* loss is caclulated for each tp partition, so its averaged over 1/tp_size times less samples making gradient tp_size times greater*/
+        learning_rate /= tp_size;
     }
+
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
+
 
     auto get_loss_value = [](const TensorPtr& loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
             loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto& xtensor) {
                 return acc + xtensor(0);
             });
-        float mean_loss = loss_float / static_cast<float>(loss_xtensors.size());
+        const float mean_loss = loss_float / static_cast<float>(loss_xtensors.size());
         return mean_loss;
     };
 
