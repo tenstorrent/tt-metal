@@ -302,20 +302,10 @@ _NAN_BITS = {
 
 @pytest.mark.parametrize("variant_name", list(_VARIANTS.keys()))
 @pytest.mark.parametrize("dtype_name", ["bf16", "fp32"])
-def test_gelu_nan_payloads_propagate(device, request, variant_name, dtype_name):
+def test_gelu_nan_payloads_propagate(device, variant_name, dtype_name):
     """gelu(NaN) must never be finite, whatever the NaN's sign or payload.
     FP32 must return NaN. BF16 has no NaN on the SFPU convert/pack path, so a
     non-finite (+-inf) output is accepted there."""
-    if variant_name == "accurate" and dtype_name == "bf16":
-        # The BF16 piecewise branch still saturates a negative NaN to 0; a guard there
-        # costs ~7% on this hot path, so it is tracked separately in #60224.
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                reason="accurate BF16 gelu maps negative NaN to 0, "
-                "see https://github.com/tenstorrent/tt-metal/issues/60224",
-            )
-        )
     variant_enum, _ = _VARIANTS[variant_name]
     bits = _NAN_BITS[dtype_name]
     if dtype_name == "fp32":
@@ -381,3 +371,27 @@ def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):
         assert val == x, f"gelu({x!r}) -> {val!r}, expected identity"
     for x, val in [(-1e30, neg_big), (-3.0e38, neg_huge)]:
         assert val == 0.0, f"gelu({x!r}) -> {val!r}, expected 0"
+
+
+def test_gelu_accurate_bf16_saturated_end(device):
+    special = [0xFFC0, 0xFF81, 0xFFFF, 0x7FC0, 0x7F81, 0x7FFF, 0xFF80]
+    row = torch.tensor([b - (1 << 16) if b & 0x8000 else b for b in special], dtype=torch.int16)
+    saturated = torch.tensor([-5.5625, -6.0, -13.375, -100.0, -1.0e30, -3.0e38], dtype=torch.bfloat16)
+    row = torch.cat([row, saturated.view(torch.int16)])
+    bits = torch.zeros((32, 32), dtype=torch.int16)
+    for r in range(32):
+        bits[r, (torch.arange(len(row)) + r) % 32] = row
+    inputs = bits.view(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        inputs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
+    out = ttnn.to_torch(ttnn.gelu(tt_input, variant=ttnn.GeluVariant.Accurate)).float()
+
+    nonfinite_in = torch.isnan(inputs) | (inputs == float("-inf"))
+    bad = nonfinite_in & torch.isfinite(out)
+    assert not bad.any(), f"{bad.sum().item()} NaN / -inf inputs produced finite outputs, e.g. {out[bad][:4].tolist()}"
+    saturated_in = torch.isfinite(inputs) & (inputs <= -5.5625)
+    sat_out = out[saturated_in]
+    assert (
+        torch.equal(sat_out, torch.zeros_like(sat_out)) and not torch.signbit(sat_out).any()
+    ), f"saturated inputs did not all return +0: {sat_out.unique().tolist()}"
