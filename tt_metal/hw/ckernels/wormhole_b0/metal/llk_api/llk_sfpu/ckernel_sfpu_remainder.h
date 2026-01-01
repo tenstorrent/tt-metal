@@ -164,6 +164,7 @@ inline void calculate_remainder() {
     sfpi::vFloat value_tmp = vConstFloatPrgm0;
     sfpi::vFloat s = sfpi::abs(value_tmp);
     sfpi::vFloat recip_val = sfpi::abs(vConstFloatPrgm1);
+    sfpi::vFloat neg_s = -s;
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
@@ -183,11 +184,9 @@ inline void calculate_remainder() {
         v_else { quotient = v * recip_val; }
         v_endif
 
-        v_if(exp < 23 && quotient * s > v) {
-            quotient = quotient - 1;
-        }
+        v = quotient * neg_s + v;
+        v_if(v < 0.0f) { v = v + s; }
         v_endif;
-        v = v - quotient * s;
 
         v_if(val < 0 && v != 0) { v = s - v; }
         v_endif;
