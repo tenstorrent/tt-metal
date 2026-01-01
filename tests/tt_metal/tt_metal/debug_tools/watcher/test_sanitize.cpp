@@ -68,6 +68,8 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteFromState,
     SanitizeNOCInlineWriteWithState,
     SanitizeNOCInvalidTxnId,
+    SanitizeNOCInlineWriteMailbox,
+    SanitizeNOCSemaphoreIncMailbox,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -319,7 +321,8 @@ void RunTestOnCore(
                       "use_inline_dw_write_from_state",
                       "use_inline_dw_write_with_state",
                       "invalid_txn_id",
-                      "use_dram_bank_dst"}},
+                      "use_dram_bank_dst",
+                      "use_semaphore_inc"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -365,6 +368,7 @@ void RunTestOnCore(
     const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
     bool use_dram_bank_dst = false;
+    bool use_semaphore_inc = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -504,6 +508,14 @@ void RunTestOnCore(
             use_inline_dw_write_with_state = true;
             break;
         case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
+        case SanitizeNOCInlineWriteMailbox:
+            output_buffer_addr = get_address_for_test(false, HalL1MemAddrType::DPRINT_BUFFERS);
+            use_inline_dw_write = true;
+            break;
+        case SanitizeNOCSemaphoreIncMailbox:
+            output_buffer_addr = get_address_for_test(false, HalL1MemAddrType::DPRINT_BUFFERS);
+            use_semaphore_inc = true;
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -531,7 +543,8 @@ void RunTestOnCore(
         use_inline_dw_write_from_state,
         use_inline_dw_write_with_state,
         invalid_txn_id,
-        use_dram_bank_dst};
+        use_dram_bank_dst,
+        use_semaphore_inc};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -563,7 +576,8 @@ void RunTestOnCore(
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
                  {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
                  {"invalid_txn_id", invalid_txn_id},
-                 {"use_dram_bank_dst", use_dram_bank_dst}}),
+                 {"use_dram_bank_dst", use_dram_bank_dst},
+                 {"use_semaphore_inc", use_semaphore_inc}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -787,8 +801,8 @@ void RunTestOnCore(
         case SanitizeNOCInlineWriteWithState:
             if (att) {
                 expected = fmt::format(
-                    "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 4 "
-                    "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
+                    "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 4 "
+                    "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
                     "address overflow).",
                     device->id(),
                     core_name,
@@ -804,11 +818,11 @@ void RunTestOnCore(
                 break;
             }
             // Inline dw write sanitized straight from the command-buffer state (DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
-            // uses read semantics with l1_addr 0). The destination coordinate is invalid; [addr=...] is the
+            // uses write semantics with l1_addr 0). The destination coordinate is invalid; [addr=...] is the
             // reconstructed destination offset, which must be the real offset rather than 0.
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 4 "
-                "bytes to local L1[{:#08x}] from Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 4 "
+                "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
                 core_name,
@@ -820,6 +834,24 @@ void RunTestOnCore(
                 noc,
                 0,  // l1_addr is 0 for address-only (FROM_STATE) sanitization
                 output_buf_noc_xy.str(),
+                output_buffer_addr);
+            break;
+        case SanitizeNOCInlineWriteMailbox:
+        case SanitizeNOCSemaphoreIncMailbox:
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 4 "
+                "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
+                "overwrites mailboxes).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                0,
+                output_core_virtual_coords.str(),
                 output_buffer_addr);
             break;
         case SanitizeNOCMulticastInvalidRange: {
@@ -1146,6 +1178,24 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteWithState) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteWithState);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteMailbox) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteMailbox);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCSemaphoreIncMailbox) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCSemaphoreIncMailbox);
         },
         this->devices_[0]);
 }
