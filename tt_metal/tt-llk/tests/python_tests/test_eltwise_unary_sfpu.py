@@ -1812,8 +1812,6 @@ def test_xielu_below_underflow(formats):
 )
 @pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
 def test_log_zero_exponent_inputs(formats, fast_mode):
-    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
-        pytest.skip("Blackhole only: the Wormhole log kernel is unchanged here")
     sign = torch.tensor([0, 1], dtype=torch.int64).repeat_interleave(128)
     if formats.input_format.is_32_bit():
         mantissa = torch.randint(

@@ -13,7 +13,6 @@ from tests.ttnn.utils_for_testing import (
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
-from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -267,8 +266,6 @@ def test_log_signed_zero(device, ttnn_function, dtype, fast_and_approximate_mode
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_log_zero_exponent_inputs(device, ttnn_function, fast_and_approximate_mode, dtype):
-    if fast_and_approximate_mode and not is_blackhole():
-        pytest.skip("fast-mode log normalisation is fixed on Blackhole only")
     sign = torch.tensor([0, 1], dtype=torch.int64).repeat_interleave(128)
     if dtype == ttnn.bfloat16:
         bits = (sign << 15) | torch.arange(128, dtype=torch.int64).repeat(2)
