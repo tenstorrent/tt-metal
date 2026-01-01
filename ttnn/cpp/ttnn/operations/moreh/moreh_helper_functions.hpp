@@ -191,11 +191,10 @@ auto create_override_runtime_arguments_callback(
             {
                 uint32_t rt_idx = 0;
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                for (uint32_t idx = 0; idx < input_tensors.size(); idx++) {
-                    runtime_args[rt_idx++] = input_tensors.at(idx).buffer()->address();
+                for (const auto& input_tensor : input_tensors) {
+                    runtime_args[rt_idx++] = input_tensor.buffer()->address();
                 }
-                for (uint32_t idx = 0; idx < optional_input_tensors.size(); idx++) {
-                    const auto& optional_input_tensor = optional_input_tensors.at(idx);
+                for (const auto& optional_input_tensor : optional_input_tensors) {
                     runtime_args[rt_idx++] =
                         optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
                 }

@@ -374,12 +374,10 @@ void addFabricMuxEvents(
     std::unordered_map<CoreCoord, std::queue<tracy::TTDeviceMarker>>& fabric_mux_markers,
     const CoreCoord& fabric_mux_core) {
     using EMD = KernelProfilerNocEventMetadata;
-    for (int i = 0; i < markers.size(); i++) {
-        if (isMarkerATimestampedDatapoint(markers[i]) &&
-            CoreCoord(markers[i].core_x, markers[i].core_y) == fabric_mux_core &&
-            std::get<EMD::LocalNocEvent>(EMD(markers[i].data).getContents()).noc_xfer_type ==
-                EMD::NocEventType::WRITE_) {
-            fabric_mux_markers[fabric_mux_core].push(markers[i]);
+    for (const auto& marker : markers) {
+        if (isMarkerATimestampedDatapoint(marker) && CoreCoord(marker.core_x, marker.core_y) == fabric_mux_core &&
+            std::get<EMD::LocalNocEvent>(EMD(marker.data).getContents()).noc_xfer_type == EMD::NocEventType::WRITE_) {
+            fabric_mux_markers[fabric_mux_core].push(marker);
         }
     }
 }
@@ -388,15 +386,15 @@ void removeFabricMuxEvents(
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>& coalesced_events,
     const CoreCoord& fabric_mux_core) {
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>> filtered_events;
-    for (int i = 0; i < coalesced_events.size(); i++) {
-        if (std::holds_alternative<tracy::TTDeviceMarker>(coalesced_events[i])) {
-            auto event = std::get<tracy::TTDeviceMarker>(coalesced_events[i]);
+    for (const auto& coalesced_event : coalesced_events) {
+        if (std::holds_alternative<tracy::TTDeviceMarker>(coalesced_event)) {
+            auto event = std::get<tracy::TTDeviceMarker>(coalesced_event);
 
             if (isMarkerAZoneEndpoint(event) || CoreCoord(event.core_x, event.core_y) != fabric_mux_core) {
-                filtered_events.push_back(coalesced_events[i]);
+                filtered_events.push_back(coalesced_event);
             }
         } else {
-            filtered_events.push_back(coalesced_events[i]);
+            filtered_events.push_back(coalesced_event);
         }
     }
     coalesced_events = std::move(filtered_events);
@@ -851,8 +849,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // add all chunks for scatter write and compute last chunk size
                     fabric_event_json["dst"] = nlohmann::json::array();
                     int last_chunk_size = local_noc_write_event.getNumBytes();
-                    for (int j = 0; j < fabric_event_markers.fabric_write_markers.size(); j++) {
-                        auto fabric_scatter_write_marker = fabric_event_markers.fabric_write_markers[j];
+                    for (const auto& fabric_scatter_write_marker : fabric_event_markers.fabric_write_markers) {
                         auto fabric_scatter_write =
                             std::get<EMD::FabricNoCScatterEvent>(EMD(fabric_scatter_write_marker.data).getContents());
                         auto phys_coord = translateNocCoordinatesToNoc0(
