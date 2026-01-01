@@ -68,8 +68,7 @@ struct CBConfig {
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -141,10 +140,10 @@ void verify_cb_config(
                         cb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
-                    for (uint32_t i = 0; i < golden_cb_config.size(); i++) {
-                        const uint32_t index = golden_cb_config[i].cb_id * sizeof(uint32_t);
-                        const uint32_t cb_num_pages = golden_cb_config[i].num_pages;
-                        const uint32_t cb_size = cb_num_pages * golden_cb_config[i].page_size;
+                    for (const auto& config : golden_cb_config) {
+                        const uint32_t index = config.cb_id * sizeof(uint32_t);
+                        const uint32_t cb_num_pages = config.num_pages;
+                        const uint32_t cb_size = cb_num_pages * config.page_size;
                         const bool addr_match = cb_config_vector.at(index) == cb_addr;
                         const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                         const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -558,12 +557,12 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
                 if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 5);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 5);
                     }
                 } else {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 6);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 6);
                     }
                 }
             }
