@@ -169,7 +169,7 @@ bool test_socket_send_recv(
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
-                auto sender_program = CreateProgram();
+                auto sender_program = CreateProgram(*mesh_device_);
 
                 auto sender_kernel = CreateKernel(
                     sender_program,
@@ -223,7 +223,7 @@ bool test_socket_send_recv(
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
                 auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
 
-                auto recv_program = CreateProgram();
+                auto recv_program = CreateProgram(*mesh_device_);
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
 

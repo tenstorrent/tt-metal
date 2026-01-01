@@ -16,6 +16,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <internal/mesh_device.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <set>
@@ -370,7 +371,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     // complete construction; its translated NOC coordinates are never submitted by this rank. Local coordinates use
     // their own chip for harvesting-aware NOC translation.
     tt::tt_metal::IDevice* coordinate_device = device->is_local(mesh_coordinate)
-                                                   ? device->get_device(mesh_coordinate)
+                                                   ? tt::tt_metal::internal::get_device(*device, mesh_coordinate)
                                                    : static_cast<tt::tt_metal::IDevice*>(device);
 
     std::vector<Tensor> input_tensors = {tensor_args.input_tensor};
@@ -720,20 +721,19 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
     constexpr uint8_t num_mux_buffers_per_channel = 2;
     const uint32_t mux_config_clients = std::max(1u, workers_per_direction);
-    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
-    const size_t mux_l1_base_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*device);
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores, placed below), so it stays clear of
+    // persistent L1 there, and the program's L1 validation keeps it below L1 buffers such as carried semaphores
+    // (#56769).
     tt::tt_fabric::FabricMuxV2Config mux_config(
         /*mesh_device=*/*device,
         /*num_channels=*/static_cast<uint8_t>(mux_config_clients),
         /*num_buffers_per_channel=*/num_mux_buffers_per_channel,
         /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device),
-        /*base_l1_address=*/mux_l1_base_address,
-        /*usable_l1_end_address=*/mux_l1_small_floor_address);
+        /*base_l1_address=*/0);
     if (use_worker_mux) {
         TT_FATAL(
             mux_config.get_memory_map_end_address() <= device->l1_size_per_core(),
-            "All-to-all fabric mux requires L1 through address {:#x}, but each Tensix core has only {:#x} bytes",
+            "All-to-all fabric mux requires {:#x} bytes of L1, but each Tensix core has only {:#x} bytes",
             mux_config.get_memory_map_end_address(),
             device->l1_size_per_core());
     }
@@ -789,6 +789,19 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     };
 
     if (use_worker_mux) {
+        // One mux per active (link, direction group); place their maps before any of them is added.
+        std::vector<CoreRange> active_mux_core_ranges;
+        for (uint32_t link = 0; link < routing.num_links; ++link) {
+            for (uint32_t direction_group = 0; direction_group < num_direction_groups; ++direction_group) {
+                if (sender_stream_direction_masks[direction_group * workers_per_direction] != 0) {
+                    active_mux_core_ranges.emplace_back(mux_cores[link][direction_group]);
+                }
+            }
+        }
+        if (!active_mux_core_ranges.empty()) {
+            mux_config.place_in_program_local_l1(desc, CoreRangeSet(active_mux_core_ranges));
+        }
+
         for (uint32_t link = 0; link < routing.num_links; ++link) {
             for (uint32_t direction_group = 0; direction_group < num_direction_groups; ++direction_group) {
                 const uint32_t representative_stream = direction_group * workers_per_direction;
@@ -1152,7 +1165,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
         std::move(drain_mapping.logical_core_candidates),
         std::move(drain_mapping.virtual_cores)};
 
-    // Carried counters: prefer L1_SMALL, which sits above the fabric mux's ceiling (#56769).
+    // Carried counters: prefer L1_SMALL over general L1.
     const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);

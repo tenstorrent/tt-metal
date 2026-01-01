@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
+#include <internal/kernel_build_options.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstring>
@@ -33,8 +34,8 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "common/stable_hash.hpp"
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -153,7 +154,8 @@ Kernel::Kernel(
     const std::vector<std::string>& runtime_arg_names,
     const std::vector<std::string>& common_runtime_arg_names,
     const std::vector<TensorBindingHandle>& tensor_binding_handles,
-    const KernelCrtaLayout& crta_layout) :
+    const KernelCrtaLayout& crta_layout,
+    const KernelRtaLayout& rta_layout) :
     context_id_(context_id),
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
@@ -168,6 +170,7 @@ Kernel::Kernel(
     common_runtime_arg_names_(common_runtime_arg_names),
     tensor_binding_handles_(tensor_binding_handles),
     crta_layout_(crta_layout),
+    rta_layout_(rta_layout),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -277,6 +280,10 @@ void ComputeKernel::process_defines(
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
+bool ComputeKernel::get_sfpu_replay_optimization_disabled() const {
+    return this->defines_.contains(internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE);
+}
+
 void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     Kernel::process_defines(callback);
@@ -353,14 +360,16 @@ void Kernel::process_semaphore_binding_handles(
 void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
-                                                uint32_t addr_crta_offset,
+                                                bool is_per_node,
+                                                uint32_t addr_offset,
                                                 uint32_t num_runtime_field_crta_words,
                                                 const LLKMetadata&)>& callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(
             handle.accessor_name,
             handle.cta_offset,
-            handle.addr_crta_offset,
+            handle.is_per_node,
+            handle.is_per_node ? handle.addr_rta_offset : handle.addr_crta_offset,
             handle.num_runtime_field_crta_words,
             handle.llk_metadata);
     }
@@ -519,7 +528,8 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::Progra
             return std::nullopt;
         }
         for (const auto& handle : this->tensor_binding_handles_) {
-            if (handle.addr_crta_offset == slot) {
+            // A per-node binding has no CRTA slot (and its device side notes OPAQUE instead of a slot).
+            if (!handle.is_per_node && handle.addr_crta_offset == slot) {
                 // param_name is a string_view into the handle -- no copy
                 return ResolvedBufRw::Access{.param_name = handle.tensor_parameter_name, .address = crta.data()[word]};
             }
@@ -741,6 +751,8 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+        hasher.update(static_cast<uint64_t>(handle.is_per_node));
+        hasher.update(static_cast<uint64_t>(handle.addr_rta_offset));
         hash_llk_fields(handle.llk_metadata);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in

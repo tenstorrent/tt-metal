@@ -2370,8 +2370,6 @@ std::vector<IDevice*> MeshDevice::get_devices() const {
     auto devices = pimpl_->get_devices();
     return {devices.begin(), devices.end()};
 }
-IDevice* MeshDevice::get_device(ChipId physical_device_id) const { return pimpl_->get_device(physical_device_id); }
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return pimpl_->get_device(coord); }
 tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
     return pimpl_->get_fabric_node_id(coord);
 }

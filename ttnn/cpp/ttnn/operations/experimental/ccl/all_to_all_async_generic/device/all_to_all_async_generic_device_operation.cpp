@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -38,7 +39,7 @@ DrainCoreMapping gather_drain_virtual_cores(
         if (!mesh_device->is_local(coord)) {
             continue;
         }
-        auto* coordinate_device = mesh_device->get_device(coord);
+        auto* coordinate_device = tt::tt_metal::internal::get_device(*mesh_device, coord);
         const size_t node_index = coord.to_linear_index(mesh_shape);
         for (size_t candidate = 0; candidate < candidates_per_node; ++candidate) {
             const auto drain_virtual_core =
@@ -100,7 +101,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_to_all_async must be allocated in buffers on device");
 
     auto* mesh_device = input_tensor.device();
     const uint32_t num_links =

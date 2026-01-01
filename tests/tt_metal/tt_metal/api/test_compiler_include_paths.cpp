@@ -60,7 +60,7 @@ void kernel_main() {
 }
 )";
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     DataMovementConfig config{
         .processor = DataMovementProcessor::RISCV_0,
@@ -107,7 +107,7 @@ void kernel_main() {
 }
 )";
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     DataMovementConfig config{
         .processor = DataMovementProcessor::RISCV_0,
@@ -126,7 +126,7 @@ void kernel_main() {
 // Relative paths that don't resolve to an existing directory must fail-fast at kernel
 // construction (rather than silently degrading at compile time).
 TEST_F(CompilerIncludePathsTest, TensixCompilerIncludePathsUnresolvedRelativePathThrows) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     DataMovementConfig config{
         .processor = DataMovementProcessor::RISCV_0,
@@ -144,7 +144,7 @@ TEST_F(CompilerIncludePathsTest, TensixCompilerIncludePathsUnresolvedRelativePat
 // at the same `#include` line, so the resulting binaries can semantically differ.
 TEST_F(CompilerIncludePathsTest, TensixCompilerIncludePathsAffectKernelHash) {
     // Absolute paths that don't need to exist (resolver passes them through unmodified).
-    Program program_a = CreateProgram();
+    Program program_a = CreateProgram(this->device());
     DataMovementConfig config_a{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
@@ -152,7 +152,7 @@ TEST_F(CompilerIncludePathsTest, TensixCompilerIncludePathsAffectKernelHash) {
     };
     auto handle_a = CreateKernelFromString(program_a, "void kernel_main() {}", CoreCoord{0, 0}, config_a);
 
-    Program program_b = CreateProgram();
+    Program program_b = CreateProgram(this->device());
     DataMovementConfig config_b{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
@@ -208,7 +208,7 @@ void kernel_main() {
 )";
 
     auto compile_and_get_elf_path = [&]() -> fs::path {
-        Program program = CreateProgram();
+        Program program = CreateProgram(this->device());
         DataMovementConfig config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,

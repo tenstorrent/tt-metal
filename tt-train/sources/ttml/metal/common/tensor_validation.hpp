@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <string_view>
+#include <tt-metalium/math.hpp>
 #include <vector>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -36,7 +37,7 @@ inline void check_device_tensor(
         op,
         name,
         enchantum::to_string(tensor.storage_type()));
-    TT_FATAL(tensor.buffer() != nullptr, "{}: {} buffer is null", op, name);
+    TT_FATAL(tensor.is_allocated(), "{}: {} buffer is null", op, name);
     if (req.buffer_type.has_value()) {
         TT_FATAL(
             tensor.buffer()->buffer_type() == *req.buffer_type,
@@ -68,6 +69,71 @@ inline void check_device_tensor(
             enchantum::to_string(*req.memory_layout),
             enchantum::to_string(tensor.memory_config().memory_layout()));
     }
+}
+
+// Checks that `tensor` is padded only up to whole tiles. Kernels that take tile counts from the padded shape and masks
+// from the logical one misplace tiles under custom padding, even when the logical shapes match.
+inline void check_tile_padding(const ttnn::Tensor& tensor, std::string_view op, std::string_view name) {
+    auto expected_padded = tensor.logical_shape();
+    expected_padded[-2] = tt::round_up(expected_padded[-2], tt::constants::TILE_HEIGHT);
+    expected_padded[-1] = tt::round_up(expected_padded[-1], tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        tensor.padded_shape() == expected_padded,
+        "{}: {} padded shape {} must be its logical shape {} rounded up to whole tiles",
+        op,
+        name,
+        tensor.padded_shape(),
+        tensor.logical_shape());
+}
+
+// Checks that `tensor` has the logical shape `expected` and only tile padding, so its tile grid follows from it.
+inline void check_shape(
+    const ttnn::Tensor& tensor, std::string_view op, std::string_view name, const ttnn::Shape& expected) {
+    TT_FATAL(
+        tensor.logical_shape() == expected, "{}: {} shape {} must be {}", op, name, tensor.logical_shape(), expected);
+    check_tile_padding(tensor, op, name);
+}
+
+// Checks that `head_merged` [B, 1, T, H*V] holds the tokens of `head_major` [B*H, 1, T, V] for a whole number of
+// heads H, with the heads side by side in the last dim. Heads must start on tile boundaries unless H == 1, and
+// `head_merged` must have only tile padding.
+inline void check_head_merged(
+    const ttnn::Tensor& head_major, const ttnn::Tensor& head_merged, std::string_view op, std::string_view name) {
+    const auto& major_shape = head_major.logical_shape();
+    const auto& merged_shape = head_merged.logical_shape();
+    TT_FATAL(
+        major_shape.rank() == 4U && merged_shape.rank() == 4U,
+        "{}: {} must be 4D like the input, got {} and input {}",
+        op,
+        name,
+        merged_shape,
+        major_shape);
+    const uint32_t head_dim = major_shape[-1];
+    TT_FATAL(
+        merged_shape[-1] % head_dim == 0,
+        "{}: {} width {} must be a whole number of heads of the input width V = {}",
+        op,
+        name,
+        merged_shape[-1],
+        head_dim);
+    const uint32_t num_heads = merged_shape[-1] / head_dim;
+    TT_FATAL(
+        num_heads == 1U || head_dim % tt::constants::TILE_WIDTH == 0,
+        "{}: {} holds {} heads of V = {}; V must be a multiple of {} so heads start on tile boundaries",
+        op,
+        name,
+        num_heads,
+        head_dim,
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        merged_shape[-2] == major_shape[-2] &&
+            merged_shape[0] * merged_shape[1] * num_heads == major_shape[0] * major_shape[1],
+        "{}: {} shape {} is not the head-merged layout of input {}: expected [B, 1, T, H*V] for input [B*H, 1, T, V]",
+        op,
+        name,
+        merged_shape,
+        major_shape);
+    check_tile_padding(head_merged, op, name);
 }
 
 // Checks that `tensor` lives on the same device as `reference`. Kernels are handed raw buffer addresses,

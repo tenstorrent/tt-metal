@@ -17,6 +17,7 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
     ring_cache_capacity,
     ring_cache_seq_len,
 )
+from models.demos.gemma4_d_p.tt.dflash import DFlashKVCache, allocate_dflash_kv_cache
 
 
 @dataclass
@@ -29,6 +30,7 @@ class Gemma4KvCaches(KvCaches):
     max_seq_len: int
     cp: int
     tp: int
+    dflash: DFlashKVCache | None = None
 
     def __len__(self):
         return len(self.layers)
@@ -55,6 +57,7 @@ def allocate_ring_kv_caches(
     num_layers: int | None = None,
     cache_dtype=ttnn.bfloat8_b,
     bank_aligned: bool = False,
+    dflash_config=None,
 ) -> Gemma4KvCaches:
     """Allocate the sole compute+migration cache family for a CP prefill model."""
     num_layers = num_layers or hf_config.num_hidden_layers
@@ -67,6 +70,8 @@ def allocate_ring_kv_caches(
         check_kv_bank_aligned(
             max_seq_len, ring_cache_seq_len(max_seq_len, mesh_config.cp_degree), mesh_config.device.dram_grid_size().x
         )
+    if dflash_config is not None:
+        dflash_config.validate(mesh_config, max_seq_len, hidden_size=hf_config.hidden_size, num_layers=num_layers)
     layer_types = tuple(hf_config.layer_types[:num_layers])
     caches = []
     for layer_idx, layer_type in enumerate(layer_types):
@@ -99,4 +104,9 @@ def allocate_ring_kv_caches(
         max_seq_len=max_seq_len,
         cp=mesh_config.cp_degree,
         tp=mesh_config.tp_degree,
+        dflash=(
+            allocate_dflash_kv_cache(mesh_config, dflash_config, num_users=num_users, max_seq_len=max_seq_len)
+            if dflash_config is not None
+            else None
+        ),
     )

@@ -302,6 +302,66 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, s
     base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid)
 
 
+_BLOCK_SHARDED_V2_8X8_NIGHTLY_ONLY = [
+    s for s in base.BLOCK_SHARDED_V2_8X8_SHAPES if s not in base.BLOCK_SHARDED_V2_8X8_SANITY_SHAPES
+]
+_SDXL_NIGHTLY_ONLY = [s for s in base.generate_sdxl_test_inputs() if s not in base.SDXL_SANITY_INPUTS]
+_SDXL_BH_NIGHTLY_ONLY = [
+    s for s in base.SDXL_BASE_GROUP_NORM_BH_SHAPES if s not in base.SDXL_BASE_GROUP_NORM_BH_SANITY_SHAPES
+]
+_SDXL_NEG_MASK_NIGHTLY_ONLY = [
+    s for s in base.generate_sdxl_test_inputs_neg_mask() if s not in base.SDXL_NEG_MASK_SANITY_INPUTS
+]
+_NO_INPUT_MASK_NIGHTLY_ONLY = [s for s in base.NO_INPUT_MASK_SHAPES if s not in base.NO_INPUT_MASK_SANITY_SHAPES]
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", _BLOCK_SHARDED_V2_8X8_NIGHTLY_ONLY)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_group_norm_with_block_sharded_v2_8x8_grid_specified(device, N, C, H, W, num_groups, use_welford, specify_grid):
+    base.test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("input_shape", _SDXL_NIGHTLY_ONLY)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_sdxl_base_group_norm_specified(device, input_shape, use_welford, specify_grid):
+    base.test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("input_shape", _SDXL_NIGHTLY_ONLY)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_sdxl_group_norm_reverse_inplace_specified(device, input_shape, use_welford, specify_grid):
+    base.test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("input_shape", _SDXL_BH_NIGHTLY_ONLY)
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("specify_grid", [True])
+@run_for_blackhole("blackhole specific tests")
+def test_sdxl_base_group_norm_bh_specified(device, input_shape, specify_grid):
+    base.test_sdxl_base_group_norm_bh(device, input_shape, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
+@pytest.mark.parametrize("input_shape", _SDXL_NEG_MASK_NIGHTLY_ONLY)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_sdxl_base_group_norm_negative_mask_specified(device, input_shape, specify_grid):
+    base.test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", _NO_INPUT_MASK_NIGHTLY_ONLY)
+@pytest.mark.parametrize("specify_grid", [True])
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
+def test_group_norm_no_input_mask_specified(device, N, C, H, W, num_groups, use_welford, specify_grid):
+    base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid)
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.DRAM_GRID_SIZE_SHAPES)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):

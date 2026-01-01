@@ -32,9 +32,11 @@ struct IntermeshVCConfig;
  *
  * Turn sets, producer arity, and injection guards all use this relation. U-turns are never wired.
  * In express mode, a same-mesh X producer cannot turn into a protected Y egress, while an intermesh
- * landing can begin Y. Z egress requires a local Z role. Non-express mode preserves cardinal wiring
- * and targets Z only for an intermesh boundary. Boundary producers wire only on VC1; all other
- * producer roles are VC-independent.
+ * landing can begin Y. `express_axis` decides which side of that rule the chord is on: a chord
+ * along Y is protected Y, a chord along X is an X resource. Z egress requires a local Z role.
+ * Non-express mode (ExpressAxis::NONE) preserves cardinal wiring and targets Z only for an
+ * intermesh boundary. Boundary producers wire only on VC1; all other producer roles are
+ * VC-independent.
  */
 bool wires_into(
     RoutingDirection producer_direction,
@@ -42,7 +44,7 @@ bool wires_into(
     RoutingDirection egress_direction,
     std::optional<EdgeCapability> egress_capability,
     ZPortRole chip_z_role,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     uint32_t vc);
 
 // Opposite direction for mesh routers (N<->S, E<->W). Z has no opposite.
@@ -59,15 +61,17 @@ PerDirectionCapabilities canonical_express_endpoint_capabilities();
  * @brief VC0 sender slots a router facing `direction` needs on a chip with these capabilities
  *
  * Counts the local worker plus wired producers. Per-chip callers must pass actual capabilities;
- * canonical_express_endpoint_capabilities() is only for the family maximum.
+ * canonical_express_endpoint_capabilities() is only for the family maximum. `express_axis` is the
+ * chip's mesh's and must not be NONE.
  */
-uint32_t express_vc0_producer_arity(RoutingDirection direction, const PerDirectionCapabilities& caps);
+uint32_t express_vc0_producer_arity(
+    RoutingDirection direction, const PerDirectionCapabilities& caps, ExpressAxis express_axis);
 
 /**
  * @brief Uniform VC0/VC1 sender counts for the express family
  *
- * Family maxima over facing directions on the canonical endpoint. Individual routers fill a
- * subset; channel trimming narrows from actual per-chip capabilities.
+ * Family maxima over facing directions and both express axes on the canonical endpoint. Individual
+ * routers fill a subset; channel trimming narrows from actual per-chip capabilities.
  */
 uint32_t express_vc0_sender_count();
 uint32_t express_vc1_sender_count();
@@ -141,7 +145,7 @@ RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
     const PerDirectionCapabilities& chip_capabilities,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config);
 
 /**
@@ -176,7 +180,7 @@ RouterTurnSet turn_set_for_router(
     Topology topology,
     RoutingDirection facing,
     const PerDirectionCapabilities& chip_capabilities,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config);
 
 /**
@@ -192,7 +196,7 @@ RouterArchetype router_archetype(
     Topology topology,
     RoutingDirection facing,
     const PerDirectionCapabilities& chip_capabilities,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config);
 
 /**

@@ -18,7 +18,9 @@
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
 #endif
 
-static void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
+namespace {
+
+void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
     DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(1);
     CoreLocalMem<uint32_t> ptr(dfb.get_write_ptr());
@@ -27,6 +29,8 @@ static void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t 
     }
     dfb.push_back(1);
 }
+
+}  // namespace
 
 // Load one row-major gamma/beta stick (TILE_WIDTH datums) into the first row of a tile's two 16x16 faces;
 // byte offsets scale with datum size (2B bf16 / 4B fp32). Blackhole (64B-granular DRAM reads): read the full

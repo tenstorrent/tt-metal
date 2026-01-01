@@ -14,7 +14,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -124,7 +124,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 // Match `compute_dfb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
                 num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
-                auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
+                auto num_sticks_per_core_pad32 = tt::round_up(num_sticks_per_core, 32u);
                 num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
                     num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
                 num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -269,7 +269,7 @@ SliceDfbSizing compute_dfb_size(
             // Fallback when the shrink above couldn't reach an even num_chunks: nrpb=1 makes a straddle impossible.
             s.num_read_per_barrier = (s.chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
         } else {
-            auto num_sticks_per_core_pad32 = round_up_to_mul32(num_input_pages);
+            auto num_sticks_per_core_pad32 = tt::round_up(num_input_pages, 32u);
             uint32_t num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, stride_for_merge, MAX_READ_SIZE);
             s.num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -327,7 +327,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // The kernels take the accessor's compile-time page size rather than a runtime one, so pin the
     // equivalence here: a route that skips slice.cpp's resharding guard fails loudly instead of

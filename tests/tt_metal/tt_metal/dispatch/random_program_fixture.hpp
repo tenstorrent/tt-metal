@@ -96,7 +96,7 @@ protected:
         const bool simple_kernel = false,
         KernelProperties kernel_properties = KernelProperties()) {
         if (device_->arch() != ARCH::QUASAR) {
-            Program program = CreateProgram();
+            Program program = CreateProgram(*device_);
             this->create_kernel(program, kernel_core_type, simple_kernel, kernel_properties);
             return program;
         }

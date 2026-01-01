@@ -91,6 +91,34 @@ def merge_vision_tokens_ttnn(
     return input_embeds, deepstack_visual_embeds
 
 
+def scatter_rows(base, indices, rows):
+    """Copy of base with base[indices] = rows (torch); the host twin of ttnn.scatter along dim 0."""
+    out = base.clone()
+    out[indices] = rows.to(out.dtype)
+    return out
+
+
+def _merge_on_host(input_embeds, mask_indices, image_embeds, deepstack_visual_embeds, mesh_device):
+    """Merge via host copies, for devices without ttnn.scatter (Quasar); values are copied unchanged."""
+
+    def to_host(t):
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+
+    def to_dev(t):
+        return ttnn.from_torch(
+            t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    text = to_host(input_embeds)
+    merged = to_dev(scatter_rows(text, mask_indices, to_host(image_embeds)))
+    if deepstack_visual_embeds is not None:
+        zeros = torch.zeros_like(text)
+        deepstack_visual_embeds = [
+            to_dev(scatter_rows(zeros, mask_indices, to_host(d))) for d in deepstack_visual_embeds
+        ]
+    return merged, deepstack_visual_embeds
+
+
 def merge_vision_tokens_single_user_ttnn(
     input_ids,
     input_embeds,
@@ -121,6 +149,9 @@ def merge_vision_tokens_single_user_ttnn(
         # No image tokens, return a copy of input_embeds
         input_embeds_out = ttnn.zeros_like(input_embeds)
         return ttnn.copy(input_embeds, input_embeds_out), deepstack_visual_embeds
+
+    if not getattr(model_args, "device_scatter", True):
+        return _merge_on_host(input_embeds, mask_indices, image_embeds, deepstack_visual_embeds, model_args.mesh_device)
 
     # Reshape mask_indices to match image_embeds shape for scatter
     mask_indices = mask_indices.view(image_embeds.shape[0], 1).expand(image_embeds.shape[0], image_embeds.shape[1])

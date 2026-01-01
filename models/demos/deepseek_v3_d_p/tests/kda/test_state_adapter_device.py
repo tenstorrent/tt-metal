@@ -18,14 +18,16 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
-    allocate_native_state,
     assemble_convolution,
     assemble_recurrent,
     convolution_segment_to_torch,
+    deallocate_state,
+    device_scalar,
     recurrent_segment_to_torch,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -154,7 +156,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     }
     natives = {key: _native_from_global(mesh_device, geometry, *value) for key, value in patterns.items()}
     for (slot, layer), state in natives.items():
-        slabs.export_layer(state, slot, layer)
+        index = device_scalar(mesh_device, slot)
+        slabs.export_layer(state, index, layer)
+        ttnn.deallocate(index)
     ttnn.synchronize_device(mesh_device)
 
     # 1. Every slab batch holds its layer's per-chip state, on every SP replica, bit for bit.
@@ -179,39 +183,41 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
                     name=f"conv slot{slot} L{layer} ({row},{col})",
                 )
 
-    # 2. Import lands the same bytes back in a native carry.
-    for (slot, layer), state in natives.items():
-        back = allocate_native_state(mesh_device, geometry)
-        slabs.import_layer(back, slot, layer)
-        ttnn.synchronize_device(mesh_device)
-        for index, (want, got) in enumerate(
-            zip(ttnn.get_device_tensors(state.recurrent), ttnn.get_device_tensors(back.recurrent))
-        ):
-            assert_bit_identical(
-                ttnn.to_torch(want), ttnn.to_torch(got), name=f"import S slot{slot} L{layer} dev{index}"
-            )
-        for index, (want, got) in enumerate(
-            zip(ttnn.get_device_tensors(state.convolution), ttnn.get_device_tensors(back.convolution))
-        ):
-            assert_bit_identical(
-                ttnn.to_torch(want), ttnn.to_torch(got), name=f"import conv slot{slot} L{layer} dev{index}"
-            )
-        ttnn.deallocate(back.recurrent)
-        ttnn.deallocate(back.convolution)
+    def host(state):
+        return [ttnn.to_torch(t) for s in (state.recurrent, state.convolution) for t in ttnn.get_device_tensors(s)]
 
-    # 3. A captured export follows the carry's contents on replay and touches nothing else.
+    def imported(slot, layer):
+        back = read_slab_layer(mesh_device, slabs, slot, layer)
+        ttnn.synchronize_device(mesh_device)
+        shards = host(back)
+        deallocate_state(back)
+        return shards
+
+    # 2. Import lands the same bytes back in a native carry, through the same device-read slot.
+    for (slot, layer), state in natives.items():
+        for index, (want, got) in enumerate(zip(host(state), imported(slot, layer), strict=True)):
+            assert_bit_identical(want, got, name=f"import slot{slot} L{layer} shard{index}")
+
+    # 3. A captured export follows the carry's contents and the device slot on replay, and touches
+    #    nothing else: captured on slot 0, replayed with the last slot written into the slot tensor.
     victim = natives[(0, layer_ids[0])]
+    slot_tt = device_scalar(mesh_device, 0)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    slabs.export_layer(victim, 0, layer_ids[0])
+    slabs.export_layer(victim, slot_tt, layer_ids[0])
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     new_rec, new_conv = _global_patterns(geometry, 5, 9)
     staged = _native_from_global(mesh_device, geometry, new_rec, new_conv)
     ttnn.copy(staged.recurrent, victim.recurrent)
     ttnn.copy(staged.convolution, victim.convolution)
+    replay_slot = num_slots - 1
+    staged_slot = device_scalar(mesh_device, replay_slot)
+    ttnn.copy(staged_slot, slot_tt)
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
     ttnn.release_trace(mesh_device, trace_id)
-    patterns[(0, layer_ids[0])] = (new_rec, new_conv)
+    for tensor in (slot_tt, staged_slot):
+        ttnn.deallocate(tensor)
+    patterns[(replay_slot, layer_ids[0])] = (new_rec, new_conv)
     rec_shards = _shards(slabs.recurrent, mesh_device)
     conv_shards = _shards(slabs.convolution, mesh_device)
     for (slot, layer), (recurrent, convolution) in patterns.items():
@@ -304,6 +310,16 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
             table.read_device_chunk(probe_layer, kda_position(geometry, kind, 5, KDA_VERSIONS - 1), probe_slot, cfg_id)
         ) == bytes(table.read_device_chunk(probe_layer, kda_position(geometry, kind, 5, 0), probe_slot, cfg_id))
     print(f"host {socket.gethostname()}: table check ok for fabric node {int(fid.mesh_id)}:{int(fid.chip_id)}")
+
+    # 7. Zeroing a slot zeroes every layer of that slot and nothing else.
+    others = {(slot, layer): imported(slot, layer) for slot in range(1, num_slots) for layer in layer_ids}
+    slabs.zero_slot(0)
+    for layer in layer_ids:
+        for index, got in enumerate(imported(0, layer)):
+            assert torch.count_nonzero(got) == 0, f"zero_slot(0) left nonzero bytes in L{layer} dev{index}"
+    for (slot, layer), want in others.items():
+        for index, (w, g) in enumerate(zip(want, imported(slot, layer))):
+            assert_bit_identical(w, g, name=f"zero_slot(0) touched slot{slot} L{layer} dev{index}")
 
     for state in natives.values():
         ttnn.deallocate(state.recurrent)

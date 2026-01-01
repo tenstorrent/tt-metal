@@ -322,7 +322,8 @@ LoweredKernel LowerKernel(
     // Resolve TensorBindings for this kernel:
     //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
     //    (after the user CTA-vararg prefix)
-    //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
+    //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section),
+    //    or in each node's RTA buffer for a per-node binding (after the user-named RTAs)
     const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
     const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
     const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
@@ -330,6 +331,7 @@ LoweredKernel LowerKernel(
         kernel_spec,
         resources.tensor_parameters,
         /*base_named_crta_count=*/user_named_crtas.size(),
+        /*base_named_rta_count=*/kernel_spec.runtime_arg_schema.runtime_arg_names.size(),
         /*base_cta_offset=*/vararg_cta_count);
 
     // Create TensorBindingHandles for this kernel
@@ -380,7 +382,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         } else {
             auto config = MakeGen2ComputeConfig(kernel_spec, resources.dfbs.slot, hal);
             config.compile_args = std::move(compile_args);
@@ -398,7 +401,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         }
     } else {  // gen1
         if (kernel_spec.is_data_movement_kernel()) {
@@ -420,7 +424,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         } else {
             auto config = MakeGen1ComputeConfig(kernel_spec, resources.dfbs.slot, hal);
             config.compile_args = std::move(compile_args);
@@ -436,7 +441,8 @@ LoweredKernel LowerKernel(
                 named_rtas,
                 user_named_crtas,
                 tensor_binding_handles,
-                ta_bindings.crta_layout);
+                ta_bindings.crta_layout,
+                ta_bindings.rta_layout);
         }
     }
 

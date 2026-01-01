@@ -178,6 +178,9 @@ private:
     decltype(detail::make_mcast_semaphore<DataReadyBinding{}>()) data_ready_;
     decltype(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()) consumer_ready_;
     SenderCoordinates coords_;  // Stored by value; pointer views still require invocation-lived storage.
+    // A fixed sender's coordinates, read once so each round's ack does not reload them from coords_.
+    uint32_t fixed_sender_x_ = 0;
+    uint32_t fixed_sender_y_ = 0;
 };
 
 }  // namespace detail

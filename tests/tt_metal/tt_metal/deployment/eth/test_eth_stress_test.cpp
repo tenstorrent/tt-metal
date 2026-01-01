@@ -170,10 +170,10 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                 tested.insert(receiver_core);
 
                 if (!programs.contains(sender_mesh_device)) {
-                    programs[sender_mesh_device] = make_shared<Program>();
+                    programs[sender_mesh_device] = make_shared<Program>(CreateProgram(*sender_mesh_device));
                 }
                 if (!programs.contains(receiver_mesh_device)) {
-                    programs[receiver_mesh_device] = make_shared<Program>();
+                    programs[receiver_mesh_device] = make_shared<Program>(CreateProgram(*receiver_mesh_device));
                 }
 
                 log_info(

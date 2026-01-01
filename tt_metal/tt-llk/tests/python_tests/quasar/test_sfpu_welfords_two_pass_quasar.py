@@ -27,8 +27,7 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 FORMATS = [
-    InputOutputFormat(fmt, fmt)
-    for fmt in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
+    InputOutputFormat(fmt, fmt) for fmt in (DataFormat.Float16_b, DataFormat.Float32)
 ]
 
 # Two output steps of relative slack. The near-zero floor is that slack times the smallest

@@ -227,7 +227,7 @@ std::pair<double, double> run_d2h_throughput(
     auto sender_data_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, page_size);
     auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, sizeof(uint64_t));
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender_benchmark.cpp",
@@ -275,7 +275,7 @@ std::vector<uint64_t> run_d2h_latency(
     std::size_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
     auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, measurement_buffer_size);
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/d2h_socket_loopback_latency.cpp",
@@ -323,7 +323,7 @@ std::vector<uint64_t> measure_d2h_handshake_overhead(
     std::size_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
     auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), sender_core.core_coord, measurement_buffer_size);
 
-    auto send_program = CreateProgram();
+    auto send_program = CreateProgram(*mesh_device);
     CreateKernel(
         send_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/d2h_socket_handshake_overhead.cpp",
@@ -376,7 +376,7 @@ std::pair<double, double> run_h2d_throughput(
                                   ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_throughput_device_pull.cpp"
                                   : "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_throughput_host_push.cpp";
 
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*mesh_device);
     CreateKernel(
         recv_program,
         kernel_path,
@@ -430,7 +430,7 @@ std::vector<double> run_h2d_latency_us(
         (h2d_mode == H2DMode::DEVICE_PULL)
             ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_latency_device_pull.cpp"
             : "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_latency_host_push.cpp";
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*mesh_device);
     CreateKernel(
         recv_program,
         kernel_path,
@@ -481,7 +481,7 @@ std::vector<double> measure_h2d_handshake_overhead(
     std::size_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
     auto measurement_buffer = make_l1_mesh_buffer(mesh_device.get(), recv_core.core_coord, measurement_buffer_size);
 
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*mesh_device);
     CreateKernel(
         recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_ping.cpp",

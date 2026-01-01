@@ -371,6 +371,7 @@ def run_all_to_all_dispatch_test(
     use_optional_output_tensors=False,
     test_skew=False,
     shard_dim=0,
+    consume_immediately=False,
 ):
     use_sub_devices = False
     torch.manual_seed(2005)
@@ -535,6 +536,9 @@ def run_all_to_all_dispatch_test(
 
                 tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
                 tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
+                if consume_immediately:
+                    # Read the output right after the op, as a real consumer would, not after a sync.
+                    tt_out_tensor = ttnn.clone(tt_out_tensor)
 
                 if not trace_mode:
                     ttnn.synchronize_device(mesh_device)
@@ -665,6 +669,8 @@ def run_all_to_all_dispatch_test(
     num_program_cache_entries = 1
     if test_skew:
         num_program_cache_entries = 2
+    if consume_immediately:
+        num_program_cache_entries += 1
     logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
         mesh_device.cache_entries_counter.total == num_program_cache_entries
@@ -1285,3 +1291,41 @@ def test_all_to_all_dispatch_no_trace_batch1(
 
     torch.allclose(torch_tt_output_tensor, sparse_output_token_tensor)
     torch.allclose(torch_tt_metadata_tensor, metadata_tensor)
+
+
+# Ring: payloads to the antipode alternate arcs, and the credit used to ride on the metadata packet, so it
+# could arrive before the last token and the op finished early. Each output is cloned right after the op in
+# the same trace, into zeroed buffers, so a late token shows up as a zero row. Timing dependent: the test
+# repeats the op but cannot force the race.
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 200000},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((1, 8), (1, 8), id="1x8_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("num_iters", [30])
+def test_all_to_all_dispatch_ring_consume_immediately(mesh_device, mesh_shape, num_iters):
+    dispatch_devices = mesh_shape[1]
+    run_all_to_all_dispatch_test(
+        mesh_device,
+        mesh_shape,
+        batch=16 * dispatch_devices,
+        experts=8 * dispatch_devices,
+        select_experts_k=8,
+        hidden_size=7168,
+        seq_len=7,
+        num_iters=num_iters,
+        warmup_iters=0,
+        trace_mode=True,
+        num_links=1,
+        scheme="sequential",
+        dtype=ttnn.bfloat16,
+        cluster_axis=1,
+        topology=ttnn.Topology.Ring,
+        use_optional_output_tensors=True,
+        consume_immediately=True,
+    )

@@ -68,7 +68,7 @@ void kernel_main() {
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
-    const uint32_t my_channel = core_y * ctas.cores_x + core_x;
+    const uint32_t my_channel = (core_y * ctas.cores_x) + core_x;
 
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
@@ -76,7 +76,7 @@ void kernel_main() {
         for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
             for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
                 const uint32_t block_depth =
-                    std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
+                    std::min(ctas.input_depth - (column_block_i * ctas.block_depth), ctas.block_depth);
                 if (row_chunk_i > 0) {
                     const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(

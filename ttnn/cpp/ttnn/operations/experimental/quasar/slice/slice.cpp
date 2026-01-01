@@ -147,11 +147,12 @@ ttnn::Tensor slice(
     };
 
     // True when the next to_memory_config can land directly in the preallocated buffer: layouts
-    // must match (prim::copy validates equality) and source must not alias the preallocated.
+    // must match (prim::copy validates equality) and source must not alias the preallocated. A dtype
+    // mismatch is left to finalize_into_preallocated to reject.
     auto can_land_in_preallocated = [&](const ttnn::Tensor& source) {
         return optional_output_tensor.has_value() && source.storage_type() == StorageType::DEVICE &&
                source.layout() == optional_output_tensor->layout() &&
-               source.buffer() != optional_output_tensor->buffer();
+               source.dtype() == optional_output_tensor->dtype() && source.buffer() != optional_output_tensor->buffer();
     };
     // Safety net for paths that bypass the device op (composite / no-op / rm_only layout fixup):
     // short-circuits by buffer identity, falls back to ttnn::copy when result != preallocated.
@@ -163,6 +164,14 @@ ttnn::Tensor slice(
         if (result.buffer() == dst.buffer()) {
             return result;
         }
+        // ttnn::copy converts silently, so only accept the result's dtype, or the input's: the rm_only
+        // path promotes BFLOAT8_B to BFLOAT16 (untilize), and copying back only undoes that promotion.
+        TT_FATAL(
+            dst.dtype() == result.dtype() || dst.dtype() == input_tensor.dtype(),
+            "The preallocated output tensor needs dtype {} or {}, however it is {}",
+            result.dtype(),
+            input_tensor.dtype(),
+            dst.dtype());
         return ttnn::copy(result, dst);
     };
 
@@ -365,6 +374,12 @@ ttnn::Tensor slice(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
+    // prim::qsr::slice writes into the caller's buffer verbatim, so it can only be the destination when
+    // the buffer's page geometry matches the output the op computes for `input`. rm_only downgrades a
+    // TILE input to ROW_MAJOR, which leaves the caller's TILE tensor tile-paged while the RM factories
+    // page it by row; hand it over only when the layouts agree and let ret_adjustment retilize into it
+    // via finalize_into_preallocated's copy otherwise.
+    const auto prim_output = can_land_in_preallocated(input) ? optional_output_tensor : std::nullopt;
     auto res = ttnn::prim::qsr::slice(
         input,
         ttnn::Shape(modified_begins),
@@ -377,7 +392,7 @@ ttnn::Tensor slice(
         std::nullopt,
         std::nullopt,
         sub_core_grids,
-        optional_output_tensor);
+        prim_output);
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {

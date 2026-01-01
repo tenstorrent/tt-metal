@@ -90,7 +90,7 @@ void kernel_main() {
                     const uint32_t wt = id % Wt;
                     const uint32_t slice = (id / Wt) % num_h_slices;
                     const uint32_t nc = id / (Wt * num_h_slices);
-                    const uint32_t ht = slice * slice_Ht + j;
+                    const uint32_t ht = (slice * slice_Ht) + j;
 
                     if (filled == 0) {
                         dfb_in0.reserve_back(tiles_per_batch);
@@ -102,14 +102,14 @@ void kernel_main() {
                             tensor_accessor,
                             dfb_in0,
                             tile_bytes,
-                            {.page_id = nc * HtWt + ht * Wt + wt},
+                            {.page_id = (nc * HtWt) + (ht * Wt) + wt},
                             {.offset_bytes = filled * tile_bytes});
                     } else if constexpr (reduce_selects) {
                         noc.async_read(
                             tensor_accessor,
                             dfb_in0,
                             tile_bytes,
-                            {.page_id = nc * HtWt + (Ht - 1) * Wt + wt},
+                            {.page_id = (nc * HtWt) + ((Ht - 1) * Wt) + wt},
                             {.offset_bytes = filled * tile_bytes});
                     } else {
                         noc.async_write_zeros(dfb_in0, tile_bytes, {.offset_bytes = filled * tile_bytes});
@@ -133,7 +133,7 @@ void kernel_main() {
             if (padded) {
                 noc.write_zeros_l1_barrier();
             }
-            dfb_in0.push_back(filled);
+            dfb_in0.push_back(static_cast<uint16_t>(filled));
         }
         return;
     }
@@ -195,17 +195,17 @@ void kernel_main() {
                     const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
                     const std::uint32_t read_batch =
                         std::min(std::min(max_read_batch, pass_end - ht_base), contiguous_pages);
-                    dfb_in0.reserve_back(read_batch);
+                    dfb_in0.reserve_back(static_cast<uint16_t>(read_batch));
                     for (std::uint32_t ht = 0; ht < read_batch; ++ht) {
                         noc.async_read(
                             tensor_accessor,
                             dfb_in0,
                             tile_bytes,
-                            {.page_id = reset_curr_id + (ht_base + ht) * Wt},
+                            {.page_id = reset_curr_id + ((ht_base + ht) * Wt)},
                             {.offset_bytes = ht * tile_bytes});
                     }
                     noc.async_read_barrier();
-                    dfb_in0.push_back(read_batch);
+                    dfb_in0.push_back(static_cast<uint16_t>(read_batch));
                     ht_base += read_batch;
                     stream_write_page = (stream_write_page + read_batch) % max_read_batch;
                 }

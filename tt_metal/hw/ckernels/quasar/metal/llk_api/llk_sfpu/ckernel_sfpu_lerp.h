@@ -10,6 +10,9 @@
 
 namespace ckernel::sfpu {
 
+template <bool APPROXIMATION_MODE>
+inline void lerp_init() {}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_lerp(
     const uint dst_index_in0,  // input (start)

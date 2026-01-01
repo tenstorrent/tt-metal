@@ -176,7 +176,6 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Int8,
         DataFormat.UInt8,
         DataFormat.Int32,

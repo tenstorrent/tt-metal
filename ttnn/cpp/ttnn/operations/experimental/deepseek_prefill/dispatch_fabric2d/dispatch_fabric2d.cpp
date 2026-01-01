@@ -7,6 +7,7 @@
 #include <tt-metalium/sub_device.hpp>
 
 #include "device/dispatch_fabric2d_device_operation.hpp"
+#include "device/kernels/dataflow/dispatch_fabric2d_kernel_interface.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
@@ -27,9 +28,12 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t cluster_axis,
     uint32_t num_links,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::Tensor>& forwarding_buffer,
+    const std::optional<ttnn::Tensor>& staging_buffer) {
     // Ring on an axis without a closing link resolves to Linear, which this op cannot run: it sends
     // single hops around a ring.
     const tt::tt_fabric::Topology usable = ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
@@ -64,9 +68,43 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         seq_len_per_chip,
         cluster_axis,
         num_links,
+        fwd_vc_pages,
         usable,
         memory_config,
-        allowed_cores);
+        allowed_cores,
+        forwarding_buffer,
+        staging_buffer);
+}
+
+std::array<ttnn::Tensor, 2> dispatch_fabric2d_buffers(
+    ttnn::MeshDevice* mesh_device,
+    uint32_t emb_dim,
+    uint32_t seq_len_per_chip,
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    uint32_t fwd_vc_pages) {
+    // The op's own checks on these, which the buffer specs rely on and would otherwise not run until the first call.
+    TT_FATAL(
+        num_links >= 1 && num_links <= 4,
+        "dispatch_fabric2d_buffers: num_links must be between 1 and 4 (got {})",
+        num_links);
+    TT_FATAL(
+        fwd_vc_pages >= dspf2d::MIN_VC_PAGES,
+        "dispatch_fabric2d_buffers: fwd_vc_pages must be at least {} (got {})",
+        dspf2d::MIN_VC_PAGES,
+        fwd_vc_pages);
+    // Only the fields the buffer specs read.
+    const DispatchFabric2dParams params{
+        .device = mesh_device,
+        .seq_len_per_chip = seq_len_per_chip,
+        .axis = cluster_axis,
+        .num_links = num_links,
+        .fwd_vc_pages = fwd_vc_pages,
+    };
+    const uint32_t token_bytes = token_page_bytes(mesh_device, emb_dim);
+    return {
+        create_device_tensor(forwarding_buffer_spec(params, token_bytes), mesh_device),
+        create_device_tensor(staging_buffer_spec(params, token_bytes), mesh_device)};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

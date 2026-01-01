@@ -20,17 +20,17 @@ path), so the K/V this produces matches the layout the old HF-based golden produ
 
 ATTENTION (dense + MSA, the real schedule)
 ------------------------------------------
-Layers with ``sparse_attention_freq[i] == 0`` (layers 0-2) use full causal attention. Layers with
-``sparse_attention_freq[i] == 1`` (layers 3-59) use MSA sparse attention: a lightweight index
+Layers with ``sparse_attention_freq[i] == 0`` (M3: layers 0-2; M3.1: none) use full causal attention. Layers
+with ``sparse_attention_freq[i] == 1`` (M3: layers 3-59; M3.1: all) use MSA sparse attention: a lightweight index
 branch (``index_q/k_proj`` -> per-head norm -> partial RoPE) scores key blocks, the top
 ``sparse_topk_blocks`` (16) blocks of ``sparse_block_size`` (128) — plus the force-local current
 block (no sink/init block, matching upstream) — are selected per GQA group, and attention runs causally over only the
 selected blocks. This mirrors the device chain (``msa.py`` + ``indexer_score_msa`` /
 ``sparse_sdpa_msa``) and the validated torch reference in ``tests/unit/test_msa_layer_vs_ref.py``.
 
-Because MSA always keeps a *causal* mask and selects up to ``MSA_DENSE_EQUIV_TOKENS = 2048`` keys,
-for a context of <= 2048 tokens every block is selected and MSA reduces **exactly** to full causal
-attention. Above 2048 it is genuinely sparse.
+Because MSA always keeps a *causal* mask and selects up to ``cfg.dense_equiv_tokens`` (topk * block,
+2048 for both variants) keys, for a context of at most that many tokens every block is selected and MSA
+reduces **exactly** to full causal attention. Above it is genuinely sparse.
 
 ``dense_only=True`` (CLI ``--dense-only``) forces full causal attention on every layer, skipping
 the index branch + block selection entirely. At <= 2048 this is identical to the default; above
@@ -52,9 +52,12 @@ from typing import Callable, Optional
 
 import torch
 
-# MSA equivalence bound: sparse_topk_blocks(16) * sparse_block_size(128). At or below this many
-# context tokens, MSA's top-k block selection covers every block -> identical to dense attention.
-MSA_DENSE_EQUIV_TOKENS = 2048
+from models.demos.minimax_m3.utils.checkpoint import (
+    check_supported_config,
+    check_supported_quantization,
+    checkpoint_key_for,
+    load_plain,
+)
 
 # -------------------------------------------------------------------------------------------------
 # Long-context memory controls. The only O(S^2) tensors in this reference are the attention scores
@@ -70,69 +73,73 @@ FFN_TOKEN_CHUNK = int(os.environ.get("REF_FFN_TOKEN_CHUNK", "4096"))
 
 @dataclass
 class MiniMaxM3Config:
-    """The subset of ``text_config`` the text forward needs."""
+    """The subset of ``text_config`` the text forward needs. Build it with ``from_hf_config``: every field comes
+    from the config, with no model defaults."""
 
-    hidden_size: int = 6144
-    num_hidden_layers: int = 60
-    num_attention_heads: int = 64
-    num_key_value_heads: int = 4
-    head_dim: int = 128
-    rotary_dim: int = 64  # partial_rotary_factor 0.5 * head_dim
-    rope_theta: float = 5_000_000.0
-    rms_norm_eps: float = 1e-6
-    vocab_size: int = 200064
-    # MoE
-    num_local_experts: int = 128
-    num_experts_per_tok: int = 4
-    routed_scaling_factor: float = 2.0
+    hidden_size: int
+    num_hidden_layers: int
+    num_attention_heads: int
+    num_key_value_heads: int
+    head_dim: int
+    rotary_dim: int  # partial_rotary_factor * head_dim
+    rope_theta: float
+    rms_norm_eps: float
+    vocab_size: int
+    # MoE (sigmoid scoring, one shared expert: check_supported_config)
+    num_local_experts: int
+    num_experts_per_tok: int
+    routed_scaling_factor: float
     # swigluoai activation
-    swiglu_alpha: float = 1.702
-    swiglu_limit: float = 7.0
+    swiglu_alpha: float
+    swiglu_limit: float
     # per-layer schedules (0 -> dense, 1 -> MoE / sparse-attn)
-    moe_layer_freq: Optional[list] = None
-    sparse_attention_freq: Optional[list] = None
-    # MSA (sparse attention) — sparse_attention_config
-    sparse_index_dim: int = 128
-    sparse_num_index_heads: int = 4
-    sparse_block_size: int = 128
-    sparse_topk_blocks: int = 16
-    sparse_local_block: int = 1  # current block is always selected (force-local); no sink/init block (upstream)
+    moe_layer_freq: list
+    sparse_attention_freq: list
+    # MSA (sparse attention) — sparse_attention_config. The current block is always selected (force-local),
+    # no sink/init block (upstream); check_supported_sparse_attention enforces local 1 / init 0.
+    sparse_index_dim: Optional[int]
+    sparse_num_index_heads: Optional[int]
+    sparse_block_size: Optional[int]
+    sparse_topk_blocks: Optional[int]
 
     @classmethod
     def from_hf_config(cls, hf_config: dict) -> "MiniMaxM3Config":
-        """Build from the flat ``text_config`` dict (the inner block of the VL config.json)."""
+        """Build from the flat ``text_config`` dict (the inner block of the VL config.json, or a repo config)."""
         tc = hf_config.get("text_config", hf_config)
-        head_dim = tc.get("head_dim", 128)
-        rotary_dim = tc.get("rotary_dim")
-        if rotary_dim is None:
-            rotary_dim = int(round(tc.get("partial_rotary_factor", 0.5) * head_dim))
-        sac = tc.get("sparse_attention_config", {}) or {}
+        check_supported_config(tc)
+        sac = tc["sparse_attention_config"]
+        freq = list(sac.get("sparse_attention_freq") or []) if sac.get("use_sparse_attention") else []
         return cls(
             hidden_size=tc["hidden_size"],
             num_hidden_layers=tc["num_hidden_layers"],
             num_attention_heads=tc["num_attention_heads"],
             num_key_value_heads=tc["num_key_value_heads"],
-            head_dim=head_dim,
-            rotary_dim=rotary_dim,
-            rope_theta=tc.get("rope_theta", 5_000_000.0),
-            rms_norm_eps=tc.get("rms_norm_eps", 1e-6),
+            head_dim=tc["head_dim"],
+            rotary_dim=tc["rotary_dim"],
+            rope_theta=tc["rope_theta"],
+            rms_norm_eps=tc["rms_norm_eps"],
             vocab_size=tc["vocab_size"],
-            num_local_experts=tc.get("num_local_experts", 128),
-            num_experts_per_tok=tc.get("num_experts_per_tok", 4),
-            routed_scaling_factor=tc.get("routed_scaling_factor", 2.0),
-            swiglu_alpha=tc.get("swiglu_alpha", 1.702),
-            swiglu_limit=tc.get("swiglu_limit", 7.0),
-            moe_layer_freq=list(tc.get("moe_layer_freq", [])),
-            sparse_attention_freq=list(sac.get("sparse_attention_freq", [])),
-            sparse_index_dim=sac.get("sparse_index_dim", 128),
-            sparse_num_index_heads=sac.get("sparse_num_index_heads", 4),
-            sparse_block_size=sac.get("sparse_block_size", 128),
-            sparse_topk_blocks=sac.get("sparse_topk_blocks", 16),
-            sparse_local_block=sac.get("sparse_local_block", 1),
+            num_local_experts=tc["num_local_experts"],
+            num_experts_per_tok=tc["num_experts_per_tok"],
+            routed_scaling_factor=tc["routed_scaling_factor"],
+            swiglu_alpha=tc["swiglu_alpha"],
+            swiglu_limit=tc["swiglu_limit"],
+            moe_layer_freq=list(tc["moe_layer_freq"]),
+            sparse_attention_freq=freq,
+            sparse_index_dim=sac.get("sparse_index_dim"),
+            sparse_num_index_heads=sac.get("sparse_num_index_heads"),
+            sparse_block_size=sac.get("sparse_block_size"),
+            sparse_topk_blocks=sac.get("sparse_topk_blocks"),
         )
 
+    @property
+    def dense_equiv_tokens(self) -> int:
+        """sparse_topk_blocks * sparse_block_size: at or below this many context tokens MSA's top-k block
+        selection covers every block, so MSA is identical to dense causal attention."""
+        return self.sparse_topk_blocks * self.sparse_block_size
+
     def is_moe_layer(self, i: int) -> bool:
-        return bool(self.moe_layer_freq[i]) if self.moe_layer_freq else False
+        return bool(self.moe_layer_freq[i])
 
     def is_sparse_attn_layer(self, i: int) -> bool:
         return bool(self.sparse_attention_freq[i]) if self.sparse_attention_freq else False
@@ -143,7 +150,8 @@ class MiniMaxM3Config:
 # to be fully resident. Each ``get`` returns a fresh fp32 tensor; the caller drops it per layer.
 # --------------------------------------------------------------------------------------------
 class SafetensorsWeights:
-    """Lazy, mmap-backed accessor over a sharded ``language_model.*`` checkpoint."""
+    """Lazy, mmap-backed accessor over a sharded ``language_model.*`` checkpoint. Quantized (MXFP8 / NVFP4)
+    weights are dequantized on read and answer to their plain ``.weight`` name (``utils/checkpoint.py``)."""
 
     def __init__(self, model_path, prefix: str = "language_model.", dtype: torch.dtype = torch.float32):
         from safetensors import safe_open
@@ -162,12 +170,17 @@ class SafetensorsWeights:
             h = self._handles[shard] = self._safe_open(str(self.model_path / shard), framework="pt")
         return h
 
+    def _raw(self, key: str) -> torch.Tensor:
+        return self._handle(self.weight_map[key]).get_tensor(key)
+
+    def _key(self, name: str) -> str:
+        return checkpoint_key_for(self.prefix + name, self.weight_map.__contains__)
+
     def has(self, name: str) -> bool:
-        return (self.prefix + name) in self.weight_map
+        return self._key(name) in self.weight_map
 
     def get(self, name: str) -> torch.Tensor:
-        key = self.prefix + name
-        return self._handle(self.weight_map[key]).get_tensor(key).to(self.dtype)
+        return load_plain(self._key(name), self._raw).to(self.dtype)
 
 
 class DictWeights:
@@ -187,16 +200,11 @@ class DictWeights:
 # --------------------------------------------------------------------------------------------
 # Math primitives — verbatim from the validated torch references.
 # --------------------------------------------------------------------------------------------
-def gemma_rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float) -> torch.Tensor:
-    """Full-width RMSNorm with Gemma ``(1 + w)`` scale (use_gemma_norm=True)."""
+def rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float, gemma: bool) -> torch.Tensor:
+    """RMSNorm over the last dim (full width, or per head over head_dim for QK-norm), scaled by ``(1 + w)``
+    when ``gemma`` (use_gemma_norm) else by ``w``."""
     var = x.float().pow(2).mean(-1, keepdim=True)
-    return (x.float() * torch.rsqrt(var + eps)) * (1.0 + w.float())
-
-
-def gemma_head_rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float) -> torch.Tensor:
-    """Per-head RMSNorm over head_dim with ``(1 + w)`` scale (qk_norm_type=per_head)."""
-    var = x.float().pow(2).mean(-1, keepdim=True)
-    return (x.float() * torch.rsqrt(var + eps)) * (1.0 + w.float())
+    return (x.float() * torch.rsqrt(var + eps)) * ((1.0 + w.float()) if gemma else w.float())
 
 
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
@@ -319,7 +327,7 @@ def msa_block_selection_chunk(iq_g, ik_shared, scale, block_size, topk_blocks, q
 # The model.
 # --------------------------------------------------------------------------------------------
 class MiniMaxM3TextModel:
-    """MiniMax-M3 text reference (dense layers 0-2 + MSA sparse layers 3-59, the real schedule).
+    """MiniMax-M3 text reference (dense / MSA sparse attention per sparse_attention_freq, the real schedule).
 
     Streams weights per layer via a weight source. ``dense_only`` forces full causal attention
     everywhere."""
@@ -328,6 +336,9 @@ class MiniMaxM3TextModel:
         self.cfg = config
         self.w = weights
 
+    def _norm(self, x, weight_name):
+        return rms_norm(x, self.w.get(weight_name), self.cfg.rms_norm_eps, gemma=True)
+
     # ---- MSA index branch (per-group index_q + one shared index_k) ----
     def _index_branch(self, x, p, cos, sin):
         cfg = self.cfg
@@ -335,18 +346,8 @@ class MiniMaxM3TextModel:
         nidx, d = cfg.sparse_num_index_heads, cfg.sparse_index_dim
         iq = (x @ self.w.get(p + "self_attn.index_q_proj.weight").t()).view(B, S, nidx, d).transpose(1, 2)
         ik = (x @ self.w.get(p + "self_attn.index_k_proj.weight").t()).view(B, S, 1, d).transpose(1, 2)
-        iq = partial_rope(
-            gemma_head_rms_norm(iq, self.w.get(p + "self_attn.index_q_norm.weight"), cfg.rms_norm_eps),
-            cos,
-            sin,
-            cfg.rotary_dim,
-        )
-        ik = partial_rope(
-            gemma_head_rms_norm(ik, self.w.get(p + "self_attn.index_k_norm.weight"), cfg.rms_norm_eps),
-            cos,
-            sin,
-            cfg.rotary_dim,
-        )
+        iq = partial_rope(self._norm(iq, p + "self_attn.index_q_norm.weight"), cos, sin, cfg.rotary_dim)
+        ik = partial_rope(self._norm(ik, p + "self_attn.index_k_norm.weight"), cos, sin, cfg.rotary_dim)
         return iq, ik
 
     # ---- attention (GQA; full causal, or MSA block-sparse causal) ----
@@ -360,8 +361,8 @@ class MiniMaxM3TextModel:
         k = (x @ self.w.get(p + "self_attn.k_proj.weight").t()).view(B, S, nkv, hd).transpose(1, 2)
         v = (x @ self.w.get(p + "self_attn.v_proj.weight").t()).view(B, S, nkv, hd).transpose(1, 2)
 
-        q = gemma_head_rms_norm(q, self.w.get(p + "self_attn.q_norm.weight"), cfg.rms_norm_eps)
-        k = gemma_head_rms_norm(k, self.w.get(p + "self_attn.k_norm.weight"), cfg.rms_norm_eps)
+        q = self._norm(q, p + "self_attn.q_norm.weight")
+        k = self._norm(k, p + "self_attn.k_norm.weight")
         q = partial_rope(q, cos, sin, cfg.rotary_dim)
         k = partial_rope(k, cos, sin, cfg.rotary_dim)
 
@@ -432,9 +433,10 @@ class MiniMaxM3TextModel:
         T = flat.shape[0]
 
         gate_w = self.w.get(p + "block_sparse_moe.gate.weight")
-        bias = self.w.get(p + "block_sparse_moe.e_score_correction_bias")
         scores = torch.sigmoid(flat.float() @ gate_w.float().t())  # [T, E]
-        sel = torch.topk(scores + bias.float(), cfg.num_experts_per_tok, dim=-1).indices  # bias selects only
+        select = scores + self.w.get(p + "block_sparse_moe.e_score_correction_bias").float()
+        # bias selects only; ties go to the lowest expert id (stable descending sort), as in the vendor router
+        sel = torch.sort(select, dim=-1, descending=True, stable=True).indices[:, : cfg.num_experts_per_tok]
         tw = torch.gather(scores, 1, sel)  # un-biased scores weight the combine
         tw = (tw / tw.sum(-1, keepdim=True)) * cfg.routed_scaling_factor  # [T, topk]
 
@@ -482,7 +484,7 @@ class MiniMaxM3TextModel:
     ):
         """Single-shot prefill forward (no cache reuse). ``input_ids`` is ``[B, S]`` (B==1).
 
-        Uses the real attention schedule (dense for layers 0-2, MSA sparse for 3-59) unless
+        Uses the real attention schedule (sparse_attention_freq; M3: dense 0-2, MSA sparse 3-59) unless
         ``dense_only=True``, which forces full causal attention on every layer.
 
         Returns ``(kv_caches, logits)`` where ``kv_caches`` is a list of ``(k, v)`` per layer
@@ -523,11 +525,11 @@ class MiniMaxM3TextModel:
         for i in range(cfg.num_hidden_layers):
             p = f"model.layers.{i}."
             sparse = cfg.is_sparse_attn_layer(i) and not dense_only
-            normed = gemma_rms_norm(x, self.w.get(p + "input_layernorm.weight"), cfg.rms_norm_eps)
+            normed = self._norm(x, p + "input_layernorm.weight")
             attn_out, k_cache, v_cache, index_k = self._attention(normed, p, cos, sin, sparse)
             x = x + attn_out
 
-            normed2 = gemma_rms_norm(x, self.w.get(p + "post_attention_layernorm.weight"), cfg.rms_norm_eps)
+            normed2 = self._norm(x, p + "post_attention_layernorm.weight")
             ffn_out = self._moe(normed2, p) if cfg.is_moe_layer(i) else self._dense_mlp(normed2, p)
             x = x + ffn_out
 
@@ -541,7 +543,7 @@ class MiniMaxM3TextModel:
 
         logits = None
         if compute_logits:
-            h = gemma_rms_norm(x, self.w.get("model.norm.weight"), cfg.rms_norm_eps)
+            h = self._norm(x, "model.norm.weight")
             logits = h @ self.w.get("lm_head.weight").t()
         return kv_caches, logits
 
@@ -553,6 +555,7 @@ def load_text_model(model_path, *, compute_dtype: torch.dtype = torch.float32) -
     """
     model_path = Path(model_path)
     hf_config = json.loads((model_path / "config.json").read_text())
+    check_supported_quantization(hf_config.get("quantization_config"))
     cfg = MiniMaxM3Config.from_hf_config(hf_config)
     weights = SafetensorsWeights(model_path, prefix="language_model.", dtype=compute_dtype)
     return MiniMaxM3TextModel(cfg, weights)

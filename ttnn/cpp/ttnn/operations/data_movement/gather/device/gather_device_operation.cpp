@@ -110,7 +110,7 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
+        (tensor_args.input_tensor.is_allocated()) && (tensor_args.input_index_tensor.is_allocated()),
         "Operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
@@ -122,6 +122,30 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input_index_tensor.storage_type());
 
     TT_FATAL(attributes.sparse_grad == false, "Sparse gradient is not supported yet.");
+
+    if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
+        auto check_shard_row = [](const MemoryConfig& mc, uint32_t element_size, const char* role) {
+            TT_FATAL(
+                !ttnn::operations::data_movement::has_subaligned_shard_row(mc, element_size),
+                "gather: ROW_MAJOR {} shard row of {} B is not a multiple of the buffer alignment. Reach this op "
+                "through ttnn::gather, which moves such tensors to interleaved memory, rather than calling the "
+                "device operation directly.",
+                role,
+                mc.shard_spec()->shape[1] * element_size);
+        };
+        check_shard_row(tensor_args.input_tensor.memory_config(), tensor_args.input_tensor.element_size(), "input");
+        check_shard_row(
+            tensor_args.input_index_tensor.memory_config(), tensor_args.input_index_tensor.element_size(), "index");
+        const bool output_is_sharded = tensor_args.output_tensor.has_value()
+                                           ? tensor_args.output_tensor->is_sharded()
+                                           : attributes.output_mem_config.is_sharded();
+        if (output_is_sharded) {
+            const uint32_t output_elem_size = tensor_args.output_tensor.has_value()
+                                                  ? tensor_args.output_tensor->element_size()
+                                                  : tensor_args.input_tensor.element_size();
+            check_shard_row(compute_output_specs(attributes, tensor_args).memory_config(), output_elem_size, "output");
+        }
+    }
 }
 
 GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output_specs(

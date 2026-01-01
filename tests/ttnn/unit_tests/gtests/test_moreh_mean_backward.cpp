@@ -2,25 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Program-spec tests to read compute kernel's compile-time args.
+// Tests for the H broadcast flag that the factory passes to the compute kernel.
 //
-// The factory stores one need_bcast_dim entry per dimension of input_grad's logical shape.
-// Entry 0 is the W broadcast flag. Entry 1 is the H broadcast flag.
-// A rank-1 input_grad has only entry 0.
-// The factory used to read entry 1 anyway (#58406 item 3).
-// That read returned whatever value was left in the vector's inline storage.
+// The factory stores one need_bcast_dim entry per dimension of input_grad's logical shape. Entry 0 is the
+// W broadcast flag. Entry 1 is the H broadcast flag. A rank-1 input_grad has only entry 0. Reading entry 1 would
+// return whatever value was left in the vector's inline storage.
 //
-// Running the op does not show the bug.
-// The compute kernel only broadcasts along H when ht_need_bcast is exactly 1.
+// Running the op does not show the bug. The compute kernel only broadcasts along H when ht_need_bcast is 1.
 // A rank-1 tensor also has a single logical row. Every broadcast mode gives the same values for that row.
-// Reading the compile-time arg is the only way to catch the bad read.
 //
-// A leftover value of 0 would hide the bug. The rank-1 test avoids that in two steps.
-// First it builds a rank-2 case that broadcasts along H. That call writes 1 into entry 1.
-// Then it builds the rank-1 case right away, from the same call site.
-// In practice the second call's vector reuses the same stack memory. Entry 1 still holds the 1 from the first call.
-// Without the fix, the rank-1 case reads that 1 and the test fails.
-// The two calls must stay back to back. Code between them could overwrite the leftover 1.
+// get_ht_need_bcast holds the bounds check. GetHtNeedBcast tests it directly.
+// Its vector keeps a 1 in the slot after its last entry. An unguarded read returns that 1 every time.
+//
+// Rank1HtNeedBcast checks that the factory passes the helper's value to the kernel. It first builds a rank-2 case
+// that broadcasts along H (writes 1 into entry 1). Then it builds the rank-1 case from the same call site. The second
+// call's vector usually reuses the same stack memory. A factory that skipped the helper would read that 1, but it is
+// not guaranteed. The helper test is the deterministic check. The two calls should be back to back. The code between
+// them could overwrite the leftover 1.
 
 #include <gtest/gtest.h>
 
@@ -32,6 +30,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/device/moreh_mean_backward_device_operation.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -118,7 +117,7 @@ uint32_t arg_value(const KernelSpec::CompileTimeArgs& args, const std::string& n
 
 class MorehMeanBackwardProgramSpecFixture : public TTNNFixtureWithSuiteDevice<MorehMeanBackwardProgramSpecFixture> {};
 
-TEST_F(MorehMeanBackwardProgramSpecFixture, Rank1InputGradHasNoHeightBroadcast) {
+TEST_F(MorehMeanBackwardProgramSpecFixture, Rank1HtNeedBcast) {
     // Case 0: output_grad [1, 5] broadcasts along H to input_grad [7, 5]. Its entry 1 is 1.
     // Case 1: output_grad [1] broadcasts along W to input_grad [5]. A rank-1 tensor has no H dimension.
     const auto args =
@@ -130,6 +129,17 @@ TEST_F(MorehMeanBackwardProgramSpecFixture, Rank1InputGradHasNoHeightBroadcast) 
 
     EXPECT_EQ(arg_value(args[1], "wt_need_bcast"), 1u);
     EXPECT_EQ(arg_value(args[1], "ht_need_bcast"), 0u);
+}
+
+TEST(MorehBackwardNeedBcast, GetHtNeedBcast) {
+    // A rank-1 need_bcast_dim. pop_back leaves the 1 in the slot after the last entry.
+    ttsl::SmallVector<uint32_t> rank1_need_bcast_dim = {0, 1};
+    rank1_need_bcast_dim.pop_back();
+    ASSERT_EQ(rank1_need_bcast_dim.size(), 1u);
+    EXPECT_EQ(get_ht_need_bcast(rank1_need_bcast_dim), 0u);
+
+    // A rank-2 need_bcast_dim returns entry 1.
+    EXPECT_EQ(get_ht_need_bcast(ttsl::SmallVector<uint32_t>{0, 1}), 1u);
 }
 
 }  // namespace

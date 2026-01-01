@@ -3,23 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 void kernel_main() {
-    const uint32_t num_units = get_arg_val<uint32_t>(0);
-    const uint32_t num_elements_per_row = get_arg_val<uint32_t>(1);
-    const uint32_t unpadded_row_size_bytes = get_arg_val<uint32_t>(2);
-    const uint32_t padded_row_size_bytes = get_arg_val<uint32_t>(3);
+    const uint32_t num_units = get_arg(args::num_units);
+    const uint32_t num_elements_per_row = get_arg(args::num_elements_per_row);
+    const uint32_t unpadded_row_size_bytes = get_arg(args::unpadded_row_size_bytes);
+    const uint32_t padded_row_size_bytes = get_arg(args::padded_row_size_bytes);
     const uint32_t pad_size_bytes = padded_row_size_bytes - unpadded_row_size_bytes;
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(1);
-    constexpr uint32_t output_elem_size = get_compile_time_arg_val(2);
+    constexpr uint32_t output_elem_size = get_arg(args::output_elem_size);
 
     Noc noc;
-    experimental::CB cb_out_obj(cb_id_out);
-    experimental::CB cb_temp_pad_obj(cb_temp_pad);
+    DataflowBuffer dfb_out(dfb::out);
+    DataflowBuffer dfb_temp_pad(dfb::temp_pad);
 
-    const uint32_t pad_addr = cb_temp_pad_obj.get_read_ptr();
-    const uint32_t out_addr = cb_out_obj.get_read_ptr();
+    const uint32_t pad_addr = dfb_temp_pad.get_read_ptr();
+    const uint32_t out_addr = dfb_out.get_read_ptr();
     if (pad_size_bytes == 0) {
         return;  // No padding needed, exit early
     }
@@ -32,7 +32,7 @@ void kernel_main() {
         unpadded_row_size_bytes,
         padded_row_size_bytes,
         pad_size_bytes);
-    DPRINT("CB Temp Pad {}, pad_addr: {}, out_addr: {}\n", cb_temp_pad, pad_addr, out_addr);
+    DPRINT("Temp Pad pad_addr: {}, out_addr: {}\n", pad_addr, out_addr);
     DPRINT("Output Elem Size {}\n", output_elem_size);
 #endif
 
@@ -61,7 +61,7 @@ void kernel_main() {
 
     uint32_t write_offset = unpadded_row_size_bytes;
     for (uint32_t i = 0; i < num_units; ++i) {
-        noc.async_read(self_ep, cb_out_obj, pad_size_bytes, pad_src, {.offset_bytes = write_offset});
+        noc.async_read(self_ep, dfb_out, pad_size_bytes, pad_src, {.offset_bytes = write_offset});
         write_offset += padded_row_size_bytes;
     }
     noc.async_read_barrier();

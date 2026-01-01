@@ -155,6 +155,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const bool flat_v = (vs.rank() == 3);
     const bool flat_qk = (qs.rank() == 3);
     const uint32_t HV = flat_v ? beta_in.logical_shape()[2] : vs[2];
+    TT_FATAL(HV > 0, "chunk_gated_delta_rule: the value head count HV must be greater than 0");
     const uint32_t V = flat_v ? (vs[2] / HV) : vs[3];
     uint32_t K = 0;
     uint32_t H = 0;
@@ -168,6 +169,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
                 H);
             K = qs[2] / H;
         } else {
+            TT_FATAL(V > 0, "chunk_gated_delta_rule: the value head dim V must be greater than 0");
             K = V;
             H = qs[2] / K;
         }
@@ -186,7 +188,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             num_key_heads.value_or(0),
             qs[2]);
     }
-    TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
+    TT_FATAL(H > 0 && HV % H == 0, "HV ({}) must be divisible by H ({}) and H must be greater than 0", HV, H);
     const uint32_t G = HV / H;
     const uint32_t BH = B * HV;
 

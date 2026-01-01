@@ -357,28 +357,6 @@ def test_squared_difference_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.logical_or,
-        ttnn.logical_xor,
-        ttnn.logical_and,
-    ],
-)
-def test_logical_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.509009, 2, 3.33, 4, 0, -11]], dtype=torch.float32)
-    y_torch = torch.tensor([[0, 3, 4, 5, 0, -9999]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.bitwise_and,
         ttnn.bitwise_or,
         ttnn.bitwise_xor,

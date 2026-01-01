@@ -202,6 +202,12 @@ export PREFILL_MODEL=my_model PREFILL_NUM_LAYERS=<L> \
 Left unset, the producer falls back to the adapter defaults (61 layers), which will not match a deeper
 runner. The ack count is `num_layers × chunks`, so the drain hangs.
 
+With `PREFILL_FORWARD_TOKENS_BUDGET` above the chunk size (packed forwards, `ADDING_A_PREFILL_MODEL.md`
+section 2.1) both modules pack each forward with one run of consecutive chunks per slot, round-robin (or
+shuffled for `interleave: random`) until it holds `budget / chunk_size` chunks or no slot has more, and fill the
+rest with empty chunks. `p_burst` must be 0 there, and the warm-up chunks go out a full forward at a time.
+Layer completions still count per chunk.
+
 For an arbitrary mapping instead of a uniform offset, replace `dst_slot_offset` with `pairs` (CLI
 equivalent: `--migrations "0:3,1:2"`). Source and destination sets must be disjoint in loopback, and
 duplicate destinations are rejected.
@@ -250,9 +256,9 @@ knob existed, so existing legs are unaffected.
 
 Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
 host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
-closest existing coverage is the on-device producer/runner PCC gate
-`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
-fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
+closest existing coverage is the on-device producer/runner PCC gate `runners/ci/run_multirank_pcc.sh`,
+which drives the producer end to end and fails if any resident slot's KV PCC is below threshold, though
+it is not multi-turn-specific.
 
 ---
 
@@ -557,6 +563,7 @@ gets a branch there, and both gates work.
 | H2D socket | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` | — |
 | layer depth | `PREFILL_NUM_LAYERS` | same var, exported | — |
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
+| tokens per forward | `PREFILL_FORWARD_TOKENS_BUDGET` (default the chunk size) | `model.forward_tokens_budget` or the same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
 | device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `migration.device_map_path` | — |

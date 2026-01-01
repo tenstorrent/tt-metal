@@ -86,6 +86,45 @@ def op(name: str):
 
 
 # =============================================================================
+# RTL emulator (ZEBU) detection
+# =============================================================================
+#
+# UMD picks the backend from TT_METAL_SIMULATOR (``classify()`` in
+# tt-umd/src/simulation/simulation_connector.cpp): a ``.so`` file runs the TTSim shared-library
+# backend (craq-sim); a directory is either an RTL emulator session (emu-quasar-1x3 / 2x3 over
+# the NNG socket) or, when it holds live ``tt-umd-sim-*.sock`` files, a simulation-server client
+# whose backend may be TTSim or RTL. ``on_emulator()`` treats every directory as RTL, so a
+# TTSim simulation server also gets the skips; ``TTNN_YOLO_OPS_EMULATOR=0`` lifts them there.
+# The emulator runs ~3 orders of magnitude slower than craq-sim, so a few cases that pass on
+# the functional sim never finish there. ``TTNN_YOLO_OPS_EMULATOR=1|0`` forces the
+# classification either way; any other value is an error.
+
+
+def on_emulator() -> bool:
+    v = os.environ.get("TTNN_YOLO_OPS_EMULATOR", "auto").lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    if v != "auto":
+        raise ValueError(f"TTNN_YOLO_OPS_EMULATOR must be 1/0/true/false/yes/no/auto, got {v!r}")
+    sim = os.environ.get("TT_METAL_SIMULATOR", "")
+    return bool(sim) and os.path.isdir(sim)
+
+
+def skip_on_emulator(reason: str):
+    """Skip a case that cannot complete on the Quasar RTL emulator (passes on craq-sim and silicon).
+
+    Only for cases documented in issue #56622 as hanging there: the reason should say why
+    (slow kernel path, host readback volume, emulator-only fault) so the skip can be lifted
+    once the cause is fixed. The reasons describe the Quasar fork paths, so an emulator run
+    of another architecture (mainline ops) keeps the cases.
+    """
+    if is_quasar() and on_emulator():
+        pytest.skip(f"RTL emulator: {reason} (issue #56622)")
+
+
+# =============================================================================
 # YOLOv8 (640x640, batch 1) constants
 # =============================================================================
 

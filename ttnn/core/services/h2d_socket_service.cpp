@@ -43,6 +43,7 @@
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -472,7 +473,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
     const auto& coords = topology.mesh_coords();
     for (const auto& coord : coords) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         auto claimable = svc.get_claimable_cores(d);
         TT_FATAL(!claimable.empty(), "H2DStreamService: no claimable service core on device at coord {}", coord);
         const CoreCoord chosen = claimable.front();
@@ -498,7 +499,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // socket config buffer and the post-plan scratch words are not yet subtracted; the reserve inside
     // service_core_cb_l1_budget (>> their combined size) covers them. L1 layout is uniform across
     // coords, so a representative service core suffices.
-    auto* rep_device = mesh_device_->get_device(coords.front());
+    auto* rep_device = tt::tt_metal::internal::get_device(*mesh_device_, coords.front());
     const uint64_t service_core_free_l1 = svc.bytes_available(rep_device, service_cores_.at(coords.front()));
     const uint64_t usable_cb_l1 = service_core_cb_l1_budget(service_core_free_l1, metadata_cb_page_size);
     const H2DChunkPlan plan =
@@ -577,7 +578,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // than via a GlobalSemaphore (which can't target per-coord service cores).
     std::vector<uint32_t> zero_word{0};
     for (const auto& coord : coords) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         const CoreCoord chosen = service_cores_.at(coord);
         const DeviceAddr sem_addr = svc.allocate_l1(d, chosen, sizeof(uint32_t));
         termination_addrs_.emplace(coord, sem_addr);
@@ -599,7 +600,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
 
         // Consumed counter: per-coord L1 word on the service core.
         for (const auto& coord : coords) {
-            auto* d = mesh_device_->get_device(coord);
+            auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
             const CoreCoord chosen = service_cores_.at(coord);
             const DeviceAddr addr = svc.allocate_l1(d, chosen, sizeof(uint32_t));
             consumed_addrs_.emplace(coord, addr);
@@ -675,7 +676,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     uint32_t completion_index = 0;
     for (auto& s : sockets_) {
         const auto core = s->get_active_cores()[0];
-        auto* d = mesh_device_->get_device(core.device_coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, core.device_coord);
         const Buffer* dbuf = device_tensor_.mesh_buffer().get_device_buffer(core.device_coord);
         TT_FATAL(dbuf != nullptr, "H2DStreamService: device buffer missing for coord {}", core.device_coord);
         const uint32_t term_addr = static_cast<uint32_t>(termination_addrs_.at(core.device_coord));
@@ -832,24 +833,24 @@ H2DStreamService::~H2DStreamService() {
         if (mesh_device_) {
             auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
             for (const auto& [coord, core] : service_cores_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.wait_done(d, core);
             }
 
             for (const auto& [coord, addr] : termination_addrs_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             termination_addrs_.clear();
 
             for (const auto& [coord, addr] : consumed_addrs_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             consumed_addrs_.clear();
 
             for (const auto& [coord, addr] : completion_src_addrs_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             completion_src_addrs_.clear();
@@ -871,7 +872,7 @@ H2DStreamService::~H2DStreamService() {
             sockets_.clear();
 
             for (const auto& [coord, core] : service_cores_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.release(d, {core});
             }
         }
@@ -1099,7 +1100,7 @@ void H2DStreamService::signal_termination() {
     }
     std::vector<uint32_t> one_word{1};
     for (const auto& [coord, addr] : termination_addrs_) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         const CoreCoord chosen = service_cores_.at(coord);
         tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), one_word);
     }

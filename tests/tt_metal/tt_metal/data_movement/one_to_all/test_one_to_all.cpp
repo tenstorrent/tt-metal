@@ -60,7 +60,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
     /* ================ SETUP ================ */
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     // assert(
     //    (test_config.is_multicast && test_config.loopback) ||

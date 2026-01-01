@@ -750,6 +750,24 @@ class PACK_NUM_TILES(TemplateParameter):
 
 
 @dataclass
+class SDPA_BCAST_NUM_TILES(TemplateParameter):
+    """Outer-loop tile count of the SDPA bcast-col SrcB-reuse MOP (``sdpa_bcast_col_srcb_reuse_test.cpp``).
+
+    A template argument on both the math and the unpack LLK (``num_tiles``), so it cannot be a
+    runtime parameter: one ``_llk_unpack_A_`` call walks this many tiles and the math MOP writes
+    them to consecutive DEST tiles. Emits ``constexpr std::uint32_t SDPA_BCAST_NUM_TILES``.
+
+    The field carries the ``sdpa_bcast_`` prefix so it stays globally unique
+    (``test_perf_header_gate.py``); bare ``num_tiles`` belongs to ``PACK_NUM_TILES``.
+    """
+
+    sdpa_bcast_num_tiles: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_BCAST_NUM_TILES = {self.sdpa_bcast_num_tiles}u;"
+
+
+@dataclass
 class RMSNORM_DEST_REUSE(TemplateParameter):
     """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
 
@@ -1600,6 +1618,19 @@ class LOOP_FACTOR(RuntimeParameter):
 
 
 @dataclass
+class GROUP_KT_DIM(RuntimeParameter):
+    """K tiles per quantization group (group-wise dequant matmul)."""
+
+    group_kt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GROUP_KT_DIM = {self.group_kt_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t GROUP_KT_DIM;", "I"
+
+
+@dataclass
 class UNPACK_TRANS_FACES(RuntimeParameter):
     unpack_transpose_faces: Transpose = Transpose.No
 
@@ -1679,6 +1710,20 @@ class ZERO_POINT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class OUT_ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of requant's output zero point, added after rounding.
+    Ignored by other binary ops."""
+
+    out_zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t OUT_ZERO_POINT = {self.out_zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t OUT_ZERO_POINT;", "I"
 
 
 @dataclass
@@ -2379,10 +2424,9 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
 class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
     """Compile-time dims for the experimental sdpa_custom_mm_reuse_dest_srcb OV matmul.
 
-    kt_dim: number of K tiles (softmax-score / V K tiles). The unpack MOP requires an
-            even kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in
-            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h); kt_dim < 2 underflows the
-            MOP iteration count and hangs the unpacker.
+    kt_dim: number of K tiles (softmax-score / V K tiles), 1 to 256. The unpack MOP
+            covers them in pairs and replays an odd last one directly (see
+            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h).
     nt_dim: number of V head-dim output tiles per K iteration (1..16).
     """
 

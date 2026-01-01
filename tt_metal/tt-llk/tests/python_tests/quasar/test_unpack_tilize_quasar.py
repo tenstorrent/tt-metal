@@ -187,7 +187,6 @@ def generate_unpack_tilize_combinations(
 UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int16,

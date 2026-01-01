@@ -12,17 +12,20 @@ from tests.ttnn.nightly.unit_tests.operations.reduction import test_two_pass_red
 from tests.ttnn.unit_tests.operations.reduce.test_reduction import enabled_program_cache
 
 
+@pytest.mark.merge_gate
 def test_two_pass_hw_batch_combine(device, enabled_program_cache):
     regression.test_std_var_hw_compact_lane_combine(
         device, enabled_program_cache, ttnn.float32, True, (2, 3, 33, 128), (1, 2, 3)
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 def test_two_pass_hw_partial_width(device, enabled_program_cache, dtype):
     regression.test_std_var_hw_compact_partial_width(device, enabled_program_cache, dtype, 15, 3, 33)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
     [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat8_b)],
@@ -32,6 +35,7 @@ def test_two_pass_hw_output_padding(device, torch_dtype, ttnn_dtype, op):
     regression.test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, op, 128, 64)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "op,torch_op,dtype,dim,scalar",
     [

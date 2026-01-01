@@ -12,6 +12,7 @@
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul::utilities {
 
@@ -336,7 +337,7 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
     if (!view.contains(coord) || !view.is_local(coord)) {
         return device;
     }
-    return a.device()->get_device(coord);
+    return tt::tt_metal::internal::get_device(*a.device(), coord);
 }
 
 void get_max_page_size_and_num_pages(

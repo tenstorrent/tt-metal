@@ -142,12 +142,16 @@ class TTBEVFormerLayer:
             value: Batch-first multi-camera features [B, num_cams, H*W, embed_dims], shared by
                 every layer.
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
-            shift: Camera shift information for temporal alignment
+            prev_bev: The previous BEV, rotated to this frame, stacked per sample with the encoder's
+                input queries, [B*2, num_queries, embed_dims], as upstream's encoder builds it; None
+                on the first frame.
+            shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
+                with ``prev_bev``.
             reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
             rebatch_plan: Shared SCA rebatch plan for this frame
-            bev_reference_points: 2D BEV reference points on device [B, num_queries, 1, 2].
+            bev_reference_points: 2D BEV reference points on device, float32 ROW_MAJOR
+                [B, num_queries, 1, 2].
                 The encoder owns the grid and widens its leading dimension to the
                 runtime batch before the layer loop.
 
@@ -165,6 +169,7 @@ class TTBEVFormerLayer:
             value=prev_bev,  # Use previous BEV as value for temporal context
             query_pos=bev_pos,
             reference_points=bev_reference_points,
+            shift=shift,
             **kwargs,
         )
 
@@ -183,7 +188,6 @@ class TTBEVFormerLayer:
             query=bev_query,
             value=value,
             residual=bev_query,
-            query_pos=bev_pos,
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
             rebatch_plan=rebatch_plan,
@@ -373,11 +377,13 @@ class TTBEVFormerEncoder:
             batch_size=1,
             dtype=torch.float32,
         )
+        # float32: in bfloat16 a 100-cell grid's centres round by up to 0.4 cells. ROW_MAJOR, where
+        # the trailing (1, 2) is not padded to a tile.
         self._bev_reference_points = ttnn.from_torch(
             self._reference_points_3d[:, :, 0, :2].unsqueeze(2),
             device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         # Build transformer layers
@@ -424,8 +430,11 @@ class TTBEVFormerEncoder:
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key (optional); falls back to ``key`` when omitted
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
-            shift: Camera shift for temporal alignment
+            prev_bev: The previous BEV, rotated to this frame, stacked per sample with the encoder's
+                input queries, [B*2, num_queries, embed_dims], as upstream's encoder builds it; None
+                on the first frame.
+            shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
+                with ``prev_bev``.
             img_metas: Camera metadata for point sampling
 
         Returns:
@@ -508,6 +517,8 @@ class TTBEVFormerEncoder:
                 img_metas=img_metas,
                 device=self.device,
             )
+            # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
+            reference_points_cam = ttnn.typecast(reference_points_cam, ttnn.bfloat16)
 
         # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
         rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None

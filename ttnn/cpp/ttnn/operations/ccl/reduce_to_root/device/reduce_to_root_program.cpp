@@ -86,7 +86,12 @@ inline void fabric_mux_ct_args(
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
     worker_ct_args.push_back(
         mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
+    // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
+    // status word; every other mux address is then an offset from that address.
+    worker_ct_args.push_back(
+        mux_kernel_config.is_in_program_local_l1()
+            ? mux_kernel_config.get_l1_base_semaphore_id()
+            : mux_kernel_config.get_status_address());  // fabric_mux_status_address or l1_base_semaphore_id
     worker_ct_args.push_back(
         mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
     worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients
@@ -468,9 +473,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::vector<uint32_t> compute_ct_args;
 
     // 1. Setup muxes for each device type
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
     const uint32_t num_workers_per_direction = 4;
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
@@ -488,8 +490,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
 
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there; its addresses are offsets until the mux publishes the map's base.
     tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
+        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, /*base_l1_address=*/0);
+    mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
 
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -90,8 +90,7 @@ class PrefillRunParams:
     mtp_levels: int = 0
     # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
     mtp_decode_levels: int = 0
-    # Chunks per forward, PREFILL_FORWARD_TOKENS_BUDGET // chunk_size. 1 = one chunk per prefill_chunk call; > 1
-    # needs an adapter with supports_packed_forward and drives the runtime's prefill_forward.
+    # Chunks per forward, PREFILL_FORWARD_TOKENS_BUDGET // chunk_size.
     forward_chunks: int = 1
 
     @property
@@ -153,11 +152,12 @@ class PrefillModelAdapter(ABC):
     # The drafter partial travels as its own D2D plane next to the model's planes; False packs it beside the
     # hidden instead, widening the activation to 2H.
     dflash_partial_separate_plane: bool = False
+    # Stored drafter K layout used when comparing against half-split HF goldens.
+    dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
-    # Whether the runtime implements prefill_forward (several chunks per forward), so the runner may run with
-    # PREFILL_FORWARD_TOKENS_BUDGET above the chunk size. See docs/ADDING_A_PREFILL_MODEL.md.
+    # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.
     supports_packed_forward: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
@@ -247,7 +247,7 @@ class PrefillModelAdapter(ABC):
         """Construct the model for this rank and return a runtime handle. The runtime
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
-        it (make_chunk_input, prefill_chunk — or prefill_forward when ``params.forward_chunks > 1`` — and,
+        it (make_chunk_input, prefill_chunk — or prefill_forward with ``supports_packed_forward`` — and,
         when enabled, build_kv_chunk_table / set_layer_completion_sink). ``params`` carries the per-rank
         knobs."""
 

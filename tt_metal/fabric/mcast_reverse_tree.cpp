@@ -197,29 +197,22 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
                 parent_edge_position));
         }
 
-        std::uint8_t output_code = 0;
-        if (tree.axis_dim == 0) {
-            switch (edge.parent_output) {
-                case RoutingDirection::N: output_code = Routing2DCodec::Y2_NORTH; break;
-                case RoutingDirection::S: output_code = Routing2DCodec::Y2_SOUTH; break;
-                case RoutingDirection::Z: output_code = Routing2DCodec::Y2_Z; break;
-                default:
-                    return fail(fmt::format(
-                        "edge into row {} leaves its parent {}, which the Y axis cannot encode",
-                        edge.child,
-                        dir_name(edge.parent_output)));
-            }
-        } else {
-            switch (edge.parent_output) {
-                case RoutingDirection::E: output_code = Routing2DCodec::X2_EAST; break;
-                case RoutingDirection::W: output_code = Routing2DCodec::X2_WEST; break;
-                default:
-                    return fail(fmt::format(
-                        "edge into row {} leaves its parent {}, which the X axis cannot encode -- X carries no express "
-                        "dimension",
-                        edge.child,
-                        dir_name(edge.parent_output)));
-            }
+        const Fabric2DAxis axis = tree.axis_dim == 0 ? Fabric2DAxis::Y : Fabric2DAxis::X;
+        std::uint8_t output_code = Routing2DCodec::INVALID_CODE;
+        switch (edge.parent_output) {
+            case RoutingDirection::N: output_code = Routing2DCodec::encode(axis, eth_chan_directions::NORTH); break;
+            case RoutingDirection::S: output_code = Routing2DCodec::encode(axis, eth_chan_directions::SOUTH); break;
+            case RoutingDirection::E: output_code = Routing2DCodec::encode(axis, eth_chan_directions::EAST); break;
+            case RoutingDirection::W: output_code = Routing2DCodec::encode(axis, eth_chan_directions::WEST); break;
+            case RoutingDirection::Z: output_code = Routing2DCodec::encode(axis, eth_chan_directions::Z); break;
+            default: break;
+        }
+        if (output_code == Routing2DCodec::INVALID_CODE) {
+            return fail(fmt::format(
+                "edge into row {} leaves its parent {}, which the {} axis cannot encode",
+                edge.child,
+                dir_name(edge.parent_output),
+                axis == Fabric2DAxis::Y ? "Y" : "X"));
         }
 
         packed.push_back(static_cast<std::uint16_t>(

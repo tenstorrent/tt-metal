@@ -297,41 +297,6 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.7-1T) prefill runner accuracy code_debug 55k@5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export PREFILL_MODEL=kimi_k2_7
-    export PREFILL_FABRIC_MODE=2d_torus_xy
-    export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
-    export PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    export PREFILL_NUM_LAYERS=61
-    export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
-    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
-    export PREFILL_RUNNER_LAUNCH=ci
-    export PREFILL_STANDALONE_CHUNKED_PCC=0.877000
-    export LOGURU_LEVEL=INFO  # as every other prefill entry; keeps per-layer progress, drops per-op DEBUG
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
-      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=3600
-    '
-  test_type: prefill_runner
-  test_tags: [kimi_k2_7, runner]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 60
-      tier: 2
-      release_ready: false
-  owner_id: U09L76N1MAT  # Nenad Babin
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
 # ===== Kimi-K3-2.8T ====================================================================================
 
 - name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k"
@@ -658,10 +623,11 @@
     glm_mtp() (
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      export TT_GLM53_MTP_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_ttnn_cache
       timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP leg: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; the pretrained parametrization would skip and leave the leg green on random weights alone"; exit 1; }
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and not multiturn and (fused or pretrained)" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not multiturn and (fused or pretrained)" -vvv --tb=short
       '
     )
 
@@ -2175,8 +2141,10 @@
     echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      export TT_GLM53_MTP_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_ttnn_cache
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
+      export TT_GLM53_MTP_REF_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_multiturn_ref
       timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP multi-turn: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; every selected case is pretrained, so all would skip and leave the job green"; exit 1; }
         export OMP_NUM_THREADS=$(nproc)
@@ -2258,9 +2226,9 @@
 # Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
 # the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
 # decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-# sc4's 83 slots, so eager like sc4, and timed to 250k like the other sc1 legs; 24 layers are no
-# baseline for 93, so its numbers stay in this job's log and out of the sc4 summary.
-- name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 250k@5k, SC1"
+# sc4's 83 slots, so eager like sc4, and timed to sc4's 1M request; 24 layers are no baseline for 93,
+# so its numbers are gated and reported in this job's summary but kept out of the sc4 summary.
+- name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"

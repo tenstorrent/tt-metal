@@ -19,7 +19,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_mis
         q_input_tensor.storage_type() == StorageType::DEVICE && kv_input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to TM need to be on device!");
     TT_FATAL(
-        q_input_tensor.buffer() != nullptr && kv_input_tensor.buffer() != nullptr,
+        q_input_tensor.is_allocated() && kv_input_tensor.is_allocated(),
         "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         q_input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||

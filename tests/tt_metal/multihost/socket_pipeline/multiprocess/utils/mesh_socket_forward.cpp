@@ -19,6 +19,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -36,7 +37,7 @@ tt::tt_metal::Program create_socket_forward_program(
         tt::tt_metal::GetClusterType() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         "Socket forward only supports BLACKHOLE_GALAXY cluster");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
     const auto& recv_socket_conn = recv_socket.get_config().socket_connection_config[0];
@@ -164,7 +165,7 @@ void socket_forward(
     const auto& device_coord = send_socket_connections[0].sender_core.device_coord;
 
     // Check if this device coordinate is local to this mesh device
-    auto* target_device = mesh_device->get_device(device_coord);
+    auto* target_device = internal::get_device(*mesh_device, device_coord);
     TT_FATAL(target_device != nullptr, "SocketForward device coordinate not found in mesh device");
 
     distributed::MeshWorkload workload;

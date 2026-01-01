@@ -20,6 +20,7 @@
 #include "hostdevcommon/kernel_structs.h"
 
 #include "fused_msda_device_operation.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
 
@@ -61,6 +62,9 @@ struct TileAssignment {
 // [0, 1] rows, which is why `secondary_scale` is 1 except on a singleton
 // align_corners axis.
 //
+// `extent` is the axis' W or H, which bounds the floored corner on the SFPU
+// (kernels/msda_corner_word.hpp).
+//
 // Must stay in step with `AxisConstants` in msda_geometry.hpp, which consumes
 // them, and with kAxisConstantsPerLevel below, which is how many uint32 one
 // level ships as.
@@ -68,9 +72,25 @@ struct AxisConstants {
     uint32_t primary_scale;    // fp32 bit pattern
     uint32_t secondary_scale;  // fp32 bit pattern
     uint32_t bias;             // fp32 bit pattern
+    uint32_t extent;           // fp32 bit pattern
 };
 
-constexpr uint32_t kAxisConstantsPerLevel = 6;  // (primary, secondary, bias) x (x, y)
+constexpr uint32_t kAxisConstantsPerLevel = 8;  // (primary, secondary, bias, extent) x (x, y)
+static_assert(kAxisConstantsPerLevel == fused_msda_tiled_geometry::CONSTANTS_PER_LEVEL);
+
+// Appends each level's constants in kAxisConstantsPerLevel order, the layout
+// both the compute kernel and the tiled-geometry reader read.
+template <typename Args>
+void append_axis_constants(Args& args, const std::vector<AxisConstants>& kx, const std::vector<AxisConstants>& ky) {
+    for (size_t l = 0; l < kx.size(); ++l) {
+        for (const auto& k : {kx[l], ky[l]}) {
+            args.push_back(k.primary_scale);
+            args.push_back(k.secondary_scale);
+            args.push_back(k.bias);
+            args.push_back(k.extent);
+        }
+    }
+}
 
 AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_space, bool from_offsets) {
     // The from-offsets branch has no grid-space row. Silently applying the
@@ -115,7 +135,8 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
     return {
         std::bit_cast<uint32_t>(primary_scale),
         std::bit_cast<uint32_t>(secondary_scale),
-        std::bit_cast<uint32_t>(bias)};
+        std::bit_cast<uint32_t>(bias),
+        std::bit_cast<uint32_t>(e)};
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
@@ -124,19 +145,23 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 // fused_msda_reader_common.hpp), so the pipes between them hold up to two
 // points' worth; each depth below is that pipe's floor plus any slack, as noted.
 //
-// kScalarCbPages is a hard deadlock floor: at the fourth corner_weight of point
-// j+1 the PACK thread holds 7 pages and reserves the 8th, and UNPACK cannot free
-// one until the reduction of point j runs, so 7 hangs the kernel.
+// kScalarCbPages is a hard deadlock floor: the geometry of point j+1 reserves
+// its four scalar pages at once while point j's four are still outstanding,
+// and UNPACK cannot free one until the reduction of point j runs, so 7 hangs
+// the kernel.
 // kInputCbGroups is only a throughput floor — the reader's pushes are never
 // gated behind work the compute kernel has not already issued, so halving it
-// costs overlap but cannot hang. kCornerCbPages and kFracCbPages each carry one
-// page of slack over their maximum outstanding (2 and 1).
+// costs overlap but cannot hang. kCornerCbPages carries one page of slack over
+// its maximum outstanding (2).
 // Deepening the lookahead means scaling all of them.
 constexpr uint32_t kGeomCbPages = 4;    // reader -> compute operand tiles
-constexpr uint32_t kCornerCbPages = 3;  // compute -> reader floored corners
-constexpr uint32_t kFracCbPages = 2;    // compute -> compute, one point at a time
+constexpr uint32_t kCornerCbPages = 3;  // compute -> reader corner words
 constexpr uint32_t kScalarCbPages = 8;  // two points of four corners each
 constexpr uint32_t kInputCbGroups = 8;  // ditto, in corner groups of n_d_tiles
+// The tiled geometry's depths are in msda_tiled_geometry.hpp, which the
+// kernels read too.
+
+bool bf16_exact(uint32_t fp32_bits) { return (fp32_bits & 0xFFFFu) == 0; }
 
 constexpr uint32_t kTileMaxRows = 32;
 constexpr uint32_t kTileWidth = 32;
@@ -148,20 +173,22 @@ constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;
 constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;
 constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;
 constexpr uint8_t ref_scratch_cb = tt::CBIndex::c_6;
-// The geometry pipeline (README.md §6). geom/offset/attn go reader ->
-// compute, x0/y0 come back compute -> reader, frac never leaves compute.
+// The geometry pipeline (README.md §6). geom/attn go reader -> compute, the
+// corner words come back compute -> reader.
 constexpr uint8_t geom_x_cb = tt::CBIndex::c_7;
 constexpr uint8_t geom_y_cb = tt::CBIndex::c_8;
-constexpr uint8_t offset_x_cb = tt::CBIndex::c_9;
-constexpr uint8_t offset_y_cb = tt::CBIndex::c_10;
 constexpr uint8_t attn_tile_cb = tt::CBIndex::c_11;
-constexpr uint8_t x0_cb = tt::CBIndex::c_12;
-constexpr uint8_t y0_cb = tt::CBIndex::c_13;
-constexpr uint8_t frac_x_cb = tt::CBIndex::c_14;
-constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
+constexpr uint8_t corner_cb = tt::CBIndex::c_12;
 constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
 constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
 constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
+// Tiled geometry only, in place of geom_x/geom_y/attn_tile and the offset/attn
+// arenas (kernels/msda_tiled_geometry.hpp).
+constexpr uint8_t geom_rm_cb = tt::CBIndex::c_9;
+constexpr uint8_t geom_operand_cb = tt::CBIndex::c_10;
+constexpr uint8_t ref_tile_cb = tt::CBIndex::c_14;
+constexpr uint8_t const_cb = tt::CBIndex::c_15;
+constexpr uint8_t weight_cb = tt::CBIndex::c_19;
 
 // Row-major staging: when D is a whole number of tile widths, the reader
 // lands the four corners of a point side by side as a row-major block and
@@ -174,6 +201,57 @@ bool uses_rm_staging(const MSDAShapes& s) { return s.head_dim % kTileWidth == 0;
 // scatter path (D % 32 != 0) is always reader-only. Decided only here, by the
 // CB plan; create_descriptor reads the decision back from the plan.
 bool uses_split_gather(const MSDAShapes& s, tt::ARCH arch) { return uses_rm_staging(s) && arch == tt::ARCH::BLACKHOLE; }
+
+struct LevelConstants {
+    std::vector<AxisConstants> kx;
+    std::vector<AxisConstants> ky;
+};
+
+LevelConstants level_constants(const FusedMSDAOperation::operation_attributes_t& attrs, const MSDAShapes& s) {
+    LevelConstants c;
+    for (uint32_t l = 0; l < s.num_levels; ++l) {
+        c.kx.push_back(axis_constants(
+            attrs.spatial_shapes_hw[2 * l + 1],
+            attrs.align_corners,
+            attrs.locations_in_grid_space,
+            attrs.from_offsets));
+        c.ky.push_back(axis_constants(
+            attrs.spatial_shapes_hw[2 * l], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets));
+    }
+    return c;
+}
+
+// Tiled geometry (kernels/msda_tiled_geometry.hpp): compute solves a whole
+// block from tiles, so the reader hands the operands over once per block. The
+// layout puts point j in tile column j, which fixes L * P at 16, and the FPU
+// applies the per-level constants as bf16 matrix entries, so each must be exact
+// in bf16. Every staged offsets column must be one the layout names, so the
+// offsets stick must be unpadded. bf16 reference points only: the reference
+// tile is bf16. Blackhole only: like the split gather, it has been validated
+// and measured nowhere else.
+bool uses_tiled_geometry(
+    const FusedMSDAOperation::operation_attributes_t& attrs,
+    const FusedMSDAOperation::tensor_args_t& args,
+    const MSDAShapes& s,
+    uint32_t loc_stick_aligned,
+    uint32_t attn_stick_aligned) {
+    namespace tg = fused_msda_tiled_geometry;
+    if (!attrs.from_offsets || args.reference_points->dtype() != DataType::BFLOAT16 ||
+        args.value.device()->arch() != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    const auto c = level_constants(attrs, s);
+    bool constants_exact = true;
+    for (uint32_t l = 0; l < s.num_levels; ++l) {
+        for (const auto& k : {c.kx[l], c.ky[l]}) {
+            constants_exact = constants_exact && bf16_exact(k.primary_scale) && bf16_exact(k.secondary_scale) &&
+                              bf16_exact(k.bias) && bf16_exact(k.extent);
+        }
+    }
+    return s.locations_packed && s.weights_packed && s.num_levels * s.num_points == tg::POINTS &&
+           s.num_refs <= tg::MAX_REFS && loc_stick_aligned == tg::RM_ATTN_OFFSET &&
+           attn_stick_aligned <= tg::RM_ROW_NBYTES - tg::RM_ATTN_OFFSET && constants_exact;
+}
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
     const auto *const it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
@@ -250,26 +328,20 @@ MSDARuntimeArgs msda_runtime_args(
     const FusedMSDAOperation::tensor_args_t& tensor_args,
     const Tensor& output,
     const MSDAShapes& s,
-    const MSDAWorkSplit& split) {
+    const MSDAWorkSplit& split,
+    bool tiled_geometry) {
     const Tensor& loc = attrs.from_offsets ? *tensor_args.sampling_offsets : *tensor_args.sampling_locations;
+    // The tiled geometry's reader writes the per-level constants into its
+    // matrices, so it gets them too, after the level table.
+    const uint32_t reader_fixed = 5 + 3 * s.num_levels + (tiled_geometry ? kAxisConstantsPerLevel * s.num_levels : 0);
     const uint32_t ref_addr = attrs.from_offsets ? tensor_args.reference_points->buffer()->address() : 0u;
 
     // Same constants on every core.
     std::vector<uint32_t> compute_template;
     compute_template.reserve(1 + kAxisConstantsPerLevel * s.num_levels);
     compute_template.push_back(0);
-    for (uint32_t l = 0; l < s.num_levels; ++l) {
-        const auto kx = axis_constants(
-            attrs.spatial_shapes_hw[2 * l + 1], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets);
-        const auto ky = axis_constants(
-            attrs.spatial_shapes_hw[2 * l], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets);
-        compute_template.push_back(kx.primary_scale);
-        compute_template.push_back(kx.secondary_scale);
-        compute_template.push_back(kx.bias);
-        compute_template.push_back(ky.primary_scale);
-        compute_template.push_back(ky.secondary_scale);
-        compute_template.push_back(ky.bias);
-    }
+    const auto level_k = level_constants(attrs, s);
+    append_axis_constants(compute_template, level_k.kx, level_k.ky);
 
     MSDARuntimeArgs args;
     uint32_t tile_cursor = 0;
@@ -278,7 +350,7 @@ MSDARuntimeArgs msda_runtime_args(
         const uint32_t count = split.counts[i];
 
         auto& reader = args.reader.emplace_back();
-        reader.reserve(5 + 3 * s.num_levels + slots * 4);
+        reader.reserve(reader_fixed + slots * 4);
         reader.push_back(tensor_args.value.buffer()->address());
         reader.push_back(tensor_args.attention_weights.buffer()->address());
         reader.push_back(loc.buffer()->address());
@@ -293,6 +365,9 @@ MSDARuntimeArgs msda_runtime_args(
             reader.push_back(level_start);
             level_start += h * w;
         }
+        if (tiled_geometry) {
+            append_axis_constants(reader, level_k.kx, level_k.ky);
+        }
 
         auto& writer = args.writer.emplace_back();
         writer.reserve(3 + slots * 3);
@@ -306,12 +381,11 @@ MSDARuntimeArgs msda_runtime_args(
             // Output is (B, Q, H*D): one page per (b, q), head placed by offset.
             writer.insert(writer.end(), {asn.batch * s.num_queries + asn.q_start, asn.head, asn.v_rows});
         }
-        reader.resize(5 + 3 * s.num_levels + slots * 4, 0u);
+        reader.resize(reader_fixed + slots * 4, 0u);
         writer.resize(3 + slots * 3, 0u);
 
-        // `mul_unary_tile` takes its scalar as a runtime uint32 and the level
-        // index is a runtime value, so the per-level constants are runtime args.
-        // Their count is fixed by num_levels, which is in the program hash.
+        // The per-level constants are runtime args. Their count is fixed by
+        // num_levels, which is in the program hash.
         auto compute = compute_template;
         compute[0] = count;
         args.compute.push_back(std::move(compute));
@@ -391,18 +465,23 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
         });
     };
 
+    const bool tiled_geometry = uses_tiled_geometry(attrs, args, s, loc_stick_aligned, attn_stick_aligned);
+
     // Reader-only staging arenas: reserved once and treated as flat L1 space.
+    // The tiled geometry stages offsets and attn into its own row-major page.
     push(value_scratch_cb, kTileMaxRows, value_stick_aligned, datatype_to_dataformat_converter(value.dtype()));
-    push(
-        attn_scratch_cb,
-        kTileMaxRows * attn_sticks_per_row,
-        attn_stick_aligned,
-        datatype_to_dataformat_converter(attn.dtype()));
-    push(
-        loc_scratch_cb,
-        kTileMaxRows * loc_sticks_per_row,
-        loc_stick_aligned,
-        datatype_to_dataformat_converter(loc.dtype()));
+    if (!tiled_geometry) {
+        push(
+            attn_scratch_cb,
+            kTileMaxRows * attn_sticks_per_row,
+            attn_stick_aligned,
+            datatype_to_dataformat_converter(attn.dtype()));
+        push(
+            loc_scratch_cb,
+            kTileMaxRows * loc_sticks_per_row,
+            loc_stick_aligned,
+            datatype_to_dataformat_converter(loc.dtype()));
+    }
     if (attrs.from_offsets) {
         push(
             ref_scratch_cb,
@@ -417,24 +496,31 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
         push(tiled_input_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
     }
     push(scalar_tile_cb, kScalarCbPages, tile_nbytes, data_format);
-    // The geometry pipeline. Always allocated, including the offset pipes on
-    // V1 where the compute kernel names but never reads them: 16 KB of L1
-    // against a conditional CB index the kernel would have to guard.
+    // The geometry pipeline. On V2 the sampling offset rides in column 16 of
+    // the geom tiles.
     //
     // float32 reference points use float32 geom_x/geom_y tiles. Packing them
     // to bf16 first would round the point before the SFPU multiply.
     const bool ref_fp32 = attrs.from_offsets && args.reference_points->dtype() == DataType::FLOAT32;
     const auto primary_format = ref_fp32 ? datatype_to_dataformat_converter(DataType::FLOAT32) : data_format;
     const uint32_t primary_tile_nbytes = tt::tile_size(primary_format);
-    push(geom_x_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
-    push(geom_y_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
-    push(offset_x_cb, kGeomCbPages, tile_nbytes, data_format);
-    push(offset_y_cb, kGeomCbPages, tile_nbytes, data_format);
-    push(attn_tile_cb, kGeomCbPages, tile_nbytes, data_format);
-    push(x0_cb, kCornerCbPages, tile_nbytes, data_format);
-    push(y0_cb, kCornerCbPages, tile_nbytes, data_format);
-    push(frac_x_cb, kFracCbPages, tile_nbytes, data_format);
-    push(frac_y_cb, kFracCbPages, tile_nbytes, data_format);
+    // The corner word needs 24 exact bits (kernels/msda_corner_word.hpp).
+    const auto corner_format = datatype_to_dataformat_converter(DataType::FLOAT32);
+    const uint32_t corner_tile_nbytes = tt::tile_size(corner_format);
+    if (tiled_geometry) {
+        namespace tg = fused_msda_tiled_geometry;
+        push(geom_rm_cb, tg::RM_CB_PAGES, tile_nbytes, data_format);
+        push(geom_operand_cb, tg::RM_TILES, tile_nbytes, data_format);
+        push(ref_tile_cb, tg::REF_TILE_CB_PAGES, tile_nbytes, data_format);
+        push(const_cb, tg::CONST_TILES, tile_nbytes, data_format);
+        push(weight_cb, tg::WEIGHT_CB_PAGES, tile_nbytes, data_format);
+        push(corner_cb, tg::CORNER_CB_PAGES, corner_tile_nbytes, corner_format);
+    } else {
+        push(geom_x_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
+        push(geom_y_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
+        push(attn_tile_cb, kGeomCbPages, tile_nbytes, data_format);
+        push(corner_cb, kCornerCbPages, corner_tile_nbytes, corner_format);
+    }
     // Compute -> writer, double-buffered.
     push(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_format);
     // Writer-only scratch.
@@ -479,8 +565,13 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     const uint32_t value_stick_raw = s.head_dim * value.element_size();
     const uint32_t output_page_raw = s.num_heads * s.head_dim * output.element_size();
     const uint32_t value_stick_aligned = page_size_for_cb(cb_plan, value_scratch_cb);
-    const uint32_t attn_stick_aligned = page_size_for_cb(cb_plan, attn_scratch_cb);
-    const uint32_t loc_stick_aligned = page_size_for_cb(cb_plan, loc_scratch_cb);
+    // Not read back from the plan: the tiled geometry allocates no attn / offset
+    // arena, but its reader still reads sticks of these sizes.
+    const uint32_t attn_stick_aligned = aligned_page_size(
+        (s.weights_packed ? s.num_levels * s.num_points : s.num_points) * attn.element_size(),
+        attn.buffer()->buffer_type());
+    const uint32_t loc_stick_aligned = aligned_page_size(
+        (s.locations_packed ? s.num_levels * s.num_points * 2u : 2u) * loc.element_size(), loc.buffer()->buffer_type());
     const uint32_t ref_stick_aligned = attrs.from_offsets ? page_size_for_cb(cb_plan, ref_scratch_cb) : 0;
     const uint32_t output_page_aligned = aligned_page_size(output_page_raw, output.buffer()->buffer_type());
 
@@ -534,6 +625,9 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     const uint32_t gather_mailbox_nbytes = split_gather ? page_size_for_cb(cb_plan, gather_mailbox_cb) : 0u;
     constexpr uint32_t gather_ready_sem = 0;
     constexpr uint32_t gather_done_sem = 1;
+    // The tiled geometry's CBs, decided by the plan like the split gather.
+    const bool tiled_geometry =
+        std::any_of(cb_plan.begin(), cb_plan.end(), [](const auto& spec) { return spec.index == geom_rm_cb; });
     if (split_gather) {
         descriptor.semaphores.push_back(SemaphoreDescriptor{
             .id = gather_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
@@ -571,11 +665,8 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         static_cast<uint32_t>(attrs.from_offsets),
         geom_x_cb,
         geom_y_cb,
-        offset_x_cb,
-        offset_y_cb,
         attn_tile_cb,
-        x0_cb,
-        y0_cb,
+        corner_cb,
         kGeomCbPages,
         static_cast<uint32_t>(rm_staging),
         static_cast<uint32_t>(split_gather),
@@ -583,6 +674,10 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         gather_done_sem,
         gather_mailbox_cb,
         gather_mailbox_nbytes,
+        static_cast<uint32_t>(tiled_geometry),
+        geom_rm_cb,
+        ref_tile_cb,
+        const_cb,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
@@ -614,24 +709,25 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         n_d_tiles,
         geom_x_cb,
         geom_y_cb,
-        offset_x_cb,
-        offset_y_cb,
         attn_tile_cb,
-        x0_cb,
-        y0_cb,
-        frac_x_cb,
-        frac_y_cb,
+        corner_cb,
         s.num_levels,
         s.num_points,
         static_cast<uint32_t>(attrs.from_offsets),
         static_cast<uint32_t>(rm_staging),
         tiled_input_cb,
+        static_cast<uint32_t>(tiled_geometry),
+        geom_rm_cb,
+        geom_operand_cb,
+        ref_tile_cb,
+        const_cb,
+        weight_cb,
     };
     // fp32 destination: the geometry builds px, which reaches the feature map's
     // extent. In a 16-bit destination the ulp at 200 is 1.0, so floor(px) and
     // the fraction it feeds are lost outright on the larger levels and bilinear
-    // degrades to nearest-neighbour. The from-offsets path uses all four DST
-    // slots a 32-bit destination allows; there is no spare.
+    // degrades to nearest-neighbour. The geometry uses all four DST slots a
+    // 32-bit destination allows; there is no spare.
     //
     // This kernel also drives packer L1 accumulation, which #28800 records as
     // unsupported alongside a 32-bit destination (docs/L1_ACCUMULATION_FP32_ANALYSIS.md;
@@ -646,6 +742,11 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         compute_cfg.unpack_to_dest_mode[geom_x_cb] = UnpackToDestMode::UnpackToDestFp32;
         compute_cfg.unpack_to_dest_mode[geom_y_cb] = UnpackToDestMode::UnpackToDestFp32;
     }
+    // HiFi4 (the default) is required by the tiled geometry: its matmuls must
+    // reproduce bf16 data exactly, and only HiFi4 multiplies every mantissa bit
+    // of both sources: in0 (the data) is SrcB, in1 (the bf16-exact constants)
+    // is SrcA (tech_reports/matrix_engine/matrix_engine.md).
+    compute_cfg.math_fidelity = MathFidelity::HiFi4;
     compute_desc.config = compute_cfg;
 
     // ---- writer (shared by V1 and V2) ----
@@ -683,7 +784,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // tile lists and is excluded from the program hash, so buffer bindings alone
     // cannot refresh a hit.
     // Order must match kReaderKernel, kComputeKernel, kWriterKernel.
-    auto rt = msda_runtime_args(attrs, tensor_args, output, s, split);
+    auto rt = msda_runtime_args(attrs, tensor_args, output, s, split, tiled_geometry);
     for (size_t i = 0; i < split.cores.size(); ++i) {
         const auto& core = split.cores[i];
         reader_desc.runtime_args.emplace_back(core, std::move(rt.reader[i]));
@@ -706,7 +807,16 @@ void FusedMSDAOperation::ProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto s = derive_shapes(attrs, tensor_args);
     const auto split = msda_work_split(attrs, s, tensor_args.value.device()->compute_with_storage_grid_size());
-    const auto rt = msda_runtime_args(attrs, tensor_args, output, s, split);
+    const auto cb_plan = derive_circular_buffer_plan(
+        attrs,
+        tensor_args,
+        s,
+        tensor_args.value.buffer()->buffer_type(),
+        output.buffer()->buffer_type(),
+        output.dtype());
+    const bool tiled_geometry =
+        std::any_of(cb_plan.begin(), cb_plan.end(), [](const auto& spec) { return spec.index == geom_rm_cb; });
+    const auto rt = msda_runtime_args(attrs, tensor_args, output, s, split, tiled_geometry);
     const auto patch = [&](uint32_t kernel, const CoreCoord& core, const std::vector<uint32_t>& values) {
         auto& args = GetRuntimeArgs(program, kernel, core);
         TT_FATAL(

@@ -468,7 +468,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
- * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes, including the SrcA Y stride.
+ * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes; it re-asserts the canonical SrcA Y stride.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -494,8 +494,10 @@ inline void _llk_unpack_tilizeA_B_init_(
     config_unpacker_x_end<p_setadc::UNP_A>(1);
     config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
 
-    // Set Y stride for SrcA to be one 1x16 row of datums
-    std::uint32_t unpA_ch1_y_stride = SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM);
+    // Set the SrcA Y stride to one 1x16 row of datums with canonical_unpA_y_stride, the same helper
+    // configure_unpack_AB, the srcA reconfig and _llk_unpack_tilizeA_B_uninit_ use. A Tf32 SrcA (Float32 L1
+    // operand under 32-bit dest) has 4-byte datums; SCALE_DATUM_SIZE has no Tf32 arm and would give a quarter-row stride.
+    const std::uint32_t unpA_ch1_y_stride = canonical_unpA_y_stride(unpack_dst_format);
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -604,7 +606,7 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
- * Reverts the SrcA Ch1 Y stride @ref _llk_unpack_tilizeA_B_init_ wrote, and zeroes the Ch0/Ch1 Y
+ * Re-asserts the canonical SrcA Ch1 Y stride @ref _llk_unpack_tilizeA_B_init_ also wrote, and zeroes the Ch0/Ch1 Y
  * counters on both unpackers, which belong to the execute path rather than to init. The unpack
  * config word-0 write is wider than init's: init only clears haloize_mode, while this is a
  * full-word write that also forces out_data_format and throttle_mode and zeroes context_count,

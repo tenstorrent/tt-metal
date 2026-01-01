@@ -63,8 +63,9 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-static void add_block_bcast_rows_inplace(
-    uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols, bool first_call) {
+namespace {
+
+void add_block_bcast_rows_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols, bool first_call) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -100,7 +101,7 @@ static void add_block_bcast_rows_inplace(
     }
     in1_dfb_obj.pop_front(static_cast<uint16_t>(cols));
 }
-static void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
+void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -127,7 +128,7 @@ static void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_t
         in0_dfb_obj.push_back(1);
     }
 }
-static void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -159,7 +160,7 @@ static void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uin
     in1_dfb_obj.pop_front(static_cast<uint16_t>(rows));
 }
 
-static void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
+void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
 
@@ -187,7 +188,7 @@ static void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
     }
 }
 
-static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
+void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(static_cast<uint16_t>(in_dfb));
@@ -212,6 +213,8 @@ static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
         in_dfb_obj.push_back(1);
     }
 }
+
+}  // namespace
 
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in_dfb, uint32_t scale_dfb, uint32_t out_dfb>
 void reduce_c(uint32_t rows, uint32_t cols) {

@@ -37,7 +37,7 @@ template <
     typename DFB3>
 void calc_numeric_stable(
     DFB0& dfb_in_obj,
-    DFB1& dfb_max_scaler_obj,
+    DFB1& /*dfb_max_scaler_obj*/,
     DFB2& dfb_max_obj,
     DFB3& dfb_out_obj,
     std::uint32_t Wt,

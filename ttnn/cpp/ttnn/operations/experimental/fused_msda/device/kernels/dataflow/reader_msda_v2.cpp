@@ -17,20 +17,19 @@
 //   1 (pillar): P % R == 0, r = p % R — BEVFormer, where the point axis is
 //                                       laid out as (P / R, R) over z-anchors
 //
-// The addition, the scale_l normalization and the normalized -> pixel
-// mapping all happen on the SFPU in one expression:
+// The addition, the / [W_l, H_l] normalization and the normalized -> pixel
+// mapping all happen on compute in one expression:
 //
 //     px = ref_x * primary_scale + off_x * secondary_scale + bias
 //
-// with the three constants folded per level on the host. This reader only
-// chooses which pair is the reference and which is the offset; it does no
-// arithmetic on either. reference_points are bf16, or float32 when REF_FP32
-// is defined. A bf16 point in [0, 1] moves in steps of up to 2^-8 (~0.8 px at
-// W = 200), and that rounding would already be in the tile before the SFPU
-// multiply. Offsets stay bf16. The gather and the input-tile contract live in
-// fused_msda_reader_common.hpp, compiled with FROM_OFFSETS set. REF_FP32
-// changes only the reference operand's tile format there (float32, 4096 B); V1
-// never defines it.
+// with the three constants folded per level on the host — on the SFPU per
+// point, or as matrix entries on the FPU with the tiled geometry. This reader
+// only decides *which* bf16 pair is the reference and which is the offset (and,
+// tiled, where they land in the block's tiles); it does no arithmetic on
+// either. reference_points are bf16, or float32 when REF_FP32 is defined
+// (per-point path only; REF_FP32 changes the reference operand's tile format
+// to float32).
+// Everything else is fused_msda_reader_common.hpp, shared with V1.
 
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/fused_msda_reader_common.hpp"
 
@@ -56,16 +55,14 @@ struct ReferencePlusOffset {
     // block's rows intact.
     uint32_t staged_ref_row = UINT32_MAX;
 
-    void stage(Noc& noc, uint32_t b, uint32_t q_start, uint32_t head, uint32_t v_rows) {
-        // Offsets share the (B, Q, H, L, P, 2) / packed layout with V1's
-        // locations, so the same staging routine applies.
-        fused_msda::stage_location_tensor(noc, off_acc, off_arena_l1, b, q_start, head, v_rows);
-        // reference_points is (B, Q, R, 2): one page per (b, q, r), head-invariant,
-        // so consecutive heads of one query block reuse the staged rows. v_rows
-        // is a function of q_start, so the first row identifies the block.
+    // reference_points is (B, Q, R, 2): one page per (b, q, r), head-invariant,
+    // so consecutive heads of one query block reuse the staged rows. v_rows is
+    // a function of q_start, so the first row identifies the block. Returns
+    // whether the rows were re-read.
+    bool stage_refs(Noc& noc, uint32_t b, uint32_t q_start, uint32_t v_rows) {
         const uint32_t ref_row = b * Q + q_start;
         if (ref_row == staged_ref_row) {
-            return;
+            return false;
         }
         staged_ref_row = ref_row;
         for (uint32_t r = 0; r < v_rows; ++r) {
@@ -75,6 +72,47 @@ struct ReferencePlusOffset {
                 noc.async_read(ref_acc, dst, ref_stick_nbytes, {.page_id = base + k}, {.offset_bytes = 0});
             }
         }
+        return true;
+    }
+
+    void stage(Noc& noc, uint32_t b, uint32_t q_start, uint32_t head, uint32_t v_rows) {
+        // Offsets share the (B, Q, H, L, P, 2) / packed layout with V1's
+        // locations, so the same staging routine applies.
+        fused_msda::stage_location_tensor(noc, off_acc, off_arena_l1, b, q_start, head, v_rows);
+        stage_refs(noc, b, q_start, v_rows);
+    }
+
+    bool stage_tiled(
+        Noc& noc,
+        uint32_t b,
+        uint32_t q_start,
+        uint32_t head,
+        uint32_t v_rows,
+        uint32_t off_l1,
+        uint32_t off_row_nbytes) {
+        fused_msda::stage_location_tensor(noc, off_acc, off_l1, b, q_start, head, v_rows, off_row_nbytes);
+        return stage_refs(noc, b, q_start, v_rows);
+    }
+
+    // Reference k of row r to (r, k) and (r, 16 + k); see
+    // msda_tiled_geometry.hpp. Plain loads and stores, fenced on both sides
+    // here; the caller has barriered the arena's NoC reads.
+    void fill_ref_tile(uint32_t tile_l1, uint32_t v_rows) const {
+        asm volatile("" ::: "memory");
+        constexpr uint32_t STICK_WORDS = ref_stick_nbytes / sizeof(uint32_t);
+        for (uint32_t r = 0; r < v_rows; ++r) {
+            const auto off = fused_msda_tile_layout::tile_row_offsets(r);
+            uint16_t* x = &CoreLocalMem<uint16_t>(tile_l1 + off.lo)[0];
+            uint16_t* y = &CoreLocalMem<uint16_t>(tile_l1 + off.hi)[0];
+            const uint32_t* src = &CoreLocalMem<uint32_t>(ref_arena_l1 + r * NUM_REFS * ref_stick_nbytes)[0];
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < NUM_REFS; ++k) {
+                const uint32_t xy = src[k * STICK_WORDS];  // (x, y) bf16, little-endian
+                x[k] = static_cast<uint16_t>(xy);
+                y[k] = static_cast<uint16_t>(xy >> 16);
+            }
+        }
+        asm volatile("" ::: "memory");
     }
 
 #ifdef REF_FP32
@@ -88,7 +126,7 @@ struct ReferencePlusOffset {
     }
 #else
     void primary(uint32_t r, uint32_t l, uint32_t p, uint16_t& x, uint16_t& y) const {
-        const uint32_t ref_idx = (REF_MODE == 0) ? l : (p % NUM_REFS);
+        const uint32_t ref_idx = fused_msda::ref_index(l, p);
         CoreLocalMem<volatile uint16_t> ref(ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes);
         x = ref[0];
         y = ref[1];
@@ -113,15 +151,21 @@ void kernel_main() {
     const auto value_acc = TensorAccessor(value_args, value_addr, value_page_nbytes);
     const auto attn_acc = TensorAccessor(attn_args, attn_addr, attn_stick_nbytes);
 
-    CircularBuffer off_scratch_cb(loc_scratch_cb_index);
-    off_scratch_cb.reserve_back(TILE_MAX_ROWS * LOC_STICKS_PER_ROW);
+    // Tiled geometry stages the offsets into its row-major block instead, and
+    // the factory allocates no offset arena.
+    uint32_t off_arena_l1 = 0;
+    if constexpr (!TILED_GEOMETRY) {
+        CircularBuffer off_scratch_cb(loc_scratch_cb_index);
+        off_scratch_cb.reserve_back(TILE_MAX_ROWS * LOC_STICKS_PER_ROW);
+        off_arena_l1 = off_scratch_cb.get_write_ptr();
+    }
     CircularBuffer ref_scratch_cb(ref_scratch_cb_index);
     ref_scratch_cb.reserve_back(TILE_MAX_ROWS * NUM_REFS);
 
     ReferencePlusOffset loc_src{
         .off_acc = TensorAccessor(off_args, off_addr, loc_stick_nbytes),
         .ref_acc = TensorAccessor(ref_args, ref_addr, ref_stick_nbytes),
-        .off_arena_l1 = off_scratch_cb.get_write_ptr(),
+        .off_arena_l1 = off_arena_l1,
         .ref_arena_l1 = ref_scratch_cb.get_write_ptr(),
     };
 

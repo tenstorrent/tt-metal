@@ -947,7 +947,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rounding.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/activations.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/clamp.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/trigonometric.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/binop_with_scalar.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/fill.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/fmod.h \
@@ -958,7 +957,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/typecast.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/prelu.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/softplus.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/softsign.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/hardtanh.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rand.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/isinf_isnan.h \
@@ -991,7 +989,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/cumsum.h \
                          tt_metal/hw/inc/api/compute/cumprod.h \
                          tt_metal/hw/inc/api/compute/add_int_sfpu.h \
-                         tt_metal/hw/inc/api/compute/binop_with_scalar.h \
                          tt_metal/hw/inc/api/compute/gcd.h \
                          tt_metal/hw/inc/api/compute/xlogy.h \
                          tt_metal/hw/inc/api/compute/lcm.h \
@@ -1004,16 +1001,8 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/sub_int_sfpu.h \
                          tt_metal/hw/inc/api/compute/mul_int_sfpu.h \
                          tt_metal/hw/inc/api/compute/compute_kernel_api.h \
-                         tt_metal/impl/kernels/kernel_args.hpp \
-                         tt_metal/include/tt_metal/metal.hpp \
-                         tt_metal/api/tt-metalium/types.hpp \
-                         tt_metal/include/tt_metal/buffer.hpp \
-                         tt_metal/include/tt_metal/command_queue.hpp \
-                         tt_metal/include/tt_metal/device.hpp \
-                         tt_metal/api/tt-metalium/global_circular_buffer.hpp \
-                         tt_metal/include/tt_metal/kernel.hpp \
-                         tt_metal/include/tt_metal/program.hpp \
-                         tt_metal/include/tt_metal/trace.hpp
+                         tt_metal/jit_build/kernel_args.hpp \
+                         tt_metal/api/tt-metalium/global_circular_buffer.hpp
 
 
 # This tag can be used to specify the character encoding of the source files

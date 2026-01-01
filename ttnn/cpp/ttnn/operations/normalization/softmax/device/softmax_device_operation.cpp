@@ -176,8 +176,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensors_args.input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(
-        tensors_args.input_tensor.buffer() != nullptr,
-        "Operands to softmax need to be allocated in buffers on device!");
+        tensors_args.input_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((tensors_args.input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
         tensors_args.input_tensor.dtype() == DataType::FLOAT32 ||
@@ -217,6 +216,15 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                      tensors_args.input_tensor.padded_shape()[-1] / tile_width,
                      tile_height});
                 TT_FATAL(mask.padded_shape() == expected_shape, "Non-sharded mask shape must match expected shape");
+            } else {
+                const auto& input_tile = tensors_args.input_tensor.tensor_spec().tile();
+                TT_FATAL(
+                    mask.padded_shape()[-2] >= input_tile.get_height() &&
+                        mask.padded_shape()[-1] >= input_tile.get_width(),
+                    "Non-sharded TILE mask must span at least one {}x{} input tile, got padded shape {}",
+                    input_tile.get_height(),
+                    input_tile.get_width(),
+                    mask.padded_shape());
             }
             for (uint32_t i = 1; i < tensors_args.input_tensor.padded_shape().rank() - 2; i++) {
                 TT_FATAL(

@@ -200,7 +200,13 @@ BlockPlan make_block_plan(
     uint32_t output_single_tile_size,
     uint32_t tile_height,
     uint32_t tile_width,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
+// Widest row-major block the Quasar unpacker may tilize in one pass. On the RTL emulator a
+// tilize_with_val_padding block of 191 or more tiles never completes (176 does; emu-quasar-2x3
+// sweep, #56622), so Quasar keeps every tilize block at or under this width.
+constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
 
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
@@ -439,6 +445,16 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
+
+// True for a BLOCK/WIDTH-sharded memory config whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. For an RM buffer with such a config, one page is one shard row,
+// and the device stores pages at the aligned page size. The kernel-side TensorAccessor uses a single
+// page size both as the distance between pages and, in `noc_async_*_sharded`, as the bytes moved per
+// page, so one value is correct for both uses only when the shard row is a multiple of the alignment.
+// Always false for HEIGHT sharding. TensorSpec requires a HEIGHT-sharded tensor's shard width to equal
+// the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
+// single transfer of the size the caller asks for, using the page size only as the distance between pages.
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
