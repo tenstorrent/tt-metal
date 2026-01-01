@@ -10,20 +10,35 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_softsign() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat tmp = sfpi::abs(v) + 1.0f;
-        tmp = sfpu_reciprocal<APPROXIMATION_MODE>(tmp);
-        sfpi::dst_reg[0] = v * tmp;
-        sfpi::dst_reg++;
+        sfpi::vFloat va = sfpi::setsgn(v, 0);
+        sfpi::vFloat in = va + 1.0f;
+        // Inlined sfpu_reciprocal_iter; 2**(127 - in.Exp) goes on |v| (doubled) and 0.5 on y, so nothing underflows.
+        sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
+        sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;
+        sfpi::vUInt scale_bits = ~sfpi::as<sfpi::vUInt>(in);
+        y = sfpi::vConstFloatPrgm2 + y * negative_x;
+        sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
+        sfpi::vFloat t = 1.0f + negative_x * y;
+        y = y + y * t;
+        if constexpr (!APPROXIMATION_MODE) {
+            t = 1.0f + negative_x * y;
+            y = y + y * t;
+        }
+        sfpi::vFloat r = (va * scale) * (y * 0.5f);
+        // scale is negative (~ flips the sign bit) and 0 for inf / NaN; copysgn restores the sign of v.
+        // ADDR_MOD_2 here is ADDR_MOD_6 once the SFPU address-mode base is applied.
+        sfpi::dst_reg[0].mode(ADDR_MOD_2) = sfpi::copysgn(r, v);
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_softsign() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }

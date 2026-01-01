@@ -866,6 +866,7 @@ _OP_EDGES: dict[MathOperation, dict[Operand, Edges]] = {
         threshold=RELU_MIN_THRESHOLD,
     ),
     MathOperation.Softplus: _a((SOFTPLUS_THRESHOLD,)),  # linear past it
+    MathOperation.Softsign: _a((-(2.0**126), 2.0**126, -3.0e38, 3.0e38)),
     MathOperation.Round: _a((-2.5, -1.5, -0.5, 0.5, 1.5, 2.5)),  # half-to-even ties
     MathOperation.Floor: _a((-2.0, -1.0, 0.0, 1.0, 2.0)),
     MathOperation.Ceil: _a((-2.0, -1.0, 0.0, 1.0, 2.0)),
