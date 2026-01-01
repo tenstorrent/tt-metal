@@ -691,7 +691,8 @@ void BandwidthResultsManager::compare_summary_results_with_golden() {
             golden_csv_entries_.size());
     }
 
-    for (auto& test_result : bandwidth_results_summary_) {
+    for (int i = 0; i < bandwidth_results_summary_.size(); i++) {
+        BandwidthResultSummary& test_result = bandwidth_results_summary_[i];
         auto bandwidth_stat_location =
             std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::BandwidthMean);
         if (bandwidth_stat_location == stat_order_.end()) {

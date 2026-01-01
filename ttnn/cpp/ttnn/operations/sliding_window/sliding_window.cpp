@@ -599,22 +599,23 @@ static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTran
     GatherRoute current_route;
     current_route.header.noc_x = transfers[0].noc_x;
     current_route.header.noc_y = transfers[0].noc_y;
-    for (const auto& xfer : transfers) {
-        bool same_core = (xfer.noc_x == current_route.header.noc_x) && (xfer.noc_y == current_route.header.noc_y);
+    for (size_t i = 0; i < transfers.size(); i++) {
+        const auto& t = transfers[i];
+        bool same_core = (t.noc_x == current_route.header.noc_x) && (t.noc_y == current_route.header.noc_y);
         if (!same_core) {
             current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
             TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
             output.routes.push_back(current_route);
 
             current_route = GatherRoute();
-            current_route.header.noc_x = xfer.noc_x;
-            current_route.header.noc_y = xfer.noc_y;
+            current_route.header.noc_x = t.noc_x;
+            current_route.header.noc_y = t.noc_y;
         }
 
         GatherTransfer transfer{};
-        transfer.src_id = xfer.src_id;
-        transfer.dst_id = xfer.dst_id;
-        transfer.size = xfer.size;
+        transfer.src_id = t.src_id;
+        transfer.dst_id = t.dst_id;
+        transfer.size = t.size;
         current_route.transfers.push_back(transfer);
     }
     current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());

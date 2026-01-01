@@ -309,7 +309,9 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     uint32_t tile_start_id = 0;
     auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
-    for (auto core : cores) {
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        CoreCoord core = cores[i];
+
         tt::tt_metal::SetRuntimeArgs(
             program, typecast_reader_kernel_id, core, {src_buffer->address(), ntiles_per_core, tile_start_id});
 

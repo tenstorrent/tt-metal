@@ -6,8 +6,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
-#include <functional>
-#include <numeric>
 #include <ostream>
 
 #include <tt_stl/assert.hpp>
@@ -26,7 +24,11 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
 std::uint32_t TensAddr::numel() const {
-    return std::accumulate(sh.begin(), sh.end(), std::uint32_t{1}, std::multiplies<>{});
+    std::uint32_t prod = 1;
+    for (int j = 0; j < sh.size(); j++) {
+        prod *= sh[j];
+    }
+    return prod;
 }
 
 int TensAddr::offs(int n, int c, int h, int w) {
