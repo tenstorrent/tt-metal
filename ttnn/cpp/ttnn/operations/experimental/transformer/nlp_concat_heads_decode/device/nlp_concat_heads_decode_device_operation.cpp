@@ -57,6 +57,10 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
         "Shard spec shape[0] ({}) must match input tensor padded shape[-2] ({})",
         shard_spec.shape[0],
         input_tensor.padded_shape()[-2]);
+    TT_FATAL(
+        shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        "Input shard orientation must be ROW_MAJOR but got {}",
+        shard_spec.orientation);
     auto num_cores = shard_spec.grid.num_cores();
     if (args.on_subcoregrids) {
         TT_FATAL(num_cores == input_shape[1], "Input core grid num_cores must be equal to num users");
