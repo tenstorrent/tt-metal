@@ -565,8 +565,8 @@ void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
-        for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-            delete node_id_to_kernel[idx];
+        for (auto& kernel : node_id_to_kernel) {
+            delete kernel;
         }
         node_id_to_kernel.clear();
         command_queue_compile_group.clear();
@@ -786,9 +786,9 @@ void configure_dispatch_cores(IDevice* device) {
         }
     }
     // Configure cores for all nodes corresponding to this device
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->ConfigureCore();
+    for (auto& kernel : node_id_to_kernel) {
+        if (kernel->GetDeviceId() == device->id()) {
+            kernel->ConfigureCore();
         }
     }
 }
@@ -816,8 +816,8 @@ const std::unordered_set<TerminationInfo>& get_registered_termination_cores(Chip
 
 void reset_topology_state() {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24439
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        delete node_id_to_kernel[idx];
+    for (auto& kernel : node_id_to_kernel) {
+        delete kernel;
     }
     node_id_to_kernel.clear();
     command_queue_compile_group.clear();

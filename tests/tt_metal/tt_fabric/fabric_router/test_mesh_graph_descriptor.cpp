@@ -109,8 +109,7 @@ void check_connections(
     uint32_t expected_channel_count,
     GlobalNodeId expected_parent_instance_id,
     const std::unordered_set<std::string>& expected_node_names) {
-    for (size_t idx = 0; idx < connections.size(); ++idx) {
-        const auto connection_id = connections[idx];
+    for (unsigned int connection_id : connections) {
         const auto& connection = desc.get_connection(connection_id);
 
         EXPECT_EQ(connection.count, expected_channel_count);

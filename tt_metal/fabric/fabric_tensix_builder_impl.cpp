@@ -1096,8 +1096,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
     } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
         // Add sender_channel_is_traffic_injection_channel_array to ct args for MUX mode
-        for (size_t i = 0; i < sender_channel_is_traffic_injection_channel_array.size(); i++) {
-            ct_args.push_back(sender_channel_is_traffic_injection_channel_array[i] ? 1 : 0);
+        for (bool is_injection : sender_channel_is_traffic_injection_channel_array) {
+            ct_args.push_back(is_injection ? 1 : 0);
         }
     }
 
