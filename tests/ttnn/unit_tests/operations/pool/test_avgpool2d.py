@@ -3,6 +3,7 @@
 
 import ttnn
 import pytest
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
 pytestmark = pytest.mark.use_module_device
@@ -282,3 +283,56 @@ def test_global_avg_pool2d_memory_config(device, input_shape, memory_config):
     tt_torch = ttnn.to_torch(tt_output)
     tt_torch = torch.permute(tt_torch, (0, 3, 1, 2))
     assert_with_pcc(torch_expected, tt_torch, 0.999)
+
+
+@pytest.mark.parametrize("channels", [64, 256])
+@pytest.mark.parametrize(
+    "kernel_size, divisor_override, padding",
+    [((2, 2), None, 0), ((3, 3), 8, 0), ((5, 5), 16, 0), ((3, 3), None, 0), ((3, 3), None, 1)],
+    ids=["2x2", "3x3_div8", "5x5_div16", "3x3", "3x3_pad1_exclude_pad"],
+)
+def test_avg_pool2d_within_one_ulp(device, kernel_size, divisor_override, padding, channels):
+    import torch
+
+    if channels > 128 and is_wormhole_b0():
+        pytest.skip("Wormhole keeps the bfloat16 DEST when an avg pool reduces more than 4 channel tiles at once")
+    torch.manual_seed(0)
+    n, c, h, w = 1, channels, 56, 56
+    torch_input = torch.rand((n, c, h, w)).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_output = ttnn.avg_pool2d(
+        input_tensor=tt_input,
+        batch_size=n,
+        input_h=h,
+        input_w=w,
+        channels=c,
+        kernel_size=list(kernel_size),
+        stride=[1, 1],
+        padding=[padding] * 4,
+        ceil_mode=False,
+        divisor_override=divisor_override,
+        count_include_pad=padding == 0,
+        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        config_tensor_in_dram=True,
+    )
+
+    window_sum = torch.nn.functional.avg_pool2d(torch_input.double(), kernel_size, 1, padding, divisor_override=1)
+    if divisor_override is not None:
+        divisor = torch.full_like(window_sum, divisor_override)
+    else:
+        ones = torch.ones((1, 1, h, w), dtype=torch.float64)
+        divisor = torch.nn.functional.avg_pool2d(ones, kernel_size, 1, padding, divisor_override=1)
+    scalar = (1.0 / divisor).float().to(torch.bfloat16).double()
+    exact = (window_sum * scalar).permute(0, 2, 3, 1).reshape(-1, c)
+    output = ttnn.to_torch(tt_output).double().reshape(-1, c)[: exact.shape[0]]
+    nearest = exact.to(torch.bfloat16)
+    bits = nearest.view(torch.int16)
+    below = torch.where(nearest.double() <= exact, nearest.double(), (bits - 1).view(torch.bfloat16).double())
+    above = torch.where(nearest.double() >= exact, nearest.double(), (bits + 1).view(torch.bfloat16).double())
+    outside = ((output < below) | (output > above)).sum().item()
+    assert outside == 0, f"{outside} of {output.numel()} outputs are more than one bfloat16 ulp from the expected value"
