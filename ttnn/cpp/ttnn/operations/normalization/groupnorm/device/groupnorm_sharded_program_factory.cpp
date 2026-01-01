@@ -424,14 +424,14 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
         }
     } else {
         for (const auto& core_group : core_coords2D) {
-            for (size_t j = 0; j < core_group.size(); ++j) {
-                if (mcast_sender_core_ranges.contains(CoreRange(core_group[j]))) {
+            for (const auto& core : core_group) {
+                if (mcast_sender_core_ranges.contains(CoreRange(core))) {
                     group_index += 1;
                 }
                 if (group_index >= static_cast<int>(mcast_groups.size())) {
                     mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
                 }
-                mcast_groups[group_index].push_back(core_group[j]);
+                mcast_groups[group_index].push_back(core);
             }
         }
     }

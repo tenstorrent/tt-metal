@@ -32,7 +32,7 @@ using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
 TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
-    for (auto mesh_device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -55,7 +55,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
-    for (auto mesh_device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
 
         distributed::MeshWorkload workload;
