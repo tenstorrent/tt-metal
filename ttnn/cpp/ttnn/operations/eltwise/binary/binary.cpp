@@ -9,6 +9,8 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
@@ -823,15 +825,15 @@ inline auto invoke_binary_ng_impl(
     // ends with isclose's rtol/atol/equal_nan, the scalar one with scalar_is_lhs. No single call
     // can satisfy both, and while these were two separate call sites the flag was passed on one and
     // forgotten on the other. This lambda is the only place either overload is invoked.
-    auto dispatch = [&](const auto& a, const auto& b) {
+    auto dispatch = [&](const auto& a, const auto& b, DataType dt, const std::optional<Tensor>& out) {
         if constexpr (requires { b.dtype(); }) {
             return ttnn::prim::binary_ng(
                 a,
                 b,
                 binary_op_type,
-                out_dtype,
+                dt,
                 memory_config,
-                output,
+                out,
                 fast_and_approximate_mode,
                 lhs_activations,
                 rhs_activations,
@@ -844,9 +846,9 @@ inline auto invoke_binary_ng_impl(
                 a,
                 b,
                 binary_op_type,
-                out_dtype,
+                dt,
                 memory_config,
-                output,
+                out,
                 fast_and_approximate_mode,
                 lhs_activations,
                 rhs_activations,
@@ -860,13 +862,40 @@ inline auto invoke_binary_ng_impl(
 
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
         // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
-        return dispatch(lhs_eff, rhs_eff);
+        return dispatch(lhs_eff, rhs_eff, out_dtype, output);
     }
     // Either one or both are tiles
     const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
     const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
 
-    auto result = dispatch(input_a, input_b);
+    std::optional<Tensor> repadded;
+    if (binary_op_type == operations::binary::BinaryOpType::DIV &&
+        operations::binary::detail::is_block_format(out_dtype) && !sub_core_grids.has_value() &&
+        !sub_device_id.has_value() && !input_a.is_sharded() &&
+        !(memory_config.has_value() && memory_config->is_sharded()) && !(output.has_value() && output->is_sharded())) {
+        std::optional<DataType> wide;
+        if constexpr (requires { rhs.dtype(); }) {
+            const auto rhs_width = rhs_eff.logical_shape()[-1];
+            if (!input_b.is_sharded() && rhs_width % tt::constants::FACE_WIDTH != 0 &&
+                (rhs_width != 1 || lhs_eff.logical_shape()[-1] == 1)) {
+                wide = lhs_eff.dtype() == DataType::FLOAT32 || rhs_eff.dtype() == DataType::FLOAT32
+                           ? DataType::FLOAT32
+                           : DataType::BFLOAT16;
+            }
+        } else {
+            if (scalar_is_lhs && lhs_eff.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0) {
+                wide = lhs_eff.dtype() == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+            }
+        }
+        if (wide.has_value()) {
+            repadded = ttnn::typecast(
+                ttnn::fill_implicit_tile_padding(dispatch(input_a, input_b, *wide, std::nullopt), 0.0f),
+                out_dtype,
+                memory_config,
+                output);
+        }
+    }
+    auto result = repadded.has_value() ? *repadded : dispatch(input_a, input_b, out_dtype, output);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
