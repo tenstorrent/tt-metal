@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
+from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
 
@@ -256,3 +258,69 @@ def test_conv_dram(
         fast_compare=True,
         use_dram_slicing=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, weight_channels, input_channels, input_height, input_width, kernel, stride, padding",
+    (
+        (96, 3, 16, 224, 224, (4, 4), (4, 4), (0, 0)),  # Swin patch embedding, RGB zero-padded to 16 channels
+        (64, 3, 16, 64, 64, (7, 7), (2, 2), (3, 3)),
+    ),
+)
+@pytest.mark.parametrize("prepare_weights", [False, True], ids=["host_weights", "prepare_conv_weights"])
+def test_conv2d_kernel_stride_folding_weights_with_fewer_channels(
+    device,
+    output_channels,
+    weight_channels,
+    input_channels,
+    input_height,
+    input_width,
+    kernel,
+    stride,
+    padding,
+    prepare_weights,
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, weight_channels, input_height, input_width, dtype=torch.bfloat16)
+    torch_weight = torch.randn(output_channels, weight_channels, *kernel, dtype=torch.bfloat16)
+    torch_output = torch.nn.functional.conv2d(torch_input.float(), torch_weight.float(), stride=stride, padding=padding)
+
+    padded_input = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, input_channels - weight_channels))
+    tt_input = ttnn.from_torch(
+        padded_input.permute(0, 2, 3, 1),
+        ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    conv_kwargs = dict(
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        kernel_size=kernel,
+        stride=stride,
+        padding=padding,
+        batch_size=1,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, enable_kernel_stride_folding=True),
+    )
+    tt_weight = ttnn.from_torch(torch_weight, ttnn.bfloat16)
+    if prepare_weights:
+        tt_weight = ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight,
+            weights_format="OIHW",
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            dilation=(1, 1),
+            groups=1,
+            has_bias=False,
+            input_dtype=ttnn.bfloat16,
+            **conv_kwargs,
+        )
+        tt_weight = ttnn.to_device(tt_weight, device)
+    tt_output = ttnn.conv2d(input_tensor=tt_input, weight_tensor=tt_weight, dtype=ttnn.bfloat16, **conv_kwargs)
+    out_h, out_w = torch_output.shape[-2:]
+    tt_output = ttnn.to_torch(tt_output).float().reshape(1, out_h, out_w, output_channels).permute(0, 3, 1, 2)
+    assert_with_pcc(torch_output, tt_output, 0.999)

@@ -185,6 +185,9 @@ Result conv2d_L1(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
+    const uint32_t unfolded_in_channels = conv_config.enable_kernel_stride_folding.value()
+                                              ? in_channels / (orig_stride[0] * orig_stride[1])
+                                              : in_channels;
     // Configure weight and bias preparation parameters
     Conv2dWeightsBiasPrepConfig params(
         input_channels_alignment,
@@ -204,7 +207,8 @@ Result conv2d_L1(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride);
+        orig_stride,
+        unfolded_in_channels);
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
