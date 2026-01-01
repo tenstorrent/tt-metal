@@ -56,6 +56,14 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) 
         case tt::tt_metal::DataType::INT32: os << "int32"; break;
         case tt::tt_metal::DataType::INT8: os << "int8"; break;
         case tt::tt_metal::DataType::FP8_E4M3: os << "fp8_e4m3"; break;
+        case tt::tt_metal::DataType::MXFP8_E4M3: os << "mxfp8_e4m3"; break;
+        case tt::tt_metal::DataType::MXFP8_E5M2: os << "mxfp8_e5m2"; break;
+        case tt::tt_metal::DataType::MXFP6_E2M3: os << "mxfp6_e2m3"; break;
+        case tt::tt_metal::DataType::MXFP6_E3M2: os << "mxfp6_e3m2"; break;
+        case tt::tt_metal::DataType::MXFP4: os << "mxfp4"; break;
+        case tt::tt_metal::DataType::MXINT8: os << "mxint8"; break;
+        case tt::tt_metal::DataType::MXINT4: os << "mxint4"; break;
+        case tt::tt_metal::DataType::MXINT2: os << "mxint2"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
@@ -277,7 +285,7 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
             return tensor;
         }
         if (tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B) {
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT4_B || tt::tt_metal::is_mx(tensor.dtype())) {
             return tt::tt_metal::to_layout(
                 ttnn::to_dtype(tensor, tt::tt_metal::DataType::FLOAT32), tt::tt_metal::Layout::ROW_MAJOR);
         }
@@ -351,6 +359,11 @@ std::string to_string_impl<bfloat4_b>(const ttnn::Tensor& tensor) {
 
 template <>
 std::string to_string_impl<float8_e4m3>(const ttnn::Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
+template <>
+std::string to_string_impl<mx_tiles>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
@@ -481,6 +494,12 @@ ttnn::Tensor extract_shard_impl<float8_e4m3>(const ttnn::Tensor&, const uint32_t
     // FP8_E4M3 sharded device tensors are not produced by any current op (combine emits
     // interleaved output). Add a real implementation when a use case appears.
     TT_THROW("extract_shard: FP8_E4M3 is not supported");
+}
+
+template <>
+ttnn::Tensor extract_shard_impl<mx_tiles>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
+    // MX tiles are stored as packed uint32 words, like BFP.
+    return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id) {

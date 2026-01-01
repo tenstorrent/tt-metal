@@ -53,7 +53,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.ulp_sweep import golden_input, sweep_spec
+from helpers.ulp_sweep import fp16_dest_unusable, golden_input, sweep_spec
 
 pytestmark = pytest.mark.accuracy
 
@@ -74,10 +74,10 @@ SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
 SPECIALS_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
 
 
-def _arch_is_blackhole():
-    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+def _arch():
+    from helpers.chip_architecture import get_chip_architecture
 
-    return get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    return get_chip_architecture()
 
 
 def _cells():
@@ -91,9 +91,9 @@ def _cells():
         # A float32 input through a 16-bit Dest is truncated before the SFPU sees
         # it: that measures the Dest, not the kernel.
         and not (in_fmt == DataFormat.Float32 and dest == DestAccumulation.No)
-        # Blackhole cannot run a Float16 SFPU input through a 16-bit Dest (the
-        # functional tests skip it too); what comes back is not the kernel's.
-        and not (_arch_is_blackhole() and DataFormat.Float16 in (in_fmt, out_fmt) and dest == DestAccumulation.No)
+        # Blackhole cannot run fp16 through a 16-bit Dest; what comes back is not the
+        # kernel's. The sweep leaves out the same cells.
+        and not fp16_dest_unusable(in_fmt, out_fmt, dest, _arch())
     ]
 
 

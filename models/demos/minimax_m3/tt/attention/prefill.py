@@ -3,9 +3,9 @@
 
 
 import ttnn
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
-from ..prefill_chunk import PrefillChunk
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
@@ -60,7 +60,7 @@ def attention_forward(
         position_idx: Position indices (unused in prefill)
         ccl_manager: Communication manager
         layer_idx: this layer's index, for the per-layer cache write
-        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each; None = one
+        chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py), one equal block of rows each; None = one
             chunk in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
             chunk against its slot_id at its actual_start (>0 selects the cache-read paths). Empty chunks (the
             tail) get zero rows. A partial chunk's pad rows follow its real rows, so causality keeps them out of

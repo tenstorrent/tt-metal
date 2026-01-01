@@ -52,6 +52,7 @@ from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_tensor_prefetcher_pipes as _make_tensor_prefetcher_pipes,
     require_tensor_prefetcher,
 )
 
@@ -141,14 +142,50 @@ def _per_receiver_page_size_bytes() -> int:
     return k_block_w_tiles * n_per_recv_tiles * int(_DTYPE_BYTES * ttnn.TILE_SIZE * ttnn.TILE_SIZE)
 
 
-def _gcb_size_bytes(page_size: int, pages_per_layer: int) -> int:
-    """Per-receiver GCB size = one full layer's worth of pages. Matches what the worker
-    path passes (`pages_per_layer * page_size`) so the two paths have symmetric buffer
-    depth. Previously this was `4 * page_size` for the DRAM-core path, which left only
-    4 pages of in-flight headroom and gave `reserve_back` a ~16× backpressure tax vs the
-    worker — making the comparison unfair (see docs/tensor_prefetcher_drisc_profile.md).
-    """
-    return pages_per_layer * page_size
+def _bank_columns(num_dram_banks: int):
+    """Bank b feeds the column of receivers (b, 0)..(b, recv_per_bank - 1). The senders are DRAM
+    cores, not workers, so this grid cannot collide with dispatch cores."""
+    return [
+        (
+            b,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
+        )
+        for b in range(num_dram_banks)
+    ]
+
+
+def _time_pipe_push(device, pipes, request, num_prefetch_layers: int, pages_per_layer: int, page_size: int) -> float:
+    """Queue ``request`` num_prefetch_layers times, drain one warmup layer, then time the replay of
+    a trace of ``num_prefetch_layers - 1`` discard consumers, each draining one layer. Returns the
+    elapsed seconds."""
+    trace_repeats = num_prefetch_layers - 1
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [request] * num_prefetch_layers, prefetcher_pipes=pipes)
+
+    # Warmup: drain 1 layer's worth of entries — this also primes the cached MeshWorkload so the
+    # binary write happens here, not inside the trace.
+    ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+        device, num_iters=pages_per_layer, page_size_bytes=page_size, prefetcher_pipes=pipes
+    )
+    ttnn.synchronize_device(device)
+
+    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(trace_repeats):
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=pages_per_layer, page_size_bytes=page_size, prefetcher_pipes=pipes
+        )
+    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+
+    t0 = time.perf_counter()
+    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - t0
+    ttnn.release_trace(device, bench_trace)
+    ttnn.experimental.stop_tensor_prefetcher(device)
+
+    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
+        time.sleep(3)  # let watcher dump DRISC ring buffers before device close
+    return elapsed
 
 
 def _build_weight(device, num_dram_banks: int) -> ttnn.Tensor:
@@ -179,24 +216,6 @@ def _build_weight_recv_contig(device, num_dram_banks: int) -> ttnn.Tensor:
     return _make_recv_contig_weight(device, pt_weight, num_dram_banks, _RING_SIZE, _DTYPE)
 
 
-def _build_dummy_addrs(device) -> ttnn.Tensor:
-    """tensor_addrs is unused on the DRAM-core path but required by op contract."""
-    return ttnn.from_torch(
-        torch.zeros(1, 1),
-        device=device,
-        dtype=ttnn.uint32,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-                [1, 1],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        ),
-    )
-
-
 def _gbps(bytes_total: float, elapsed_s: float) -> float:
     return bytes_total / elapsed_s / 1e9
 
@@ -208,68 +227,27 @@ def _gbps(bytes_total: float, elapsed_s: float) -> float:
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_tensor_prefetcher(device, op_name, shape):
-    """Tensor prefetcher → discard receiver. Prefetcher launched out-of-band with
-    num_layers = trace_repeats + 1 (1 warmup + N traced). A trace captures N consumer
-    ops (each draining one layer worth = ring_size pages) and is replayed once. Same
-    methodology as the matmul bench (test_bench_dram_core_repeats).
+    """Tensor prefetcher, legacy K-row-major weight → discard receiver. Prefetcher launched
+    out-of-band with num_layers = trace_repeats + 1 (1 warmup + N traced). A trace captures N
+    consumer ops (each draining one layer worth = ring_size pages) and is replayed once. Same
+    methodology as the matmul bench (test_bench_dram_core_repeats). One pipe per bank, since one read
+    of a bank's shard feeds all of its receivers; the ring holds one layer.
     """
     _apply_shape(shape)
     if device.dram_grid_size().x != 8:
         pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
 
     trace_repeats = _bench_trace_repeats()
-    num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace
-
     num_dram_banks = device.dram_grid_size().x
     num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
     page_size = _per_receiver_page_size_bytes()
     pages_per_layer = num_receivers  # = ring_size
 
     tt_weight = _build_weight(device, num_dram_banks)
-    addrs = _build_dummy_addrs(device)
-
-    # DRAM-sender GCB with a simple grid receiver layout (banks 0..N-1 in row 0;
-    # receivers stacked in rows 0..recv_per_bank-1). Works for DRAM-core because senders
-    # are DRAM cores, not workers — no dispatch-core collision.
-    bank_to_receivers = [
-        (
-            b,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
-        )
-        for b in range(num_dram_banks)
-    ]
-    gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
-    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
-
-    ttnn.experimental.start_tensor_prefetcher(device)
-    ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, _bank_columns(num_dram_banks), page_size * pages_per_layer, single_sender=True
     )
-
-    # Warmup: drain 1 layer's worth of pages — this also primes the cached MeshWorkload
-    # so the binary write happens here, not inside the trace.
-    ttnn.experimental.test_dram_prefetcher_consumer(
-        device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-    )
-    ttnn.synchronize_device(device)
-
-    # Trace: trace_repeats consumer ops, each draining one layer (= pages_per_layer pages).
-    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(trace_repeats):
-        ttnn.experimental.test_dram_prefetcher_consumer(
-            device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-        )
-    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
-
-    t0 = time.perf_counter()
-    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - t0
-    ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_tensor_prefetcher(device)
-
-    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
-        time.sleep(3)  # let watcher dump DRISC ring buffers before device close
+    elapsed = _time_pipe_push(device, pipes, (tt_weight, num_receivers), trace_repeats + 1, pages_per_layer, page_size)
 
     bytes_per_recv = trace_repeats * pages_per_layer * page_size
     bytes_total = bytes_per_recv * num_receivers
@@ -288,174 +266,32 @@ def test_bw_tensor_prefetcher(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
-    """Tensor prefetcher in **receiver-contiguous** layout → discard receiver.
-
-    Identical methodology to test_bw_tensor_prefetcher: prefetcher launched
-    out-of-band with num_layers = trace_repeats + 1, one warmup consumer drain,
-    then trace captures `trace_repeats` consumer ops and is replayed once.
-
-    The only differences from the K-row-major bench:
-    - Weight allocated via NdShardSpec(Shape([K, n_per_recv]), ROUND_ROBIN_1D)
-      with num_shards = ring_size > num_dram_banks. Bank b stacks
-      num_recv_per_bank slabs of (K, n_per_recv) vertically. Manager auto-
-      detects this and takes the recv-contig main loop in the DRISC kernel.
-    - GCB topology is the same column-of-receivers layout the K-row-major
-      bench uses (bank b -> col b, rows 0..R-1). Under BDS round-robin this
-      makes bank b's slot r feed the receiver assigned ring position
-      `b + r * num_banks` — a "strided" assignment. For a discard-receiver
-      BW bench this is fine; byte correctness is exercised by
-      test_validator_dram_sender_recv_contig.
-    """
-    _apply_shape(shape)
-    if device.dram_grid_size().x != 8:
-        pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
-
-    trace_repeats = _bench_trace_repeats()
-    num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace
-
-    num_dram_banks = device.dram_grid_size().x
-    num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
-    page_size = _per_receiver_page_size_bytes()
-    pages_per_layer = num_receivers  # = ring_size
-
-    tt_weight = _build_weight_recv_contig(device, num_dram_banks)
-
-    bank_to_receivers = [
-        (
-            b,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
-        )
-        for b in range(num_dram_banks)
-    ]
-    gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
-    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
-        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
-    )
-
-    ttnn.experimental.start_tensor_prefetcher(device)
-    ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
-    )
-
-    # Warmup: drain 1 layer's worth of pages — primes the cached MeshWorkload.
-    ttnn.experimental.test_dram_prefetcher_consumer(
-        device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-    )
-    ttnn.synchronize_device(device)
-
-    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(trace_repeats):
-        ttnn.experimental.test_dram_prefetcher_consumer(
-            device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-        )
-    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
-
-    t0 = time.perf_counter()
-    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - t0
-    ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_tensor_prefetcher(device)
-
-    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
-        time.sleep(3)
-
-    bytes_per_recv = trace_repeats * pages_per_layer * page_size
-    bytes_total = bytes_per_recv * num_receivers
-    bw_total = _gbps(bytes_total, elapsed)
-    bw_per_recv = bw_total / num_receivers
-    logger.info(
-        f"[dram_core_bw_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
-        f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
-        f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s"
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
-    indirect=True,
-)
-@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
-    """Tensor prefetcher in receiver-contiguous layout -> **PrefetcherPipes** -> discard receiver.
+    """Tensor prefetcher in receiver-contiguous layout → discard receiver.
 
-    The transport comparison against test_bw_tensor_prefetcher_recv_contig: same weight, same
-    bank -> receiver topology, same ring depth (one layer's worth of blocks per receiver), same
-    trace methodology. Only the delivery object differs, so the gap between the two logs is what
-    the pipe's credit layout costs -- its per-receiver counter pairs are strided by 2 * L1_ALIGNMENT
-    where a GCB packs them at uint32, which is one extra address computation per receiver per round.
+    Same methodology as test_bw_tensor_prefetcher, with the weight in the receiver-contiguous layout
+    (NdShardSpec, num_shards = ring_size > num_dram_banks) so the DRISC kernel takes the recv-contig
+    main loop. The bank -> receiver topology is the same column-of-receivers layout (bank b -> col b,
+    rows 0..R-1), which under BDS round-robin makes bank b's slot r feed ring position
+    `b + r * num_banks` -- a strided assignment, fine for a discard receiver. BENCH_DUAL_SENDERS=1
+    splits each bank's receivers across its two DRISC senders.
     """
     _apply_shape(shape)
     if device.dram_grid_size().x != 8:
         pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
 
     trace_repeats = _bench_trace_repeats()
-    num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace
-
     num_dram_banks = device.dram_grid_size().x
     num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
     page_size = _per_receiver_page_size_bytes()
     pages_per_layer = num_receivers  # = ring_size
 
     tt_weight = _build_weight_recv_contig(device, num_dram_banks)
-
-    bank_to_receivers = [
-        (
-            b,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
-        )
-        for b in range(num_dram_banks)
-    ]
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    # Depth in whole blocks matches _gcb_size_bytes(page_size, pages_per_layer), so both transports
-    # give the sender the same in-flight headroom before reserve_back backpressures.
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, _bank_columns(num_dram_banks), page_size * pages_per_layer, single_sender=not dual_senders
     )
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=page_size * pages_per_layer,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        pipe_space,
-        bank_to_receivers,
-        support_multi_receiver_shards=not dual_senders,
-    )
-
-    ttnn.experimental.start_tensor_prefetcher(device)
-    ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, num_receivers)] * num_prefetch_layers, prefetcher_pipes=pipes
-    )
-
-    # Warmup: drain 1 layer's worth of entries — primes the cached MeshWorkload.
-    ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-        device, num_iters=pages_per_layer, page_size_bytes=page_size, prefetcher_pipes=pipes
-    )
-    ttnn.synchronize_device(device)
-
-    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(trace_repeats):
-        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-            device, num_iters=pages_per_layer, page_size_bytes=page_size, prefetcher_pipes=pipes
-        )
-    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
-
-    t0 = time.perf_counter()
-    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - t0
-    ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_tensor_prefetcher(device)
-
-    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
-        time.sleep(3)
+    elapsed = _time_pipe_push(device, pipes, (tt_weight, num_receivers), trace_repeats + 1, pages_per_layer, page_size)
 
     bytes_per_recv = trace_repeats * pages_per_layer * page_size
     bytes_total = bytes_per_recv * num_receivers
@@ -477,21 +313,18 @@ def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
 def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     """DRAM-core prefetcher in **streaming** receiver-contiguous mode → discard receiver.
 
-    Same recv-contig weight + topology as test_bw_tensor_prefetcher_recv_contig, but
-    the request is queued with a per-receiver rotation table (each receiver's blocks read
-    circularly from its ring index) and the GCB is sized to a small window of
-    BENCH_GCB_WINDOW_BLOCKS blocks/receiver (default 4) instead of a full layer. This measures
-    the prefetcher-side cost of streaming — the two-DMA-read source split on wrapping receivers
-    plus the shallower GCB backpressure — against the batched recv-contig and K-row-major push-BW
-    numbers.
+    Same recv-contig weight + topology as test_bw_tensor_prefetcher_pipe_recv_contig, but the request
+    is queued with a per-receiver rotation table (each receiver's blocks read circularly from its ring
+    index) and the ring is sized to a small window of BENCH_RING_WINDOW_BLOCKS blocks/receiver
+    (default 4) instead of a full layer. This measures the prefetcher-side cost of streaming — the
+    two-DMA-read source split on wrapping receivers plus the shallower ring backpressure — against
+    the batched recv-contig and K-row-major push-BW numbers.
     The discard consumer drains FIFO order regardless of block content, so the rotated
     delivery is BW-neutral; byte correctness is covered by the validator + matmul PCC tests.
     """
     _apply_shape(shape)
 
     trace_repeats = _bench_trace_repeats()
-    num_prefetch_layers = trace_repeats + 1
-
     num_dram_banks = device.dram_grid_size().x
     num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
     page_size = _per_receiver_page_size_bytes()
@@ -499,55 +332,30 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
 
     tt_weight = _build_weight_recv_contig(device, num_dram_banks)
 
-    bank_to_receivers = [
-        (
-            b,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
-        )
-        for b in range(num_dram_banks)
-    ]
-    # Shallow GCB: a small live window instead of a full layer (the streaming win).
-    window_blocks = int(os.environ.get("BENCH_GCB_WINDOW_BLOCKS", "4"))
+    # Shallow ring: a small live window instead of a full layer (the streaming win).
+    window_blocks = int(os.environ.get("BENCH_RING_WINDOW_BLOCKS", "4"))
     window_blocks = min(window_blocks, pages_per_layer)
-    gcb_size = window_blocks * page_size
+    ring_size = window_blocks * page_size
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
-        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, _bank_columns(num_dram_banks), ring_size, single_sender=not dual_senders
     )
 
     logger.info(
         f"[dram_core_bw_stream][{op_name}] dual_senders={dual_senders} window_blocks={window_blocks} "
         f"K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} ring={num_receivers} page_size={page_size} "
-        f"pages_per_layer={pages_per_layer} gcb_size={gcb_size} trace_repeats={trace_repeats}"
+        f"pages_per_layer={pages_per_layer} ring_size={ring_size} trace_repeats={trace_repeats}"
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device)
-    # Identity rotation (rotation[r] = r) = natural topology ring order (reproduces old streaming=True).
-    ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, num_receivers, list(range(num_receivers)))] * num_prefetch_layers, global_cb=gcb
+    # Identity rotation (rotation[r] = r) = natural topology ring order.
+    elapsed = _time_pipe_push(
+        device,
+        pipes,
+        (tt_weight, num_receivers, list(range(num_receivers))),
+        trace_repeats + 1,
+        pages_per_layer,
+        page_size,
     )
-
-    ttnn.experimental.test_dram_prefetcher_consumer(
-        device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-    )
-    ttnn.synchronize_device(device)
-
-    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(trace_repeats):
-        ttnn.experimental.test_dram_prefetcher_consumer(
-            device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
-        )
-    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
-
-    t0 = time.perf_counter()
-    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - t0
-    ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_tensor_prefetcher(device)
-
-    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
-        time.sleep(3)
 
     bytes_per_recv = trace_repeats * pages_per_layer * page_size
     bytes_total = bytes_per_recv * num_receivers

@@ -1486,6 +1486,21 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
         return "\n".join(lines)
 
 
+@dataclass
+class GATHER_COMPRESS_PARAMS(TemplateParameter):
+    """Gather / compress mode and FPU vector size (32 elements for a 16-bit format, 64 for an 8-bit one)."""
+
+    compress: bool = False
+    elem_cnt: int = 32
+
+    def convert_to_cpp(self) -> str:
+        mode = "COMPRESS" if self.compress else "GATHER"
+        return (
+            f"constexpr auto GATHER_COMPRESS_MODE = ckernel::GatherCompressModeSelect::{mode};\n"
+            f"constexpr std::uint32_t GATHER_COMPRESS_ELEM_CNT = {self.elem_cnt};"
+        )
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
@@ -1506,6 +1521,23 @@ class BLOCK_MAX8_PARAMS(RuntimeParameter):
     def convert_to_struct_fields(self):
         """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
         return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
+
+
+@dataclass
+class BLOCK_MAX8_FPU_PARAMS(RuntimeParameter):
+    """Number of FPU block-max calls per DST acquire and the optional DST denormal probe."""
+
+    calls: int
+    inject_denormal: int
+
+    def convert_to_cpp(self):
+        return (
+            f"constexpr unsigned FPU_CALLS = {self.calls};"
+            f"constexpr unsigned INJECT_DENORMAL = {self.inject_denormal};"
+        )
+
+    def convert_to_struct_fields(self):
+        return "unsigned FPU_CALLS; unsigned INJECT_DENORMAL;", "II"
 
 
 def generate_input_dim(

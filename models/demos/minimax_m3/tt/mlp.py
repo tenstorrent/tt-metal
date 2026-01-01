@@ -216,7 +216,7 @@ class MLP:
     def __call__(self, hidden_states, chunks=None):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), or None for all rows real. Their real-token
+        chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py), or None for all rows real. Their real-token
         ranges drive the padding config below (see TopKRouter.build_padding_config); a wrong range silently
         drops real tokens.
 

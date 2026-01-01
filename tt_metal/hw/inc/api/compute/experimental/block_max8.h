@@ -9,6 +9,10 @@
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "experimental/llk_sfpu/llk_math_block_max8.h"
+#include "experimental/llk_math_block_max8_fpu_api.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "experimental/llk_unpack_block_max8_fpu_api.h"
 #endif
 
 namespace ckernel {
@@ -37,6 +41,32 @@ ALWI void block_max8_init() { MATH((llk_math_block_max8_init<DST_ACCUM_MODE>()))
  */
 ALWI void block_max8(uint32_t dst_index, uint32_t valid_scores = TILE_R_DIM * TILE_C_DIM) {
     MATH((llk_math_block_max8<DST_ACCUM_MODE>(dst_index, valid_scores)));
+}
+
+/**
+ * @brief Initialize the FPU (GMPOOL) variant of block_max8 on the math thread.
+ *
+ * Call before block_max8_fpu. Same requirements as block_max8_init.
+ */
+ALWI void block_max8_fpu_init() { MATH((llk_math_block_max8_fpu_init<DST_ACCUM_MODE>())); }
+
+/**
+ * @brief FPU (GMPOOL) variant of block_max8, with the same arguments and result layout.
+ *
+ * Unlike block_max8, this also runs on the unpack thread: it queues SrcA cleared to
+ * negative infinity and SrcB cleared to 1.0, which this call consumes on the math
+ * thread. The math thread must consume any earlier unpacked operand first, as
+ * copy_tile does. A block whose maximum is -0.0 or a denormal returns +0.0, because
+ * GMPOOL flushes inputs with a zero exponent.
+ * Use BF16 DST with SyncHalf throughout the call; runtime FP32 accumulation
+ * and full-DST synchronization are unsupported. Values outside the documented
+ * argument ranges are unsupported; release builds do not validate or clamp them.
+ * @param dst_index Runtime tile index in the acquired BF16 DST half (0 through 7).
+ * @param valid_scores Valid row-major prefix length, from zero through 1024; defaults to the full tile.
+ */
+ALWI void block_max8_fpu(uint32_t dst_index, uint32_t valid_scores = TILE_R_DIM * TILE_C_DIM) {
+    UNPACK((llk_unpack_block_max8_fpu()));
+    MATH((llk_math_block_max8_fpu<DST_ACCUM_MODE>(dst_index, valid_scores)));
 }
 
 }  // namespace ckernel

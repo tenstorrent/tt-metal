@@ -15,7 +15,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 
 #include "impl/context/metal_context.hpp"

@@ -25,9 +25,9 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "multi_command_queue_fixture.hpp"

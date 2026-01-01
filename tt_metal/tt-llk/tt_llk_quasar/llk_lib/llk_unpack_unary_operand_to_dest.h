@@ -13,54 +13,6 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 
 /**
- * @brief Reset the unpack thread's DEST bank tracking to bank 0 at the start of a program.
- *
- * The unpacker places sections through the UNP_DEST tile index counter, not through a DEST_TARGET_REG_CFG_MATH_SEC
- * register: those bases are consulted for math-issued instructions only, a write from the unpack thread does not move
- * UNPACR_DEST (emulator, 2026-10-05). The bank therefore lives in this thread's dest_register_offset, and the placers
- * add it, converted to tiles, to every DEST tile index. This zeroes it; @ref _llk_unpack_dest_section_advance_ toggles
- * it per section in SyncHalf (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
- *
- * @note Call once per program before the first @ref _llk_unpack_unary_operand_to_dest_init_, never from a per-op init: op writers may
- *       re-run the per-op init inside their tile loop, and a reset there would pin unpack to bank 0 while pack keeps
- *       alternating banks. Pair with @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2). The one
- *       exception is the unpack_to_dest compatibility arm of @ref _llk_unpack_unary_operand_init_, which keeps the per-init
- *       reset its unported callers rely on.
- */
-inline void _llk_unpack_dest_init_()
-{
-    _reset_dest_register_offset_();
-}
-
-/**
- * @brief Move the unpack thread to the other DEST bank after a SyncHalf section.
- *
- * Only this thread's dest_register_offset changes; the placers fold it into the next DEST tile index. No config write
- * and no drain: instructions already issued carry the old index, the toggle only affects indices computed from here on.
- *
- * @tparam EN_32BIT_DEST: Sizes the flip, bank-1 base at row 256 when true (32-bit DEST), 512 when false. Must match
- *         what the pack thread uses, or the two sides address different halves.
- */
-template <bool EN_32BIT_DEST>
-inline void _llk_unpack_dest_section_advance_()
-{
-    _update_dest_register_offset_<EN_32BIT_DEST>();
-}
-
-/**
- * @brief The current DEST bank base of this thread, in 32x32-tile units of the UNP_DEST tile index counter.
- *
- * dest_register_offset is kept in DEST rows (0, 256 or 512); a 32x32 tile spans 1 << get_dest_tile_size_log2 rows, the
- * same stride @ref _set_dst_write_addr_ uses on the math thread, so the two sides agree on where bank 1 starts. The
- * shift assumes full 32x32 tiles: the UNP_DEST tile counter steps in buffer-descriptor tiles, and a tiny-tile operand
- * is described in one-face tiles, which would put bank 1 at the wrong rows. The API init asserts the shape.
- */
-inline std::uint32_t _llk_unpack_dest_bank_tile_offset_()
-{
-    return _get_dest_buffer_base_() >> get_dest_tile_size_log2(DstTileShape::Tile32x32);
-}
-
-/**
  * @brief MOP configuration for unpacking one tile of a single operand directly into the math DEST register (UNP_DEST).
  *
  * One UNPACR_DEST per run. Both the L1 and DEST tile counters auto-increment (Src/Dst_Tile_Idx_Inc = 1), so back-to-back
@@ -85,12 +37,9 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  * @brief Initializes the unpacker to unpack a single operand directly into the math DEST register, synchronized with
  *        math and pack through the UNPACK_PACK / UNPACK_MATH / MATH_PACK semaphores.
  *
- * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h). The two families are
- * independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_) and its DEST handshake is the
- * semaphore protocol of the section calls rather than dest-dvalid. The unpack_to_dest = true arm of the unary operand
- * family is a compatibility path for callers not yet ported (the tt-llk test infra and fuser): it keeps that family's
- * init-sized MOP and brackets one @ref _llk_unpack_unary_operand_to_dest_tile_ run with the section handshake itself;
- * new callers use this family directly.
+ * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h), which only unpacks to
+ * SrcA / SrcB. The two families are independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_)
+ * and its DEST handshake is the semaphore protocol of the section calls, or dest-dvalid (see the last @note).
  *
  * Per-op init: programs the transpose config and the MOP only. It does not touch the DEST bank tracking, so it is
  * safe to call inside a tile loop; the once-per-program bank reset lives in @ref _llk_unpack_dest_init_.
@@ -119,6 +68,10 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       each below N would still admit a third section into a two-bank DEST (tt-metal #58903). tt-metal runs this
  *       sequence in tile_regs_acquire / tile_regs_commit (llk_unpack_wait_for_dest_available /
  *       llk_unpack_dest_section_done, quasar llk_unpack_common_api.h).
+ * @note Dest-dvalid form (the standalone tt-llk tests): the tile / block calls carry no synchronization, so they can be
+ *       bracketed with the dest-dvalid handshake instead. Run @ref _llk_unpack_dest_init_ once so the bank tile offset
+ *       stays 0, never call @ref _llk_unpack_dest_section_advance_ (dest-dvalid moves this client between banks in
+ *       hardware), and close each section with @ref _llk_unpack_dest_dvalid_section_done_.
  */
 inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc_id)
 {

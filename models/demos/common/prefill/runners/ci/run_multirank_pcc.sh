@@ -69,6 +69,8 @@ DFLASH=0
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
+REQUEST_LEN=""
+SC1_REQUEST_LEN=""
 
 case "${MODEL}" in
   gptoss120b)
@@ -81,10 +83,11 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+    REQUEST_LEN=256000
     if [ "${VARIANT}" = _dflash ]; then
       DFLASH=1
       MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json"
-      VARIANT_MAX_SEQ_LEN=256000
+      VARIANT_MAX_SEQ_LEN=286720
       DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
@@ -96,10 +99,12 @@ case "${MODEL}" in
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PCC_THRESHOLD=0.83
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    REQUEST_LEN=1044480
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
-      SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
+      SC1_MAX_SEQ_LEN=81920
+      SC1_REQUEST_LEN=${GOLDEN_LEN}
       MTP_PCC_THRESHOLD=0.80
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
       PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
@@ -127,6 +132,7 @@ case "${MODEL}" in
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     # Deliberately only the first 55k: the K3 golden trace is currently unreliable.
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+    REQUEST_LEN=1049600
     if [ "${VARIANT}" = _dspark ]; then
       [ "${CONFIG}" = sc4 ] || { echo "${MODEL} runs sc4 only" >&2; exit 2; }
       DFLASH=1
@@ -143,9 +149,7 @@ case "${MODEL}" in
     # PP_RANKS, so the next pipeline-parallel model sets only that.
     PP_RANKS=4
     # Validates the entire 36-layer golden, including positions >8192.
-    MAX_SEQ_LEN=${GOLDEN_LEN}
-    # sc1 is the only config, so the sc1 window below must not widen it to the 256k default.
-    SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
+    REQUEST_LEN=${GOLDEN_LEN}
     MISTRAL_MODEL="${PREFILL_HF_MODEL:-/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603}"
     MISTRAL_CACHE="${PREFILL_TTNN_CACHE:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI}"
     MISTRAL_GOLDEN="${PREFILL_TRACE_DIR:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L}"
@@ -203,12 +207,17 @@ fi
 if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
-echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+SC1_REQUEST_LEN=${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}
+SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
+REQUEST_LEN=${SC4_REQUEST_LEN}
+[ "${CONFIG}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
+echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
-SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
-SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
+REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
+
+SC1_CHUNKS=$((SC1_REQUEST_LEN / CHUNK_SIZE))
+SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # Start, ~50k, ~100k, ~255k, and the midpoint + tail of each config's window. Deduped: a model with
 # one config yields the same chunk twice, and the summary drops chunks past a short window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \

@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.tt.prefill_chunk import packed_real_rows
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
 
@@ -163,7 +163,7 @@ class TopKRouter:
         self.compute_config = None
 
     def build_padding_config(self, chunks):
-        """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``chunks`` (tt/prefill_chunk.py), or
+        """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``chunks`` (common/prefill/prefill_chunk.py), or
         None when every row is real (nothing to mark).
 
         The SAME tensor must go to the gate topk AND the dispatch op — see

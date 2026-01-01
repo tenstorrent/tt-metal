@@ -24,6 +24,8 @@ Tests exercise both NanoGPT (nanogpt config) and Llama (nanollama config).
 """
 
 import math
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -146,7 +148,7 @@ class TestLoraWeightFreezing:
     def test_all_base_params_frozen_llama(self, toy_llama_config):
         model = Llama(toy_llama_config)
 
-        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear", "out_linear"])
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
 
         for name, param in lora_model.parameters().items():
@@ -181,27 +183,24 @@ class TestLoraInjection:
         lora_config = LoraConfig(
             rank=4,
             alpha=8.0,
-            target_modules=["q_linear", "kv_linear", "out_linear"],
+            target_modules=["qkv_linear", "out_linear"],
         )
         lora_model = LoraModel(model, lora_config)
 
         for block in lora_model.model.blocks:
-            assert isinstance(block.attention.q_linear, LoraLinear)
-            assert isinstance(block.attention.kv_linear, LoraLinear)
+            assert isinstance(block.attention.qkv_linear, LoraLinear)
             assert isinstance(block.attention.out_linear, LoraLinear)
 
     def test_non_target_modules_unchanged_llama(self, toy_llama_config):
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear"])
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear"])
         lora_model = LoraModel(model, lora_config)
 
         for block in lora_model.model.blocks:
-            assert isinstance(block.attention.q_linear, LoraLinear)
-            assert isinstance(block.attention.kv_linear, LinearLayer)
+            assert isinstance(block.attention.qkv_linear, LoraLinear)
             assert isinstance(block.attention.out_linear, LinearLayer)
-            assert isinstance(block.mlp.w1, LinearLayer)
+            assert isinstance(block.mlp.w_gate_up, LinearLayer)
             assert isinstance(block.mlp.w2, LinearLayer)
-            assert isinstance(block.mlp.w3, LinearLayer)
 
     def test_target_modules_replaced_nanogpt(self, toy_gpt_config):
         model = create_nanogpt(toy_gpt_config)
@@ -240,11 +239,11 @@ class TestLoraInjection:
     def test_lora_adapter_shapes_llama(self, toy_llama_config):
         rank = 4
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(rank=rank, alpha=8.0, target_modules=["q_linear"])
+        lora_config = LoraConfig(rank=rank, alpha=8.0, target_modules=["qkv_linear"])
         lora_model = LoraModel(model, lora_config)
 
         for block in lora_model.model.blocks:
-            ll = block.attention.q_linear
+            ll = block.attention.qkv_linear
             assert isinstance(ll, LoraLinear)
             assert tuple(ll.lora_A.tensor.shape()) == (
                 1,
@@ -336,7 +335,7 @@ class TestLoraTrainableModules:
         lora_config = LoraConfig(
             rank=4,
             alpha=8.0,
-            target_modules=["q_linear"],
+            target_modules=["qkv_linear"],
             trainable_modules=["tok_emb"],
         )
         lora_model = LoraModel(model, lora_config)
@@ -387,21 +386,21 @@ class TestLoraTrainableParameterCount:
         lora_config = LoraConfig(
             rank=rank,
             alpha=8.0,
-            target_modules=["q_linear", "kv_linear", "out_linear"],
+            target_modules=["qkv_linear", "out_linear"],
         )
         lora_model = LoraModel(model, lora_config)
 
         # Per layer: lora_A + lora_B for each target
-        #   q_linear:   rank*hidden + hidden*rank
-        #   kv_linear:  rank*hidden + kv_dim*rank
+        #   qkv_linear: rank*hidden + qkv_dim*rank
         #   out_linear: rank*hidden + hidden*rank
-        per_layer = rank * hidden + hidden * rank + rank * hidden + kv_dim * rank + rank * hidden + hidden * rank
+        qkv_dim = hidden + kv_dim
+        per_layer = rank * hidden + qkv_dim * rank + rank * hidden + hidden * rank
         expected = per_layer * toy_llama_config.num_hidden_layers
         actual = _count_trainable_params(lora_model)
         assert actual == expected, f"Expected {expected} trainable params, got {actual}"
 
         total = _count_total_params(lora_model)
-        assert total == 134464
+        assert total == 133952
 
     def test_exact_trainable_count_nanogpt(self, toy_gpt_config):
         """Verify exact trainable parameter count for NanoGPT."""
@@ -431,14 +430,14 @@ class TestLoraTrainableParameterCount:
         model_r4 = Llama(toy_llama_config)
         lora_r4 = LoraModel(
             model_r4,
-            LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear"]),
+            LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear"]),
         )
         count_r4 = _count_trainable_params(lora_r4)
 
         model_r8 = Llama(toy_llama_config)
         lora_r8 = LoraModel(
             model_r8,
-            LoraConfig(rank=8, alpha=16.0, target_modules=["q_linear"]),
+            LoraConfig(rank=8, alpha=16.0, target_modules=["qkv_linear"]),
         )
         count_r8 = _count_trainable_params(lora_r8)
 
@@ -449,7 +448,7 @@ class TestLoraTrainableParameterCount:
         model1 = Llama(toy_llama_config)
         lora1 = LoraModel(
             model1,
-            LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear"]),
+            LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear"]),
         )
         count1 = _count_trainable_params(lora1)
 
@@ -459,7 +458,7 @@ class TestLoraTrainableParameterCount:
             LoraConfig(
                 rank=4,
                 alpha=8.0,
-                target_modules=["q_linear", "kv_linear", "out_linear"],
+                target_modules=["qkv_linear", "out_linear"],
             ),
         )
         count3 = _count_trainable_params(lora3)
@@ -477,7 +476,7 @@ class TestLoraOptimizerState:
 
     def test_optimizer_state_matches_trainable_llama(self, toy_llama_config):
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear", "out_linear"])
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"])
         lora_model = LoraModel(model, lora_config)
 
         trainable_count = _count_trainable_tensors(lora_model)
@@ -530,7 +529,7 @@ class TestLoraForwardPass:
         lora_config = LoraConfig(
             rank=4,
             alpha=8.0,
-            target_modules=["q_linear", "kv_linear", "out_linear"],
+            target_modules=["qkv_linear", "out_linear"],
         )
         lora_model = LoraModel(model, lora_config)
         lora_model.eval()
@@ -593,7 +592,7 @@ class TestLoraForwardPass:
         lora_config = LoraConfig(
             rank=4,
             alpha=8.0,
-            target_modules=["q_linear", "kv_linear", "out_linear", "w1", "w2", "w3"],
+            target_modules=["qkv_linear", "out_linear", "w_gate_up", "w2"],
         )
         lora_model = LoraModel(model, lora_config)
         lora_model.eval()
@@ -626,7 +625,7 @@ class TestLoraTrainingStep:
         lora_config = LoraConfig(
             rank=4,
             alpha=8.0,
-            target_modules=["q_linear", "kv_linear", "out_linear"],
+            target_modules=["qkv_linear", "out_linear"],
         )
         lora_model = LoraModel(model, lora_config)
         lora_model.train()
@@ -690,7 +689,7 @@ class TestLoraTrainingStep:
     def test_only_lora_params_updated_llama(self, toy_llama_config):
         """Frozen params must not change; at least some LoRA params must change."""
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear"])
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear"])
         lora_model = LoraModel(model, lora_config)
         lora_model.train()
 
@@ -798,7 +797,7 @@ class TestLoraTrainEvalMode:
 
     def test_mode_propagation_llama(self, toy_llama_config):
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear"])
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear"])
         lora_model = LoraModel(model, lora_config)
 
         lora_model.eval()
@@ -820,16 +819,65 @@ class TestLoraTrainEvalMode:
 
     def test_lora_linear_inherits_mode(self, toy_llama_config):
         model = Llama(toy_llama_config)
-        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["q_linear"])
+        lora_config = LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear"])
         lora_model = LoraModel(model, lora_config)
 
         lora_model.eval()
         for block in lora_model.model.blocks:
-            assert block.attention.q_linear.get_run_mode() == RunMode.EVAL
+            assert block.attention.qkv_linear.get_run_mode() == RunMode.EVAL
 
         lora_model.train()
         for block in lora_model.model.blocks:
-            assert block.attention.q_linear.get_run_mode() == RunMode.TRAIN
+            assert block.attention.qkv_linear.get_run_mode() == RunMode.TRAIN
+
+
+# =============================================================================
+# The LoRA example's --resume
+# =============================================================================
+
+
+def _lora_llama_example():
+    """sources/examples/lora_llama/train_lora_llama.py, which imports its sibling llama_config.py."""
+    example_dir = str(Path(__file__).resolve().parents[2] / "sources" / "examples" / "lora_llama")
+    if example_dir not in sys.path:
+        sys.path.insert(0, example_dir)
+    import train_lora_llama
+
+    return train_lora_llama
+
+
+class TestLoraLlamaExampleResume:
+    @staticmethod
+    def lora_llama(config):
+        return LoraModel(Llama(config), LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"]))
+
+    def test_resumes_every_adapter(self, toy_llama_config, tmp_path):
+        example = _lora_llama_example()
+        saved = self.lora_llama(toy_llama_config)
+        example.save_lora_checkpoint(saved, str(tmp_path), step=1)
+        resumed = self.lora_llama(toy_llama_config)
+
+        example.load_lora_checkpoint(resumed, str(tmp_path / "lora_step_1.safetensors"))
+
+        resumed_params = resumed.parameters()
+        for name, param in saved.parameters().items():
+            if not param.get_requires_grad():
+                continue
+            np.testing.assert_array_equal(
+                resumed_params[name].to_numpy(ttnn.DataType.FLOAT32), param.to_numpy(ttnn.DataType.FLOAT32), name
+            )
+
+    def test_refuses_adapters_saved_before_the_qkv_fusion(self, toy_llama_config, tmp_path, expect_error):
+        from safetensors.numpy import load_file, save_file
+
+        example = _lora_llama_example()
+        model = self.lora_llama(toy_llama_config)
+        example.save_lora_checkpoint(model, str(tmp_path), step=1)
+        path = str(tmp_path / "lora_step_1.safetensors")
+        save_file({name.replace("qkv_linear", "q_linear"): array for name, array in load_file(path).items()}, path)
+
+        with expect_error(RuntimeError, "not in the checkpoint: .*qkv_linear"):
+            example.load_lora_checkpoint(model, path)
 
 
 if __name__ == "__main__":

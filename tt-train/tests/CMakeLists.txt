@@ -71,6 +71,7 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
+    ops/qkv_causal_conv1d_silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
@@ -206,6 +207,7 @@ if(TARGET benchmark::benchmark)
         benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_kv_assemble_benchmark.cpp
         benchmark/transpose_matmul_benchmark.cpp
+        benchmark/qkv_causal_conv1d_silu_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

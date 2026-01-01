@@ -312,8 +312,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
     // only 19 bits wide, so unpacking Float32 there truncates it to tf32. MultiCoreTiledGeneric
     // already sets UnpackToDest on the same two CBs.
-    // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
-    if (cb_data_format == tt::DataFormat::Float32) {
+    // Int32/UInt32 take the same route: Quasar's tilize unpacks to Dest only when UnpackToDest
+    // is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
+    if (fp32_dest_acc_en) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 

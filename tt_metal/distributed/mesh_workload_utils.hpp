@@ -27,7 +27,6 @@ class MeshDevice;
 // Used by offline command serialization; normal dispatch writes the same
 // canonical sequence directly into CQ-owned hugepage memory below.
 HostMemDeviceCommand build_go_signal_sequence(
-    uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,

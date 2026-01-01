@@ -23,7 +23,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 

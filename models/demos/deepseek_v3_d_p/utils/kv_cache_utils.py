@@ -14,13 +14,15 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
-# This is a predefined constant for the number of contiguous tokens in a DRAM bank
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # Nominal DRAM bank count for a full (unharvested) Blackhole part. Prefer get_num_dram_banks(device)
 # at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
@@ -1035,6 +1037,7 @@ def init_kvpe_cache(
     layout=ttnn.TILE_LAYOUT,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ):
     """
     Initialize KVPE cache for MLA.
@@ -1080,6 +1083,8 @@ def init_kvpe_cache(
     seq_len_local = seq_len // stripes
 
     num_dram_banks = get_num_dram_banks(mesh_device)
+    if bank_aligned:
+        check_kv_bank_aligned(seq_len, seq_len_local, num_dram_banks)
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
@@ -1169,6 +1174,7 @@ def init_mla_kv_cache(
     num_users=1,
     full_mesh=False,
     tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate and zero a persistent MLA cache in the selected physical format.
 
@@ -1194,12 +1200,23 @@ def init_mla_kv_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
     return MlaKvCache(format=cache_format, storage=storage, geometry=geometry)
 
 
 def allocate_mla_kvpe_cache(
-    *, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users, full_mesh=False, tp_axis=None
+    *,
+    mesh_device,
+    hf_config,
+    max_seq_len,
+    mesh_shape,
+    sp_axis,
+    num_layers,
+    num_users,
+    full_mesh=False,
+    tp_axis=None,
+    bank_aligned=False,
 ) -> MlaKvCache:
     """Allocate the MLA KVPE cache for one runtime from the HF config.
 
@@ -1221,6 +1238,7 @@ def allocate_mla_kvpe_cache(
         num_users=num_users,
         full_mesh=full_mesh,
         tp_axis=tp_axis,
+        bank_aligned=bank_aligned,
     )
 
 

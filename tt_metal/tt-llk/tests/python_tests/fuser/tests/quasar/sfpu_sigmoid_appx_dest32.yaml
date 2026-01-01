@@ -24,7 +24,7 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float32
-    atol: 0.13  # SigmoidAppx coarse LUT budget in helpers/sfpu_accuracy_budget.yaml.
+    atol: 0.13  # SigmoidAppx coarse LUT budget in helpers/sfpu_accuracy_budget_wh.yaml, the table Quasar reads.
 
 operations:
   - math:

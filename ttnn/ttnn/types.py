@@ -18,6 +18,22 @@ bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
 fp8_e4m3 = DataType.FP8_E4M3
+# OCP microscaling (MX) formats, Quasar only, TILE layout only.
+mxfp8_e4m3 = DataType.MXFP8_E4M3
+mxfp8_e5m2 = DataType.MXFP8_E5M2
+mxfp6_e2m3 = DataType.MXFP6_E2M3
+mxfp6_e3m2 = DataType.MXFP6_E3M2
+mxfp4 = DataType.MXFP4
+mxint8 = DataType.MXINT8
+mxint4 = DataType.MXINT4
+mxint2 = DataType.MXINT2
+MX_DTYPES = (mxfp8_e4m3, mxfp8_e5m2, mxfp6_e2m3, mxfp6_e3m2, mxfp4, mxint8, mxint4, mxint2)
+
+
+def is_mx_dtype(dtype) -> bool:
+    return dtype in MX_DTYPES
+
+
 DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
 
 BufferType = ttnn._ttnn.tensor.BufferType

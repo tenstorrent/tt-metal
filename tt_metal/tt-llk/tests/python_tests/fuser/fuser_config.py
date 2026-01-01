@@ -29,6 +29,7 @@ from helpers.test_config import (
 from .fpu_node import FpuNode
 from .l1_operation import L1Operation
 from .operand import OperandRegistry
+from .pipeline_plan import plan_pipeline
 from .sentinel import FuserSentinel
 from .sfpu_node import SfpuNode
 
@@ -43,6 +44,7 @@ class GlobalConfig:
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
     quasar_use_dvalid: bool = False
+    quasar_unpack_to_dest: bool = field(default=False, init=False)
     skip_for_perf: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
 
@@ -52,6 +54,14 @@ class GlobalConfig:
             PerfRunType.PACK_ISOLATE,
             PerfRunType.MATH_ISOLATE,
         )
+
+    @property
+    def uses_unpack_to_dest_sync(self) -> bool:
+        return self.quasar_unpack_to_dest and not self.skip_unpack_init
+
+    @property
+    def uses_unpack_to_dest_pack_sync(self) -> bool:
+        return self.uses_unpack_to_dest_sync and not self.skip_sync
 
     @property
     def skip_math_init(self) -> bool:
@@ -91,7 +101,35 @@ class FuserConfig(TestConfig):
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
+        self._configure_unpack_to_dest_sync()
+        self.pipeline_plans = [
+            plan_pipeline(
+                operation,
+                self.global_config.dest_acc.value,
+                unpack_to_dest_sync=self.global_config.quasar_unpack_to_dest,
+            )
+            for operation in self.pipeline
+        ]
         self._validate_pack_sfpu_formats()
+
+    def _configure_unpack_to_dest_sync(self) -> None:
+        config = self.global_config
+        config.quasar_unpack_to_dest = (
+            config.architecture == ChipArchitecture.QUASAR
+            and any(
+                isinstance(node, FpuNode) and node.unpack_to_dest.value
+                for operation in self.pipeline
+                for node in operation.math_nodes
+            )
+        )
+        if not config.quasar_unpack_to_dest:
+            return
+        if config.quasar_use_dvalid:
+            raise ValueError("Quasar unpack_to_dest requires quasar_use_dvalid: false")
+        if len({operation.dest_sync for operation in self.pipeline}) != 1:
+            raise ValueError(
+                "Quasar unpack_to_dest requires a consistent dest_sync across the pipeline"
+            )
 
     def _validate_pack_sfpu_formats(self):
         config = self.global_config
@@ -100,8 +138,8 @@ class FuserConfig(TestConfig):
         ):
             return
         formats = set()
-        for op in self.pipeline:
-            config.sentinel.prepare_operation(config, op)
+        for op, blocks in zip(self.pipeline, self.pipeline_plans):
+            config.sentinel.prepare_operation(config, op, blocks)
             output_format = op._get_pack_nodes()[0].output.data_format
             for node in op.math_nodes:
                 if isinstance(node, FpuNode) and node.src_a is not None:
@@ -129,6 +167,7 @@ class FuserConfig(TestConfig):
             "current_run_type",
             "temp_elfs",
             "pipeline",
+            "pipeline_plans",
             "global_config",
             "operand_registry",
             "_kernel_sources",

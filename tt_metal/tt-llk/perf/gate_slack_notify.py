@@ -187,6 +187,18 @@ def _subject(ctx):
     )
 
 
+def _report_line(ctx, run_link):
+    """Where the full table is: this gate's own summary, not the whole run page."""
+    links = []
+    if ctx.get("report_url"):
+        links.append(f"<{ctx['report_url']}|full table>")
+    if ctx.get("artifact_url"):
+        links.append(f"<{ctx['artifact_url']}|download the report and CSVs>")
+    if not links:
+        return f"The full table is in the report attached to the {run_link}."
+    return "Report: " + " · ".join(links)
+
+
 def build_text(status, rows, ctx):
     """The Slack message for one verdict. Plain text; Slack renders the links."""
     subject, byline, where = _subject(ctx)
@@ -219,31 +231,44 @@ def build_text(status, rows, ctx):
             ]
         )
 
-    findings = _findings(rows)
-    worst = findings[:_TOP_N]
     lines = [
         f":rotating_light: *{gate}: regression* {subject}",
         f"{byline}  ·  {where}",
         *note,
         "",
-        f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*",
     ]
     if ctx.get("pr_title"):
         lines.insert(2, f"_{_escape(ctx['pr_title'])}_")
+    lines += regression_body(rows, ctx)
+    return "\n".join(lines)
+
+
+def regression_body(rows, ctx, annotate=None):
+    """Count, worst findings, report links and a repro command for one arch.
+
+    ``annotate(row)`` may return one more line for a finding's worst point."""
+    run_link = f"<{ctx['run_url']}|gate run>" if ctx.get("run_url") else "gate run"
+    findings = _findings(rows)
+    worst = findings[:_TOP_N]
+    lines = [f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*"]
     if worst:
         lines.append("")
         varying = _varying_keys([g[0] for g in worst])
-        lines += [_describe_finding(g, varying) for g in worst]
+        for group in worst:
+            lines.append(_describe_finding(group, varying))
+            extra = annotate(group[0]) if annotate else ""
+            if extra:
+                lines.append(f"      ↳ {extra}")
     if len(findings) > _TOP_N:
         lines.append(f"_… and {len(findings) - _TOP_N} more finding(s)._")
     lines += [
         "",
-        f"The full table is in the report attached to the {run_link}.",
+        _report_line(ctx, run_link),
         "",
         "Reproduce the worst one locally:",
         f"```{_repro_command(rows, ctx.get('arch'), ctx.get('baseline_sha'))}```",
     ]
-    return "\n".join(lines)
+    return lines
 
 
 def _emit_outputs(**values):
@@ -274,6 +299,10 @@ def main(argv=None):
     ap.add_argument("--arch", default="")
     ap.add_argument("--run-types", default="")
     ap.add_argument("--run-url", default="")
+    ap.add_argument(
+        "--report-url", default="", help="this job's summary on the run page"
+    )
+    ap.add_argument("--artifact-url", default="", help="the uploaded gate report")
     ap.add_argument("--baseline-sha", default="")
     ap.add_argument("--commit", default="")
     ap.add_argument("--mode", default="")
@@ -286,6 +315,12 @@ def main(argv=None):
         "--post-pass",
         default="true",
         help="false: post nothing when the gate passes; regressions and skips still post",
+    )
+    ap.add_argument("--threshold", default="", help="for the combined post")
+    ap.add_argument("--module-thresholds", default="", help="for the combined post")
+    ap.add_argument(
+        "--part-out",
+        help="also write the verdict as JSON, for gate_slack_combine.py",
     )
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
@@ -318,13 +353,29 @@ def main(argv=None):
         "arch": a.arch,
         "run_types": a.run_types,
         "run_url": a.run_url,
+        "report_url": a.report_url,
+        "artifact_url": a.artifact_url,
         "baseline_sha": a.baseline_sha,
         "reason": reason,
         "gate_name": a.gate_name,
         "trigger": a.trigger,
         "note": a.note,
+        "threshold": a.threshold,
+        "module_thresholds": a.module_thresholds,
     }
     text = build_text(status, rows, ctx)
+
+    if a.part_out:
+        with open(a.part_out, "w") as fh:
+            json.dump(
+                {
+                    "status": status,
+                    "should_post": should_post,
+                    "rows": rows,
+                    "ctx": ctx,
+                },
+                fh,
+            )
 
     with open(a.out, "w") as fh:
         json.dump({"channel": a.channel, "text": text}, fh)

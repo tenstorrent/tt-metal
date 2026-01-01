@@ -8,7 +8,7 @@ from ttml.common.config import (
     load_config,
     DeviceConfig,
     TransformerConfig,
-    MultiHostConfig,
+    resolve_multihost_config,
 )
 from ttml.common.utils import round_up_to_tile
 
@@ -59,10 +59,7 @@ class TransformerModelFactory:
 
         self.transformer_config = TransformerConfig(load_config(tc["model_config"]))
 
-        if "multihost_config" in tc:
-            self.multihost_config = MultiHostConfig(load_config(tc["multihost_config"]))
-        else:
-            self.multihost_config = MultiHostConfig({})
+        self.multihost_config = resolve_multihost_config(yaml_config)
         self.model_type = self.transformer_config.model_type
 
     def _create_gpt2(self):

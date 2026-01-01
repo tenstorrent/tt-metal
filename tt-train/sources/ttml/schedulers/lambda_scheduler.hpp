@@ -9,19 +9,16 @@
 #include "scheduler_base.hpp"
 
 namespace ttml::schedulers {
-class LambdaScheduler : public LRSchedulerBase {
+class LambdaScheduler : public ClosedFormLRScheduler {
 public:
     explicit LambdaScheduler(optimizers::OptimizerBase *optimizer, std::function<float(int)> lr_lambda);
 
-    void step() override;
-
-    [[nodiscard]] serialization::StateDict get_state_dict() const override;
-
-    void set_state_dict(const serialization::StateDict &dict) override;
+protected:
+    [[nodiscard]] float compute_lr(float base_lr) const override;
 
 private:
+    // A type-erased std::function cannot be introspected (no equivalent of Python's callable __dict__), so it is not
+    // part of the saved state. Callers must reconstruct the scheduler with the same lr_lambda before restoring state.
     std::function<float(int)> m_lr_lambda;
-    size_t m_last_step = 0;
-    float m_base_lr = 0.0F;
 };
 }  // namespace ttml::schedulers

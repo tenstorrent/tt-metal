@@ -1273,6 +1273,31 @@ class TestPenaltiesOnBlockFloatLogits:
         assert torch.allclose(result[:, penalized_token], logits_in[:, penalized_token] - 64.0, atol=0.5)
 
 
+class TestCombinedPenaltiesOrder:
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    def test_repetition_applies_before_presence_and_frequency(self, mesh_device):
+        # vLLM's apply_penalties scales by the repetition penalty first, then subtracts frequency and presence.
+        torch.manual_seed(0)
+        vocab_size = 1024
+        presence, frequency, repetition = 2.0, 1.0, 2.0
+        penalties = TTPenalties(mesh_device, SimpleNamespace(max_batch_size=BATCH_SIZE, vocab_size=vocab_size))
+        penalties.reset_params([presence], [frequency], [repetition])
+        penalties.reset_output_tokens(torch.tensor([3, 5, 5], dtype=torch.int64).repeat(BATCH_SIZE, 1))
+
+        logits = (torch.rand(1, 1, BATCH_SIZE, vocab_size) * 4 - 2).bfloat16()
+        logits_tt = ttnn.from_torch(logits, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        result_tt = penalties.apply(logits_tt)
+        result = ttnn.to_torch(ttnn.get_device_tensors(result_tt)[0]).float().reshape(BATCH_SIZE, vocab_size)
+
+        expected = logits.float().reshape(BATCH_SIZE, vocab_size).clone()
+        for token, count in ((3, 1), (5, 2)):
+            scaled = torch.where(
+                expected[:, token] > 0, expected[:, token] / repetition, expected[:, token] * repetition
+            )
+            expected[:, token] = scaled - frequency * count - presence
+        assert torch.allclose(result, expected, atol=0.1), f"max abs diff {(result - expected).abs().max().item():.3f}"
+
+
 # --- Test: seed behavior ---
 class TestSeededSamplingPerRequest:
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)

@@ -21,6 +21,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -81,8 +82,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
+        if constexpr (unpack_to_dest)
+        {
+            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
+            // bank offset reset to 0 keeps every section at DEST tile 0.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        }
+        else
+        {
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
+        }
         PROFILER_SYNC();
     }
     {
@@ -115,14 +126,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-
                     if constexpr (unpack_to_dest)
                     {
+                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
                         }
+                    }
+                    else
+                    {
+                        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
 
                     // After datacopy consumes SrcA and clears its dvalid, provide
@@ -167,7 +181,7 @@ inline void run_datacopy_transpose_loop(
             {
                 // Datacopy and transpose both use bank0's instruction buffer, so
                 // each operation must program its MOP immediately before execution.
-                _configure_default_alu_data_format_state_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+                _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
                 for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -176,8 +190,7 @@ inline void run_datacopy_transpose_loop(
                 }
             }
 
-            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format
-            // settings and disables implied math format.
+            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
             _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
@@ -229,7 +242,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<false, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
         PROFILER_SYNC();
     }
     {

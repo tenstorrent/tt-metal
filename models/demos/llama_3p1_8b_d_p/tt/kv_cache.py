@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 
 import ttnn
+from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig as Model
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import DEFAULT_MAX_SEQ_LEN, DEFAULT_NUM_USERS
 from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as layout
@@ -166,6 +167,7 @@ def allocate_kv_cache(
     cache_dtype=ttnn.bfloat8_b,
     reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
     slots_per_user=1,
+    bank_aligned=False,
 ):
     """Allocate zeroed K/V caches in the packed, block-cyclic SP4/TP8 layout.
 
@@ -217,6 +219,8 @@ def allocate_kv_cache(
     )
     memory_config = _cache_memory_config(mesh_device)
     geometry = PrefillGeometry(max_seq_len, num_users)
+    if bank_aligned:
+        check_kv_bank_aligned(max_seq_len, geometry.local_cache_sequence, mesh_device.dram_grid_size().x)
 
     def allocate_one():
         # Not ttnn.zeros: for bfloat8_b it stages a host std::vector<float> of shape.volume(), so the

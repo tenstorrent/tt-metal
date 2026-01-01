@@ -54,7 +54,7 @@ def check(rec, path, label, metric, expected, margin):
         return False
     lo, hi = expected * (1 - margin), expected * (1 + margin)
     print(
-        f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:.0f}% "
+        f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:g}% "
         f"[{lo:{fmt}}, {hi:{fmt}}]"
     )
     if value < lo or value > hi:

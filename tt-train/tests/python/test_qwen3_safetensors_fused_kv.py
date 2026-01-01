@@ -23,12 +23,12 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
+from ttml.common.utils import unpermute_proj_rows  # noqa: E402
 from ttml.models.qwen3.safetensors_loader import (  # noqa: E402
     _fuse_kv,
     _kv_match,
     _repermute_proj_rows,
     _split_kv,
-    _unpermute_proj_rows,
 )
 
 NUM_KV_HEADS = 4
@@ -70,7 +70,7 @@ def test_fused_layout_is_k_then_v_with_permuted_k(is_weight):
     fused = _fuse_kv(k_hf, v_hf, NUM_KV_HEADS)
 
     # First half is the *permuted* K (unpermute_proj_rows applied), second half is V verbatim.
-    np.testing.assert_array_equal(fused[:KV_OUT], _unpermute_proj_rows(k_hf, NUM_KV_HEADS))
+    np.testing.assert_array_equal(fused[:KV_OUT], unpermute_proj_rows(k_hf, NUM_KV_HEADS))
     np.testing.assert_array_equal(fused[KV_OUT : 2 * KV_OUT], v_hf)
 
 

@@ -40,6 +40,7 @@
 #include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
+#include "ops/qkv_causal_conv1d_silu_op.hpp"
 #include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
@@ -138,6 +139,24 @@ void py_module(nb::module_& m) {
 
     {
         auto py_conv = static_cast<nb::module_>(m.attr("conv"));
+        py_conv.def(
+            "qkv_causal_conv1d_silu",
+            &ttml::ops::qkv_causal_conv1d_silu,
+            nb::arg("input"),
+            nb::arg("history"),
+            nb::arg("tap0"),
+            nb::arg("tap1"),
+            nb::arg("tap2"),
+            nb::arg("tap3"),
+            nb::arg("q_width"),
+            nb::arg("k_width"),
+            nb::arg("v_width"),
+            nb::arg("channel_chunk_size") = 0,
+            "Fused causal depthwise conv1d (4 taps) + SiLU over the packed [q|k|v] channels, with the fused backward.\n"
+            "input:   [1, T, Q+K+V] or [1, 1, T, Q+K+V] TILE bf16 (autograd).\n"
+            "history: [1, 3, Q+K+V] or [1, 1, 3, Q+K+V], the three rows before the sequence; no gradient.\n"
+            "tap0..3: logical volume Q+K+V each (autograd; frozen taps skip the tap-gradient work).\n"
+            "Returns (q, k, v) with widths Q, K, V and the input's rank.");
         py_conv.def(
             "conv3d",
             [](const autograd::TensorPtr& input,
@@ -358,7 +377,12 @@ void py_module(nb::module_& m) {
 
     {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
-        py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
+        py_multi_head_utils.def(
+            "heads_creation",
+            &ttml::ops::heads_creation,
+            nb::arg("qkv"),
+            nb::arg("num_heads"),
+            nb::arg("num_groups") = nb::none());
         py_multi_head_utils.def(
             "split_heads",
             &ttml::ops::split_heads,

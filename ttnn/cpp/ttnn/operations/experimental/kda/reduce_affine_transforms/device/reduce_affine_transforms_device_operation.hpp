@@ -25,8 +25,7 @@ struct ReduceAffineTransformsOperation {
 };
 
 std::pair<Tensor, Tensor> reduce_affine_transforms(
-    const Tensor&,
-    const Tensor&,
+    const Tensor& summaries,
     uint32_t,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&,
