@@ -14,6 +14,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BroadcastType,
     DestAccumulation,
     DestSync,
@@ -60,7 +61,7 @@ from helpers.tile_constants import (
     get_tile_params,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class CT_DIM(TemplateParameter):
 
 @dataclass
 class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_init does."""
 
     bcast_preserve: bool = False
 
@@ -168,12 +169,7 @@ def _canonical_bcast_col_config(
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
     tile_rows=_TILE_ROWS,
     # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
@@ -334,7 +330,7 @@ def test_eltwise_bcast_col_custom(
         configuration.prepare()
         canonical.prepare()
     res_from_L1 = configuration.run().result
-    res_tilized = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tilized = result_tensor(res_from_L1, formats.output_format)
 
     res_from_L1 = untilize_block(
         res_from_L1,
@@ -345,12 +341,7 @@ def test_eltwise_bcast_col_custom(
         face_r_dim=face_r_dim,
     ).flatten()
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Spot-check: log a few elements per tile to verify srcA <op> bcast(srcB)
     tile_elems = tile_rows * 32

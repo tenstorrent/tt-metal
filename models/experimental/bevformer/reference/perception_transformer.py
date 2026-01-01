@@ -37,7 +37,7 @@ import torch
 import torch.nn as nn
 from torchvision.transforms.functional import rotate
 
-from models.experimental.bevformer.model_config import CAN_BUS_DIMS, EMBED_DIMS, NUM_CAMS, NUM_LEVELS, ROTATE_CENTER
+from models.experimental.bevformer.model_config import CAN_BUS_DIMS, EMBED_DIMS, NUM_CAMS, ROTATE_CENTER
 
 
 def bev_grid_length(pc_range, bev_h, bev_w):
@@ -82,7 +82,9 @@ class PerceptionTransformer(nn.Module):
     Args:
         encoder (nn.Module): ``reference.encoder.BEVFormerEncoder``.
         embed_dims (int): Channels of the features, queries and BEV.
-        num_feature_levels (int): FPN levels.
+        num_feature_levels (int): Level embeddings, of which the FPN's levels take the first ones.
+            Upstream's default of four holds for every variant: tiny's and small's single level
+            takes the first.
         num_cams (int): Cameras.
         rotate_center (tuple[int]): Pixel the previous BEV rotates about, (x, y).
     """
@@ -91,7 +93,7 @@ class PerceptionTransformer(nn.Module):
         self,
         encoder,
         embed_dims=EMBED_DIMS,
-        num_feature_levels=NUM_LEVELS,
+        num_feature_levels=4,
         num_cams=NUM_CAMS,
         rotate_center=ROTATE_CENTER,
     ):

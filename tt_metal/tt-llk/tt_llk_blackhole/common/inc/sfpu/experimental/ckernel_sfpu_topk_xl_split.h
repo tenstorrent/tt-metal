@@ -362,10 +362,11 @@ inline void release_dest_bank0()
     _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
 }
 
-// rebuild_dir: the direction of stages 7 and 8 (ascending for the last chunk of a mirrored segment).
+// rebuild_dir: the direction of stages 7 and 8 (ascending for the last chunk of a mirrored segment). take_next: a merge
+// takes the token of MATH's next step before it stores (see case 6).
 template <std::uint32_t K>
 inline __attribute__((always_inline)) void sfpu_stage_body(
-    const std::uint32_t chunk, const std::uint32_t stage, const std::uint32_t num_chunks, const bool rebuild_dir)
+    const std::uint32_t chunk, const std::uint32_t stage, const std::uint32_t num_chunks, const bool rebuild_dir, const bool take_next)
 {
     static_assert(supported_split<K>, "the split takes fused K = 512, 1024 and 2048 rows");
     namespace sfpu                  = ckernel::sfpu;
@@ -407,6 +408,12 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(tile_offset, ascending);
             if (chunk > 0)
             {
+                // The merge also stores into the previous survivor, whose Dst bank MATH's next step works in, so that step
+                // must be done first: its token is taken here rather than by the next SFPU part.
+                if (take_next)
+                {
+                    take_math_token();
+                }
                 if constexpr (K == 512)
                 {
                     if (num_chunks == 2)
@@ -443,33 +450,35 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
 // mirror_last is a parameter, not a template argument: sfpu_stage_body takes the direction as a value, so
 // templating on it duplicates every stage body in PACK instruction memory for identical code.
 template <std::uint32_t K, std::uint32_t stage>
-inline __attribute__((always_inline)) void sfpu_step_inline(const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take)
+inline __attribute__((always_inline)) void sfpu_step_inline(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take, const bool take_next)
 {
     if (take)
     {
         take_math_token();
     }
-    sfpu_stage_body<K>(chunk, stage, num_chunks, mirror_last && chunk + 1 == num_chunks);
+    sfpu_stage_body<K>(chunk, stage, num_chunks, mirror_last && chunk + 1 == num_chunks, take_next);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
 template <std::uint32_t K, std::uint32_t stage>
 inline __attribute__((noinline, noclone)) void sfpu_step_call(
-    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take)
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take, const bool take_next)
 {
-    sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take);
+    sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take, take_next);
 }
 
 template <std::uint32_t K, std::uint32_t stage>
-inline __attribute__((always_inline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take = true)
+inline __attribute__((always_inline)) void sfpu_step(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool mirror_last, const bool take = true, const bool take_next = false)
 {
     if constexpr (K == 512)
     {
-        sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take);
+        sfpu_step_inline<K, stage>(chunk, num_chunks, mirror_last, take, take_next);
     }
     else
     {
-        sfpu_step_call<K, stage>(chunk, num_chunks, mirror_last, take);
+        sfpu_step_call<K, stage>(chunk, num_chunks, mirror_last, take, take_next);
     }
 }
 
@@ -479,6 +488,8 @@ template <std::uint32_t K>
 inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const std::uint32_t num_chunks, const bool mirror_last)
 {
     const bool cur = c1 < num_chunks, prev = c1 > 0, prev_merged = c1 > 1;
+    // Chunk c1 - 1's merge takes the token of chunk c1's stage 2.
+    const bool merge_takes_next = cur && prev_merged;
     if (cur)
     {
         sfpu_step<K, 0>(c1, num_chunks, mirror_last, c1 > 0);
@@ -493,11 +504,11 @@ inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const st
     }
     if (prev)
     {
-        sfpu_step<K, 6>(c1 - 1, num_chunks, mirror_last);
+        sfpu_step<K, 6>(c1 - 1, num_chunks, mirror_last, true /*take*/, merge_takes_next);
     }
     if (cur)
     {
-        sfpu_step<K, 2>(c1, num_chunks, mirror_last);
+        sfpu_step<K, 2>(c1, num_chunks, mirror_last, !merge_takes_next /*take*/);
     }
     if (prev_merged)
     {
@@ -532,12 +543,13 @@ inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks, 
     sfpu_step<K, 4>(1, num_chunks, mirror_last);
     sfpu_step<K, 5>(0, num_chunks, mirror_last);
     sfpu_step<K, 5>(1, num_chunks, mirror_last);
-    sfpu_step<K, 6>(0, num_chunks, mirror_last);
-    sfpu_step<K, 6>(1, num_chunks, mirror_last);
+    // Chunk 1's merge takes the token of chunk 2's copy.
     const bool cur = num_chunks > 2;
+    sfpu_step<K, 6>(0, num_chunks, mirror_last);
+    sfpu_step<K, 6>(1, num_chunks, mirror_last, true /*take*/, cur /*take_next*/);
     if (cur)
     {
-        sfpu_step<K, 0>(2, num_chunks, mirror_last);
+        sfpu_step<K, 0>(2, num_chunks, mirror_last, false /*take*/);
     }
     sfpu_step<K, 7>(1, num_chunks, mirror_last);
     if (cur)

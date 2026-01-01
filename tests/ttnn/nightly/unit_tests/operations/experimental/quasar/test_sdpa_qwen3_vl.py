@@ -23,6 +23,11 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.test_sdpa_atte
     _to_device,
 )
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 CHUNK = 256
 
 

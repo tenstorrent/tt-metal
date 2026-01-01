@@ -817,7 +817,7 @@ bool DPrintServer::Impl::poll_device_print_data(
         while (pos + header_size <= payload.size()) {
             DramStreamMessageHeader header;
             std::memcpy(&header, payload.data() + pos, header_size);
-            const uint32_t align = header.align;
+            const uint32_t align = header.align * sizeof(uint32_t);
             const uint32_t length = header.length;
             const bool buffer_wrapped = header.buffer_wrapped != 0;
 

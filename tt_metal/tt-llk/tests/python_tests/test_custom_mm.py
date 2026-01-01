@@ -56,7 +56,7 @@ from helpers.llk_params import (
     MathFidelity,
 )
 from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -97,7 +97,7 @@ _BFP_UNPACKERS = {
 
 @dataclass
 class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_init does."""
 
     preserve: bool = False
 
@@ -490,7 +490,7 @@ def _run_compact_against_default(M, kt, ct, formats, dest_acc, dest_sync=DestSyn
     """
     out_format = formats.output_format
     torch_a, torch_b = _seeded_operands(M, kt, ct)
-    max_default_ct = 4 if dest_acc == DestAccumulation.Yes else 8
+    max_default_ct = max_dest_tiles(dest_acc)
 
     compact, golden = _build_custom_mm(
         M,

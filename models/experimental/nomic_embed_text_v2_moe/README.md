@@ -102,6 +102,7 @@ tt/
   encoder.py                  the 12 blocks in sequence
   pooling.py                  mean pool, Matryoshka truncation, L2 normalize
   model.py                    the whole model, plus the text-to-embedding driver
+  chunking.py                 splits a large batch into chunks of whole sequences
 demo/
   demo.py                     embeds queries and passages, prints the similarity matrix
 ```

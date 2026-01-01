@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt_stl/assert.hpp>

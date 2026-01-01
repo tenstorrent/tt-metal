@@ -28,7 +28,7 @@ from helpers.golden_generators import (
     truncate_to_bfloat16,
 )
 from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import parametrize
+from helpers.param_config import max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import ROPE, TILE_COUNT
@@ -126,7 +126,7 @@ def _run(
     cos_sin_per_row=False,
     dest_acc=DestAccumulation.No,
 ):
-    max_tiles = 4 if dest_acc == DestAccumulation.Yes else MAX_DEST_TILES
+    max_tiles = max_dest_tiles(dest_acc)
     assert tiles <= max_tiles, f"{tiles} tiles is past the Dest half"
     formats = InputOutputFormat(
         DataFormat.Float16_b,

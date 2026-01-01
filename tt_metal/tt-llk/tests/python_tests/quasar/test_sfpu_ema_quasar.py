@@ -40,7 +40,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # No Float32: the SrcA datacopy narrows it to TF32 (the unary sweep covers it via unpack-to-Dest).
 EMA_FORMATS = [
@@ -119,7 +119,7 @@ def test_sfpu_ema_quasar(formats, schedule):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = get_golden_generator(UntilizeGolden)(
         res_tensor, formats.output_format, input_dimensions
     )

@@ -468,6 +468,9 @@ class DestAccumulation(Enum):
         return str(self.value).lower()
 
 
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
+
+
 class L1Accumulation(Enum):
     Yes = 1
     No = 0
@@ -576,6 +579,14 @@ class MathFidelity(Enum):
     @property
     def cpp_enum_value(self):
         return f"ckernel::MathFidelity::{self.name}"
+
+
+ALL_MATH_FIDELITIES = [
+    MathFidelity.LoFi,
+    MathFidelity.HiFi2,
+    MathFidelity.HiFi3,
+    MathFidelity.HiFi4,
+]
 
 
 class DestSync(Enum):

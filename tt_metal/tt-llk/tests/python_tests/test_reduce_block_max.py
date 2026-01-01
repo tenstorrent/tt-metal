@@ -37,6 +37,7 @@ Coverage (Blackhole + Wormhole B0):
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -314,6 +315,8 @@ def test_reduce_block_max_runtime(formats, block_ct_dim, num_faces):
     _run_reduce_block_max(formats, block_ct_dim, use_runtime=True, num_faces=num_faces)
 
 
+# compile-time reduce_block_max_row reinit is a Blackhole-only lib path
+@blackhole_only
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[2, 4],
@@ -332,10 +335,6 @@ def test_reduce_block_max_reinit(formats, block_ct_dim, reinit):
 
     Compile-time short/minimal reinit lib fns are Blackhole-only; skip on WH.
     """
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "compile-time reduce_block_max_row reinit is a Blackhole-only lib path"
-        )
     _run_reduce_block_max(
         formats, block_ct_dim, reinit=reinit, clobber=_CLOBBER_FOR_REINIT[reinit]
     )

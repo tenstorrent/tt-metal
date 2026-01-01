@@ -30,7 +30,6 @@ canonical Y-stride is not 32 (Tf32 -> 64, Bfp8_b -> 16) or a register readback l
 
 from dataclasses import dataclass
 
-import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
@@ -44,7 +43,7 @@ from helpers.test_variant_parameters import (
     SRCA_REUSE_COUNT,
     TemplateParameter,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # 1 SrcA tile reused for 1 SrcB tile — the minimal bcast that still sets Y-stride=32.
 BCAST_SRCA_REUSE = 1
@@ -130,11 +129,7 @@ def test_unpack_bcastA_B_uninit_restore(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

@@ -88,15 +88,15 @@ class TTDetrTransformerDecoderLayer:
         signpost(header="TTNN DecoderLayer Forward Start")
         signpost(header="DecoderLayer SelfAttn Start")
         self_attn_output = self.self_attn(query, query_pos)
-        signpost(header="DecoderLayer SelfAttn Complete")
+        signpost(header="DecoderLayer SelfAttn End")
         query = layer_norm(self_attn_output, norms[0], residual=query)
         signpost(header="DecoderLayer CrossAttn Start")
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
-        signpost(header="DecoderLayer CrossAttn Complete")
+        signpost(header="DecoderLayer CrossAttn End")
         query = layer_norm(query, norms[1])
         signpost(header="DecoderLayer FFN Start")
         ffn_output = self.ffn(query)
-        signpost(header="DecoderLayer FFN Complete")
+        signpost(header="DecoderLayer FFN End")
         query = layer_norm(ffn_output, norms[2], residual=query)
         signpost(header="TTNN DecoderLayer Forward End")
         return query
@@ -150,7 +150,7 @@ class TTDetectionTransformerDecoder:
 
             signpost(header="Decoder RegBranch Start")
             box_code = self._reg_branch(output, branch)
-            signpost(header="Decoder RegBranch Complete")
+            signpost(header="Decoder RegBranch End")
             # The clamp (a no-op on the first layer's logit output) runs inside the add.
             logits = ttnn.add(box_code[..., CENTERS_FIRST_CENTERS], logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)

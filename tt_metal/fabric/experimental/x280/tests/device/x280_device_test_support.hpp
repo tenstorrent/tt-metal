@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <llrt/tt_cluster.hpp>
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include <cstdint>

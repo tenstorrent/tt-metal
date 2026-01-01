@@ -21,7 +21,8 @@ from models.experimental.bevformer.tt.tt_fpn import TTFPN
 def test_fpn(device, reset_seeds):
     torch_model = build_reference_fpn()
 
-    # C3-C5 have the sizes of the FPN's first three levels; its extra conv makes the fourth.
+    # Each backbone output has the size of one of the FPN's first levels; the FPN's extra convs, if
+    # any, make the rest.
     input_tensors = [
         torch.randn(NUM_CAMS, channels, h, w)
         for channels, (h, w) in zip(FPN_KWARGS["in_channels"], SPATIAL_SHAPES, strict=False)

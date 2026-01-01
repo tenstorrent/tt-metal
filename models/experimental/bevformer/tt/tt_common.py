@@ -16,11 +16,19 @@ import math
 import ttnn
 
 try:
-    from tracy import signpost
-except ModuleNotFoundError:  # Tracy is only installed for profiling.
+    from tracy import signpost as _tracy_signpost
 
-    def signpost(header, message=None):
-        pass
+    use_signpost = True
+except ModuleNotFoundError:  # Tracy is only installed for profiling.
+    _tracy_signpost = None
+    use_signpost = False
+
+
+def signpost(header, message=None):
+    """Tracy stage marker. No-op unless ``use_signpost`` is on and Tracy is installed."""
+    if not use_signpost or _tracy_signpost is None:
+        return
+    _tracy_signpost(header, message)
 
 
 def layer_norm(x, params, residual=None):

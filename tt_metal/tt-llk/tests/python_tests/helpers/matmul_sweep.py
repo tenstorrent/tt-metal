@@ -15,7 +15,7 @@ from helpers.llk_params import (
     StochasticRounding,
     Transpose,
 )
-from helpers.param_config import get_max_dst_index
+from helpers.param_config import get_max_dst_index, max_dest_tiles
 
 
 # =========================
@@ -443,7 +443,6 @@ def sweep_matmul(
     fpu_stochastic_modes = {StochasticRounding.Fpu, StochasticRounding.All}
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
         is_fpu_bfloat16 = (
             fmt.input_format in bfloat16_formats
             and fmt.output_format in bfloat16_formats
@@ -453,7 +452,9 @@ def sweep_matmul(
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
 
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            max_tiles = max_dest_tiles(
+                dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
+            )
 
             # Use cached or newly generated dimensions
             dimensions_list = dimensions_cache.setdefault(

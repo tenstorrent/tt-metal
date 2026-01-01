@@ -152,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG)
     {
-        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // Leave the Src zero flag at keep, as a preceding copy_init does. The init must restore the
         // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
         math::_configure_preserve_zero_flag_state_();
     }

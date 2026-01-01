@@ -61,7 +61,7 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Input is pinned to Float16_b: the kernel is bf16-dest only, so anything wider has
 # nowhere to land. Only the pack-side format varies.
@@ -135,7 +135,7 @@ def test_sfpu_sdpa_exp_unclamped(formats, input_range, scale_en, scale, num_tile
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

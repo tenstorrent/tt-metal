@@ -422,6 +422,10 @@ class RunTimeOptions {
     // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
+    // Use the DRAM size the soc descriptor declares on the emulator models that back less
+    // (TT_METAL_SIMULATOR_DRAM_UNCAPPED=1).
+    bool simulator_dram_uncapped = false;
+
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
 
@@ -1034,6 +1038,8 @@ public:
 
     bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
+
+    bool get_simulator_dram_uncapped() const { return simulator_dram_uncapped; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
 

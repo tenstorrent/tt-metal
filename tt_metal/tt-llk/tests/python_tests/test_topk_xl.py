@@ -245,7 +245,7 @@ def _variant(
     result_tiles = (1 if fused_region_only else 2) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
     # through SrcA then the MATH A2D datacopy.
-    is_32bit = formats.input_format in (DataFormat.Float32, DataFormat.Int32)
+    is_32bit = formats.input_format.is_32_bit()
     # Unused dummy tile, but it is declared with the input format, so its dtype has
     # to follow it or the stimuli packer is handed a mislabeled tensor.
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[formats.input_format])

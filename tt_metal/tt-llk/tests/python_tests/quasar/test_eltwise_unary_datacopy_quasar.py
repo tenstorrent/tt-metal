@@ -4,7 +4,6 @@
 from typing import List
 
 import pytest
-import torch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -14,10 +13,8 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
@@ -26,6 +23,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -50,7 +48,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_eltwise_unary_datacopy_combinations(
@@ -71,9 +69,7 @@ def generate_eltwise_unary_datacopy_combinations(
         in_fmt = fmt.input_format
 
         dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-        dest_sync_modes = (
-            (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-        )
+        dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
         tile_sizes = (
             select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
@@ -273,12 +269,7 @@ def test_eltwise_unary_datacopy_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

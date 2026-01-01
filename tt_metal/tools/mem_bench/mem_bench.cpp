@@ -314,7 +314,7 @@ TestResult mem_bench_multi_mmio_devices(
 
         // Wait all programs to complete
         for (const auto& device_entry : devices) {
-            device_entry.second->mesh_command_queue().finish();
+            device_entry.second->mesh_command_queue(0).finish();
         }
 
         // Read counters from each core

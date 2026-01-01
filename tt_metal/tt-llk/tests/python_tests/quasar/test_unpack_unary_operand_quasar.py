@@ -5,7 +5,10 @@ from typing import List
 
 import pytest
 import torch
-from helpers.constraints import is_valid_data_format_conversion
+from helpers.constraints import (
+    is_valid_data_format_conversion,
+    is_valid_quasar_dest_mode_conversion,
+)
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -18,11 +21,9 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     Transpose,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
@@ -30,6 +31,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -61,7 +63,7 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_unpack_unary_operand_combinations(
@@ -80,7 +82,7 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     for fmt in formats_list:
         if not is_valid_data_format_conversion(fmt):
@@ -111,23 +113,8 @@ def generate_unpack_unary_operand_combinations(
             )
 
         for dest_acc in dest_acc_modes:
-            if (
-                not in_fmt.is_32_bit()
-                and fmt.output_format.is_32_bit()
-                and dest_acc == DestAccumulation.No
-            ):
-                # Skip if input format is not 32-bit and output format is 32-bit and dest_acc is No
-                # This combination is not supported in the Quasar Packer format conversions
-                continue
-            # Int8<->UInt8 conversion requires dest_acc enabled.
-            src_reg_fmt = {
-                DataFormat.Int4: DataFormat.Int8,
-                DataFormat.UInt4: DataFormat.UInt8,
-            }.get(in_fmt, in_fmt)
-            if (
-                dest_acc == DestAccumulation.No
-                and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
-                and src_reg_fmt != fmt.output_format
+            if not is_valid_quasar_dest_mode_conversion(
+                in_fmt, fmt.output_format, dest_acc
             ):
                 continue
             for dest_sync in dest_sync_modes:
@@ -357,12 +344,7 @@ def test_unpack_unary_operand_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape

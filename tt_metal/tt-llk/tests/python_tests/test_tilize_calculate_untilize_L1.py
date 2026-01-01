@@ -1,14 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
-    MathFidelity,
     MathOperation,
-    format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -23,7 +21,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 @parametrize(
@@ -36,12 +34,7 @@ from helpers.utils import passed_test
     ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_tilize_calculate_untilize_L1(
     formats,
@@ -94,8 +87,6 @@ def test_tilize_calculate_untilize_L1(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+import os
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.distributed_norm import DistributedNorm
+from models.ttt_compat.tt.model_config import ModelArgs
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+@pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_rms_norm_inference(
+    max_seq_len,
+    batch_size,
+    mode,
+    mesh_device,
+    reset_seeds,
+    ensure_gc,
+):
+    dtype = ttnn.bfloat16
+
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+
+    model_args.n_layers = 1
+    state_dict = model_args.load_state_dict()
+    state_dict_prefix = model_args.get_state_dict_prefix("", 0)
+    first_layer_prefix = state_dict_prefix + "attention_norm."
+
+    # Create the inner RMSNormxw
+    tt_ccl = TT_CCL(mesh_device)
+    tt_inner_norm = RMSNorm(
+        device=mesh_device,
+        dim=model_args.dim,
+        state_dict=state_dict,
+        state_dict_prefix=state_dict_prefix,
+        weight_key="attention_norm",
+        weight_dtype=dtype,
+        add_unit_offset=model_args.rms_norm_add_unit_offset,
+        is_distributed=model_args.is_distributed_norm,
+        tt_ccl=tt_ccl,
+    )
+
+    # Wrap it in DistributedNorm
+    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
+
+    # Create reference model (unchanged)
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    reference_model = model_args.reference_rms_norm()
+    reference_model.load_state_dict(partial_state_dict)
+
+    input = torch.rand(1, 1, 32, model_args.dim)
+    reference_output = reference_model(input)
+
+    # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
+    tt_input = ttnn.from_torch(
+        input,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+        memory_config=(model_args.get_residual_mem_config(mode)),
+    )
+
+    norm_config = model_args.get_norm_config("attn", mode, None)
+    tt_output = tt_model(tt_input, mode=mode, norm_config=norm_config)
+
+    # DistributedNorm outputs are replicated across devices
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
+        ),
+    )[:1, :, :, :]
+
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"PCC: {pcc_message}")
+
+    if passing:
+        logger.info("rms_norm Passed!")
+    else:
+        logger.warning("rms_norm Failed!")
+
+    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("dim", [128, 256, 896, 1152, 2304, 3072])
+@pytest.mark.parametrize("seq_len", [32, 64, 96, 128, 160])
+def test_rms_norm_short_prefill(device, seq_len, dim, reset_seeds):
+    weight = torch.rand(dim) + 0.5
+    tt_norm = RMSNorm(device=device, dim=dim, state_dict={"norm.weight": weight}, weight_key="norm", eps=1e-6)
+
+    x = torch.randn(1, 1, seq_len, dim)
+    reference = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * weight
+
+    tt_input = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_output = tt_norm(tt_input, mode=Mode.PREFILL)
+    assert tt_output.memory_config() == tt_input.memory_config()
+
+    passing, pcc_message = comp_pcc(reference, ttnn.to_torch(tt_output), pcc=0.9999)
+    logger.info(f"PCC: {pcc_message}")
+    assert passing, f"rms_norm output does not meet PCC requirement 0.9999: {pcc_message}"

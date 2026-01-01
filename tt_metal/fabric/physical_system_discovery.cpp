@@ -27,7 +27,7 @@
 #include <filesystem>
 #include <vector>
 
-#include <tt-umd/cluster.hpp>
+#include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/soc_descriptor.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"

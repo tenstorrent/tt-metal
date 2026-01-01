@@ -38,9 +38,10 @@ from helpers.test_variant_parameters import (
     EMA_INTERLEAVED_INIT,
     EMA_SEED,
     TILE_COUNT,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # EMA smoothing factor chosen for the functional test (ttnn.ema has no default alpha;
 # it is a required argument). beta is derived as 1 - alpha.
@@ -58,10 +59,6 @@ AFTER_INIT_NUM_TIME_TILES = 2
 # deliberately: it is the cheapest check that the carry term is actually multiplied
 # in rather than ignored.
 _ALPHA_STEPS = 1000
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _ema_golden(
@@ -150,7 +147,7 @@ def _run_ema_on_device(
         formats,
         templates=[
             APPROX_MODE(ApproximationMode.No),
-            EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
+            EMA_ALPHA_BETA(alpha_bits=fp32_bits(alpha), beta_bits=fp32_bits(beta)),
             EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
             EMA_SEED(seed_from_first_input=seed_from_first_input),
         ],
@@ -174,7 +171,7 @@ def _run_ema_on_device(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
     return res_tensor, golden_input
 

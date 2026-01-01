@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from helpers.constraints import get_valid_eltwise_binary_math_fidelities
 from helpers.llk_params import BroadcastType, DestAccumulation, DestSync, Transpose
 from helpers.param_config import parametrize
 from test_eltwise_binary import (
     BFP4_MATH_OPS,
     _get_valid_formats,
-    _get_valid_math_fidelity,
     _run_eltwise_binary_test,
     get_bfp4_formats,
     get_eltwise_binary_acc_to_dest,
@@ -30,7 +30,9 @@ ELTWISE_BINARY_BROADCAST_TYPES = [
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
     math_op=lambda formats: get_eltwise_binary_math_ops(formats),
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
+        formats, math_op
+    ),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
         transpose_srca, broadcast_type
@@ -78,7 +80,7 @@ def test_eltwise_binary_broadcast(
     unpack_to_dest=[False],
     formats=get_bfp4_formats(),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_fidelity=lambda formats: _get_valid_math_fidelity(formats),
+    math_fidelity=lambda formats: get_valid_eltwise_binary_math_fidelities(formats),
     transpose_srca=Transpose.No,
     math_op=BFP4_MATH_OPS,
     tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(

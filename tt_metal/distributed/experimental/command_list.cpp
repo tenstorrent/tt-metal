@@ -1004,7 +1004,7 @@ void CommandListBuilderImpl::add(MeshWorkload& workload, const CmdListParameters
         "The active sub-device manager changed while recording a command list");
     validate_no_service_cores(workload, mesh_device);
 
-    auto& binary_load_cq = mesh_device.mesh_command_queue();
+    auto& binary_load_cq = mesh_device.mesh_command_queue(0);
     auto binary_buffer = workload.impl().prepare_for_command_list(binary_load_cq);
 
     StagedCommandListNode staged_node;

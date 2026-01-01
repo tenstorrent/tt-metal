@@ -57,6 +57,21 @@ repos:
       # Override on the same line:  with pytest.raises(...):  # allow-pytest.raises: <why>
 - repo: local
   hooks:
+    # models/tt_transformers moved to models/ttt_compat. Its import path is aliased
+    # (models/tt_transformers/__init__.py), but nothing else is: a file path into the old
+    # folder fails at run time, or in pytest with exit code 4.
+    - id: ttt-compat-file-paths
+      name: "models/tt_transformers moved: use models/ttt_compat/ in file paths"
+      language: pygrep
+      files: \.py$
+      entry: '["'']models/tt_transformers/|/\s*["'']tt_transformers["'']|["'']tt_transformers["''],\s*["'']'
+    - id: ttt-compat-ci-paths
+      name: "models/tt_transformers moved: use models/ttt_compat/ in commands"
+      language: pygrep
+      files: (\.sh$|^tests/pipeline_reorg/.*\.ya?ml$)
+      entry: '(^|[\s"''=])models/tt_transformers/'
+- repo: local
+  hooks:
     - id: check-large-files
       name: check for large files (>500 KB)
       entry: python3 scripts/check_file_size.py

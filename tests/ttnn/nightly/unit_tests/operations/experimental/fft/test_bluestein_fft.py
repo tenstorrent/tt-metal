@@ -25,6 +25,11 @@ import torch
 
 import ttnn
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 _DTYPES = [
     # bf16 tol is loose for Bluestein because two FFTs + 3 cmul chain
     # accumulates rounding; the per-bin worst case is dominated by the
