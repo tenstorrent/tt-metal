@@ -1664,3 +1664,75 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+_NAN_BITS = (0x7FC00000, 0x7F800001, 0x7FFFFFFF, 0xFFC00000, 0xFF800001, 0xFFFFFFFF)
+
+
+def _float_tile(values, num_elements=1024):
+    row = torch.as_tensor(values, dtype=torch.float32).flatten()
+    return row.repeat(num_elements // row.numel() + 1)[:num_elements].contiguous()
+
+
+def _nan_values(bits=_NAN_BITS):
+    return torch.tensor(
+        [b - (1 << 32) if b >> 31 else b for b in bits], dtype=torch.int32
+    ).view(torch.float32)
+
+
+def _run_unary_edge(
+    mathop, formats, src_A, approx_mode=ApproximationMode.No, fast_mode=FastMode.No
+):
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+    res = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=approx_mode,
+        mathop=mathop,
+        fast_mode=fast_mode,
+        input_dimensions=[32, 32],
+        src_A=src_A,
+        src_B=torch.zeros_like(src_A),
+        check_golden=False,
+    )
+    return torch.tensor(res, dtype=torch.float32)
+
+
+_EDGE_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+]
+
+
+@pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
+@pytest.mark.parametrize(
+    "mathop, approx_mode",
+    [
+        (MathOperation.Erf, ApproximationMode.No),
+        (MathOperation.Erf, ApproximationMode.Yes),
+        (MathOperation.Erfc, ApproximationMode.No),
+    ],
+    ids=lambda v: v.name,
+)
+def test_erf_erfc_nan_input(formats, mathop, approx_mode):
+    finite = torch.tensor(
+        [0.0, 0.5, -0.5, 4.0, -4.0, 6.0, -6.0, 20.0, -20.0], dtype=torch.float32
+    )
+    src_A = _float_tile(torch.cat([_nan_values(), finite]))
+    res = _run_unary_edge(mathop, formats, src_A, approx_mode)
+
+    nan_in = torch.isnan(src_A)
+    if formats.output_format.is_32_bit():
+        bad = nan_in & ~torch.isnan(res)
+    else:
+        bad = nan_in & torch.isfinite(res)
+    assert (
+        not bad.any()
+    ), f"{mathop.name}: {int(bad.sum())} NaN inputs came out as {res[bad][:4].tolist()}"
+    assert torch.isfinite(
+        res[~nan_in]
+    ).all(), f"{mathop.name}: finite inputs came out non-finite"
