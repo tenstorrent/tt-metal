@@ -1774,3 +1774,32 @@ def test_xielu_below_underflow(formats):
         assert (
             not off.any()
         ), f"xielu of {x[off][:4].tolist()} returned {res[off][:4].tolist()}, expected {expected[off][:4].tolist()}"
+
+
+@pytest.mark.parametrize(
+    "fast_mode", [FastMode.No, FastMode.Yes], ids=lambda m: f"fast_{m.name}"
+)
+@pytest.mark.parametrize("formats", _EDGE_FORMATS, ids=lambda f: f.input_format.name)
+def test_log_zero_exponent_inputs(formats, fast_mode):
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip("Blackhole only: the Wormhole log kernel is unchanged here")
+    sign = torch.tensor([0, 1], dtype=torch.int64).repeat_interleave(128)
+    if formats.input_format.is_32_bit():
+        mantissa = torch.randint(
+            1,
+            1 << 23,
+            (128,),
+            generator=torch.Generator().manual_seed(0),
+            dtype=torch.int64,
+        )
+        mantissa[0], mantissa[1] = 0, (1 << 23) - 1
+        bits = (sign << 31) | mantissa.repeat(2)
+    else:
+        bits = (sign << 31) | (torch.arange(128, dtype=torch.int64).repeat(2) << 16)
+    src_A = _float_tile(bits.to(torch.int32).view(torch.float32))
+    res = _run_unary_edge(MathOperation.Log, formats, src_A, fast_mode=fast_mode)
+
+    bad = ~(torch.isinf(res) & (res < 0))
+    assert (
+        not bad.any()
+    ), f"log of zero-exponent inputs {src_A[bad][:4].tolist()} returned {res[bad][:4].tolist()}"
