@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <numeric>
 #include <optional>
 #include <tt-metalium/constants.hpp>
@@ -2981,19 +2982,15 @@ void SparseMatmul::validate(
     TT_FATAL(this->nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", this->nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
-    uint32_t batch_length_A = 1;
-    if (a_shape_padded.rank() > 2) {
-        for (int i = 0; i < a_shape_padded.rank() - 2; ++i) {
-            batch_length_A *= a_shape_padded[i];
-        }
-    }
+    uint32_t batch_length_A =
+        (a_shape_padded.rank() > 2)
+            ? std::accumulate(a_shape_padded.cbegin(), a_shape_padded.cend() - 2, 1u, std::multiplies<uint32_t>())
+            : 1;
 
-    uint32_t batch_length_B = 1;
-    if (b_shape_padded.rank() > 2) {
-        for (int i = 0; i < b_shape_padded.rank() - 2; ++i) {
-            batch_length_B *= b_shape_padded[i];
-        }
-    }
+    uint32_t batch_length_B =
+        (b_shape_padded.rank() > 2)
+            ? std::accumulate(b_shape_padded.cbegin(), b_shape_padded.cend() - 2, 1u, std::multiplies<uint32_t>())
+            : 1;
 
     uint32_t batch_length = 0;
     if (this->is_input_a_sparse && this->is_input_b_sparse) {

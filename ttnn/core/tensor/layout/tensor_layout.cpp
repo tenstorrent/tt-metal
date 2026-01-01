@@ -4,6 +4,9 @@
 
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 
+#include <functional>
+#include <numeric>
+
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
@@ -303,10 +306,7 @@ Shape2D TensorLayout::compute_logical_2d_shape(const tt::tt_metal::Shape& shape)
         return Shape2D{1, shape[-1]};
     }
     size_t width = shape[-1];
-    size_t height = shape[-2];
-    for (int i = -3; i >= -shape.rank(); --i) {
-        height *= shape[i];
-    }
+    size_t height = std::accumulate(shape.cbegin(), shape.cend() - 1, size_t{1}, std::multiplies<size_t>());
     return Shape2D{height, width};
 }
 

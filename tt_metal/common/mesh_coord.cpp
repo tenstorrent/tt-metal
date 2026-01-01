@@ -545,10 +545,10 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
         }
 
         // Calculate the total size of all ranges combined
-        uint64_t total_size = 0;
-        for (const auto& range : ranges_) {
-            total_size += range.shape().mesh_size();
-        }
+        uint64_t total_size =
+            std::transform_reduce(ranges_.begin(), ranges_.end(), uint64_t{0}, std::plus<>{}, [](const auto& range) {
+                return range.shape().mesh_size();
+            });
 
         // If the bounding box size equals the total size, all ranges fit perfectly
         // into a single rectangle with no gaps

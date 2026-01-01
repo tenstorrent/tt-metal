@@ -5,6 +5,9 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <numeric>
+
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -663,10 +666,8 @@ ttnn::MemoryConfig create_sharded_memory_config(
     if (shard_shape.has_value()) {
         computed_shard_shape = shard_shape.value();
     } else {
-        uint32_t batch_size = 1;
-        for (int i = 0; i < rank - 2; i++) {
-            batch_size *= logical_shape[i];
-        }
+        uint32_t batch_size =
+            std::accumulate(logical_shape.cbegin(), logical_shape.cend() - 2, 1u, std::multiplies<uint32_t>());
 
         auto tensor_height = batch_size * height;
         auto tensor_width = width;

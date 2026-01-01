@@ -15,6 +15,9 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
+#include <functional>
+#include <numeric>
+
 namespace ttnn::operations::reduction {
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
@@ -250,10 +253,8 @@ static Tensor reduce_impl(
         if (dim.size() == 1 || linear_type) {
             output_tensor = reduce_nd_loop(/*use_reduce_type=*/true, scalar);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            int reduced_volume = 1;
-            for (int axis : dim) {
-                reduced_volume *= input_shape[axis];
-            }
+            int reduced_volume = std::transform_reduce(
+                dim.begin(), dim.end(), 1, std::multiplies<>{}, [&](int axis) { return input_shape[axis]; });
             output_tensor = reduce_nd_loop(
                 /*use_reduce_type=*/false, scalar / reduced_volume);
         } else {
@@ -271,10 +272,8 @@ static Tensor reduce_impl(
             TT_THROW("Unsupported dim");
         }
 
-        int reduced_volume = 1;
-        for (int axis : dim) {
-            reduced_volume *= input_shape[axis];
-        }
+        int reduced_volume = std::transform_reduce(
+            dim.begin(), dim.end(), 1, std::multiplies<>{}, [&](int axis) { return input_shape[axis]; });
 
         auto input_tensor = (rank > 4)   ? data_movement::squeeze_from_ND_to_4D(input_tensor_arg)
                             : (rank < 4) ? ttnn::unsqueeze_to_4D(input_tensor_arg)
@@ -356,10 +355,8 @@ static Tensor std_var_impl(
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
-    int reduced_volume = 1;
-    for (int axis : dim) {
-        reduced_volume *= input_shape[axis];
-    }
+    int reduced_volume = std::transform_reduce(
+        dim.begin(), dim.end(), 1, std::multiplies<>{}, [&](int axis) { return input_shape[axis]; });
 
     // Bessel's correction (i.e. divisor of N-1)
     if (correction) {

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <numeric>
 
 namespace tt::tt_fabric::bench {
@@ -22,11 +23,10 @@ double stddev_of(const std::vector<double>& v, double m) {
     if (v.size() < 2) {
         return 0.0;
     }
-    double acc = 0.0;
-    for (double x : v) {
+    double acc = std::transform_reduce(v.begin(), v.end(), 0.0, std::plus<>{}, [m](double x) {
         double d = x - m;
-        acc += d * d;
-    }
+        return d * d;
+    });
     return std::sqrt(acc / static_cast<double>(v.size() - 1));
 }
 
@@ -49,28 +49,26 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     s.bytes = pts.front().bytes;
     s.iters = static_cast<int>(pts.size());
 
-    std::vector<double> v_ms;
-    v_ms.reserve(pts.size());
-    std::vector<double> v_GB_s;
-    v_GB_s.reserve(pts.size());
-    for (const auto& p : pts) {
-        v_ms.push_back(p.ms);
-        v_GB_s.push_back(p.GB_s);
-    }
+    std::vector<double> v_ms(pts.size());
+    std::vector<double> v_GB_s(pts.size());
+    std::transform(pts.begin(), pts.end(), v_ms.begin(), [](const auto& p) { return p.ms; });
+    std::transform(pts.begin(), pts.end(), v_GB_s.begin(), [](const auto& p) { return p.GB_s; });
 
     s.mean_ms = mean_of(v_ms);
     s.std_ms = stddev_of(v_ms, s.mean_ms);
     s.p50_ms = percentile(v_ms, 50.0);
     s.p95_ms = percentile(v_ms, 95.0);
-    s.min_ms = *std::min_element(v_ms.begin(), v_ms.end());
-    s.max_ms = *std::max_element(v_ms.begin(), v_ms.end());
+    auto [min_ms_it, max_ms_it] = std::minmax_element(v_ms.begin(), v_ms.end());
+    s.min_ms = *min_ms_it;
+    s.max_ms = *max_ms_it;
     // throughput stats
     s.mean_GB_s = mean_of(v_GB_s);
     s.std_GB_s = stddev_of(v_GB_s, s.mean_GB_s);
     s.p50_GB_s = percentile(v_GB_s, 50.0);
     s.p10_GB_s = percentile(v_GB_s, 10.0);
-    s.min_GB_s = *std::min_element(v_GB_s.begin(), v_GB_s.end());
-    s.max_GB_s = *std::max_element(v_GB_s.begin(), v_GB_s.end());
+    auto [min_GB_it, max_GB_it] = std::minmax_element(v_GB_s.begin(), v_GB_s.end());
+    s.min_GB_s = *min_GB_it;
+    s.max_GB_s = *max_GB_it;
     s.cv_GB_s_pct = (s.mean_GB_s > 0.0) ? (s.std_GB_s / s.mean_GB_s) * 100.0 : 0.0;
     return s;
 }

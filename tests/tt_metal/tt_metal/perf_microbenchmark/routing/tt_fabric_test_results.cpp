@@ -504,10 +504,12 @@ void BandwidthResultsManager::calculate_bandwidth_std_dev() {
     for (auto& result : bandwidth_results_summary_) {
         double sum = std::accumulate(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end(), 0.0);
         double mean = sum / result.num_iterations;
-        double variance = 0.0;
-        for (auto& bandwidth_gb_s : result.bandwidth_vector_GB_s) {
-            variance += std::pow(bandwidth_gb_s - mean, 2);
-        }
+        double variance = std::transform_reduce(
+            result.bandwidth_vector_GB_s.begin(),
+            result.bandwidth_vector_GB_s.end(),
+            0.0,
+            std::plus<>{},
+            [mean](double bandwidth_gb_s) { return std::pow(bandwidth_gb_s - mean, 2); });
         variance /= result.num_iterations;
         double std_dev = std::sqrt(variance);
         result.statistics_vector.push_back(std_dev);

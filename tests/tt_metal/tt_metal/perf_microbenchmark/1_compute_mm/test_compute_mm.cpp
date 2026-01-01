@@ -1514,11 +1514,10 @@ bool validation_single_core(
         }
     }
 
-    std::vector<float> result_vec;
-    result_vec.reserve(result_untilized.size());
-    for (int i = 0; i < result_untilized.size(); ++i) {
-        result_vec.push_back(to_float(static_cast<bfloat16>(result_untilized[i])));
-    }
+    std::vector<float> result_vec(result_untilized.size());
+    std::transform(result_untilized.begin(), result_untilized.end(), result_vec.begin(), [](auto val) {
+        return to_float(static_cast<bfloat16>(val));
+    });
 
     // for (int i=0; i<result_vec.size(); ++i) {
     //     std::cout << "index: " << i << " " << golden_vec[i] << " " << result_vec[i] << std::endl;

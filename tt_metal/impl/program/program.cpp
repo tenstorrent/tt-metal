@@ -20,6 +20,7 @@
 #include <cstring>
 #include <functional>
 #include <future>
+#include <numeric>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -1566,11 +1567,8 @@ ProgramId detail::ProgramImpl::get_runtime_id() const { return this->runtime_id;
 ProgramId Program::get_runtime_id() const { return internal_->get_runtime_id(); }
 
 size_t detail::ProgramImpl::num_kernels() const {
-    size_t count = 0;
-    for (const auto& kernels : kernels_) {
-        count += kernels.size();
-    }
-    return count;
+    return std::transform_reduce(
+        kernels_.begin(), kernels_.end(), size_t{0}, std::plus<>{}, [](const auto& kernels) { return kernels.size(); });
 }
 
 std::span<const std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers() const {

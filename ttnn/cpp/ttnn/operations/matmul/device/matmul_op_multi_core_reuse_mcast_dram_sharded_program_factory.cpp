@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <functional>
+#include <numeric>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -610,14 +612,16 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         }
         return a.x < b.x;
     });
-    in0_mcast_sender_noc_x.reserve(mcast_senders_coords.size());
-    for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
-    }
-    in0_mcast_sender_noc_y.reserve(mcast_senders_coords.size());
-    for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
-    }
+    in0_mcast_sender_noc_x.resize(mcast_senders_coords.size());
+    in0_mcast_sender_noc_y.resize(mcast_senders_coords.size());
+    std::transform(
+        mcast_senders_coords.begin(), mcast_senders_coords.end(), in0_mcast_sender_noc_x.begin(), [device](auto core) {
+            return static_cast<std::uint32_t>(device->worker_core_from_logical_core(core).x);
+        });
+    std::transform(
+        mcast_senders_coords.begin(), mcast_senders_coords.end(), in0_mcast_sender_noc_y.begin(), [device](auto core) {
+            return static_cast<std::uint32_t>(device->worker_core_from_logical_core(core).y);
+        });
 
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
@@ -718,17 +722,15 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         }
     }
 
-    std::vector<uint32_t> output_noc_x;
-    std::vector<uint32_t> output_noc_y;
     std::vector<CoreCoord> output_coords = corerange_to_cores(output_all_storage_cores, std::nullopt, true);
-    output_noc_x.reserve(output_coords.size());
-    for (auto core : output_coords) {
-        output_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
-    }
-    output_noc_y.reserve(output_coords.size());
-    for (auto core : output_coords) {
-        output_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
-    }
+    std::vector<uint32_t> output_noc_x(output_coords.size());
+    std::vector<uint32_t> output_noc_y(output_coords.size());
+    std::transform(output_coords.begin(), output_coords.end(), output_noc_x.begin(), [device](auto core) {
+        return static_cast<std::uint32_t>(device->worker_core_from_logical_core(core).x);
+    });
+    std::transform(output_coords.begin(), output_coords.end(), output_noc_y.begin(), [device](auto core) {
+        return static_cast<std::uint32_t>(device->worker_core_from_logical_core(core).y);
+    });
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
     uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
