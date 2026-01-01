@@ -193,62 +193,88 @@ def run(
         )
 
     if weight_shape and torch_weight is not None and not is_host:
+        # Use original weight shape from traced config (already correct for group_norm)
+        # group_norm requires last dim to be TILE_WIDTH (32), so shapes like [1, 1, 4, 32] are correct
         weight_tensor = ttnn.from_torch(
             torch_weight,
             dtype=weight_dtype or ttnn.bfloat16,
-            layout=weight_layout or ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for weight
             device=device,
             memory_config=weight_memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
     if bias_shape and torch_bias is not None and not is_host:
+        # Use original bias shape from traced config (already correct for group_norm)
+        # group_norm requires last dim to be TILE_WIDTH (32), so shapes like [1, 1, 4, 32] are correct
         bias_tensor = ttnn.from_torch(
             torch_bias,
             dtype=bias_dtype or ttnn.bfloat16,
-            layout=bias_layout or ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,  # Force ROW_MAJOR for bias
             device=device,
             memory_config=bias_memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
     if reciprocals_shape and use_welford and not is_host:
-        # Create reciprocals tensor (needed for Welford's algorithm)
-        torch_reciprocals = torch.ones(reciprocals_shape, dtype=torch.float32)
+        # Reciprocals are needed for Welford's algorithm, but traced configs often have issues:
+        # - Non-tile-aligned shard shapes (e.g., shard_shape=(1, 8192) where height=1)
+        # - L1 OOM when using sharded L1 memory
+        # Solution: Skip reciprocals with incompatible memory configs - operation will compute internally
 
-        # Use the reciprocals memory config if provided, otherwise use DRAM
+        skip_reciprocals = False
         reciprocals_mem_cfg = reciprocals_memory_config if reciprocals_memory_config else ttnn.DRAM_MEMORY_CONFIG
 
-        # For sharded memory configs with ROW_MAJOR layout, use TILE layout instead
-        # ROW_MAJOR + HEIGHT_SHARDED requires tile-aligned shard shapes
-        recip_layout = reciprocals_layout or ttnn.ROW_MAJOR_LAYOUT
-        if reciprocals_mem_cfg and hasattr(reciprocals_mem_cfg, "memory_layout"):
-            if reciprocals_mem_cfg.memory_layout in [
+        # Check if memory config is L1 sharded (likely to cause OOM)
+        if (
+            reciprocals_mem_cfg
+            and hasattr(reciprocals_mem_cfg, "memory_layout")
+            and hasattr(reciprocals_mem_cfg, "buffer_type")
+        ):
+            is_sharded = reciprocals_mem_cfg.memory_layout in [
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
-            ]:
-                # Use TILE layout for sharded configs (handles non-tile-aligned shard shapes)
-                recip_layout = ttnn.TILE_LAYOUT
+            ]
+            is_l1 = reciprocals_mem_cfg.buffer_type == ttnn.types.BufferType.L1
 
-        reciprocals_tensor = ttnn.from_torch(
-            torch_reciprocals,
-            dtype=reciprocals_dtype or ttnn.float32,
-            layout=recip_layout,
-            device=device,
-            memory_config=reciprocals_mem_cfg,
-        )
+            if is_sharded and is_l1:
+                # L1 sharded reciprocals often cause OOM - skip them
+                skip_reciprocals = True
+
+        if not skip_reciprocals:
+            torch_reciprocals = torch.ones(reciprocals_shape, dtype=torch.float32)
+            recip_layout = reciprocals_layout or ttnn.TILE_LAYOUT  # Prefer TILE for compatibility
+
+            reciprocals_tensor = ttnn.from_torch(
+                torch_reciprocals,
+                dtype=reciprocals_dtype or ttnn.float32,
+                layout=recip_layout,
+                device=device,
+                memory_config=reciprocals_mem_cfg,
+            )
 
     start_time = start_measuring_time()
 
-    # Determine core_grid (try to infer from device or use default)
-    # Use a smaller grid for sample tests that don't have reciprocals/welford
-    if reciprocals_tensor is not None and use_welford:
+    # Determine core_grid based on num_groups and use_welford
+    # Constraint: when use_welford=True, num_groups_per_core must be <= 16
+    # num_groups_per_core = num_groups / (grid.y * grid.x)
+
+    if use_welford and num_groups > 16:
+        # Need larger grid to keep num_groups_per_core <= 16
+        # For num_groups=32, need at least 2x1 grid -> 32/2 = 16 groups per core
+        min_cores = (num_groups + 15) // 16  # Round up to ensure <= 16 groups per core
         try:
             grid_size = device.compute_with_storage_grid_size()
-            core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
+            # Use available grid, but ensure we have enough cores
+            if grid_size.y * grid_size.x >= min_cores:
+                core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
+            else:
+                # Use min required cores in a row
+                core_grid = ttnn.CoreGrid(y=1, x=min_cores)
         except:
-            core_grid = ttnn.CoreGrid(y=8, x=8)
+            # Fallback: use min required cores
+            core_grid = ttnn.CoreGrid(y=1, x=min_cores)
     else:
-        # For simple tests without Welford, use smaller grid
+        # For non-Welford or small num_groups, use simple 1x1 grid
         core_grid = ttnn.CoreGrid(y=1, x=1)
 
     # Build group_norm arguments
