@@ -235,11 +235,11 @@ bool test_socket_send_recv(
         }
         // Increment the source vector for the next iteration
         // This is to ensure that the data is different for each transaction
-        for (unsigned int& val : src_vec) {
-            val++;
+        for (int i = 0; i < src_vec.size(); i++) {
+            src_vec[i]++;
         }
-        for (unsigned int& val : src_vec_per_core) {
-            val++;
+        for (int i = 0; i < src_vec_per_core.size(); i++) {
+            src_vec_per_core[i]++;
         }
     }
     return is_data_match;

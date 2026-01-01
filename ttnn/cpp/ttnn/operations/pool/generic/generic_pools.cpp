@@ -284,8 +284,8 @@ static std::vector<Tensor> pool2d_invoke(
 
     // format and return the result
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
-        for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
+        for (int i = 0; i < output_tensors.size(); i++) {
+            output_tensors[i] = ttnn::to_memory_config(output_tensors[i], memory_config.value(), std::nullopt);
         }
     }
 

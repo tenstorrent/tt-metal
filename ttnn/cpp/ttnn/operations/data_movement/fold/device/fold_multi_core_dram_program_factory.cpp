@@ -192,12 +192,13 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const uint32_t patch_size = stride_h * stride_w;         // Size of each patch
     const uint32_t output_width = input_width / stride_w;    // Output width
     // Configure runtime arguments for each core
-    for (auto core : cores) {
+    for (auto i = 0; i < cores.size(); i++) {
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
         uint32_t output_offset = (patch_size * curr_output_height_idx * output_width) +
                                  (patch_height_offset * stride_w);  // Total output height * width
+        CoreCoord core = cores[i];
         if (!full_cores.contains(core)) {
             continue;
         }
@@ -419,7 +420,8 @@ void Fold::MultiCoreDRAMFold::override_runtime_arguments(
     auto* dst_dram_buffer = output_tensor.buffer();
 
     // Update runtime arguments for each core
-    for (auto core : cores_with_rtargs) {
+    for (auto i = 0; i < cores_with_rtargs.size(); i++) {
+        CoreCoord core = cores_with_rtargs[i];
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();

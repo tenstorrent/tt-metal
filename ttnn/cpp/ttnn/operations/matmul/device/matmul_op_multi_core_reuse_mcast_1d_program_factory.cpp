@@ -2219,7 +2219,9 @@ process_gather_in0_program_and_create_override_variables(
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
     auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
     auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
-    for (auto core : all_cores_vec) {
+    for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
+        auto core = all_cores_vec[i];
+
         auto all_worker_cores_iter = std::find(worker_cores_vec.begin(), worker_cores_vec.end(), core);
         auto hop_cores_iter = std::find(hop_cores_vec.begin(), hop_cores_vec.end(), core);
         bool core_is_in_all_worker_cores = all_worker_cores_iter != worker_cores_vec.end();
@@ -2588,7 +2590,8 @@ inline void override_gather_in0_program_parameters(
         }
     }
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
-    for (const auto& core : override_variables.cores) {
+    for (uint32_t i = 0; i < override_variables.cores.size(); ++i) {
+        const auto& core = override_variables.cores[i];
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
         /* in1 */

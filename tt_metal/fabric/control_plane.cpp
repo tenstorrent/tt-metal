@@ -2280,7 +2280,10 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
             auto tensix_info = tensix_config.get_worker_tensix_info(physical_chip_id, core_coord);
 
             // Populate worker-specific tensix mux connection for ALL eth channel indices
-            for (auto& connection_info : worker_connections.read_only) {
+            for (uint8_t eth_chan = 0;
+                 eth_chan < tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS;
+                 eth_chan++) {
+                auto& connection_info = worker_connections.read_only[eth_chan];
                 fill_tensix_connection_info_fields(
                     connection_info,
                     tensix_info.tensix_core,

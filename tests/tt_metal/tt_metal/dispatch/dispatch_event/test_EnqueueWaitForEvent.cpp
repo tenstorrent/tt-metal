@@ -35,8 +35,8 @@ using std::vector;
 namespace local_test_functions {
 
 void FinishAllCqs(vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs) {
-    for (auto& cq : cqs) {
-        distributed::Finish(cq);
+    for (uint i = 0; i < cqs.size(); i++) {
+        distributed::Finish(cqs[i]);
     }
 }
 }  // namespace local_test_functions

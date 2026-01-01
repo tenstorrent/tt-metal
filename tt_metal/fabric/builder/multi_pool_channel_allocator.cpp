@@ -53,10 +53,10 @@ void MultiPoolChannelAllocator::emit_ct_args(
     // Step 1: Emit number of pools
     // a bit hacky for now
     size_t num_pools = 0;
-    for (const auto& pool_allocator : pool_allocators_) {
-        if (implements_static_channel_allocator(pool_allocator.get())) {
+    for (size_t i = 0; i < pool_allocators_.size(); ++i) {
+        if (implements_static_channel_allocator(pool_allocators_[i].get())) {
             auto [num_sender_channels, num_receiver_channels] =
-                get_static_channel_allocator_num_channels(pool_allocator.get());
+                get_static_channel_allocator_num_channels(pool_allocators_[i].get());
             num_pools += num_sender_channels + num_receiver_channels;
         } else {
             num_pools++;
@@ -86,10 +86,10 @@ void MultiPoolChannelAllocator::emit_ct_args(
     }
 
     // Emit the sender channel to pool index
-    for (const auto& pool_allocator : pool_allocators_) {
+    for (size_t i = 0; i < pool_allocators_.size(); ++i) {
         TT_FATAL(
-            dynamic_cast<FabricStaticSizedChannelsAllocator*>(pool_allocator.get()) ||
-                dynamic_cast<FabricRemoteChannelsAllocator*>(pool_allocator.get()),
+            dynamic_cast<FabricStaticSizedChannelsAllocator*>(pool_allocators_[i].get()) ||
+                dynamic_cast<FabricRemoteChannelsAllocator*>(pool_allocators_[i].get()),
             "Non static sized channel allocators not supported in the code below yet");
     }
     for (size_t i = 0; i < num_used_sender_channels; ++i) {

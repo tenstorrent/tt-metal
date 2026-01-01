@@ -390,9 +390,9 @@ std::vector<ttnn::Tensor> composite_all_gather(
     std::optional<uint32_t> cluster_axis) {
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
+    for (size_t i = 0; i < input_tensors.size(); i++) {
         output_tensors.push_back(
-            composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis));
+            composite_all_gather(input_tensors[i], dim, num_links, memory_config, subdevice_id, cluster_axis));
     }
     return output_tensors;
 }
@@ -462,11 +462,11 @@ ttnn::Tensor composite_all_to_all(
     input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim
-    for (auto& broadcasted_tensor : broadcasted_tensors) {
-        temp_tensor =
-            ttnn::mesh_partition(broadcasted_tensor, out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
-        broadcasted_tensor.deallocate();
-        broadcasted_tensor = temp_tensor;
+    for (size_t i = 0; i < broadcasted_tensors.size(); i++) {
+        temp_tensor = ttnn::mesh_partition(
+            broadcasted_tensors[i], out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
+        broadcasted_tensors[i].deallocate();
+        broadcasted_tensors[i] = temp_tensor;
     }
 
     // Step 3: Concatenate along in_dim

@@ -155,12 +155,12 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, T
     std::vector<uint32_t> args;
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
     args.push_back(row_map.size());
-    for (unsigned int row : row_map) {
-        args.push_back(row);
+    for (uint32_t i = 0; i < row_map.size(); i++) {
+        args.push_back(row_map.at(i));
     }
     args.push_back(col_map.size());
-    for (unsigned int col : col_map) {
-        args.push_back(col);
+    for (uint32_t i = 0; i < col_map.size(); i++) {
+        args.push_back(col_map.at(i));
     }
 
     return args;
