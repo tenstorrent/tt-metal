@@ -1,0 +1,40 @@
+# Guide for adding op unit tests for new fused ops based on an existing model/module
+
+The following should be provided by the user in order to complete this task successfully:
+- The sequence of ops that comprise the new fused op
+- The name of the new fused op
+- The test command for the containing module of the sequence of ops
+
+Before you start, please read the example test in /PATH carefully. The new test should be similar to the example test, just for a different fused op.
+
+Follow these steps to add a new fused op unit test:
+1. Run the provided module test command to capture the baseline accuracy and verify that the test is working. If it's not working, let the user know.
+2. Identify the ttnn operations that will be fused into a new operation, this should be provided by the user; if it's unclear which ones should be fused, let the user know.
+3. Create a new file for the new fused op unit test under MODEL_FOLDER/tests/fused_op_unit_tests/NEW_FUSED_OP_NAME.py
+4. In the fused op unit test file, create a PyTorch reference for the newly fused op based on the sequence of ttnn ops.
+	- Make sure to use the PyTorch reference as a basis here. To figure out what reference code is used, look at the containing module's test, e.g. test_mla.py for a fused op that's contained in the MLA module. Then figure out which exact portion of the reference model's code corresponds to our new fused op. It might be necessary to modify the reference code slightly to get the correct reference implementation since the exact operations used in the ttnn model and in the reference model my differer.
+	2. In the fused op unit test file, create a new reference function "NEW_FUSED_OP_reference". Inputs/outputs to the function should be PyTorch tensors and function parameters of that sequence of ops; make sure to parameterize everything that's parameterized in the module as well, no hardcoding unless it is hardcoded in the model too.
+5. In the fused op unit test file, create a function "NEW_FUSED_OP_ttnn" containing the sequence of ttnn ops that correspond to the new fused op. Inputs and outputs correspond to the inputs/output of the sequence of ops for the new fused op; inputs/outputs should be ttnn tensors and function parameters.
+6. Verify NEW_FUSED_OP_ttnn by replacing the identified sequence of ops within the module code with a function call to NEW_FUSED_OP_ttnn and run the module test to verify that the code is running as expected and producing good outputs (no change to the baseline!). If it's not passing, debug NEW_FUSED_OP_ttnn to make it work.
+7. In the fused op unit test file, implement a pytest that:
+	1. Creates all input tensors and function parameters (based on the actual use in the module code)
+      - Parameters to the ops should be variables in an easily readable section in the code
+      - Use pytest parameters for expected_pcc, expected_perf, mode+seqlen(add decode with seqlen 1, prefill with seqlen 128/1024/8k/128k)
+	2. Tests the NEW_FUSED_OP_ttnn using the reference code in NEW_FUSED_OP_reference
+    3. Contains a performance measurement wrapper, so that we measure device performance. See following notes on performance measurements.
+    4. Supports trace mode; add a pytest parameter to turn tracing on/off
+      - If it fails due to trace_region_size being too small, set the trace_region_size pytest parameter (see example test) based on the required size as printed in the log.
+    5. Contains a pytet parameter to turn program_caching on/off; use device.disable_and_clear_program_cache() for disabling, it's enabled by default
+	6. Compares PCC, ATOL, performance
+8. Verify NEW_FUSED_OP_reference and the test code itself by running the unit test and comparing pcc to NEW_FUSED_OP_ttnn. The PCC should typically by > 0.99, otherwise there's likely something wrong.
+	1. Update the expected_pcc with the pcc value from the test (if it's > 0.99 otherwise, debug the test to fix it!)
+	2. Use the current perf as expected_perf but add a TODO comment to add the actual target (based on theoretical numbers)
+9. Done!
+
+Notes on performance measurements:
+
+
+Notes on using TT hardware:
+- If there's a machine issue, you'll need to reset the machine using "tt-smi -glx_reset"
+- Running the test may take a few minutes, if you kill it the device might need a reset. In general, if there is no log output for more than 5 minutes the test likely hangs and needs to be killed + device reset, but if there's log output keep it running.
+- Run each job with piping the output to a log file, i.e. add " 2>&1 | tee $TT_METAL_HOME/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log" to each command
