@@ -522,11 +522,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
-    for (int i = 0; i < outputs.size(); ++i) {
+    for (const auto& output : outputs) {
         TT_FATAL(
-            outputs[i].memory_config().is_sharded(),
+            output.memory_config().is_sharded(),
             "Output memory config needs to be sharded, but got {}",
-            outputs[i].memory_config());
+            output.memory_config());
     }
 
     /**

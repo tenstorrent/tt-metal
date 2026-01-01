@@ -183,8 +183,7 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
 
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
 
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        CoreCoord core = cores[i];
+    for (auto core : cores) {
         if (!full_cores.contains(core)) {
             continue;
         }

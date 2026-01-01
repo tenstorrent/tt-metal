@@ -374,8 +374,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
 
     std::vector<Shape2D> global_buffer_shapes = {{64, 256}, {128, 128}, {256, 2048}, {32, 512}, {512, 1024}};
 
-    for (int i = 0; i < global_buffer_shapes.size(); i++) {
-        auto global_buffer_shape = global_buffer_shapes[i];
+    for (auto global_buffer_shape : global_buffer_shapes) {
         Shape2D shard_shape = {0, global_buffer_shape.width() / mesh_device_->num_cols()};
         // Mesh-Level Sharding Parameters for the MeshBufferView that will be read to verify correctness
         Shape2D global_buffer_read_shape = {
@@ -425,8 +424,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
 
     std::vector<Shape2D> global_buffer_shapes = {{256, 64}, {1024, 1024}, {128, 32}, {512, 64}, {2048, 256}};
 
-    for (int i = 0; i < global_buffer_shapes.size(); i++) {
-        auto global_buffer_shape = global_buffer_shapes[i];
+    for (auto global_buffer_shape : global_buffer_shapes) {
         Shape2D shard_shape = {global_buffer_shape.height() / mesh_device_->num_rows(), 0};
         uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
         Shape2D global_buffer_read_shape = {
