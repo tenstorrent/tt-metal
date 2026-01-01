@@ -16,7 +16,7 @@ inline void calculate_cumprod([[maybe_unused]] const bool first) {
     cumprod_tile_is_not_supported_on_quasar();
 }
 
-template <bool APPROXIMATION_MODE /*unused*/>
+template <bool APPROXIMATION_MODE /*unused*/, bool>
 inline void cumprod_init() {
     cumprod_tile_is_not_supported_on_quasar();
 }

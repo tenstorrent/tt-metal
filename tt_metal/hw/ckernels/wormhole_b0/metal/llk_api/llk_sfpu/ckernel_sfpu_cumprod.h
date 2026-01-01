@@ -23,7 +23,7 @@ inline void calculate_cumprod(const bool first) {
     scan_tile_columns<cumprod_step>();
 }
 
-template <bool APPROXIMATION_MODE /*unused*/>
+template <bool APPROXIMATION_MODE /*unused*/, bool>
 inline void cumprod_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     lltt::record(0, 2 * cumprod_step);

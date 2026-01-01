@@ -217,6 +217,11 @@ inline void calculate_sfpu_binary(
     }
 }
 
+sfpi_inline sfpi::vFloat _sfpu_mul_signed_zero_(sfpi::vFloat a, sfpi::vFloat b) {
+    constexpr std::uint32_t SFPMAD_MOD1_NEGATE_VC = 2;
+    return __builtin_rvtt_sfpmad(a.get(), b.get(), sfpi::vFloat(0.0f).get(), SFPMAD_MOD1_NEGATE_VC);
+}
+
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -226,7 +231,7 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat result = in0 * in1;
+        sfpi::vFloat result = _sfpu_mul_signed_zero_(in0, in1);
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
@@ -271,12 +276,12 @@ inline void calculate_sfpu_binary_div(
             // scaling is exact for normal results.
             sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
             sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
-            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+            result = _sfpu_mul_signed_zero_(sfpi::setexp(q, half), sfpi::setexp(sfpi::vFloat(1.0f), exponent - half));
 
             // For exceptional inputs only the reciprocal's sign and zero/Inf
             // classification matter. Inverting its exponent gives Inf for zero,
             // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
-            // Zero scales would hide NaN divisors, so add an all-ones NaN bit
+            // Zero scales would hide NaN divisors, so subtract an all-ones NaN bit
             // pattern where |in1| > +Inf in sign-magnitude order, and +0 elsewhere.
             // Normal inputs have biased exponents in [1, 254], or unbiased exponents
             // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
@@ -285,7 +290,7 @@ inline void calculate_sfpu_binary_div(
                 sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
                 sfpi::vFloat nan_divisor = sfpi::as<sfpi::vFloat>(sfpi::mask(sfpi::setsgn(in1, 0) > std::numeric_limits<float>::infinity()));
                 // Inverting in1 also inverts the scale's sign, so negate the product.
-                result = nan_divisor - in0 * scale;
+                result = -nan_divisor - in0 * scale;
             }
             v_endif;
         } else {

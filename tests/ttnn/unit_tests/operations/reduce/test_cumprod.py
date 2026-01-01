@@ -337,7 +337,10 @@ def test_cumprod_tile_axis_runs_in_place(size, dim, torch_dtype, device):
     assert "PermuteDeviceOperation" not in calltrace, calltrace
     assert calltrace.count("tt::tt_metal::create_device_tensor") == 1, calltrace
     expected = torch.cumprod(torch_input.double(), dim).to(torch_dtype)
-    assert torch.equal(ttnn.to_torch(output_tensor), expected)
+    output = ttnn.to_torch(output_tensor)
+    assert torch.equal(output, expected)
+    if device.arch() == ttnn.device.Arch.BLACKHOLE and torch_dtype == torch.float32:
+        assert torch.equal(torch.signbit(output), torch.signbit(expected))
 
 
 def _with_special_values(torch_input, dim):

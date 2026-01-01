@@ -2392,3 +2392,53 @@ def test_eltwise_binary_sfpu_bcast(
         dest_acc = DestAccumulation.Yes
 
     _run_sfpu_binary_bcast(formats, bcast_dim, mathop, dest_acc, **run_kwargs)
+
+
+_INF = float("inf")
+_SIGNED_ZERO_PAIRS = {
+    MathOperation.SfpuElwmul: (
+        (-3.0, 0.0),
+        (3.0, -0.0),
+        (-0.0, 1.5),
+        (0.0, -1.5),
+        (-0.0, -1.5),
+        (0.0, 0.0),
+        (1e-30, -1e-30),
+    ),
+    MathOperation.SfpuElwdiv: (
+        (0.0, -1.5),
+        (-0.0, 1.5),
+        (0.0, -_INF),
+        (-0.0, _INF),
+        (1.5, -_INF),
+        (-1.5, _INF),
+        (-0.0, -1.5),
+        (1.5, _INF),
+        (1e-30, -1e30),
+    ),
+}
+
+
+@pytest.mark.parametrize("mathop", list(_SIGNED_ZERO_PAIRS), ids=lambda op: op.name)
+def test_eltwise_binary_sfpu_fp32_signed_zero(mathop):
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip("the sign of a zero product is kept on Blackhole only")
+    src = _build_paired_tile_override(_SIGNED_ZERO_PAIRS[mathop], torch.float32)
+    a, b = src[:_ELEMENTS_PER_TILE], src[_ELEMENTS_PER_TILE:]
+    res, _ = sfpu_binary(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        mathop,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        check_contract=False,
+    )
+    got = torch.as_tensor(res, dtype=torch.float32).flatten()[:_ELEMENTS_PER_TILE]
+    expected = a * b if mathop == MathOperation.SfpuElwmul else a / b
+    assert torch.equal(
+        got, expected
+    ), f"{got[got != expected][:4].tolist()} != {expected[got != expected][:4].tolist()}"
+    wrong_sign = torch.signbit(got) != torch.signbit(expected)
+    assert (
+        not wrong_sign.any()
+    ), f"{mathop.name}: zero sign lost for {list(zip(a[wrong_sign][:4].tolist(), b[wrong_sign][:4].tolist()))}"
