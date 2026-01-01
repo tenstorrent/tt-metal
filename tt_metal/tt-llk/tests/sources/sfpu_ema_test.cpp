@@ -98,6 +98,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), 0 /* acc_to_dest */);
         }
 
+        if constexpr (EMA_SEED_FROM_FIRST_INPUT)
+        {
+            if (tile == 0)
+            {
+                llk_math_ema_sfpu_seed_previous_output(EMA_INPUT_DST_INDEX);
+            }
+        }
+
         // EMA reads dst tile 0, writes dst tile 1, updates the LREG4 carry.
         llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
 

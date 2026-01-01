@@ -2105,6 +2105,16 @@ class EMA_INTERLEAVED_INIT(TemplateParameter):
 
 
 @dataclass
+class EMA_SEED(TemplateParameter):
+    """Whether sfpu_ema_test.cpp seeds the running EMA from the first input tile instead of zero."""
+
+    seed_from_first_input: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool EMA_SEED_FROM_FIRST_INPUT = {str(self.seed_from_first_input).lower()};"
+
+
+@dataclass
 class TILE_DST_CT_OFFSET(TemplateParameter):
     offset: int = 0
 

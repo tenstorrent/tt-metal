@@ -90,13 +90,14 @@ void kernel_main() {
     transpose_init(dfb::src);
 
     for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
-        // For each batch, clear the previous output
-        ema_clear_previous_output();
         for (uint32_t tile_id = 0; tile_id < tiles_per_channel; ++tile_id) {
             // Read input, transpose and compute ema
             dfb_src.wait_front(ONE_TILE);
             tile_regs_acquire();
             transpose_tile(dfb::src, 0, inp_dst_index);
+            if (tile_id == 0) {
+                ema_seed_previous_output(inp_dst_index);
+            }
             ema_tile(inp_dst_index);
             tile_regs_commit();
             dfb_src.pop_front(ONE_TILE);

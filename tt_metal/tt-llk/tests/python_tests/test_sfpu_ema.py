@@ -36,6 +36,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     EMA_ALPHA_BETA,
     EMA_INTERLEAVED_INIT,
+    EMA_SEED,
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -63,7 +64,12 @@ def _f32_bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-def _ema_golden(input_2d: torch.Tensor, alpha: float, beta: float) -> torch.Tensor:
+def _ema_golden(
+    input_2d: torch.Tensor,
+    alpha: float,
+    beta: float,
+    seed_from_first_input: bool = False,
+) -> torch.Tensor:
     """Continuous per-column EMA down the rows (time axis), carry starting at 0.
 
     EMA_new = alpha * EMA_old + beta * input. The device carries EMA_old in LREG4
@@ -73,8 +79,12 @@ def _ema_golden(input_2d: torch.Tensor, alpha: float, beta: float) -> torch.Tens
     """
     rows, cols = input_2d.shape
     out = torch.empty((rows, cols), dtype=torch.float32)
-    prev = torch.zeros(cols, dtype=torch.float32)
     x = input_2d.to(torch.float32)
+    prev = (
+        x[0].clone()
+        if seed_from_first_input
+        else torch.zeros(cols, dtype=torch.float32)
+    )
     for t in range(rows):
         cur = alpha * prev + beta * x[t]
         out[t] = cur
@@ -104,6 +114,7 @@ def _run_ema_on_device(
     num_time_tiles: int,
     dest_acc,
     binary_init_before_ema: bool = False,
+    seed_from_first_input: bool = False,
 ):
     """Run the EMA kernel over a [num_time_tiles*32, 32] input.
 
@@ -141,6 +152,7 @@ def _run_ema_on_device(
             APPROX_MODE(ApproximationMode.No),
             EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
             EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
+            EMA_SEED(seed_from_first_input=seed_from_first_input),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -266,3 +278,18 @@ def test_sfpu_ema_alpha_sweep(alpha_index, dest_acc):
         f"alpha={alpha!r}: peak error {peak:.6e} is {peak_half_ulps:.1f} half-ULPs "
         f"of the peak value {gpeak:.6e} (rms {rms:.6e}, signal rms {scale:.6e})"
     )
+
+
+@pytest.mark.parametrize(
+    "dest_acc", [DestAccumulation.No, DestAccumulation.Yes], ids=lambda d: d.name
+)
+def test_sfpu_ema_seeded_from_first_input(dest_acc):
+    res_tensor, golden_input = _run_ema_on_device(
+        EMA_ALPHA, EMA_BETA, 2, dest_acc, seed_from_first_input=True
+    )
+    golden_tensor = _ema_golden(
+        golden_input, EMA_ALPHA, EMA_BETA, seed_from_first_input=True
+    )
+    assert passed_test(
+        golden_tensor, res_tensor, DataFormat.Float16_b
+    ), "EMA seeded from the first input does not match golden"
