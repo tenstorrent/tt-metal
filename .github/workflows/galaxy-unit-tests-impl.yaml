@@ -243,18 +243,23 @@ jobs:
           HF_HOME: /mnt/MLPerf/huggingface
           HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
         run: |
-          pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+          # All tests run, and this step fails if any test failed.
+          failed=0
+
+          pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py \
             -m "not slow" \
             --tb=short \
             --cov=models.common.modules.mlp.mlp_2d \
             --cov-report=term-missing \
-            --cov-config=models/common/tests/setup.cfg
+            --cov-config=models/common/tests/setup.cfg || failed=1
 
-          pytest models/common/tests/test_auto_compose.py \
+          pytest --durations-min=3.0 models/common/tests/test_auto_compose.py \
             --tb=short \
             --cov=models.common.auto_compose \
             --cov-report=term-missing \
-            --cov-config=models/common/tests/setup.cfg
+            --cov-config=models/common/tests/setup.cfg || failed=1
+
+          exit $failed
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
