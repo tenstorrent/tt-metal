@@ -20,7 +20,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_torch,
     to_ttnn,
 )
-from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
 # Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device
@@ -528,7 +527,6 @@ def test_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, 
     run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",
@@ -562,7 +560,6 @@ def test_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affi
     run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",
@@ -896,7 +893,6 @@ def test_moreh_layer_norm_rstd_only_mean_none(device):
 # configuration that binds mask_h_w on the large path; normalized_dims=2 is what lets do_mask_h fire at
 # all (it is gated on !is_lastdim_layer_norm). fp32_dest_acc_en=True additionally puts the intermediate
 # buffers in Float32, the case that requires explicit unpack modes.
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
@@ -919,3 +915,26 @@ def test_moreh_layer_norm_backward_large_algorithm(
     run_moreh_layer_norm_backward(
         input_shape_normalized_dims, elementwise_affine, eps, dtype, device, compute_kernel_options
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape", [[2, 64, 64], [40, 32, 64], [2, 64, 16384]], ids=["small", "rows_16_to_39", "large"]
+)
+def test_moreh_layer_norm_backward_per_row_mean_rstd(input_shape, device):
+    torch.manual_seed(2024)
+    N, H, W = input_shape
+    scale = torch.tensor([0.5, 1.0, 2.0, 4.0])[torch.randint(0, 4, (N, H, 1))]
+    offset = torch.randint(-16, 17, (N, H, 1)).float() * 0.25
+    sign = torch.tensor([-1.0, 1.0]).repeat(W // 2)
+    cpu_input = (offset + scale * sign).to(torch.bfloat16)
+    cpu_output_grad = torch.ones(input_shape, dtype=torch.bfloat16)
+    cpu_gamma = torch.ones(W, dtype=torch.bfloat16)
+    cpu_beta = torch.zeros(W, dtype=torch.bfloat16)
+
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layer_norm_backward(
+        cpu_input, cpu_output_grad, normalized_dims=1, gamma=cpu_gamma, beta=cpu_beta, device=device
+    )
+
+    torch.testing.assert_close(actual_gamma_grad.float(), sign * N * H, rtol=0, atol=0)
+    torch.testing.assert_close(actual_beta_grad.float(), torch.full((W,), float(N * H)), rtol=0, atol=0)
+    torch.testing.assert_close(actual_input_grad.float(), torch.zeros(input_shape), rtol=0, atol=1e-2)
