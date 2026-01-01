@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -13,7 +14,6 @@ from ttml.common.utils import build_causal_mask
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
-
 
 # =============================================================================
 # Fixtures
@@ -49,6 +49,108 @@ def create_causal_mask(seq_len: int) -> ttml.autograd.Tensor:
 
 
 # =============================================================================
+# LlamaConfig.from_hf
+# =============================================================================
+
+# Llama-3.2-1B-Instruct's config.json, minus fields the model has no use for.
+HF_LLAMA_3_2_1B = {
+    "architectures": ["LlamaForCausalLM"],
+    "model_type": "llama",
+    "attention_bias": False,
+    "head_dim": 64,
+    "hidden_size": 2048,
+    "intermediate_size": 8192,
+    "max_position_embeddings": 131072,
+    "mlp_bias": False,
+    "num_attention_heads": 32,
+    "num_hidden_layers": 16,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-05,
+    "rope_scaling": {
+        "factor": 32.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3",
+    },
+    "rope_theta": 500000.0,
+    "tie_word_embeddings": True,
+    "vocab_size": 128256,
+}
+
+
+class TestLlamaConfigFromHf:
+    def test_reads_the_architecture(self):
+        config = LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=2048)
+        assert (config.hidden_size, config.intermediate_size, config.num_hidden_layers) == (2048, 8192, 16)
+        assert (config.num_attention_heads, config.num_key_value_heads, config.vocab_size) == (32, 8, 128256)
+        assert config.rope_theta == 500000.0
+        assert config.rope_scaling == LlamaRopeScalingConfig(32.0, 4.0, 1.0, 8192)
+        assert config.weight_tying == WeightTyingType.Enabled
+        assert config.rms_norm_eps == 1e-5
+
+    def test_sequence_length_is_the_callers_not_the_trained_context(self):
+        config = LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=2048)
+        assert config.max_position_embeddings == 2048
+
+    def test_overrides_win(self):
+        config = LlamaConfig.from_hf(
+            HF_LLAMA_3_2_1B, max_position_embeddings=256, runner_type=RunnerType.MemoryEfficient, mlp_dropout=0.1
+        )
+        assert config.runner_type == RunnerType.MemoryEfficient
+        assert config.mlp_dropout == 0.1
+
+    def test_reads_config_json_from_a_checkpoint_directory(self, tmp_path):
+        (tmp_path / "config.json").write_text(json.dumps(HF_LLAMA_3_2_1B))
+        from_dir = LlamaConfig.from_hf(tmp_path, max_position_embeddings=256)
+        assert from_dir == LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=256)
+
+    def test_key_value_heads_default_to_the_attention_heads(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "num_key_value_heads"}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256).num_key_value_heads == 32
+
+    def test_no_rope_scaling_means_none(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "rope_scaling"}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256).rope_scaling == LlamaRopeScalingConfig()
+
+    def test_reads_the_rope_parameters_transformers_v5_writes(self):
+        """v5 moves rope_theta into the scaling dict and renames it."""
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k not in ("rope_scaling", "rope_theta")}
+        hf["rope_parameters"] = {**HF_LLAMA_3_2_1B["rope_scaling"], "rope_theta": HF_LLAMA_3_2_1B["rope_theta"]}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256) == LlamaConfig.from_hf(
+            HF_LLAMA_3_2_1B, max_position_embeddings=256
+        )
+
+    def test_default_rope_type_means_no_scaling(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k not in ("rope_scaling", "rope_theta")}
+        hf["rope_parameters"] = {"rope_type": "default", "rope_theta": 10000.0}
+        config = LlamaConfig.from_hf(hf, max_position_embeddings=256)
+        assert (config.rope_scaling, config.rope_theta) == (LlamaRopeScalingConfig(), 10000.0)
+
+    def test_norm_epsilon_defaults_to_hugging_faces(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "rms_norm_eps"}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256).rms_norm_eps == 1e-6
+
+    @pytest.mark.parametrize(
+        "patch,message",
+        [
+            ({"model_type": "qwen3"}, "not a Llama checkpoint"),
+            ({"mlp_bias": True}, "mlp_bias"),
+            # The loader leaves biases at init, so a checkpoint that ships them cannot load.
+            ({"attention_bias": True}, "attention_bias"),
+            ({"hidden_act": "gelu"}, "hidden_act 'gelu'"),
+            ({"head_dim": 128}, "head_dim"),
+            ({"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "rope type 'yarn'"),
+            ({"quantization_config": {"quant_method": "fp8"}}, "quantized checkpoints"),
+        ],
+        ids=["model_type", "mlp_bias", "attention_bias", "hidden_act", "head_dim", "rope_type", "quantized"],
+    )
+    def test_rejects_what_the_model_cannot_express(self, patch, message, expect_error):
+        with expect_error(ValueError, message):
+            LlamaConfig.from_hf({**HF_LLAMA_3_2_1B, **patch}, max_position_embeddings=256)
+
+
+# =============================================================================
 # Llama Model Tests
 # =============================================================================
 
@@ -63,6 +165,11 @@ class TestLlama:
         assert model is not None
         assert isinstance(model, Llama)
         assert model.config == tiny_config
+
+    def test_norm_epsilon_reaches_every_norm(self, tiny_config):
+        model = Llama(replace(tiny_config, rms_norm_eps=1e-3))
+        norms = [model.ln_fc] + [norm for block in model.blocks for norm in (block.attention_norm, block.mlp_norm)]
+        assert [norm.epsilon for norm in norms] == [1e-3] * len(norms)
 
     def test_model_forward_shape(self, tiny_config):
         """Test that Llama forward pass produces correct output shape."""

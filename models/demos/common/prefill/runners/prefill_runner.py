@@ -16,6 +16,16 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.prefill_chunk import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
+from models.demos.common.prefill.prefill_chunk import WARMUP_WORD as WARMUP_METADATA_WORD
+from models.demos.common.prefill.prefill_chunk import (
+    check_packed_forward_support,
+    decode_forward_metadata,
+    forward_metadata_words,
+    metadata_size_bytes,
+    sentinel_words,
+    validate_chunks,
+)
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -63,7 +73,6 @@ def _apply_manifest_env():
 _apply_manifest_env()
 
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-METADATA_SIZE_BYTES = 12
 
 # Worker grid for the socket copies on both ends of a stage boundary (activation <-> backing tensor).
 # Each worker copies its page slice with one NoC round trip per page, so the copy time divides by the
@@ -85,12 +94,7 @@ LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4
 # One metadata-only D2H socket page: the ack record padded to the PCIe alignment.
 LAYER_ACK_RECORD_BYTES = 64
 
-SHUTDOWN_METADATA_WORD = -1
-WARMUP_METADATA_WORD = -2
-
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
-
-D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 256))
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 MODEL_CFG = ADAPTER.model_config
@@ -108,7 +112,13 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+# Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
+FORWARD_TOKENS_BUDGET = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
+assert (
+    FORWARD_TOKENS_BUDGET >= CHUNK_SIZE and FORWARD_TOKENS_BUDGET % CHUNK_SIZE == 0
+), f"PREFILL_FORWARD_TOKENS_BUDGET={FORWARD_TOKENS_BUDGET} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
+FORWARD_CHUNKS = FORWARD_TOKENS_BUDGET // CHUNK_SIZE
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
@@ -126,9 +136,17 @@ assert MTP_DECODE_LEVELS == MTP_LEVELS or (
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 
-D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+# The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
+_D2D_FIFO_MIN_BYTES = -(-D2D_METADATA_SIZE_BYTES // 256) * 256
+D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", _D2D_FIFO_MIN_BYTES))
+if D2D_FIFO_SIZE_BYTES < _D2D_FIFO_MIN_BYTES:
+    raise ValueError(
+        f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} must be >= {_D2D_FIFO_MIN_BYTES} B "
+        f"(the {D2D_METADATA_SIZE_BYTES} B D2D record, in 256 B steps)"
+    )
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
@@ -156,6 +174,15 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
+check_packed_forward_support(
+    FORWARD_CHUNKS,
+    supports_packed_forward=ADAPTER.supports_packed_forward,
+    mtp_levels=MTP_LEVELS,
+    dflash=DFLASH_ENABLED,
+    use_trace=USE_TRACE,
+    d2h_acks=os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1",
+)
+
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
 # the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
 # validated against, and an untraced drafter is a second path nothing gates. The manifests pin
@@ -177,18 +204,28 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
+def _meta_from_words(words) -> dict:
+    """Chunk 0 as slot_id / actual_start / actual_end (sentinels, MTP, logs), plus all FORWARD_CHUNKS chunks."""
+    chunks = decode_forward_metadata(words, FORWARD_CHUNKS)
+    head = chunks[0]
+    return {"slot_id": head.slot_id, "actual_start": head.actual_start, "actual_end": head.actual_end, "chunks": chunks}
+
+
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
-    # One D2H read; the 4th word is MTP provided_levels.
+    # One D2H read; the word after the chunk metadata is MTP provided_levels.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    meta = {
-        "slot_id": int(m[0]),
-        "actual_start": int(m[1]),
-        "actual_end": int(m[2]),
-    }
-    # Mirror _metadata_record_words: the fourth word exists only when MTP is on.
-    if with_provided_levels and m.numel() > 3:
-        meta["provided_levels"] = max(0, int(m[3]))
+    n = CHUNK_METADATA_SIZE_BYTES // 4
+    meta = _meta_from_words(m[:n].tolist())
+    # Mirror _metadata_record_words: that word exists only when MTP is on.
+    if with_provided_levels and m.numel() > n:
+        meta["provided_levels"] = max(0, int(m[n]))
     return meta
+
+
+def _chunks_str(meta: dict) -> str:
+    if FORWARD_CHUNKS == 1:
+        return ""
+    return " chunks=" + ",".join(f"{c.slot_id}:[{c.actual_start},{c.actual_end})" for c in meta["chunks"])
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -315,7 +352,7 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=METADATA_SIZE_BYTES,
+            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
         )
@@ -345,7 +382,7 @@ def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
     idx_in.release_fabric_links()
     t0 = time.perf_counter()
     indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        idx_in, metadata_size_bytes=METADATA_SIZE_BYTES
+        idx_in, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
     )
     ttnn.deallocate(metadata_msg)
     logger.info(f"[pp] RECV-d2d-idx [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
@@ -378,13 +415,13 @@ def _d2d_recv(inbound, sockets) -> tuple:
     else:
         act, sockets.metadata = _d2d_drain_op(inbound, sockets)
     meta = _decode_metadata(sockets.metadata, with_provided_levels=bool(MTP_LEVELS))
-    where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
+    where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}{_chunks_str(meta)}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta
 
 
 def _metadata_record_words(meta: dict) -> torch.Tensor:
-    words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
+    words = forward_metadata_words(meta["chunks"], FORWARD_CHUNKS)
     if MTP_LEVELS:
         words.append(int(meta["provided_levels"]))
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
@@ -457,12 +494,7 @@ def _forward_shutdown(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
     )
-    sentinel = {
-        "slot_id": SHUTDOWN_METADATA_WORD,
-        "actual_start": SHUTDOWN_METADATA_WORD,
-        "actual_end": SHUTDOWN_METADATA_WORD,
-        "provided_levels": 0,
-    }
+    sentinel = {**_meta_from_words(sentinel_words(SHUTDOWN_METADATA_WORD, FORWARD_CHUNKS)), "provided_levels": 0}
     _d2d_send(d2d_out, dummy, rank, sentinel)
     d2d_out.release_fabric_links()
     if idx_out is not None:
@@ -485,7 +517,7 @@ def _forward_shutdown(
 def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
-    words = (WARMUP_METADATA_WORD,) * 3 + ((0,) if MTP_LEVELS else ())
+    words = tuple(sentinel_words(WARMUP_METADATA_WORD, FORWARD_CHUNKS)) + ((0,) if MTP_LEVELS else ())
     inputs = get_inputs(words) if get_inputs is not None else None
     if inputs is None:
         return
@@ -637,23 +669,28 @@ def _compute_and_send(
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
-        f"provided={meta.get('provided_levels')}"
+        f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
-    mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
     with _with_hang_timeout():
-        out = runtime.prefill_chunk(
-            inp,
-            kv_caches,
-            slot_id=meta["slot_id"],
-            actual_start=meta["actual_start"],
-            actual_end=meta["actual_end"],
-            request_id=c,
-            d2h_service=d2h_service,
-            metadata_msg=sockets.metadata,
-            **mtp_kwargs,
-            **({"indexer_indices": indices} if indices is not None else {}),
-        )
+        if FORWARD_CHUNKS > 1:
+            out = runtime.prefill_forward(
+                inp, kv_caches, meta["chunks"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
+            )
+        else:
+            mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
+            out = runtime.prefill_chunk(
+                inp,
+                kv_caches,
+                slot_id=meta["slot_id"],
+                actual_start=meta["actual_start"],
+                actual_end=meta["actual_end"],
+                request_id=c,
+                d2h_service=d2h_service,
+                metadata_msg=sockets.metadata,
+                **mtp_kwargs,
+                **({"indexer_indices": indices} if indices is not None else {}),
+            )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
@@ -692,7 +729,7 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
-    logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
+    logger.info(f"[pp rank {rank}] processed {n_done} forwards in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
 
 def run_request_loop(
@@ -726,17 +763,51 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+
+    def forward_shutdown():
+        if d2d_out is not None:
+            _forward_shutdown(
+                d2d_out,
+                rank,
+                d2d_rows,
+                d2d_width,
+                outbound_planes,
+                idx_out,
+                runtime.indexer_indices_shape() if idx_out is not None else None,
+            )
+
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
-        if cfg.is_first_rank:
-            inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
-            meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
-        else:
-            inp, meta = _d2d_recv(d2d_in, sockets)
-            mtp_tokens = None
+        inp = mtp_tokens = None
+        try:
+            if cfg.is_first_rank:
+                inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
+                meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+                if FORWARD_CHUNKS > 1 and not meta["chunks"][0].is_sentinel:
+                    validate_chunks(
+                        meta["chunks"],
+                        chunk_size=CHUNK_SIZE,
+                        forward_chunks=FORWARD_CHUNKS,
+                        num_users=NUM_USERS,
+                        max_seq_len=MAX_SEQ_LEN,
+                    )
+            else:
+                inp, meta = _d2d_recv(d2d_in, sockets)
+                mtp_tokens = None
+        except BaseException:
+            # Release the downstream ranks before failing, whatever stopped this one.
+            if inp is not None:
+                if sockets.tokens is None:
+                    ttnn.deallocate(inp)
+                if sockets.persistent_metadata() is None:
+                    ttnn.deallocate(sockets.metadata)
+                if mtp_tokens is not None and sockets.overhang is None:
+                    ttnn.deallocate(mtp_tokens)
+            forward_shutdown()
+            raise
         indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
         if _is_shutdown_sentinel(meta):
-            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} forwards; exiting request loop")
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
             # A sentinel chunk runs no prefill_chunk, so a drain-allocated record has no other owner.
@@ -746,16 +817,7 @@ def run_request_loop(
                 ttnn.deallocate(mtp_tokens)
             if indices is not None:
                 ttnn.deallocate(indices)
-            if d2d_out is not None:
-                _forward_shutdown(
-                    d2d_out,
-                    rank,
-                    d2d_rows,
-                    d2d_width,
-                    outbound_planes,
-                    idx_out,
-                    runtime.indexer_indices_shape() if idx_out is not None else None,
-                )
+            forward_shutdown()
             break
         warmup = _is_warmup_sentinel(meta)
         if warmup:
@@ -813,6 +875,11 @@ def _print_config() -> None:
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
+        (
+            "PREFILL_FORWARD_TOKENS_BUDGET",
+            f"{FORWARD_TOKENS_BUDGET} (forward_chunks={FORWARD_CHUNKS}, "
+            f"adapter.supports_packed_forward={ADAPTER.supports_packed_forward})",
+        ),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
@@ -847,6 +914,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "adapter": ADAPTER.name,
         "num_layers": NUM_LAYERS,
         "chunk_size": CHUNK_SIZE,
+        "forward_chunks": FORWARD_CHUNKS,
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
@@ -884,6 +952,11 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
+    check_packed_forward_support(
+        FORWARD_CHUNKS,
+        supports_packed_forward=ADAPTER.supports_packed_forward,
+        indexer_indices=num_ranks > 1 and ADAPTER.passes_indexer_indices,
+    )
 
     layer_split = compute_layer_split(
         NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS + int(DFLASH_ENABLED)
@@ -894,7 +967,7 @@ def main() -> None:
     logger.info(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
-        f"chunk_size={CHUNK_SIZE} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
+        f"chunk_size={CHUNK_SIZE} forward_chunks={FORWARD_CHUNKS} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
     )
 
     mesh_device = open_mesh_device(
@@ -928,6 +1001,7 @@ def main() -> None:
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
         mtp_decode_levels=MTP_DECODE_LEVELS,
+        forward_chunks=FORWARD_CHUNKS,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=_sparse_kv_cache_format(),
@@ -956,7 +1030,7 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
+    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS_BUDGET, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     # The drafter partial rides beside the hidden, as a 2H width or as its own plane (the adapter's choice).
     dflash_plane = int(DFLASH_ENABLED and ADAPTER.dflash_partial_separate_plane)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED and not dflash_plane)
@@ -990,16 +1064,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             return service
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
+        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS), service_id)
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:
+        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
+        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
+        check_packed_forward_support(
+            FORWARD_CHUNKS,
+            supports_packed_forward=ADAPTER.supports_packed_forward,
+            indexer_indices=idx_inbound or idx_outbound,
+        )
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(
             mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
         )
-        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
-        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
         if idx_inbound or idx_outbound:
             idx_in, idx_out = build_d2d_index_endpoints(
                 mesh_device, rank, runtime.indexer_indices_shape(), inbound=idx_inbound, outbound=idx_outbound

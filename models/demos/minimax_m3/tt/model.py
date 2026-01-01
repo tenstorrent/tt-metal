@@ -372,7 +372,7 @@ class Model:
             rope_mats: RoPE rotation matrices [cos, sin]
             current_pos: Current position (for decode) or None (for prefill)
             kv_cache: Externally-owned MiniMaxKVCache (packed K/V/index_k), shared across layers.
-            chunks: the forward's PrefillChunks (tt/prefill_chunk.py); None = one chunk in slot 0 at position 0.
+            chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py); None = one chunk in slot 0 at position 0.
 
         Returns:
             logits: Output logits
@@ -441,7 +441,7 @@ class Model:
     ):
         """Prefill forward pass - processes full sequences.
 
-        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each, or None for
+        chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py), one equal block of rows each, or None for
         one full chunk in slot 0 at position 0. Attention runs per chunk against its slot_id; the MoE layers
         mask the chunks' pad rows (tt/topk.py).
         """

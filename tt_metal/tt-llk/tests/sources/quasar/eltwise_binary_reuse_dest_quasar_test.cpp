@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         PROFILER_SYNC();
     }

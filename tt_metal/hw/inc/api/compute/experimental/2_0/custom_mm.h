@@ -23,7 +23,10 @@
 // cb_read_address(). The caller owns input readiness and output CB capacity.
 // Short init configures only the operation: the caller must first configure
 // hardware formats/geometry and destination synchronization. It must quiesce
-// prior operations before reconfiguration. Output packing remains CB-based.
+// prior operations before reconfiguration. Output packing remains CB-based;
+// short init and uninit also take an LLKOperand output, using its format in
+// place of the CB's pack source format. Their fp32_dest_acc_en must match the
+// one the packer was configured with.
 // Fully typed inputs reconcile source exponent widths using the existing
 // 2.0 format rules. Mixed CB/LLKOperand inputs retain the CB API's requirement
 // that both configured source-register formats use the same exponent width.
@@ -187,6 +190,38 @@ ALWI void custom_mm_block_init_short(
 }
 
 template <
+    bool transpose = false,
+    CustomMmDestLayout layout = CustomMmDestLayout::Default,
+    bool clear_src = true,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat F1,
+    TensorShape S1,
+    DataFormat FO,
+    TensorShape SO>
+ALWI void custom_mm_block_init_short(
+    const std::uint32_t in0_cb_id,
+    experimental::LLKOperand<F1, S1> /*in1*/,
+    experimental::LLKOperand<FO, SO> /*out*/,
+    const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
+    static_assert(
+        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
+        "custom_mm_block: in1 tile shape must be [32, 32]");
+    constexpr auto in1_register_format = infer_unpack_dst_format(F1, fp32_dest_acc_en);
+    UNPACK(({
+        const auto in0_id = get_operand_id(in0_cb_id);
+        _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
+            get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
+    }));
+    MATH(({
+        const auto in0_id = get_operand_id(in0_cb_id);
+        _llk_math_custom_mm_init_<transpose, layout>(get_operand_face_r_dim(in0_id), ct_dim);
+    }));
+
+    PACK((_llk_pack_custom_mm_init_<layout>(infer_pack_reg_fmt(FO, fp32_dest_acc_en))));
+}
+
+template <
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
     bool finalize = custom_mm_split_acc(layout),
     bool read_transposed = false,
@@ -246,6 +281,15 @@ ALWI void custom_mm_block(
         const auto in0_id = get_operand_id(in0_cb_id);
         llk_math_custom_mm_impl<layout, finalize>(get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
     }));
+}
+
+template <
+    CustomMmDestLayout layout = CustomMmDestLayout::Default,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat FO,
+    TensorShape SO>
+ALWI void custom_mm_block_uninit(experimental::LLKOperand<FO, SO> /*out*/) {
+    PACK((_llk_pack_custom_mm_uninit_<layout>(infer_pack_reg_fmt(FO, fp32_dest_acc_en))));
 }
 
 }  // namespace ckernel

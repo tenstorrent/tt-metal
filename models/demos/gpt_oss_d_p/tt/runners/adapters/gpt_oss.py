@@ -124,6 +124,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
                     bounded_sliding_kv_cache=bounded,
                     chunk_sizes=(params.chunk_size,),
                     sliding_window=getattr(hf_config, "sliding_window", 128),
+                    bank_aligned=True,
                 )
             ]
         )

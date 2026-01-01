@@ -132,6 +132,18 @@
 #include "api/compute/eltwise_unary/dropout.h"
 #endif
 
+#ifdef SFPU_OP_RAND_INCLUDE
+#include "api/compute/eltwise_unary/rand.h"
+#endif
+
+#ifdef SFPU_OP_EMA_INCLUDE
+#include "api/compute/ema.h"
+#endif
+
+#ifdef SFPU_OP_RESHUFFLE_INCLUDE
+#include "api/compute/reshuffle.h"
+#endif
+
 #ifdef SFPU_OP_FILL_INCLUDE
 #include "api/compute/eltwise_unary/fill.h"
 #endif
@@ -286,6 +298,14 @@
 
 #ifdef SFPU_OP_BINARY_BITWISE_INCLUDE
 #include "api/compute/binary_bitwise_sfpu.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_GCD_INCLUDE
+#include "api/compute/gcd.h"
+#endif
+
+#ifdef SFPU_OP_BINARY_LCM_INCLUDE
+#include "api/compute/lcm.h"
 #endif
 
 #ifdef SFPU_OP_BINARY_SHIFT_INCLUDE

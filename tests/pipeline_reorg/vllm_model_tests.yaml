@@ -138,7 +138,7 @@
   multimodal: false
   skus:
     bh_loudbox:
-      timeout: 40
+      timeout: 30
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -162,7 +162,7 @@
   multimodal: false
   skus:
     bh_loudbox:
-      timeout: 70
+      timeout: 50
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -196,7 +196,7 @@
   multimodal: false
   skus:
     bh_loudbox:
-      timeout: 45
+      timeout: 35
       tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -260,7 +260,7 @@
   multimodal: false
   skus:
     bh_loudbox:
-      timeout: 45
+      timeout: 30
       tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -268,23 +268,29 @@
 
 
 - name: "Gemma4-26B-A4B"
+  # The served QB2 config of tt-inference-server (dev catalog, P300X2 block): the (4,1) column mesh
+  # with token-dispatch prefill is the model's 4-chip default; 32 users, 256K context, prefix caching
+  # on hybrid KV groups, 128-token blocks, one decode step after every prefill step.
   model: google/gemma-4-26B-A4B-it
   coherence-test: true
+  prefix-caching-test: true
   server-timeout: 30
   benchmark-timeout: 10
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 300000000}'
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 1200000000, "l1_small_size": 65536, "decode_interleave_prefill_steps": 1}'
   server-default-top-k: 32
-  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --block_size 128 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  extra-env: "GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_MAX_TOKENS_ALL_USERS=1572864 GEMMA4_KV_BFP8=1 GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_PREFIX_CACHING=1 GEMMA4_VLLM_SINGLE_CHUNK=0 GEMMA4_CHUNKED_PREFILL_TRACE=0"
   multimodal: false
   skus:
     bh_quietbox_2:
       timeout: 60
       tier: 1
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: vllm
+
 
 # Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
 #
@@ -322,6 +328,28 @@
 # benchmark gate gates on request *completion* only — the WH corruption class
 # returns well-formed garbage with completed == num_prompts and sails straight
 # through. Verified passing on T3K.
+- name: "Gemma4-26B-A4B tp=8"
+  # The 8-chip TP=8 profile (tt-inference-server dev catalog, P150X8 block): the same
+  # tensor-parallel width the Galaxy lane engine runs per lane.
+  model: google/gemma-4-26B-A4B-it
+  coherence-test: true
+  server-timeout: 40
+  benchmark-timeout: 10
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 1200000000}'
+  server-default-top-k: 32
+  additional-server-args: "--max_model_len 131072 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  extra-env: "GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_MAX_TOKENS_ALL_USERS=131072 GEMMA4_VLLM_SINGLE_CHUNK=0 GEMMA4_CHUNKED_PREFILL_TRACE=0"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 55
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
 - name: "Gemma4-31B (T3K)"
   model: google/gemma-4-31B-it
   coherence-test: true

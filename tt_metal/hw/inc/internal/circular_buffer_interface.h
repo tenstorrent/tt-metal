@@ -13,8 +13,7 @@
 constexpr static std::uint32_t REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE = L1_ALIGNMENT;
 
 // Pack/unpack helpers for RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr.
-// The REMOTE_CB_PACKED_* constants they use live in hostdev/dev_msgs.h. Host code composes the
-// same field with matching bit math in global_circular_buffer.cpp.
+// The REMOTE_CB_PACKED_* constants they use live in hostdev/dev_msgs.h.
 inline constexpr std::uint32_t remote_cb_num_receivers(std::uint32_t packed) {
     return packed >> REMOTE_CB_PACKED_COUNT_SHIFT;
 }
@@ -38,16 +37,12 @@ struct RemoteSenderCBInterface {
     uint32_t receiver_noc_xy_ptr;
 
     // Points to an array of size num_receivers, stored as pages_sent, pages_acked pairs
-    // for each receiver. Per-receiver stride is REMOTE_CB_LOCAL_PAGES_STRIDE: 2 * L1_ALIGNMENT
-    // for worker senders, 2 * sizeof(uint32_t) for DRISC senders (packed; NoC atomic inc
-    // only needs 4-byte alignment).
+    // for each receiver. Each entry is L1 aligned.
     uint32_t aligned_pages_sent_ptr;
 
     // Packed: bits [23:0] are the remote pages_sent address on the receiver's L1,
-    // bits [31:24] are num_receivers. The remote address is canonical (no fallback):
-    // for a sharded GCB it equals `aligned_pages_sent_ptr` (local == remote); for a
-    // DRAM-sender GCB it's the worker-side pages_sent base (the DRISC sender's local
-    // counter is in DRISC L1, but the NoC target is in worker L1).
+    // bits [31:24] are num_receivers. The remote address equals `aligned_pages_sent_ptr`,
+    // since sender and receivers share an L1 layout.
     uint32_t num_receivers_and_remote_pages_sent_ptr;
 };
 
@@ -67,10 +62,8 @@ struct RemoteReceiverCBInterface {
     // Each entry is L1 aligned
     uint32_t aligned_pages_acked_ptr;
 
-    // Address ON the SENDER's L1 where the receiver's NoC inc lands for pages_acked.
-    // Canonical (no fallback): for a sharded GCB it equals `aligned_pages_acked_ptr`;
-    // for a DRAM-sender GCB it points into DRISC L1 (separate address space from the
-    // receiver's local pages_acked).
+    // Address ON the SENDER's L1 where the receiver's NoC inc lands for pages_acked. It equals
+    // `aligned_pages_acked_ptr`, since sender and receivers share an L1 layout.
     uint32_t remote_pages_acked_ptr;
 };
 

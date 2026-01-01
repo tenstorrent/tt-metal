@@ -28,6 +28,9 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tile.hpp>
 
+#include "common_tensor_test_utils.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
+
 namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -100,6 +103,26 @@ std::pair<UnpackedBfp, PackedBfp> generate_float_to_bfp4_dataset(const Shape& sh
     auto packed =
         pack_as_bfp4_tiles(ttsl::make_const_span(floats), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
     return {std::move(floats), std::move(packed)};
+}
+
+// MX -> float golden for an MX dtype: packed tiles plus their reference unpack.
+std::pair<PackedBfp, UnpackedBfp> generate_mx_dataset(DataType dtype, const Shape& shape, const Tile& tile) {
+    const auto format = datatype_to_dataformat_converter(dtype);
+    const auto src = make_bfp_data(shape, tile);
+    auto packed = tt::test_utils::pack_as_mx_tiles(format, ttsl::make_const_span(src), /*row_major_input=*/true, tile);
+    auto unpacked = tt::test_utils::mx_to_floats(format, packed, /*row_major_output=*/false, tile);
+    return {std::move(packed), std::move(unpacked)};
+}
+
+// Cycles 0, 1 and -1, which every MX format holds exactly (an MXINT2 element is -1, 0 or +1 times the block scale),
+// so a conversion to MX and back can be compared exactly.
+std::vector<float> make_mx_exact_data(size_t count) {
+    constexpr float kValues[] = {0.0f, 1.0f, -1.0f};
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i) {
+        data[i] = kValues[i % 3];
+    }
+    return data;
 }
 
 template <typename T>
@@ -707,6 +730,82 @@ TEST(HostTensorToTensorSpec, MalformedBfpBufferThrows) {
 
     EXPECT_ANY_THROW(to_tensor_spec<float>(host_tensor, dest_spec));
 }
+
+// MX formats are packed tiles like BFP, so they also pivot through FLOAT32 and need a float pad value.
+class HostTensorToTensorSpecMx : public ::testing::TestWithParam<DataType> {};
+
+TEST_P(HostTensorToTensorSpecMx, MxTileToFloat32RowMajorValueCheck) {
+    const DataType dtype = GetParam();
+    const Shape shape{32, 32};
+    const auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const auto alignment = Alignment({32, 32});
+    const auto tile = Tile({16, 16});
+    const auto& [packed, unpacked_golden] = CMAKE_UNIQUE_NAMESPACE::generate_mx_dataset(dtype, shape, tile);
+
+    auto src_spec = TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto dest_spec = TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto source = CMAKE_UNIQUE_NAMESPACE::make_host_tensor(packed, src_spec);
+
+    auto result = to_tensor_spec<float>(source, dest_spec);
+
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_EQ(result.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(result.layout(), Layout::ROW_MAJOR);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
+
+    // unpacked_golden is tile-major; convert to RM logical for comparison.
+    auto rm_golden = CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(
+        src_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_golden));
+    EXPECT_THAT(result.to_vector<float>(), Pointwise(Eq(), rm_golden));
+}
+
+TEST_P(HostTensorToTensorSpecMx, RowMajorToMxChangesLayoutAndPreservesTile) {
+    const DataType dtype = GetParam();
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_mx_exact_data(shape.volume());
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto alignment = Alignment({32, 32});
+    auto tile = Tile({16, 16});
+
+    auto src_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+    auto dest_spec = TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE, tile), memory_config, alignment));
+    auto source = HostTensor::from_vector<float>(data, src_spec);
+
+    auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/0.f);
+
+    EXPECT_TRUE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(result.tensor_spec(), dest_spec));
+    EXPECT_EQ(result.layout(), Layout::TILE);
+    EXPECT_EQ(result.dtype(), dtype);
+    EXPECT_EQ(result.tensor_spec().tile(), tile);
+    CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(result);
+
+    auto unpacked_data = tt::test_utils::mx_to_floats(
+        datatype_to_dataformat_converter(dtype),
+        host_buffer::get_as<uint32_t>(result),
+        /*row_major_output=*/false,
+        tile);
+    auto rm_data =
+        CMAKE_UNIQUE_NAMESPACE::untilize_nfaces(dest_spec.physical_shape(), tile, ttsl::make_const_span(unpacked_data));
+    EXPECT_THAT(rm_data, Pointwise(Eq(), data));
+}
+
+TEST_P(HostTensorToTensorSpecMx, MxStagingRequiresFloatPad) {
+    const Shape shape{32, 32};
+    auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
+    auto src_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, DataType::FLOAT32, Tile({16, 16}));
+    auto dest_spec = CMAKE_UNIQUE_NAMESPACE::make_tile_spec(shape, GetParam(), Tile({16, 16}));
+
+    auto source = HostTensor::from_vector<float>(data, src_spec);
+    EXPECT_ANY_THROW(host_tensor_to_tensor_spec_with_pad_value<bfloat16>(source, dest_spec, bfloat16(0.f)));
+    EXPECT_NO_THROW(host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, 0.f));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HostTensorToTensorSpec,
+    HostTensorToTensorSpecMx,
+    ::testing::ValuesIn(::test_utils::kMxDataTypes),
+    ::test_utils::dtype_param_name);
 
 }  // namespace
 }  // namespace tt::tt_metal

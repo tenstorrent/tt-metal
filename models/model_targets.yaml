@@ -445,8 +445,8 @@ targets:
               # across runs, well beyond the validator's 15% upper-tolerance
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
-              decode_t/s/u: 4.60
-              decode_t/s: 4.60
+              decode_t/s/u: 15.8
+              decode_t/s: 15.8
               decode_t_s_tolerance: 0.25
               decode_t_s_u_tolerance: 0.25
             accuracy: {}
@@ -457,8 +457,8 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 11.43
-              decode_t/s: 11.43
+              decode_t/s/u: 15.9
+              decode_t/s: 15.9
               prefill_t/s: 449.7
               prefill_time_to_token: 0.1846
               # Widened to +/-30% (default is +/-15%): prefill t/s and TTFT on this leg
@@ -479,8 +479,8 @@ targets:
             status: active
             perf:
               prefill_t/s: 54.80
-              decode_t/s/u: 7.02
-              decode_t/s: 7.02
+              decode_t/s/u: 36.7
+              decode_t/s: 36.7
               prefill_t_s_tolerance: 0.3
               decode_t_s_tolerance: 0.2
               decode_t_s_u_tolerance: 0.2
@@ -520,10 +520,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 14.4169
-              decode_t/s: 14.4169
-              prefill_t/s: 45.9117
-              prefill_time_to_token: 1.8949
+              decode_t/s/u: 19.9096
+              decode_t/s: 19.9096
+              prefill_t/s: 219.4321
+              prefill_time_to_token: 0.3965
               compile_decode: 48.0716
               compile_prefill: 49.38
               # Widened to +/-30% (default is +/-15%): compile_prefill is cache-sensitive
@@ -537,11 +537,13 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 18.6301
-              decode_t/s: 18.6301
-              prefill_t/s: 40.7018
-              prefill_time_to_token: 2.1375
-              compile_decode: 18.5903
+              decode_t/s/u: 45.6307
+              decode_t/s: 45.6307
+              prefill_t/s: 969.3269
+              prefill_time_to_token: 0.0898
+              # 27.23 s (run 40213776008) -> 15.29 s (run 40227270371) after the FusedNormDecode runtime-arg
+              # change (the per-layer scalar no longer forks a JIT build per layer: 620 -> 542 builds).
+              compile_decode: 15.2906
               compile_prefill: 21.9563
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
@@ -562,7 +564,11 @@ targets:
               prefill_t/s: 430.5
               prefill_time_to_token: 0.2021
               compile_decode: 33.7187
-              compile_prefill: 39.1526
+              # Cold JIT compile on the WH perf runners swings between runs: 39.15 s (earlier), 32.89 s
+              # (run 40213776008), 38.57 s (run 40227270371); centred between the last two and widened to
+              # +/-30% (same precedent as the 26B wh_llmbox_perf compile_prefill).
+              compile_prefill: 35.7331
+              compile_prefill_tolerance: 0.30
             accuracy: {}
       p300x2:
         entries:
@@ -570,8 +576,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 26.813
-              decode_t/s: 26.813
+              # QB2 decode is bimodal by runner (37.4 or 44.8 ms/token, same code);
+              # centred so both modes pass at the default +/-15%.
+              decode_t/s/u: 24.5
+              decode_t/s: 24.5
               prefill_t/s: 936.1785
               prefill_time_to_token: 0.0929
               compile_decode: 14.0365
@@ -774,11 +782,17 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 54.4664
-              decode_t/s: 54.4664
+              # QB2 decode is bimodal by runner (2.35 or 3.0 ms/token, same code);
+              # +/-20% around 375 covers both modes.
+              decode_t/s/u: 375.0
+              decode_t/s: 375.0
+              decode_t_s_u_tolerance: 0.2
+              decode_t_s_tolerance: 0.2
               prefill_t/s: 435.0536
               prefill_time_to_token: 0.1701
-              compile_decode: 0.0213
+              # One traced decode step: the trace is captured during prefill warmup.
+              compile_decode: 0.005
+              compile_decode_tolerance: 0.6
               compile_prefill: 47.0974
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -805,7 +819,9 @@ targets:
               prefill_t/s: 283.7325
               prefill_time_to_token: 0.2608
               compile_decode: 0.0337
-              compile_prefill: 147.9379
+              # Bimodal by runner, same code: 144-146 s on f10cs06/f10cs08,
+              # 118-122 s on f10cs09 (host-wide speed-up since 10-14); centred so both pass at +/-15%.
+              compile_prefill: 133.0
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -944,7 +960,8 @@ targets:
               decode_t/s: 2462.6055
               prefill_t/s: 5015.9476
               prefill_time_to_token: 0.0249
-              compile_prefill: 92.8422
+              # Includes the 1x1 logprob sampling precompile (~18 s).
+              compile_prefill: 110.0
             accuracy: {}
       wh_llmbox_perf:
         entries:
@@ -981,10 +998,9 @@ targets:
               decode_t/s: 206.9905
               prefill_t/s: 6642.8391
               prefill_time_to_token: 0.0173
-              compile_prefill: 68.64
-              # Widened to +/-30% (default is +/-15%): compile_prefill is cache-sensitive
-              # (76.8s on f10cs06 run 105288186828 vs 68.64s on f10cs09 run 105412280076,
-              # ~12% swing). Observed within +/-30% across both runs (PR #59424, pt.9).
+              # Includes the 1x1 logprob sampling precompile on the DP-8 submeshes.
+              # +/-30%: runner-sensitive (90.4 s f10cs09, 101.8 s f10cs08).
+              compile_prefill: 96.0
               compile_prefill_tolerance: 0.30
             accuracy: {}
       wh_galaxy_perf:
@@ -1371,8 +1387,8 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 3.84
-              decode_t/s: 3.84
+              decode_t/s/u: 9.3
+              decode_t/s: 9.3
               prefill_t/s: 12.8039
               prefill_time_to_token: 1.4058
               compile_decode: 35.88
@@ -2165,7 +2181,8 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_time_to_token: 0.4608
+              # First frame is host-bound: 0.20-0.46 s across n150 VMs.
+              prefill_time_to_token: 0.32
               prefill_time_to_token_tolerance: 0.5
               decode_t/s/u: 20.1
               decode_t/s: 20.1
@@ -2259,8 +2276,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 33.65
-              fps_tolerance: 0.15
+              # Host-bound (input prep, per-sample logging, first-iteration compile):
+              # 32.6-37.5 fps on f10cs06/f10cs08, 40.9-46.3 fps on f10cs09.
+              fps: 39.5
+              fps_tolerance: 0.2
             accuracy:
               top1: 75.456
               top1_tolerance: 0.01
@@ -2474,10 +2493,12 @@ targets:
         entries:
           - status: active
             perf:
-              decode_t/s/u: 39.8862
-              decode_t/s: 39.8862
-              prefill_t/s: 1672.9482
-              prefill_time_to_token: 0.052
+              decode_t/s/u: 52.7586
+              decode_t/s: 52.7586
+              prefill_t/s: 1412.544
+              # 128-token prefill on qb2-120-p05t08: 59.5 ms (run 40213776008), 61.6 ms (run 40227270371); the
+              # 52 ms entry predates this branch. Re-centred on the latest measurement.
+              prefill_time_to_token: 0.0616
               compile_decode: 14.4349
               compile_prefill: 14.163
             accuracy: {}

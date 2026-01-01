@@ -283,8 +283,9 @@ def run_topk_quasar_case(
     sort_direction: TopKSortDirection,
     stable_sort: bool,
     unique_values: bool = False,
+    value_range: tuple = (0.0, 1.0),
 ):
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    sfpu_false_spec = StimuliSpec.uniform(low=value_range[0], high=value_range[1])
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -411,4 +412,37 @@ def test_topk_quasar_unique_indices():
         TopKSortDirection.Descending,
         False,
         unique_values=True,
+    )
+
+
+# The topk network compares floats with SFPSWAP. In its int32 compare mode (imm12 bit 0 = 0) the
+# fp32 bit patterns of two negative values compare in reverse order, so cover all-negative and
+# mixed-sign rows on both a single-iteration and a multi-iteration (merge + rebuild) shape.
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    input_dimensions=[
+        [32, 128],
+        [32, 1024],
+    ],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    value_range=[(-1.0, 0.0), (-1.0, 1.0)],
+)
+def test_topk_quasar_signed_values(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    sort_direction: TopKSortDirection,
+    value_range: tuple,
+):
+    run_topk_quasar_case(
+        formats,
+        input_dimensions,
+        32,
+        sort_direction,
+        False,
+        value_range=value_range,
     )

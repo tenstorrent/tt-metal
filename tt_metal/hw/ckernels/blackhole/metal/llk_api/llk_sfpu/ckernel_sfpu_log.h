@@ -288,15 +288,40 @@ inline void _init_log_() {
     sfpi::vConstFloatPrgm2 = LogPoly::B;
 }
 
+/**
+ * @tparam FAST_APPROX Ignored. The only code it ever selected was skipping the input
+ *   normalisation below, which returned NaN for -0.0 and for positive subnormals, so
+ *   fast mode now runs the same instructions as accurate mode.
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term is multiplied; see below)
+ * @tparam is_fp32_dest_acc_en If true, use the fp32 polynomial; otherwise the bf16 one
+ * @tparam IS_BASE_TWO If true, multiply only the mantissa term by log_base_scale_factor and add the
+ *   exponent term as e_float * 2^-23, so log2 of a power of two is exact. log_base_scale_factor is
+ *   always applied, and the result is log2(a) only when the factor is the fp32 bits of 1/ln(2)
+ *   (0x3FB8AA3B). Requires HAS_BASE_SCALING, enforced below.
+ */
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
-    // -0.0 and subnormals give -inf
+    static_assert(
+        !IS_BASE_TWO || HAS_BASE_SCALING,
+        "IS_BASE_TWO always applies log_base_scale_factor, so it must be instantiated with HAS_BASE_SCALING");
+    // Normalise a (-0.0 and subnormals become +0.0): SFPMAD treats subnormal
+    // inputs as zero, and adding +0.0 turns a -0.0 product into +0.0 on both
+    // Wormhole and Blackhole (Wormhole also makes every zero result +0.0;
+    // Blackhole keeps the sign of a zero only when both addends share it).
+    // This must run before the exponent read below so that -0.0 follows the
+    // same path as +0.0 and log(±0.0) returns -inf, matching torch. Fast mode
+    // used to skip it, and that was the only thing FAST_APPROX selected:
+    // without it the sign test below excludes the -0.0 lane, which then keeps
+    // the NaN that result is initialised with, and a positive subnormal reaches
+    // addexp(a, -1) with a zero exponent field and a non-zero mantissa, where
+    // the wrap to exponent 255 makes a NaN instead of the +inf the special-case
+    // handling relies on.
     a = a * 1.0f + 0.0f;
 
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
     e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
-    const sfpi::vSMag e_sm = sfpi::convert<sfpi::vSMag>(e);
     sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
 
@@ -305,7 +330,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
 
     v_if(a >= 0.0f) {
         sfpi::vFloat r;
-        sfpi::vFloat s;
+        sfpi::vFloat s = m * m;
         sfpi::vFloat e_float;
         if constexpr (is_fp32_dest_acc_en) {
             r = -0x1.92cp-5f;
@@ -314,17 +339,17 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
-            s = m * m;
+            sfpi::vMag abs_e = sfpi::abs(e);
             r = r * m + sfpi::vConstFloatPrgm1;
-            e_float = sfpi::convert<sfpi::vFloat>(e_sm, sfpi::RoundMode::Nearest);
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm2;
             sfpi::vFloat neg_half = -0.5f;
             r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         } else {
-            s = m * m;
+            sfpi::vMag abs_e = sfpi::abs(e);
             sfpi::vFloat neg_quarter = -0.25f;
             r = neg_quarter * m + sfpi::vConstFloatPrgm1;
-            e_float = sfpi::convert<sfpi::vFloat>(e_sm, sfpi::RoundMode::Nearest);
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm2;
         }
 
@@ -333,10 +358,14 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         //   input 0.0  -> -inf
         //   input +inf -> +inf
         //   input NaN  -> NaN
+        //
+        // The normalisation at the top maps -0.0 and subnormals to +0.0.
+        // addexp(a, -1) wraps exponent 0 to 255, so zero becomes +inf;
+        // exponent 255 values (Inf/NaN) are left unchanged.
         a = sfpi::addexp(a, -1);
 
         r = r * s + m;
-        sfpi::vInt a_exp;
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
         if constexpr (IS_BASE_TWO) {
             // log2 takes an exact path.  Scaling the finished natural-log sum, as
             // result *= 1/ln(2), also scales the exponent contribution by
@@ -354,11 +383,8 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             // constant is log10(2) * 2^-23, which is not exactly representable, and
             // folding it in measured worse than the existing path.
             constexpr float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
-            const sfpi::vFloat r_scaled = r * sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
-            a_exp = sfpi::exexp(a, sfpi::ExponentMode::Biased);
-            result = e_float * TWO_TO_M23 + r_scaled;
+            result = e_float * TWO_TO_M23 + r * sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         } else {
-            a_exp = sfpi::exexp(a, sfpi::ExponentMode::Biased);
             result = e_float * sfpi::vConstFloatPrgm0 + r;
 
             if constexpr (HAS_BASE_SCALING) {
@@ -369,7 +395,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         // For zero, result is negative before this multiply, so result * +inf
         // gives -inf. For +inf, result is positive, so result * +inf gives
         // +inf. NaNs either skip the main block or propagate here.
-        v_if(a_exp >= 255) { result *= a; }
+        v_if(!sfpi::is_finite(a)) { result *= a; }
         v_endif;
     }
     v_endif;
@@ -377,6 +403,17 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term; see calculate_log_body)
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ * @tparam ITERATIONS Number of iterations for given face
+ * @tparam IS_BASE_TWO If true, take the exact log2 path: log_base_scale_factor is always applied to
+ *   the mantissa term, so it must be the fp32 bits of 1/ln(2) (0x3FB8AA3B) and HAS_BASE_SCALING
+ *   must be true (see calculate_log_body)
+ */
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -397,6 +434,11 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam is_fp32_dest_acc_en If true, program the fp32 polynomial coefficients; otherwise the bf16 ones
+ */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);

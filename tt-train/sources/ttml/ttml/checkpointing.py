@@ -119,7 +119,7 @@ def _walk(value, path: tuple = ()) -> tuple:
             skeleton[key], sub_tensors = _walk(sub, path + (key,))
             tensors.extend(sub_tensors)
         return skeleton, tensors
-    if isinstance(value, (bool, int, float)):
+    if isinstance(value, (bool, int, float, str)):
         return value, []
     raise ValueError(f"checkpointing: unsupported state value of type {type(value).__name__}")
 

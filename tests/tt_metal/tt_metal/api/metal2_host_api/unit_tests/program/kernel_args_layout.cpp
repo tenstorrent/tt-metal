@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Layout of a lowered kernel's arguments: tensor binding compile-time args, and the CRTA buffer's named
-// CRTAs, varargs and tensor binding runtime fields.
+// Layout of a lowered kernel's arguments: named and tensor binding compile-time args, and the CRTA buffer's
+// named CRTAs, varargs and tensor binding runtime fields.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -219,6 +219,27 @@ TEST_F(ProgramSpecTestGen1, CPU_ContiguousNdTensorBindingPacksDistributionFlag) 
     ASSERT_LT(num_banks_offset, compile_args.size());
     EXPECT_EQ(tensor_accessor::unpack_num_banks(compile_args[num_banks_offset]), 4u);
     EXPECT_TRUE(tensor_accessor::unpack_is_shard_contiguous(compile_args[num_banks_offset]));
+}
+
+// ============================================================================
+// Named compile-time args
+// ============================================================================
+
+// CTA values lower into the kernel's named compile-time args as the implicit conversion of their
+// source to uint32_t (negative values wrap, floating point truncates, bools convert).
+TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArgValuesLowerAsUint32Conversion) {
+    const int neg = -1;
+    const std::uint64_t wide = 0x1'0000'0005;
+    const double real = 2.9;
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].compile_time_args = {{"neg", neg}, {"wide", wide}, {"flag", true}, {"real", real}};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto named = program.impl().get_kernel_by_spec_name("dm_kernel")->named_compile_time_args();
+    EXPECT_EQ(named.at("neg"), 0xFFFFFFFFu);
+    EXPECT_EQ(named.at("wide"), 5u);
+    EXPECT_EQ(named.at("flag"), 1u);
+    EXPECT_EQ(named.at("real"), 2u);
 }
 
 }  // namespace

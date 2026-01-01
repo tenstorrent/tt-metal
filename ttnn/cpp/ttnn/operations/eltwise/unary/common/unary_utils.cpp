@@ -604,6 +604,8 @@ namespace {
 // tensor with few pages runs on part of the grid. Per cost class, the pages per core below are the most at which part
 // of the grid still matched the whole grid's device time in trace replay. Never fewer than 8 cores, as fewer were not
 // faster, and a power of two, so few distinct grids and cached programs arise. L1 tensors keep their grid.
+// On Wormhole (N150, N300) more than a page per core cost device time: up to twice the kernel time, and slower trace
+// replay for most ops. There part of the grid only drops the cores that the whole grid would leave idle.
 tt::tt_metal::CoreRangeSet small_tensor_grid(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const Tensor& input_tensor,
@@ -622,8 +624,9 @@ tt::tt_metal::CoreRangeSet small_tensor_grid(
     const OpCost cost = chain_cost(op_chain);
     const bool height_sharded =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
-    const uint64_t pages_per_core = cost == OpCost::Light ? 4 : cost <= OpCost::Mid ? 2 : 1;
-    const uint64_t pages_per_core_above_32_cores = cost == OpCost::Light ? (height_sharded ? 4 : 3) : 1;
+    const bool wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const uint64_t pages_per_core = wormhole ? 1 : cost == OpCost::Light ? 4 : cost <= OpCost::Mid ? 2 : 1;
+    const uint64_t pages_per_core_above_32_cores = wormhole ? 1 : cost == OpCost::Light ? (height_sharded ? 4 : 3) : 1;
     const uint64_t pages = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
     if (pages >= pages_per_core * workers.num_cores()) {
         return workers;

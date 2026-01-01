@@ -25,10 +25,7 @@ namespace {
 // workers to the shard grid, so create_program_artifacts and the cache-hit override both call
 // this: a disagreement here is a disagreement about how many core groups exist.
 bool reduce_h_use_width_sharding(const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    using namespace tt::tt_metal;
-    return a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-           output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && a.memory_config().is_l1() &&
-           output.memory_config().is_l1();
+    return reduce_h_uses_width_sharded_fast_path(a.memory_config(), output.memory_config());
 }
 
 // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result. Mirrors the

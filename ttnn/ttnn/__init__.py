@@ -238,6 +238,16 @@ from ttnn.types import (
     bfloat4_b,
     bfloat16,
     fp8_e4m3,
+    mxfp8_e4m3,
+    mxfp8_e5m2,
+    mxfp6_e2m3,
+    mxfp6_e3m2,
+    mxfp4,
+    mxint8,
+    mxint4,
+    mxint2,
+    MX_DTYPES,
+    is_mx_dtype,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -490,6 +500,8 @@ ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ttnn.ge(self, *args, **kwargs
 ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
+
+as_tensor_cache_repair = ttnn.operations.core.as_tensor_cache_repair
 
 from ttnn.operations.matmul import (
     MatmulMultiCoreReuseProgramConfig,

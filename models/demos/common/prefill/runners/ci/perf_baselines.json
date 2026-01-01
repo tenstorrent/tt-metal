@@ -1,7 +1,7 @@
 {
   "margin": {
-    "throughput_tok_s": 0.05,
-    "ttft_s": 0.05,
+    "throughput_tok_s": 0.015,
+    "ttft_s": 0.015,
     "chunk_time_ms": 0.1
   },
   "baselines": {
@@ -9,22 +9,22 @@
       "sc4": {
         "probe": "@250k",
         "8kw": {
-          "throughput_tok_s": 6309,
-          "ttft_s": 24.78,
-          "chunk_time_ms": 2897
+          "throughput_tok_s": 6848,
+          "ttft_s": 23.0,
+          "chunk_time_ms": 2883
         },
         "14kw": {
-          "throughput_tok_s": 8318,
-          "ttft_s": 18.82,
-          "chunk_time_ms": 2202
+          "throughput_tok_s": 9184,
+          "ttft_s": 16.85,
+          "chunk_time_ms": 2185
         }
       },
       "sc1": {
         "probe": "@250k",
         "14kw": {
-          "throughput_tok_s": 2398,
-          "ttft_s": 60.67,
-          "chunk_time_ms": 2195
+          "throughput_tok_s": 2421,
+          "ttft_s": 60.11,
+          "chunk_time_ms": 2174
         }
       }
     },
@@ -32,22 +32,22 @@
       "sc4": {
         "probe": "@1020k",
         "8kw": {
-          "throughput_tok_s": 18629,
-          "ttft_s": 40.69,
-          "chunk_time_ms": 1021
+          "throughput_tok_s": 21358,
+          "ttft_s": 37.79,
+          "chunk_time_ms": 1036
         },
         "14kw": {
-          "throughput_tok_s": 19224,
-          "ttft_s": 39.7,
-          "chunk_time_ms": 998
+          "throughput_tok_s": 21942,
+          "ttft_s": 36.92,
+          "chunk_time_ms": 1294
         }
       },
       "sc1": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 5657,
-          "ttft_s": 135.26,
-          "chunk_time_ms": 905
+          "throughput_tok_s": 6264,
+          "ttft_s": 126.02,
+          "chunk_time_ms": 815
         }
       }
     },
@@ -60,17 +60,17 @@
           "chunk_time_ms": 8663
         },
         "14kw": {
-          "throughput_tok_s": 3475,
-          "ttft_s": 179.0,
-          "chunk_time_ms": 7247
+          "throughput_tok_s": 3449,
+          "ttft_s": 182.79,
+          "chunk_time_ms": 7082
         }
       },
       "sc1": {
         "probe": "@1M",
         "14kw": {
-          "throughput_tok_s": 4210,
-          "ttft_s": 149.68,
-          "chunk_time_ms": 1220
+          "throughput_tok_s": 4235,
+          "ttft_s": 146.42,
+          "chunk_time_ms": 1195
         }
       }
     }

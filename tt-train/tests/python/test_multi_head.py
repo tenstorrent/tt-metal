@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ttml.ops.multi_head_utils.split_heads.
+"""Tests for ttml.ops.multi_head_utils.split_heads, and for the arguments heads_creation and
+grouped_heads_creation refuse.
 
 split_heads takes a single separately-projected activation and splits its feature axis into
 heads: (B, 1, S, num_heads * head_dim) -> (B, num_heads, S, head_dim). It is the inverse of
@@ -161,3 +162,35 @@ def test_rejects_sharded_input(expect_error):
 
     with expect_error(ValueError, "does not support sharded inputs"):
         ttml.ops.multi_head_utils.split_heads(ttml.autograd.create_tensor(sharded, requires_grad=True), num_heads)
+
+
+@pytest.mark.parametrize(
+    "shape, num_heads, num_groups, message",
+    [
+        ((1, 1, 32, 128), 0, 1, "num_heads to be positive"),
+        # 2 + 2 * 2 = 6 heads do not divide a width of 128.
+        ((1, 1, 32, 128), 2, 2, "divisible by num_heads"),
+        # head_dim = 64 / (2 + 2 * 1) = 16 < 32: the kernel would hand back uninitialised memory.
+        ((1, 1, 32, 64), 2, 1, "to be a multiple of 32"),
+    ],
+)
+def test_heads_creation_rejects_invalid_arguments(shape, num_heads, num_groups, message, expect_error):
+    qkv = make_tensor(*shape, seed=9009)
+    with expect_error(ValueError, message):
+        ttml.ops.multi_head_utils.heads_creation(qkv, num_heads, num_groups)
+
+
+@pytest.mark.parametrize(
+    "kv_width, num_heads, num_groups, message",
+    [
+        # head_dim = 64 / 4 = 16 < 32.
+        (32, 4, 1, "to be a multiple of 32"),
+        # head_dim = 64 / 2 = 32, so one KV head needs a [K | V] width of 64, not 128.
+        (128, 2, 1, r"KV width \(128\) to be 2 \* 1 KV heads \* head_dim 32"),
+    ],
+)
+def test_grouped_heads_creation_rejects_invalid_arguments(kv_width, num_heads, num_groups, message, expect_error):
+    qs = make_tensor(1, 1, 32, 64, seed=1010)
+    kvs = make_tensor(1, 1, 32, kv_width, seed=1111)
+    with expect_error(ValueError, message):
+        ttml.ops.multi_head_utils.grouped_heads_creation(qs, kvs, num_heads, num_groups)

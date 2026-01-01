@@ -10,8 +10,7 @@
 // (PrefetcherPipeSpaceConfig::num_dram_senders); it never names DRAM cores, because each DRAM
 // bank has several candidate sender cores and picking one is a routing decision the tensor
 // prefetcher makes. The exact cores are bound here, from tt_metal/ only (TensorPrefetcherManager,
-// tests), mirroring the GCB split between the public factory and
-// global_circular_buffer_dram_sender_internal.hpp.
+// tests).
 //
 #include <span>
 

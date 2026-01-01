@@ -14,11 +14,10 @@
 
 namespace ttnn {
 
-// Worker-sender prefetcher op. Delivers into exactly one of `global_cb` (a worker-sender GCB; a
-// DRAM-sender GCB will TT_FATAL with a redirect to ttnn.experimental.start_tensor_prefetcher /
-// ttnn.experimental.stop_tensor_prefetcher) or `prefetcher_pipes` (worker-sender PrefetcherPipes, one per
-// reader core; the delivery contract is in tt_metal/impl/buffers/prefetcher_matmul_design.md, "Delivering
-// into PrefetcherPipes").
+// Worker-sender prefetcher op. Delivers into exactly one of `global_cb` (a worker-sender GCB) or
+// `prefetcher_pipes` (worker-sender PrefetcherPipes, one per reader core; the delivery contract is in
+// tt_metal/impl/buffers/prefetcher_matmul_design.md, "Delivering into PrefetcherPipes"). The DRAM-core
+// counterpart is ttnn.experimental.start_tensor_prefetcher, which delivers into PrefetcherPipes.
 ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,

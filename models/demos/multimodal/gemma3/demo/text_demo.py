@@ -149,14 +149,17 @@ def create_tt_model(
             state_dict = tt_model_args.load_state_dict()
             loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+        model = Transformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+        )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
