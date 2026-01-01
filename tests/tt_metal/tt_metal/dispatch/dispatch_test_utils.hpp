@@ -122,7 +122,8 @@ inline void verify_kernel_coordinates(
 
     const auto& sub_device_origin = mesh_device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
     for (const auto& cr : cr_set.ranges()) {
-        for (const auto& logical_coord : cr) {
+        for (auto core = cr.begin(); core != cr.end(); ++core) {
+            const auto& logical_coord = *core;
             const auto& virtual_coord = mesh_device->virtual_core_from_logical_core(logical_coord, core_type);
             CoreCoord relative_coord{logical_coord.x - sub_device_origin.x, logical_coord.y - sub_device_origin.y};
             for (const auto& device : mesh_device->get_devices()) {

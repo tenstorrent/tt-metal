@@ -273,8 +273,8 @@ TEST_P(TensorDistribution2x4Test2D, FullyReplicated) {
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
 
-    for (const auto& device_tensor : device_tensors) {
-        EXPECT_THAT(device_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
+    for (int i = 0; i < device_tensors.size(); i++) {
+        EXPECT_THAT(device_tensors[i].to_vector<float>(), Pointwise(FloatEq(), test_data));
     }
 }
 

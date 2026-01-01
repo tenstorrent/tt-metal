@@ -269,18 +269,18 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     vcores_noc_x_coords.reserve(v_cores_vector.size());
     vcores_noc_y_coords.reserve(v_cores_vector.size());
 
-    for (auto core : q_cores_vector) {
-        auto worker_core = mesh_device->worker_core_from_logical_core(core);
+    for (uint32_t i = 0; i < q_cores_vector.size(); i++) {
+        auto worker_core = mesh_device->worker_core_from_logical_core(q_cores_vector[i]);
         qcores_noc_x_coords.push_back(worker_core.x);
         qcores_noc_y_coords.push_back(worker_core.y);
     }
-    for (auto core : k_cores_vector) {
-        auto worker_core = mesh_device->worker_core_from_logical_core(core);
+    for (uint32_t i = 0; i < k_cores_vector.size(); i++) {
+        auto worker_core = mesh_device->worker_core_from_logical_core(k_cores_vector[i]);
         kcores_noc_x_coords.push_back(worker_core.x);
         kcores_noc_y_coords.push_back(worker_core.y);
     }
-    for (auto core : v_cores_vector) {
-        auto worker_core = mesh_device->worker_core_from_logical_core(core);
+    for (uint32_t i = 0; i < v_cores_vector.size(); i++) {
+        auto worker_core = mesh_device->worker_core_from_logical_core(v_cores_vector[i]);
         vcores_noc_x_coords.push_back(worker_core.x);
         vcores_noc_y_coords.push_back(worker_core.y);
     }
@@ -834,7 +834,8 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
         auto& reduction_reader_args_by_core = GetRuntimeArgs(program, shared_vars.reduction_reader_kernel_id);
         auto& reduction_writer_args_by_core = GetRuntimeArgs(program, shared_vars.reduction_writer_kernel_id);
 
-        for (const auto& core : shared_vars.output_cores_vec) {
+        for (uint32_t i = 0; i < shared_vars.output_cores_vec.size(); i++) {
+            const auto& core = shared_vars.output_cores_vec[i];
             auto& reader_args = reduction_reader_args_by_core[core.x][core.y];
             reader_args[0] = q_base_addr;
             reader_args[1] = k_base_addr;

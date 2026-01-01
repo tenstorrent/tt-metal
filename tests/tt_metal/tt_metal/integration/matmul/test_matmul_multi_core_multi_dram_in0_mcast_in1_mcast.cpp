@@ -583,9 +583,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCastIn1MCast) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
-    for (const auto& device : devices_) {
+    for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast::
-                        matmul_multi_core_multi_dram_in0_mcast_in1_mcast(device));
+                        matmul_multi_core_multi_dram_in0_mcast_in1_mcast(devices_.at(id)));
     }
 }
 

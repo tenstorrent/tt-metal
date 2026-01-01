@@ -303,8 +303,8 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Help: {}", ss.str().c_str());
             exit(0);
         }
-        for (const auto& op_name : operators) {
-            pass &= run_unit_test(op_name, arg_tile_factor, arg_use_DRAM);
+        for (uint32_t idx = 0; idx < operators.size(); idx++) {
+            pass &= run_unit_test(operators[idx], arg_tile_factor, arg_use_DRAM);
         }
     }
 

@@ -1048,8 +1048,8 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     l1_bank_to_noc_xy_[device_id].clear();
     l1_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
-        for (const auto& noc_coord : l1_noc_coord_per_bank) {
-            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
+        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
+            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, l1_noc_coord_per_bank[bank_id]);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();

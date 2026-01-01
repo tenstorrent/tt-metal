@@ -164,8 +164,8 @@ void JitBuildEnv::init(
 
     // Defines
     this->defines_ = "";
-    for (const auto& device_kernel_define : device_kernel_defines) {
-        this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
+    for (auto it = device_kernel_defines.begin(); it != device_kernel_defines.end(); ++it) {
+        this->defines_ += "-D" + it->first + "=" + it->second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
@@ -272,8 +272,8 @@ void JitBuildEnv::init(
         root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
-    for (const auto& includeDir : includeDirs) {
-        oss << "-I" << includeDir << " ";
+    for (size_t i = 0; i < includeDirs.size(); ++i) {
+        oss << "-I" << includeDirs[i] << " ";
     }
     this->includes_ = oss.str();
 

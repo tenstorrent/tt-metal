@@ -25,7 +25,8 @@ void MorehGetItemOperation::validate_inputs(
 
     // validate index tensors
     uint32_t index_size = index_tensors[0].logical_shape()[-1];
-    for (const auto& index_tensor : index_tensors) {
+    for (uint32_t i = 0; i < index_tensors.size(); i++) {
+        const auto& index_tensor = index_tensors[i];
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
         TT_FATAL(index_tensor.dtype() == DataType::INT32, "Index tensor must be of type INT32!");
@@ -107,14 +108,15 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         // index_dims = 1,2
         // output: (10, 1, 100, 40)
         SmallVector<uint32_t> output_size_vec;
-        for (unsigned int dim : output_shape) {
-            output_size_vec.push_back(dim);
+        for (int dim = 0; dim < output_shape.size(); dim++) {
+            output_size_vec.push_back(output_shape[dim]);
         }
 
         auto index = index_tensors[0];
         uint32_t index_size = index.logical_shape()[-1];
 
-        for (unsigned int out_put_dim : index_dims) {
+        for (uint32_t i = 0; i < index_dims.size(); i++) {
+            uint32_t out_put_dim = index_dims[i];
             output_size_vec[out_put_dim] = 1;
         }
         output_size_vec[index_dims.back()] = index_size;
