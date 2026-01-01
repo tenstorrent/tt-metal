@@ -64,10 +64,10 @@ std::vector<Tensor> split_tensor_for_glu(
     std::vector<Tensor> t_split;
     // The slices below always split dim 3; callers have already mapped -1 to 3.
     TT_FATAL(dim == 3, "glu-family ops only support the last dimension, got dim={}", dim);
-    ttnn::Shape inshape(input_a.padded_shape());
-    TT_FATAL(((inshape[3] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
+    ttnn::Shape inshape(input_a.logical_shape());
+    TT_FATAL(inshape[3] % 2 == 0, "glu-family ops split the last dimension in half, so it must be even, got {}", inshape[3]);
     ttsl::SmallVector<std::uint32_t> s_a = {0, 0, 0, 0};
-    ttsl::SmallVector<std::uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttsl::SmallVector<std::uint32_t> e_a = {inshape[0], inshape[1], inshape[2], inshape[3] / 2};
 
     ttsl::SmallVector<std::uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     ttsl::SmallVector<std::uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
