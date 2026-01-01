@@ -1005,8 +1005,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (num_active_cores < num_cores_available) {
         log_debug(tt::LogOp, "idle cores {}", core_group_idle.size());
         // Set the rest of the cores to idle
-        for (uint32_t i = 0; i < core_group_idle.size(); ++i) {
-            CoreCoord core = core_group_idle[i];
+        for (auto core : core_group_idle) {
             log_debug(tt::LogOp, "Setting core {} to idle", core);
             // reader runtime args
             std::vector<uint32_t> reader_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};

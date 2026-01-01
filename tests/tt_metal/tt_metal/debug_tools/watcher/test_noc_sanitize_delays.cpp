@@ -48,12 +48,12 @@ using namespace tt::tt_metal;
 // and incrementing by 1.0f for each element.
 void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
     float val = start_from;
-    for (std::uint32_t i = 0; i < vec.size(); i++) {
+    for (unsigned int& elem : vec) {
         bfloat16 num_1_bfloat16 = bfloat16(val);
         val = val + 1.0f;
         bfloat16 num_2_bfloat16 = bfloat16(val);
         val = val + 1.0f;
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        elem = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 }
 

@@ -800,12 +800,12 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
                 }
 
                 std::vector<uint32_t> mcast_noc_xy;
-                for (size_t c = 0; c < group.size(); ++c) {
-                    CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+                for (const auto& core : group) {
+                    CoreCoord coord = device->worker_core_from_logical_core(core);
                     mcast_noc_xy.push_back(coord.x);
                 }
-                for (size_t c = 0; c < group.size(); ++c) {
-                    CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+                for (const auto& core : group) {
+                    CoreCoord coord = device->worker_core_from_logical_core(core);
                     mcast_noc_xy.push_back(coord.y);
                 }
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());

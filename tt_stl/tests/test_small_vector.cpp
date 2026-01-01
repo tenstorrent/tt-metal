@@ -279,6 +279,7 @@ TEST_F(SmallVectorIntTest, ForwardAndReverseIterators) {
     Vec vec{1, 2, 3, 4};
     // Sum elements via forward iterators.
     int sum = 0;
+    // NOLINTNEXTLINE(modernize-loop-convert)
     for (auto* it = vec.begin(); it != vec.end(); ++it) {
         sum += *it;
     }

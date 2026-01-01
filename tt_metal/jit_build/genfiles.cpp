@@ -127,8 +127,8 @@ namespace {
 
 std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
     std::string formats_string;
-    for (int i = 0; i < formats.size(); i++) {
-        formats_string += to_string((int)formats[i]) + ",";
+    for (const auto& format : formats) {
+        formats_string += to_string((int)format) + ",";
     }
     return formats_string;
 }
