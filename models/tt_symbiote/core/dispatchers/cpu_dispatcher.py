@@ -7,7 +7,7 @@ import logging
 
 # Configure logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 
 
 def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:

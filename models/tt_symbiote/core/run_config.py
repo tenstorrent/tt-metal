@@ -167,6 +167,7 @@ class DispatchManager:
         pivot_table = df.pivot_table(
             index="func_name", columns="backend", values="duration", aggfunc="sum", fill_value=0
         )
+        pivot_table["Total_Duration"] = pivot_table["Torch"] + pivot_table["TTNN"]
 
         # Display or save
         pivot_table.to_csv(file_name.replace(".csv", "_pivot.csv"))
