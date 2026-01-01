@@ -402,8 +402,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulSingleTile) {
                 MatmulTileStimuli stimuli;
                 create_test_stimuli(stimuli, 1, 1, 1);
 
-                for (const auto& device : devices_) {
-                    matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
+                for (unsigned int id = 0; id < devices_.size(); id++) {
+                    matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
                 }
             }
         }
@@ -437,11 +437,11 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiTile) {
                 MatmulTileStimuli stimuli;
                 create_test_stimuli(stimuli, M, K, N);
 
-                for (const auto& device : devices_) {
-                    matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
+                for (unsigned int id = 0; id < devices_.size(); id++) {
+                    matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
                     log_info(LogTest, "Multi tile with no bias passed");
                     matmul_config.with_bias = true;
-                    matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
+                    matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
                     log_info(LogTest, "Multi tile with bias passed");
                 }
             }
@@ -478,8 +478,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlock) {
                 MatmulTileStimuli stimuli;
                 create_test_stimuli(stimuli, M, K, N);
 
-                for (const auto& device : devices_) {
-                    matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
+                for (unsigned int id = 0; id < devices_.size(); id++) {
+                    matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
                 }
             }
         }
@@ -515,8 +515,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShort) {
                 MatmulTileStimuli stimuli;
                 create_test_stimuli(stimuli, M, K, N);
 
-                for (const auto& device : devices_) {
-                    matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
+                for (unsigned int id = 0; id < devices_.size(); id++) {
+                    matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
                 }
             }
         }
@@ -552,8 +552,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulBlockInitShortWithDt) {
                 MatmulTileStimuli stimuli;
                 create_test_stimuli(stimuli, M, K, N);
 
-                for (const auto& device : devices_) {
-                    matmul_tile(this, device, matmul_config, stimuli.a, stimuli.w, stimuli.t);
+                for (unsigned int id = 0; id < devices_.size(); id++) {
+                    matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
                 }
             }
         }

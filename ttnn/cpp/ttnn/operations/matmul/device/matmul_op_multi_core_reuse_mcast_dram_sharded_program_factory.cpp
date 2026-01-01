@@ -647,7 +647,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
-    for (auto core : mcast_receiver_coords) {
+    for (uint32_t i = 0; i < mcast_receiver_coords.size(); ++i) {
+        auto core = mcast_receiver_coords[i];
+
         // in0 receivers rt args
         std::vector<uint32_t> mm_in0_receiver_args;
         // mcast receiver - 3
@@ -689,7 +691,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t curr_storage_core = 0;
 
     // for all the cores in the rect grid, we send one rt arg to determine if they are worker core
-    for (auto core : all_cores_in_rect_grid_vec) {
+    for (uint32_t i = 0; i < all_cores_in_rect_grid_vec.size(); ++i) {
+        auto core = all_cores_in_rect_grid_vec[i];
+
         if (std::find(all_worker_cores.ranges().begin(), all_worker_cores.ranges().end(), core) ==
             all_worker_cores.ranges().end()) {  // not worker
             // in1 reader rt args

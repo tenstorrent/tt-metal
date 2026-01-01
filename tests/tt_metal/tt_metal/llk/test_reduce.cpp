@@ -431,8 +431,8 @@ void run_single_core_reduce_program(
         uint32_t uint32_scaler = *reinterpret_cast<uint32_t*>(&scaler);
         uint32_scaler &= (0xFFFFFFFF & (srcb_fid_mask << 16));
         scaler = *reinterpret_cast<float*>(&uint32_scaler);
-        for (unsigned short& val : u16_src0_vec) {
-            val &= srca_fid_mask;
+        for (auto i = 0; i < u16_src0_vec.size(); i++) {
+            u16_src0_vec[i] = u16_src0_vec[i] & srca_fid_mask;
         }
     }
     // recover a linear view of input vector for consumption by gold_ function

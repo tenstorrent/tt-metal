@@ -849,19 +849,19 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
-        for (const auto *tensor : tensors) {
+        for (size_t i = 0; i < tensors.size(); i++) {
             std::ranges::copy(
                 std::array<uint32_t, 4>{
                     static_cast<uint32_t>(
-                        tensor->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
-                    static_cast<uint32_t>(tensor->buffer()->buffer_type()),
-                    static_cast<uint32_t>(tensor->layout()),
+                        tensors[i]->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
+                    static_cast<uint32_t>(tensors[i]->buffer()->buffer_type()),
+                    static_cast<uint32_t>(tensors[i]->layout()),
                     static_cast<uint32_t>(0)},
                 std::back_inserter(ct_args));
         }
-        for (const auto *tensor : tensors) {
+        for (size_t i = 0; i < tensors.size(); i++) {
             std::ranges::copy(
-                ttnn::ccl::emit_address_generator_compile_time_args(*tensor), std::back_inserter(ct_args));
+                ttnn::ccl::emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
         }
 
         datamovement_kernel_config.compile_args = ct_args;
