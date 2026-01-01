@@ -384,6 +384,20 @@ def test_erfinv(device):
     assert_allclose(expected_result=golden, actual_result=result, atol=3.4e-3, rtol=1.7e-3)
 
 
+def test_erfinv_small_magnitude(device):
+    magnitudes = torch.logspace(-30, -1, 2047, dtype=torch.float64)
+    signed_values = torch.cat([magnitudes, -magnitudes, torch.tensor([0.0, -0.0], dtype=torch.float64)])
+    input_tensor = signed_values.float().reshape(128, 32)
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden = torch.erfinv(input_tensor.double()).float()
+
+    result = ttnn.to_torch(ttnn.erfinv(tt_in))
+    assert_allclose(expected_result=golden, actual_result=result, atol=0.0, rtol=2e-5)
+    assert torch.equal(torch.signbit(result), torch.signbit(golden))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # erfc: the rational is fit on [0, 5] and the input is clamped there (#51137).
 #       x >= 5 is checked against torch.erfc in test_erfc_tail, which is

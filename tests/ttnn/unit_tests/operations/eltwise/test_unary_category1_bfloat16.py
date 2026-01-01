@@ -357,6 +357,18 @@ def test_error_functions(device, ttnn_op, low, high):
     assert_with_pcc(golden, result, 0.999)
 
 
+def test_erfinv_small_magnitude(device):
+    magnitudes = torch.logspace(-30, -1, 2048, dtype=torch.float64)
+    input_tensor = torch.cat([magnitudes, -magnitudes]).to(torch.bfloat16).reshape(128, 32)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden = torch.erfinv(input_tensor.float()).to(torch.bfloat16)
+
+    result = ttnn.to_torch(ttnn.erfinv(tt_in))
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over both signs
 #
