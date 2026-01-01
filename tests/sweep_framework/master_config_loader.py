@@ -900,6 +900,7 @@ class MasterConfigLoader:
                 traced_source_list = []
                 traced_machine_info_list = []
                 traced_config_names = []
+                config_ids = []  # Unique IDs to prevent hash collisions
                 dims_list = [] if (operation_name == "permute" or operation_name == "ttnn::permute") else None
                 end_shape_list = [] if operation_name == "untilize_with_unpadding" else None
                 dim0_list = [] if operation_name == "transpose" else None
@@ -1037,6 +1038,7 @@ class MasterConfigLoader:
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
+                    config_ids.append(f"config_{idx}")  # Unique ID to prevent hash collisions
                     if (operation_name == "permute" or operation_name == "ttnn::permute") and "dims" in cfg:
                         dims_list.append(cfg["dims"])
                     if operation_name == "untilize_with_unpadding" and "end_shape" in cfg:
@@ -1212,6 +1214,7 @@ class MasterConfigLoader:
                     "storage_type",
                     "traced_source",
                     "traced_machine_info",
+                    "config_id",  # Unique ID to prevent hash collisions
                 ]
                 param_lists = [
                     input_shapes,
@@ -1222,6 +1225,7 @@ class MasterConfigLoader:
                     storage_types,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_ids,  # Add unique config IDs
                 ]
 
                 # Add operation-specific parameters
@@ -1644,6 +1648,11 @@ class MasterConfigLoader:
                 # Separate lists for optional scalar parameter
                 scalars = []
 
+                # Create unique config IDs to prevent unintended hash collisions
+                # This ensures that even if two configs have identical parameters,
+                # they generate different test vectors if they come from different traced configs
+                config_ids = []
+
                 for idx, cfg in enumerate(paired_configs):
                     # Handle both tensor-tensor and tensor-scalar operations
                     if cfg["shape_b"] is not None:
@@ -1664,6 +1673,8 @@ class MasterConfigLoader:
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
+                    # Add unique config ID to ensure unique hashes
+                    config_ids.append(f"config_{idx}")
 
                     # Add scalar value if present (will be None for tensor-tensor ops)
                     scalars.append(cfg.get("scalar", None))
@@ -1682,6 +1693,7 @@ class MasterConfigLoader:
                     "scalar",  # For tensor-scalar operations (None for tensor-tensor)
                     "traced_source",
                     "traced_machine_info",
+                    "config_id",  # Unique ID to prevent hash collisions
                     # NOTE: traced_config_name is metadata only, not passed to run()
                     # "traced_config_name",
                 ]
@@ -1697,6 +1709,7 @@ class MasterConfigLoader:
                     scalars,  # Add scalar values
                     traced_source_list,
                     traced_machine_info_list,
+                    config_ids,  # Add unique config IDs
                     # traced_config_names,
                 ]
 
@@ -1847,6 +1860,7 @@ class MasterConfigLoader:
                 traced_source_list = []
                 traced_machine_info_list = []
                 traced_config_names = []
+                config_ids = []  # Unique IDs to prevent hash collisions
 
                 for idx, cfg in enumerate(paired_configs):
                     # Determine actual tensor count in this config (may be less than expected for optional tensors)
@@ -1874,6 +1888,7 @@ class MasterConfigLoader:
                     traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
+                    config_ids.append(f"config_{idx}")  # Unique ID to prevent hash collisions
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -1893,6 +1908,8 @@ class MasterConfigLoader:
                 param_lists.append(traced_source_list)
                 param_names.append("traced_machine_info")
                 param_lists.append(traced_machine_info_list)
+                param_names.append("config_id")  # Unique ID to prevent hash collisions
+                param_lists.append(config_ids)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
