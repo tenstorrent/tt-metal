@@ -86,9 +86,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     // here instead of timing out. See https://github.com/tenstorrent/tt-metal/issues/44558.
     const uint32_t Wt = input_shape[3] / 32;
     TT_FATAL(
-        (Wt & (Wt - 1)) == 0,
-        "Input inner dim ({}) must yield a power-of-2 number of tiles (Wt = W/32 = {}); pad W up to the "
-        "next power-of-2 multiple of 32 (e.g. with -inf values and dummy indices) if needed!",
+        Wt >= 2 && (Wt & (Wt - 1)) == 0,
+        "Input inner dim ({}) must yield a power-of-2 number of tiles, at least 2 (Wt = W/32 = {}); pad W up "
+        "to the next power-of-2 multiple of 32, at least 64 (e.g. with -inf values and dummy indices) if needed!",
         input_shape[3],
         Wt);
 
