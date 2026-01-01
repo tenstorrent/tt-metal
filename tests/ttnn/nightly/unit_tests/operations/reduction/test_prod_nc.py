@@ -113,3 +113,14 @@ def test_prod_dims_block_float(dim, npu_dtype, device):
     ref = torch.prod(torch_input, dim=dim)
     ref = ttnn.to_torch(ttnn.from_torch(ref, dtype=npu_dtype, layout=ttnn.TILE_LAYOUT, device=device))
     assert torch.allclose(out, ref, atol=1e-2), f"dim={dim} {npu_dtype}: expected {ref}, got {out}"
+
+
+@pytest.mark.parametrize("shape, dim", [((1, 1, 32, 1024), -1), ((1, 1, 1024, 32), -2), ((1, 64, 32, 32), 1)])
+def test_prod_float32_keeps_fp32_precision(device, shape, dim):
+    torch.manual_seed(0)
+    x = torch.exp(0.01 * torch.randn(shape, dtype=torch.float64)).float()
+    expected = torch.exp(torch.log(x.double()).sum(dim=dim))
+    t = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.prod(t, dim=dim)).double().reshape(expected.shape)
+    rel = ((output - expected).abs() / expected.abs()).max().item()
+    assert rel < 1e-4, rel
