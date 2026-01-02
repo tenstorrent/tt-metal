@@ -11,13 +11,13 @@
 // M must be divisible by TH
 // N must be divisible by TW
 // K must be divisible by TK
-const int TILE_HEIGHT = 16;  // Output tile and A tile height
-const int TILE_WIDTH = 16;   // Output tile and B tile width
-const int TILE_K = 16;       // A tile width, B tile height
+constexpr int TILE_HEIGHT = 16;  // Output tile and A tile height
+constexpr int TILE_WIDTH = 16;   // Output tile and B tile width
+constexpr int TILE_K = 16;       // A tile width, B tile height
 
 // Simple triple-loop matrix multiplication
 std::vector<float> simple_matrix_multiply(
-    const std::vector<float>& A, const std::vector<float>& B, int M, int K, int N) {
+    const std::vector<float>& A, const std::vector<float>& B, const int M, const int K, const int N) {
     std::vector<float> C(M * N, 0.0);
 
     for (int i = 0; i < M; i++) {
@@ -33,7 +33,7 @@ std::vector<float> simple_matrix_multiply(
 
 // Helper to calculate 1D index from 2D coordinates.
 // columns corresponds to the number of columns in the full matrix
-inline int get_idx(int row, int col, int columns) { return row * columns + col; }
+inline int get_idx(const int row, const int col, const int columns) { return row * columns + col; }
 
 /**
  * Function that multiplies a single tile.
@@ -54,14 +54,14 @@ void tile_matmul(
     const std::vector<float>& A,
     const std::vector<float>& B,
     std::vector<float>& C,
-    int K,
-    int N,  // We need K for A's stride, N for B and C's stride
-    int row_offset,
-    int col_offset,
-    int k_offset,
-    int TH,
-    int TW,
-    int TK) {
+    const int K,
+    const int N,  // We need K for A's stride, N for B and C's stride
+    const int row_offset,
+    const int col_offset,
+    const int k_offset,
+    const int TH,
+    const int TW,
+    const int TK) {
     // Iterate over TH: rows of output tile C, rows of A tile
     for (int i = 0; i < TH; ++i) {
         // Iterate over TW: columns of output tile C, columns of B tile
@@ -98,7 +98,14 @@ void tile_matmul(
  * Main matrix multiplication function using tiling
  */
 std::vector<float> tiled_matrix_multiply(
-    const std::vector<float>& A, const std::vector<float>& B, int M, int K, int N, int TH, int TW, int TK) {
+    const std::vector<float>& A,
+    const std::vector<float>& B,
+    const int M,
+    const int K,
+    const int N,
+    const int TH,
+    const int TW,
+    const int TK) {
     // 1. Input ensures data is contiguous (std::vector)
     // Validate assumptions
     assert(M % TH == 0 && "M must be divisible by TH");
@@ -128,7 +135,7 @@ std::vector<float> tiled_matrix_multiply(
 }
 
 // Helper to print matrices
-void print_matrix(const std::vector<float>& mat, int rows, int cols, const std::string& name) {
+void print_matrix(const std::vector<float>& mat, const int rows, const int cols, const std::string& name) {
     std::cout << "Matrix " << name << " (" << rows << "x" << cols << "):" << std::endl;
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
@@ -141,7 +148,12 @@ void print_matrix(const std::vector<float>& mat, int rows, int cols, const std::
 
 // Helper function to verify matrix multiplication
 bool verify_matrix_multiply(
-    const std::vector<float>& A, const std::vector<float>& B, const std::vector<float>& C, int M, int K, int N) {
+    const std::vector<float>& A,
+    const std::vector<float>& B,
+    const std::vector<float>& C,
+    const int M,
+    const int K,
+    const int N) {
     // Create a reference implementation to compare against
     auto start = std::chrono::high_resolution_clock::now();
     std::vector<float> ref_C = simple_matrix_multiply(A, B, M, K, N);
@@ -168,9 +180,9 @@ bool verify_matrix_multiply(
 int main() {
     // 4. Setup Dimensions
     // Ensure these fit the divisibility rules with TH=16, TW=16, TK=16
-    int M = 1600;
-    int K = 1600;
-    int N = 1600;
+    constexpr int M = 1600;
+    constexpr int K = 1600;
+    constexpr int N = 1600;
 
     // Create Dummy Data (Linear sequence for easy verification)
     std::vector<float> A(M * K);
