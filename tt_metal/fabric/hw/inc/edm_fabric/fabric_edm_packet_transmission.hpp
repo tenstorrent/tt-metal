@@ -300,17 +300,47 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 
 /**
  * Update packet header for next hop (1D Low Latency routing)
- * Shifts routing field by 2 bits to consume current hop instruction.
- * Automatically handles refill from route buffer for >16 hop packets.
+ *
+ * ExtensionWords=0 (≤16 hops): Compiles to single shift instruction
+ * ExtensionWords>0 (>16 hops): Includes refill logic with compile-time unrolled loops
  */
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    // Consume current hop and shift to next (handles refill automatically)
-    cached_routing_fields.consume_and_shift();
+    using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
-    // Copy updated routing fields back to packet header
-    cached_routing_fields.copy_to(&packet_header->routing_fields);
+    // Shift to consume current hop (always happens)
+    uint32_t new_value = cached_routing_fields.value >> LowLatencyFields::FIELD_WIDTH;
+
+    // Refill logic - only included when ExtensionWords > 0 (>16 hops)
+#if defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS) && (FABRIC_1D_PKT_HDR_EXTENSION_WORDS > 0)
+    // route_buffer exists: include refill logic for >16 hop packets
+    constexpr uint32_t EXT = FABRIC_1D_PKT_HDR_EXTENSION_WORDS;
+
+    if (new_value == 0) [[unlikely]] {
+        // Refill from buffer[0]
+        new_value = cached_routing_fields.route_buffer[0];
+
+// Shift buffer left (unrolled at compile time)
+#pragma unroll
+        for (uint32_t i = 0; i < EXT - 1; i++) {
+            const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
+                cached_routing_fields.route_buffer[i + 1];
+        }
+        const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[EXT - 1] = 0;
+    } else {
+// No refill needed - just copy buffer as-is
+#pragma unroll
+        for (uint32_t i = 0; i < EXT; i++) {
+            const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
+                cached_routing_fields.route_buffer[i];
+        }
+    }
+#endif
+    // ExtensionWords = 0 (or undefined): No refill code generated
+
+    // Write new value (always happens)
+    packet_header->routing_fields.value = new_value;
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(

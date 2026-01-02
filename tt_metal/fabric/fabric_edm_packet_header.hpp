@@ -699,55 +699,6 @@ struct LowLatencyRoutingFieldsT {
     uint32_t value;                         // Active routing field (always read by router)
     uint32_t route_buffer[ExtensionWords];  // Extension storage
 
-    /**
-     * Consume current hop instruction and shift to next hop.
-     * Automatically refills from route_buffer when value is exhausted.
-     * This is the core operation used by the router at each hop.
-     */
-    inline void consume_and_shift() {
-        value >>= LowLatencyFields::FIELD_WIDTH;
-
-        if constexpr (ExtensionWords > 0) {
-            // Refill logic: when value is exhausted, load next word from buffer
-            if (value == 0) [[unlikely]] {
-                value = route_buffer[0];
-
-                // Shift buffer left by one word
-                for (uint32_t i = 0; i < ExtensionWords - 1; i++) {
-                    route_buffer[i] = route_buffer[i + 1];
-                }
-                route_buffer[ExtensionWords - 1] = 0;
-            }
-        }
-    }
-
-    /**
-     * Copy routing fields to volatile destination (packet header).
-     * Needed because router updates a cached copy then writes back to packet.
-     */
-    inline void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
-        dest->value = this->value;
-        if constexpr (ExtensionWords > 0) {
-            for (uint32_t i = 0; i < ExtensionWords; i++) {
-                dest->route_buffer[i] = this->route_buffer[i];
-            }
-        }
-    }
-
-    /**
-     * Initialize from buffer (used when unpacking encoder output).
-     * Buffer layout: [value, route_buffer[0], route_buffer[1], ...]
-     */
-    static inline LowLatencyRoutingFieldsT<ExtensionWords> from_buffer(const uint32_t* buffer) {
-        LowLatencyRoutingFieldsT<ExtensionWords> result;
-        result.value = buffer[0];
-        if constexpr (ExtensionWords > 0) {
-            for (uint32_t i = 0; i < ExtensionWords; i++) {
-                result.route_buffer[i] = buffer[i + 1];
-            }
-        }
-        return result;
-    }
 } __attribute__((packed));
 
 // Partial specialization for 16-hop mode
@@ -761,27 +712,6 @@ struct LowLatencyRoutingFieldsT<0> {
 
     uint32_t value;  // Only field - no route_buffer member
 
-    /**
-     * Consume current hop (no refill needed in 16-hop mode)
-     */
-    inline void consume_and_shift() {
-        value >>= LowLatencyFields::FIELD_WIDTH;
-        // No refill logic - compiles to single shift instruction
-    }
-
-    /**
-     * Copy to packet header (value only in 16-hop mode)
-     */
-    inline void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
-
-    /**
-     * Initialize from buffer (ExtensionWords=0 specialization)
-     */
-    static inline LowLatencyRoutingFieldsT<0> from_buffer(const uint32_t* buffer) {
-        LowLatencyRoutingFieldsT<0> result;
-        result.value = buffer[0];
-        return result;
-    }
 } __attribute__((packed));
 
 // Template for 1D packet headers with variable routing field sizes
@@ -838,8 +768,15 @@ public:
         uint32_t buffer[1 + ExtensionWords];
         routing_encoding::encode_1d_multicast(start_hop, range_hops, buffer, 1 + ExtensionWords);
 
-        // Unpack using helper
-        return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(buffer);
+        // Construct routing fields directly from buffer
+        LowLatencyRoutingFieldsT<ExtensionWords> result;
+        result.value = buffer[0];
+#if defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS) && (FABRIC_1D_PKT_HDR_EXTENSION_WORDS > 0)
+        for (uint32_t i = 0; i < ExtensionWords; i++) {
+            result.route_buffer[i] = buffer[i + 1];
+        }
+#endif
+        return result;
     }
 
 public:
@@ -855,11 +792,21 @@ public:
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         auto routing = calculate_chip_unicast_routing_fields(distance_in_hops);
-        routing.copy_to(&this->routing_fields);
+        this->routing_fields.value = routing.value;
+#if defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS) && (FABRIC_1D_PKT_HDR_EXTENSION_WORDS > 0)
+        for (uint32_t i = 0; i < ExtensionWords; i++) {
+            this->routing_fields.route_buffer[i] = routing.route_buffer[i];
+        }
+#endif
     }
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
         auto routing = calculate_chip_multicast_routing_fields(chip_multicast_command_header);
-        routing.copy_to(&this->routing_fields);
+        this->routing_fields.value = routing.value;
+#if defined(FABRIC_1D_PKT_HDR_EXTENSION_WORDS) && (FABRIC_1D_PKT_HDR_EXTENSION_WORDS > 0)
+        for (uint32_t i = 0; i < ExtensionWords; i++) {
+            this->routing_fields.route_buffer[i] = routing.route_buffer[i];
+        }
+#endif
     }
 };
 
