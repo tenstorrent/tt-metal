@@ -297,9 +297,6 @@ class Generator:
             seq_len = int(prompt_lens[idx])  # Full length of the current prompt
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
             last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens
-            last_token_idx_relative = (
-                last_token_idx - num_cached_tokens
-            )  # Last token index of the current prompt, excluding the cached tokens
             prefill_seq_len = get_padded_prefill_len(
                 seq_len - num_cached_tokens
             )  # Without the cached tokens, then padded
@@ -317,7 +314,9 @@ class Generator:
                 dim=-1,
             )
 
-            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len, num_cached_tokens)
+            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(
+                prefill_seq_len, num_cached_tokens
+            )
 
             logger.info(
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"

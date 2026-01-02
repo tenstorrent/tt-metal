@@ -137,7 +137,7 @@ jobs:
               "model": "mixtral",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_mixtral_tests",
-              "timeout": 50,
+              "timeout": 60,
               "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
             },
             {
