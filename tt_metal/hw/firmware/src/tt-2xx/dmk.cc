@@ -13,13 +13,13 @@
 #include "ckernel_structs.h"
 #include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "debug/stack_usage.h"
+#include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "remote_circular_buffer_api.h"
+#include "api/remote_circular_buffer.h"
 #endif
 
 extern "C" [[gnu::section(".start")]]
@@ -38,11 +38,12 @@ uint32_t _start() {
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     extern uint32_t __tdata_lma[];
-    if (hartid == 0) {
-        extern uint32_t __ldm_tdata_start[];
-        extern uint32_t __ldm_tdata_end[];
-        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
-    }
+    // for now this works for legacy kernels, we need to revisit this for new kernels
+    // if (hartid == /* leading core */ 0) {
+    extern uint32_t __ldm_tdata_start[];
+    extern uint32_t __ldm_tdata_end[];
+    do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+    // }
     do_thread_crt1(__tdata_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
@@ -61,13 +62,15 @@ uint32_t _start() {
         WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
+            // TODO enable once NOC is ready
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
             // NOC interface is in a known idle state for the next kernel. Dispatch kernels don't increment noc counters
             // so we only include this for non-dispatch kernels
-            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
-            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
-            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
-            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
+            // ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+            // ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            // ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX),
+            // DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+            // ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             WAYPOINT("NKFD");
         }
     }

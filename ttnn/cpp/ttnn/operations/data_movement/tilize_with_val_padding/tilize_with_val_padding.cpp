@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_with_val_padding.hpp"
 
-#include "device/tilize_with_val_padding_op.hpp"
-#include "ttnn/run_operation.hpp"
+#include "device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
@@ -85,9 +84,8 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
-        output_dtype.has_value()
-            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
-            : input_single_tile_size;
+        output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+                                 : input_single_tile_size;
 
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
     uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
@@ -98,19 +96,16 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
         is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
-        return operation::run(
-            TilizeWithValPadding{
-                squeeze_output_shape(output_padded_shape),
-                pad_value,
-                memory_config.value_or(input_tensor.memory_config()),
-                output_dtype.value_or(input_tensor.dtype()),
-                use_multicore,
-                enough_space_width,
-                enough_space_height,
-                sub_core_grids},
-            {input_tensor},
-            {},
-            {})[0];
+        return ttnn::prim::tilize_with_val_padding(
+            input_tensor,
+            squeeze_output_shape(output_padded_shape),
+            pad_value,
+            memory_config.value_or(input_tensor.memory_config()),
+            output_dtype.value_or(input_tensor.dtype()),
+            use_multicore,
+            enough_space_width,
+            enough_space_height,
+            sub_core_grids);
     };
 
     return build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);

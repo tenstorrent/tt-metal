@@ -6,7 +6,7 @@
 #include <string>
 #include <optional>
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 #include <vector>
 #include <fstream>
 #include <map>

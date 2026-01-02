@@ -12,7 +12,7 @@ from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_grayskull, is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -23,11 +23,7 @@ test_dataset = datasets.MNIST(root="./data", train=False, transform=None, downlo
 
 
 def get_expected_times(tt_mnist):
-    if is_grayskull():
-        return {
-            tt_mnist: (3.54, 0.006),
-        }[tt_mnist]
-    elif is_wormhole_b0():
+    if is_wormhole_b0():
         return {
             tt_mnist: (3.89, 0.006),
         }[tt_mnist]

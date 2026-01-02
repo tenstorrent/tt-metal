@@ -218,7 +218,7 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
 
         auto connections = node[kConnections].get<std::unordered_set<uint32_t>>();
         for (const auto& tensor_id : connections) {
-            if (output_tensors.find(tensor_id) == output_tensors.end()) {
+            if (!output_tensors.contains(tensor_id)) {
                 continue;
             }
 

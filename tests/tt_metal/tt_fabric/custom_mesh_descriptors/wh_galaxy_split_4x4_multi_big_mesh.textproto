@@ -16,14 +16,14 @@ mesh_descriptors {
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
-  # Instances: mesh ids 0..1 (all 2x4)
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
 
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 2 }
+    # This is compatible with Mesh topologies. 4 exit nodes per mesh. 4 links per exit node.
+    channels { count: 16 }
   }
 }
 

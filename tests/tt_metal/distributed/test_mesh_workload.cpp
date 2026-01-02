@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -68,8 +68,7 @@ struct CBConfig {
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -141,10 +140,10 @@ void verify_cb_config(
                         cb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
-                    for (uint32_t i = 0; i < golden_cb_config.size(); i++) {
-                        const uint32_t index = golden_cb_config[i].cb_id * sizeof(uint32_t);
-                        const uint32_t cb_num_pages = golden_cb_config[i].num_pages;
-                        const uint32_t cb_size = cb_num_pages * golden_cb_config[i].page_size;
+                    for (const auto& config : golden_cb_config) {
+                        const uint32_t index = config.cb_id * sizeof(uint32_t);
+                        const uint32_t cb_num_pages = config.num_pages;
+                        const uint32_t cb_size = cb_num_pages * config.page_size;
                         const bool addr_match = cb_config_vector.at(index) == cb_addr;
                         const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                         const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -513,10 +512,6 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     if (mesh_device_->num_devices() == 1) {
         GTEST_SKIP() << "Skipping test for a unit-size mesh device";
     }
-    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type == tt::BoardType::N300) {
-        GTEST_SKIP() << "Skipping test for N300 board due to #34420";
-    }
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> output_bufs = {};
@@ -525,13 +520,14 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
-    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
+    uint32_t num_rows = mesh_device_->num_rows();
+    uint32_t num_rows_in_mesh_workload = num_rows / 2;
+    TT_FATAL(num_rows_in_mesh_workload > 0, "The MeshWorkload must be enqueued on at least one row.");
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
-        MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_mesh_workload - 1, mesh_device_->num_cols() - 1});
     MeshCoordinateRange devices_1(
-        MeshCoordinate{0, num_cols_in_workload},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{num_rows_in_mesh_workload, 0}, MeshCoordinate{num_rows - 1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(*programs[0]));
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
@@ -560,13 +556,13 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     dst_vec,
                     output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
-                if (device_coord[1] <= num_cols_in_workload - 1) {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 5);
+                if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 5);
                     }
                 } else {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 6);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 6);
                     }
                 }
             }
@@ -639,10 +635,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
     auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, 0});
-    MeshCoordinateRange devices_1(
-        MeshCoordinate{0, mesh_device_->num_cols() - 1},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(program));
     mesh_workload.add_program(devices_1, std::move(*program_1));
 

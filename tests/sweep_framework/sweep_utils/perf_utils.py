@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
+import shutil
+from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
@@ -18,6 +21,27 @@ DEVICE_PERF_KEYS = [
     "DEVICE BRISC FW DURATION [ns]",
     "DEVICE NCRISC FW DURATION [ns]",
 ]
+
+
+def clear_disk_kernel_cache() -> None:
+    """Clear disk kernel cache for current git hash."""
+    try:
+        git_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short=10", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+
+        cleared_count = 0
+        for kernels_dir in Path.home().glob(f".cache/tt-metal-cache/{git_hash}/*/kernels"):
+            if kernels_dir.exists():
+                shutil.rmtree(kernels_dir)
+                cleared_count += 1
+
+        logger.info(f"Cleared {cleared_count} disk kernel cache directories for git hash {git_hash}")
+    except Exception as e:
+        logger.warning(f"Failed to clear disk kernel cache: {e}")
 
 
 def gather_single_test_perf(device, test_passed):
@@ -72,16 +96,32 @@ def gather_single_test_perf(device, test_passed):
 
 
 def prepare_program_cache_for_comparison(device) -> None:
+    """Clear all cache layers before uncached performance measurement.
+
+    Clears:
+    1. Disk kernel cache (persistent)
+    2. In-memory HashLookup cache (process-lifetime)
+    3. Program cache (keeps it enabled for next run)
+    """
+    import ttnn
+
+    # Clear disk cache
+    clear_disk_kernel_cache()
+
+    # Clear in-memory HashLookup cache
+    logger.info("Clearing in-memory HashLookup cache")
+    ttnn.device.ClearKernelCache()
+
+    # Clear program cache (but keep it enabled)
     num_entries_before = (
         device.num_program_cache_entries() if hasattr(device, "num_program_cache_entries") else "unknown"
     )
-    logger.info(f"Clearing program cache for --perf-with-cache (entries before: {num_entries_before})")
-    device.disable_and_clear_program_cache()
-    device.enable_program_cache()  # Re-enable for cache comparison
+    logger.info(f"Clearing program cache (entries before: {num_entries_before})")
+    device.clear_program_cache()
     num_entries_after = (
         device.num_program_cache_entries() if hasattr(device, "num_program_cache_entries") else "unknown"
     )
-    logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
+    logger.info(f"Program cache cleared (entries after: {num_entries_after})")
 
 
 def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
