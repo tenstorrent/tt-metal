@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <vector>
 
@@ -18,10 +17,7 @@
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 std::string get_system_config_name(SystemConfig system_config) {
     switch (system_config) {
@@ -123,7 +119,7 @@ bool test_socket_send_recv(
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
-                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                if (mesh_core_coords.contains(connection.sender_core)) {
                     continue;
                 }
                 mesh_core_coords.insert(connection.sender_core);
@@ -537,7 +533,4 @@ void test_multi_mesh_multi_conn_bidirectional(
     distributed_context->barrier();
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

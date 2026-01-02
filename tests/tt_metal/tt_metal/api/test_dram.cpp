@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>

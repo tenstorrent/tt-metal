@@ -341,6 +341,29 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
 
 }  // anonymous namespace
 
+// Common initialization logic shared by all constructors
+void CablingGenerator::initialize_cluster(
+    const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor) {
+    // Build cluster with all connections and port validation
+    if (deployment_descriptor.has_value()) {
+        root_instance_ = build_graph_instance(
+            cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor->get(), "", node_templates_);
+    } else {
+        root_instance_ =
+            build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);
+    }
+
+    // Validate host_id uniqueness across all nodes
+    validate_host_id_uniqueness();
+
+    // Populate the host_id_to_node_ map
+    populate_host_id_to_node();
+
+    // Generate all logical chip connections
+    generate_logical_chip_connections();
+}
+
 // Constructor with full deployment descriptor
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
@@ -352,42 +375,24 @@ CablingGenerator::CablingGenerator(
         load_descriptor_from_textproto<tt::scaleout_tools::deployment::proto::DeploymentDescriptor>(
             deployment_descriptor_path);
 
-    // Build cluster with all connections and port validation
-    root_instance_ =
-        build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
+    initialize_cluster(cluster_descriptor, deployment_descriptor);
 
     // Populate deployment hosts
     populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
 }
 
-// Constructor with just hostnames (no physical location info)
+// Constructor with just hostnames (no physical location info) - wrapper around protobuf constructor
 CablingGenerator::CablingGenerator(
-    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) {
-    // Load cluster descriptor
-    auto cluster_descriptor =
+    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) :
+    CablingGenerator(
         load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
-            cluster_descriptor_path);
+            cluster_descriptor_path),
+        hostnames) {}
 
-    // Build cluster with all connections and port validation (without deployment descriptor)
-    root_instance_ = build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);
-
-    // Validate host_id uniqueness across all nodes
-    validate_host_id_uniqueness();
-
-    // Populate the host_id_to_node_ map
-    populate_host_id_to_node();
-
-    // Generate all logical chip connections
-    generate_logical_chip_connections();
+// Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)
+CablingGenerator::CablingGenerator(
+    const cabling_generator::proto::ClusterDescriptor& cluster_descriptor, const std::vector<std::string>& hostnames) {
+    initialize_cluster(cluster_descriptor);
 
     // Populate deployment hosts from hostnames
     populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
@@ -540,13 +545,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         //  all the default connections are enumerated
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
-        if (host1_node_type.size() >= suffix.size() &&
-            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host1_node_type.size() >= suffix.size() && host1_node_type.ends_with(suffix)) {
             host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
         }
         std::string host2_node_type = host2.node_type;
-        if (host2_node_type.size() >= suffix.size() &&
-            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host2_node_type.size() >= suffix.size() && host2_node_type.ends_with(suffix)) {
             host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
         }
 
@@ -599,7 +602,7 @@ void CablingGenerator::collect_host_assignments(
         HostId host_id = node.host_id;
         std::string full_node_path = path_prefix.empty() ? node_name : path_prefix + "/" + node_name;
 
-        if (host_to_node_path.count(host_id)) {
+        if (host_to_node_path.contains(host_id)) {
             throw std::runtime_error(
                 "Host ID " + std::to_string(*host_id) + " is assigned to multiple nodes: '" +
                 host_to_node_path[host_id] + "' and '" + full_node_path + "'");

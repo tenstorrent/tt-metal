@@ -10,8 +10,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace normalization {
+
+namespace operations::normalization {
 
 struct ExecuteGroupNorm {
     static ttnn::Tensor invoke(
@@ -48,8 +48,7 @@ struct ExecuteGroupNormV3 {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
-}  // namespace normalization
-}  // namespace operations
+}  // namespace operations::normalization
 
 constexpr auto group_norm =
     ttnn::register_operation<"ttnn::group_norm", ttnn::operations::normalization::ExecuteGroupNorm>();

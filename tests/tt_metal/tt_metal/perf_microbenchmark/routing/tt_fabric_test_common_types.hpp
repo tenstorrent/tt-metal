@@ -104,6 +104,12 @@ struct SenderConfig {
     uint32_t link_id = 0;  // Link ID for multi-link tests
 };
 
+// Sync configuration for a single device
+struct SyncConfig {
+    uint32_t sync_val = 0;       // Sync value for this device
+    SenderConfig sender_config;  // Sync messages sent by this device
+};
+
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
@@ -142,16 +148,16 @@ struct ParsedTestConfig {
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
     // add sync sender configs here, each config contains current device and the patterns
-    std::vector<SenderConfig> global_sync_configs;
+    std::vector<SyncConfig> sync_configs;
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     PerformanceTestMode performance_test_mode =
         PerformanceTestMode::NONE;   // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;  // Enable telemetry for performance testing
-    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
-                                  // cross-chip start-skew effects
-    uint32_t global_sync_val = 0;
+    bool global_sync = false;  // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                               // cross-chip start-skew effects
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
@@ -167,16 +173,16 @@ struct TestConfig {
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
     // add sync sender configs here, each config contains current device and the patterns
-    std::vector<SenderConfig> global_sync_configs;
+    std::vector<SyncConfig> sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     PerformanceTestMode performance_test_mode =
         PerformanceTestMode::NONE;  // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;
-    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
-                                  // cross-chip start-skew effects
-    uint32_t global_sync_val = 0;
+    bool global_sync = false;  // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                               // cross-chip start-skew effects
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
 };
 

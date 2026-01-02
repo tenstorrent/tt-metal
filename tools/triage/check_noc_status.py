@@ -10,6 +10,9 @@ Usage:
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
     stored in global variables from risc firmware and NOC status registers.
+
+Owner:
+    jbaumanTT
 """
 
 from ttexalens.context import Context
@@ -39,7 +42,7 @@ def check_noc_status(
     and stores them in dictionary creating summary of checking process
     """
 
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
 
     fw_elf_path = dispatcher_core_data.firmware_path
     fw_elf = elfs_cache[fw_elf_path]

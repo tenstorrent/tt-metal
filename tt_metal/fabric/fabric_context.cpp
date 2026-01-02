@@ -13,6 +13,7 @@
 #include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "impl/context/metal_context.hpp"
@@ -22,16 +23,10 @@ namespace tt::tt_fabric {
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
-            // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
-            // using that link to route dispatch or any other traffic
-            wrap_around_mesh[mesh_id] = false;
-            continue;
-        }
-        // we can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
+        // We can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
         for (const auto& direction : FabricContext::routing_directions) {
@@ -49,6 +44,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE: return tt::tt_fabric::Topology::NeighborExchange;
         case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
@@ -60,11 +56,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
-bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
-}
-
-size_t FabricContext::get_packet_header_size_bytes() const {
+size_t FabricContext::compute_packet_header_size_bytes() const {
     bool udm_enabled =
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
     if (udm_enabled) {
@@ -80,23 +72,12 @@ size_t FabricContext::get_packet_header_size_bytes() const {
     }
 }
 
-size_t FabricContext::get_max_payload_size_bytes() const {
+size_t FabricContext::compute_max_payload_size_bytes() const {
     if (this->is_2D_routing_enabled()) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
     } else {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
     }
-}
-
-std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
-    tt::tt_fabric::FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) {
-    auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-        .fabric_tensix_config = fabric_tensix_config,
-        .direction = direction,
-    };
-
-    return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, edm_options);
 }
 
 FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
@@ -108,46 +89,87 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology_from_config(fabric_config);
 
-    this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
+    this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
+    this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
-    this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
-    this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
+    this->packet_header_size_bytes_ = this->compute_packet_header_size_bytes();
+    this->max_payload_size_bytes_ = this->compute_max_payload_size_bytes();
     this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
 
-    // default router config don't care about the axis, since there's no optimization to it.
-    this->router_config_ = get_edm_config_options();
+    // Query tensix config from MetalContext at init time
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
-    // default router config with mux extension
-    // Initialize for all directions: EAST, WEST, NORTH, SOUTH
-    for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-        this->router_with_mux_config_[direction] =
-            get_edm_config_options(tt::tt_fabric::FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
-    }
+    // Compute intermesh VC configuration (requires ControlPlane to be initialized)
+    // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
 
-    // Tensix config will be initialized later after routing tables are configured
-    tensix_config_ = nullptr;
-
-    this->num_devices = tt::tt_metal::GetNumAvailableDevices();
-    auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
-    if (this->num_devices != 4 && num_pcie_devices == 4) {
-        // adding TG's 4 dispatch devices
-        this->num_devices += num_pcie_devices;
-    }
-    this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
-    this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
+    // Builder context will be lazy-initialized on first access
+    builder_context_ = nullptr;
 
     set_routing_mode(this->topology_);
 }
 
+// Destructor needed because of unique_ptr with forward-declared FabricBuilderContext
+FabricContext::~FabricContext() = default;
+
+// Used to check whether a physical mesh has external torus connections, to enable Ring topology.
+// Note: is_wrap_around_mesh is true if the mesh does NOT have external torus connections.
+// Returning true tells the fabric code that it must fold the internal connections on the corner chips in order to form
+// a "torus mesh"
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");
     return it->second;
 }
 
-tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
+bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
+    // Stub: returns false for now (all meshes are compute meshes)
+    // TODO: Implement when switch mesh support lands - delegate to ControlPlane
+    (void)mesh_id;  // Unused for now
+    return false;
+}
 
-bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
+bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+
+    // Iterate through all meshes to find which one contains this device
+    const auto& mesh_ids = mesh_graph.get_mesh_ids();
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& mesh_connections = inter_mesh_connectivity[*mesh_id];
+
+        // Check if this device ID is within this mesh's connectivity map
+        if (device_id < mesh_connections.size()) {
+            const auto& chip_connections = mesh_connections[device_id];
+
+            // Check if any connection from this chip uses Z direction
+            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                if (router_edge.port_direction == RoutingDirection::Z) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+// ============ Builder Context Access ============
+
+FabricBuilderContext& FabricContext::get_builder_context() {
+    if (!builder_context_) {
+        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
+    }
+    return *builder_context_;
+}
+
+const FabricBuilderContext& FabricContext::get_builder_context() const {
+    if (!builder_context_) {
+        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
+    }
+    return *builder_context_;
+}
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {
@@ -168,107 +190,5 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     return false;
 }
 
-size_t FabricContext::get_fabric_packet_header_size_bytes() const { return this->packet_header_size_bytes_; }
-
-size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->max_payload_size_bytes_; }
-
-size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
-
-tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(
-    tt::tt_fabric::FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) const {
-    switch (fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::DISABLED:
-        case tt::tt_fabric::FabricTensixConfig::UDM:
-            TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-            return *this->router_config_;
-        case tt::tt_fabric::FabricTensixConfig::MUX:
-            TT_FATAL(
-                this->router_with_mux_config_[direction] != nullptr,
-                "Error, fabric router config with mux extension is uninitialized for direction {}",
-                direction);
-            return *this->router_with_mux_config_[direction].get();
-        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", fabric_tensix_config);
-    }
-};
-
-void FabricContext::set_num_fabric_initialized_routers(ChipId chip_id, size_t num_routers) {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
-        "Error, tried to set num initialized routers again for device {}",
-        chip_id);
-    this->num_initialized_routers_[chip_id] = num_routers;
-}
-
-uint32_t FabricContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
-        "Error, querying num initialized routers for an unknown device {}",
-        chip_id);
-    return this->num_initialized_routers_[chip_id];
-}
-
-void FabricContext::set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id) {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
-        "Error, tried to set master router channel again for the same device {}",
-        chip_id);
-    this->master_router_chans_[chip_id] = chan_id;
-}
-
-chan_id_t FabricContext::get_fabric_master_router_chan(ChipId chip_id) const {
-    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
-    TT_FATAL(
-        this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
-        "Error, querying master router channel for an unknown device {}",
-        chip_id);
-    return this->master_router_chans_[chip_id];
-}
-
-std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    std::vector<size_t> addresses_to_clear = {
-        this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
-
-    if (this->router_config_->sender_txq_id != this->router_config_->receiver_txq_id) {
-        addresses_to_clear.push_back(this->router_config_->to_sender_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(this->router_config_->to_sender_channel_remote_completion_counters_base_addr);
-        addresses_to_clear.push_back(this->router_config_->receiver_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(this->router_config_->receiver_channel_remote_completion_counters_base_addr);
-    }
-
-    return addresses_to_clear;
-}
-
-std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {
-    return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
-}
-
-std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_fabric_router_ready_address_and_signal()
-    const {
-    return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-}
-
-std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
-    return std::make_pair(
-        this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-}
-
-tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
-    TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
-    return *tensix_config_;
-}
-
-void FabricContext::initialize_tensix_config() {
-    TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
-
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        // Now it's safe to call get_active_fabric_eth_channels() because
-        // configure_routing_tables_for_fabric_ethernet_channels() has already run
-        tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
-    }
-}
 
 }  // namespace tt::tt_fabric

@@ -39,6 +39,8 @@ struct ProgramSingleAnalysisResult {
 struct ProgramAnalysisData {
     ProgramExecutionUID program_execution_uid;
     std::unordered_map<std::string, ProgramSingleAnalysisResult> program_analyses_results;
+    uint32_t core_count = 0;
+    uint32_t num_available_cores = 0;
 
     bool operator==(const ProgramAnalysisData& other) const;
 

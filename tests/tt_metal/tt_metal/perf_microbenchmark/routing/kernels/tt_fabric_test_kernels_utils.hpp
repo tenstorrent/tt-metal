@@ -5,8 +5,8 @@
 #pragma once
 
 #include <array>
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -724,10 +724,10 @@ struct LineSyncConfig {
         }
     }
 
-    template <bool IS_2D_FABRIC>
+    template <bool IS_2D_FABRIC, ChipSendType CHIP_SEND_TYPE>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
         // setup header fields. 2 rt args for 1D
-        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC>::parse_and_setup(
+        ChipSendTypeHandler<CHIP_SEND_TYPE, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
         // set up noc fields, 4 rt args
@@ -2128,7 +2128,11 @@ private:
 /* ********************
  * SyncKernelConfig   *
  **********************/
-template <uint8_t NUM_SYNC_FABRIC_CONNECTIONS, bool IS_2D_FABRIC, uint8_t NUM_LOCAL_SYNC_CORES>
+template <
+    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
+    bool IS_2D_FABRIC,
+    uint8_t NUM_LOCAL_SYNC_CORES,
+    bool USE_UNICAST_SYNC_PACKETS>
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2202,7 +2206,10 @@ private:
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC>(local_args_idx, packet_header_address);
+            constexpr ChipSendType CHIP_SEND_TYPE =
+                USE_UNICAST_SYNC_PACKETS ? ChipSendType::CHIP_UNICAST : ChipSendType::CHIP_MULTICAST;
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, CHIP_SEND_TYPE>(
+                local_args_idx, packet_header_address);
         }
 
         // Initialize local sync config

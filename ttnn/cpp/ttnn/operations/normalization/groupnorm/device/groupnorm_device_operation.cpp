@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_device_operation.hpp"
-
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
@@ -60,6 +60,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
+    TT_FATAL(
+        (a.padded_shape()[1] * a.padded_shape()[2]) % TILE_HEIGHT == 0,
+        "H*W ({}*{}) must be a multiple of the tile size ({})",
+        a.padded_shape()[1],
+        a.padded_shape()[2],
+        TILE_HEIGHT);
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
@@ -251,13 +257,15 @@ tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
         args.program_config);
 }
 
-std::tuple<GroupNormDeviceOperation::operation_attributes_t, GroupNormDeviceOperation::tensor_args_t>
-GroupNormDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization::group_norm
+
+namespace ttnn::prim {
+ttnn::operations::normalization::group_norm::GroupNormDeviceOperation::tensor_return_value_t group_norm(
     const Tensor& input,
     float eps,
     uint32_t num_groups,
     const MemoryConfig& output_mem_config,
-    const GroupNormProgramConfig& program_config,
+    const ttnn::operations::normalization::group_norm::GroupNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool use_welford,
     std::optional<Tensor> gamma,
@@ -265,27 +273,27 @@ GroupNormDeviceOperation::invoke(
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
-    return {
-        operation_attributes_t{
-            .eps = eps,
-            .num_groups = num_groups,
-            .output_mem_config = output_mem_config,
-            .program_config = program_config,
-            .compute_kernel_config = compute_kernel_config,
-            .use_welford = use_welford,
-        },
-        tensor_args_t{
-            .input = input,
-            .gamma = std::move(gamma),
-            .beta = std::move(beta),
-            .input_mask = std::move(input_mask),
-            .negative_mask = std::move(negative_mask),
-            .reciprocals = std::move(reciprocals)}};
-}
+    using OperationType = ttnn::operations::normalization::group_norm::GroupNormDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .eps = eps,
+        .num_groups = num_groups,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .use_welford = use_welford,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input,
+        .gamma = std::move(gamma),
+        .beta = std::move(beta),
+        .input_mask = std::move(input_mask),
+        .negative_mask = std::move(negative_mask),
+        .reciprocals = std::move(reciprocals)};
 
-<<<<<<< HEAD:ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_device_operation.cpp
-}  // namespace ttnn::operations::normalization::group_norm
-=======
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim
+
 void GroupNormV3::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -347,6 +355,3 @@ operation::ProgramWithCallbacks GroupNormV3::create_program(
         this->chunk_size,
         this->compute_kernel_config);
 }
-
-}  // namespace ttnn::operations::normalization
->>>>>>> 7fddb938da8 (Fix bias tensor's runtime arg index):ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_op.cpp

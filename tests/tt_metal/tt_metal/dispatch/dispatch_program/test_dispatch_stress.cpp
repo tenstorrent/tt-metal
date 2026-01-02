@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -27,11 +27,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

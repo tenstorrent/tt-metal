@@ -16,8 +16,13 @@ target_include_directories(
     telemetry_unit_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
-        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
         ${UMD_HOME}
+)
+target_include_directories(
+    telemetry_unit_tests
+    SYSTEM
+    PRIVATE
+        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 
 target_link_libraries(

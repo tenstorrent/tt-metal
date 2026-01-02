@@ -10,9 +10,9 @@
 #include <memory>
 #include <random>
 #include <set>
-#include <stdlib.h>
+#include <cstdlib>
 #include <string>
-#include <string.h>
+#include <cstring>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -59,11 +59,9 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 

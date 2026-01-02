@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <cstddef>
 #include <iterator>
 #include <memory>
@@ -39,8 +39,8 @@ mapping_table_t map[9] = {0x00000001, 0x00020003, 0x00040200, 0x02010202, 0x0203
 uint64_t real_core_x_vals [18] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x2, 0x2, 0x2, 0x2, 0x3, 0x3, 0x3, 0x3, 0x4, 0x4, 0x4, 0x4};
 uint64_t real_core_y_vals [18] = {0x0, 0x1, 0x2, 0x3, 0x4, 0x0, 0x1, 0x2, 0x3, 0x4, 0x0, 0x1, 0x2, 0x3, 0x0, 0x1, 0x2, 0x3};
 }  // namespace sharding_testing_parameters
-namespace tt {
-namespace tt_metal {
+
+namespace tt::tt_metal {
 
 template <typename ADDRgen, typename ADDRgenInfo>
 void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
@@ -195,5 +195,4 @@ TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
     run_full_block_test(addrgen, info_var, tensor_address);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

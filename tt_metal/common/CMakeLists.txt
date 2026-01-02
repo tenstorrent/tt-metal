@@ -1,6 +1,9 @@
 add_library(common OBJECT)
 add_library(TT::Metalium::Common ALIAS common)
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(common)
+
 target_sources(
     common
     PRIVATE
