@@ -4,6 +4,7 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "device/groupnorm_v3_device_operation.hpp"
 #include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -231,19 +232,18 @@ ttnn::Tensor ExecuteGroupNormV3::invoke(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/false);
 
-    return operation::run(
-               GroupNormV3{
-                   .num_groups = static_cast<uint32_t>(num_groups),
-                   .eps = epsilon,
-                   .output_dtype = output_dtype,
-                   .output_mem_config = output_mem_config,
-                   .core_grid = core_grid.value().to_CoreCoord(),
-                   .inplace = inplace.value(),
-                   .chunk_size = chunk_size.value(),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor},
-               {gamma, beta})
-        .at(0);
+    return ttnn::prim::group_norm_v3(
+        input_tensor,
+        static_cast<uint32_t>(num_groups),
+        epsilon,
+        output_dtype,
+        output_mem_config,
+        core_grid.value().to_CoreCoord(),
+        inplace.value(),
+        chunk_size.value(),
+        kernel_config_val,
+        gamma,
+        beta);
 }
 
 }  // namespace ttnn::operations::normalization

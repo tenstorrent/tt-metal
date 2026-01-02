@@ -34,38 +34,6 @@ struct GroupNormDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-operation::ProgramWithCallbacks groupnorm_v3(
-    const Tensor& a,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    Tensor& output,
-    float eps,
-    uint32_t num_groups,
-    const CoreCoord& core_grid,
-    int chunk_size,
-    const DeviceComputeKernelConfig& compute_kernel_config);
-
-struct GroupNormV3 {
-    uint32_t num_groups;
-    float eps;
-    DataType output_dtype;
-    MemoryConfig output_mem_config;
-    CoreCoord core_grid;
-    bool inplace;
-    int chunk_size;
-    DeviceComputeKernelConfig compute_kernel_config;
-
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-};
-
 }  // namespace ttnn::operations::normalization::group_norm
 
 namespace ttnn::prim {

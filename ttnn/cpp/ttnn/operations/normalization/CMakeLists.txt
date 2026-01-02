@@ -55,7 +55,8 @@ target_sources(
         groupnorm/device/groupnorm_sharded_program_factory.cpp
         groupnorm/device/groupnorm_no_mcast_program_factory.cpp
         groupnorm/device/groupnorm_mcast_program_factory.cpp
-        groupnorm/device/multi_core/groupnorm_op_v3.cpp
+        groupnorm/device/groupnorm_v3_device_operation.cpp
+        groupnorm/device/groupnorm_v3_program_factory.cpp
         groupnorm/groupnorm.cpp
         groupnorm/groupnorm_input_mask.cpp
         layernorm/device/layernorm_device_operation.cpp
