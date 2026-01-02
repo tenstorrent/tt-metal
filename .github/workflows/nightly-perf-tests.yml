@@ -32,3 +32,5 @@ jobs:
         uses: ./.github/actions/report-failure
         with:
           test_name: "Nightly Performance Tests"
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
