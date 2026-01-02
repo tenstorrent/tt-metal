@@ -274,6 +274,7 @@ def run_all_broadcast_impl(
 )
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast(
     mesh_device,
     # pcie_mesh_device,
@@ -319,6 +320,7 @@ def test_all_broadcast(
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast_trace(
     mesh_device,
     # pcie_mesh_device,
@@ -430,6 +432,7 @@ def test_all_broadcast_trace(
 )
 @pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast_sharded(
     mesh_device,
     num_devices,

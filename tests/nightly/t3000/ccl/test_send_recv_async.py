@@ -97,6 +97,7 @@ def run_send_recv_test(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_send_recv(
     mesh_device,
     per_chip_shape,
