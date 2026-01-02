@@ -207,7 +207,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                                            : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
     uint32_t cb_length = tiles_per_core_y;
 
-    const uint32_t available_L1 =
+    const double available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     if ((!(operation_attributes.use_2d_core_grid.has_value() && *operation_attributes.use_2d_core_grid)) &&
         (cb_length * in_single_tile_size > available_L1 * 0.95)) {

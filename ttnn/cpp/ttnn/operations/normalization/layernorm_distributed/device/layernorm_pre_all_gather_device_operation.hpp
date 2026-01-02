@@ -31,8 +31,7 @@ struct LayerNormPreAllGatherDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::normalization
