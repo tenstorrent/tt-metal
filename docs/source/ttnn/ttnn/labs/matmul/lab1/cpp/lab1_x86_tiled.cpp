@@ -5,10 +5,15 @@
 #include <vector>
 
 // Define tile parameters (Can be changed or passed as template arguments)
-// M and N must be divisible by TILE_HEIGHT
-// K must be divisible by TILE_WIDTH
-const int TILE_HEIGHT = 16;
-const int TILE_WIDTH = 16;
+// TH x TW are dimensions of the output tile (C)
+// A tile dimensions: TH x TK
+// B tile dimensions: TK x TW
+// M must be divisible by TH
+// N must be divisible by TW
+// K must be divisible by TK
+const int TILE_HEIGHT = 16;  // Output tile and A tile height
+const int TILE_WIDTH = 16;   // Output tile and B tile width
+const int TILE_K = 16;       // A tile width, B tile height
 
 // Simple triple-loop matrix multiplication
 std::vector<float> simple_matrix_multiply(
@@ -36,10 +41,14 @@ inline int get_idx(int row, int col, int columns) { return row * columns + col; 
  * @param A        Input vector for Matrix A
  * @param B        Input vector for Matrix B
  * @param C        Output vector for Matrix C (result accumulated here)
- * @param M, K, N  Global dimensions of the matrices
+ * @param K        Number of columns in A (and rows in B)
+ * @param N        Number of columns in B (and C)
  * @param row_offset A/C  The global row index where this tile starts
  * @param col_offset B/C  The global col index where this tile starts
  * @param k_offset        The global K index where the calculation strip starts
+ * @param TH       Output tile and A tile height
+ * @param TW       Output tile and B tile width
+ * @param TK       A tile width, B tile height
  */
 void tile_matmul(
     const std::vector<float>& A,
@@ -49,17 +58,19 @@ void tile_matmul(
     int N,  // We need K for A's stride, N for B and C's stride
     int row_offset,
     int col_offset,
-    int k_offset) {
-    // Iterate over the TILE_HEIGHT (Rows of A, Rows of C)
-    for (int i = 0; i < TILE_HEIGHT; ++i) {
-        // Iterate over the TILE_HEIGHT (Cols of B, Cols of C)
-        // Note: User specified M and N divisible by TILE_HEIGHT, implying square output tiles
-        for (int j = 0; j < TILE_HEIGHT; ++j) {
+    int k_offset,
+    int TH,
+    int TW,
+    int TK) {
+    // Iterate over TH: rows of output tile C, rows of A tile
+    for (int i = 0; i < TH; ++i) {
+        // Iterate over TW: columns of output tile C, columns of B tile
+        for (int j = 0; j < TW; ++j) {
             // We accumulate the dot product for the specific tile elements
             float sum = 0.0;
 
-            // Iterate over the TILE_WIDTH (Cols of A, Rows of B)
-            for (int k = 0; k < TILE_WIDTH; ++k) {
+            // Iterate over TK: columns of A tile, rows of B tile
+            for (int k = 0; k < TK; ++k) {
                 // Global coordinates
                 int global_row_A = row_offset + i;
                 int global_col_A = k_offset + k;
@@ -87,27 +98,28 @@ void tile_matmul(
  * Main matrix multiplication function using tiling
  */
 std::vector<float> tiled_matrix_multiply(
-    const std::vector<float>& A, const std::vector<float>& B, int M, int K, int N) {
+    const std::vector<float>& A, const std::vector<float>& B, int M, int K, int N, int TH, int TW, int TK) {
     // 1. Input ensures data is contiguous (std::vector)
     // Validate assumptions
-    assert(M % TILE_HEIGHT == 0 && "M must be divisible by TILE_HEIGHT");
-    assert(N % TILE_HEIGHT == 0 && "N must be divisible by TILE_HEIGHT");
-    assert(K % TILE_WIDTH == 0 && "K must be divisible by TILE_WIDTH");
+    assert(M % TH == 0 && "M must be divisible by TH");
+    assert(N % TW == 0 && "N must be divisible by TW");
+    assert(K % TK == 0 && "K must be divisible by TK");
 
     // Initialize Result Matrix C with zeros
     std::vector<float> C(M * N, 0.0);
 
     // Loop over the matrix in steps of tile sizes
 
-    // Iterate over rows of C (M dimension)
-    for (int i = 0; i < M; i += TILE_HEIGHT) {
-        // Iterate over columns of C (N dimension)
-        for (int j = 0; j < N; j += TILE_HEIGHT) {
-            // Iterate over the shared dimension (K dimension)
+    // Iterate over rows of C (M dimension) - step by TH
+    for (int i = 0; i < M; i += TH) {
+        // Iterate over columns of C (N dimension) - step by TW
+        for (int j = 0; j < N; j += TW) {
+            // Iterate over the shared dimension (K dimension) - step by TK
             // We move across A and down B
-            for (int k = 0; k < K; k += TILE_WIDTH) {
+            for (int k = 0; k < K; k += TK) {
                 // Process the specific tile
-                tile_matmul(A, B, C, K, N, i, j, k);
+                // A tile: TH x TK, B tile: TK x TW, C tile: TH x TW
+                tile_matmul(A, B, C, K, N, i, j, k, TH, TW, TK);
             }
         }
     }
@@ -155,7 +167,7 @@ bool verify_matrix_multiply(
 
 int main() {
     // 4. Setup Dimensions
-    // Ensure these fit the divisibility rules with TILE_HEIGHT=2, TILE_WIDTH=2
+    // Ensure these fit the divisibility rules with TH=16, TW=16, TK=16
     int M = 1600;
     int K = 1600;
     int N = 1600;
@@ -171,10 +183,10 @@ int main() {
         B[i] = (i + 1) * 2;  // 2, 4, 6...
     }
 
-    std::cout << "Tiling Params: Height=" << TILE_HEIGHT << ", Width=" << TILE_WIDTH << "\n" << std::endl;
+    std::cout << "Tiling Params: TH=" << TILE_HEIGHT << ", TW=" << TILE_WIDTH << ", TK=" << TILE_K << "\n" << std::endl;
     // Perform Multiplication
     auto start = std::chrono::high_resolution_clock::now();
-    std::vector<float> tiled_C = tiled_matrix_multiply(A, B, M, K, N);
+    std::vector<float> tiled_C = tiled_matrix_multiply(A, B, M, K, N, TILE_HEIGHT, TILE_WIDTH, TILE_K);
     auto end = std::chrono::high_resolution_clock::now();
 
     auto tiled_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
