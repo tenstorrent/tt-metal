@@ -155,6 +155,6 @@ ttnn::Tensor manual_seed(
         tensor_args.user_ids = std::get<Tensor>(user_ids.value());
     }
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

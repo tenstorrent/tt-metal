@@ -76,6 +76,6 @@ ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{input, output, output_grad, input_grad};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

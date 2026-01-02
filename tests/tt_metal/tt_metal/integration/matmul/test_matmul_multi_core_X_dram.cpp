@@ -611,9 +611,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        ASSERT_TRUE(
-            unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(devices_.at(id)));
+    for (const auto& device : devices_) {
+        ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(device));
     }
 }
 

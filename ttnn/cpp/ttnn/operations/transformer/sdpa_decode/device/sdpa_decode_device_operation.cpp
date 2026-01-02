@@ -281,8 +281,8 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             D);
 
         // Check valid seqlen
-        for (int i = 0; i < operation_attributes.cur_pos.size(); i++) {
-            TT_FATAL(operation_attributes.cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
+            TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
         }
     }
 
@@ -433,7 +433,7 @@ ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_re
         .attention_sink = attention_sink,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

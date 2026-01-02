@@ -150,7 +150,7 @@ ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation::tensor_r
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

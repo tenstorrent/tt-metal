@@ -209,7 +209,7 @@ ttnn::operations::reduction::topk::TopKDeviceOperation::tensor_return_value_t to
     const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
     using OperationType = ttnn::operations::reduction::topk::TopKDeviceOperation;
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .k = k,
             .dim = dim,
