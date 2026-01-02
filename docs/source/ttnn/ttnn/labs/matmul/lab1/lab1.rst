@@ -27,9 +27,6 @@ where each element of the resulting matrix is computed as the dot product of the
        }
    }
 
-Computational Complexity
-------------------------
-
 The naive implementation has a time complexity of O(M*N*K).
 
 
@@ -163,16 +160,17 @@ The tiled version should be implemented as follows:
         int row_offset, // Tile starting indices
         int col_offset,
         int k_offset,
-        int TH, // Tile height
-        int TW // Tile width
+        int TH, // Output tile and A tile height
+        int TW, // Output tile and B tile width
+        int TK // A tile width, B tile height
     ) {
-        // Implement multiplication of TH x TW tile by TW x TH matrix to produce TH x TH result.
-        // Use the starting indices to index into matrices A, B and C.
-        // Tile in A begins at (row_offset, k_offset) and has size TH x TW.
-        // Tile in B begins at (k_offset, col_offset) and has size TW x TH.
-        // Resulting tile in C begins at (row_offset, col_offset) and has size TH x TH.
+        // Implement multiplication of TH x TK tile by TK x TW matrix to produce TH x TW result.
+        // Use offsets to index into matrices A, B and C.
+        // Tile in A begins at (row_offset, k_offset) and has size TH x TK.
+        // Tile in B begins at (k_offset, col_offset) and has size TK x TW.
+        // Resulting tile in C begins at (row_offset, col_offset) and has size TH x TW.
         // Accumulate the result into C (assume it is initialized to 0).
-        // Hint: your code will be a lot simpler if you create a helper function get_idx to index
+        // Hint: your code will be a lot simpler if you create a helper function to index
         // into a matrix using row and column coordinates and number of columns.
     }
 
@@ -182,8 +180,9 @@ The tiled version should be implemented as follows:
         int M, // Full matrix dimensions
         int K,
         int N,
-        int TH, // Tile height
-        int TW // Tile width
+        int TH, // Output tile and A tile height
+        int TW, // Output tile and B tile width
+        int TK // A tile width, B tile height
     ) {
         // Implement full matrix multiplication using tiling
     }
@@ -382,6 +381,7 @@ a **compute kernel** for calculations, and a **writer kernel** for data output.
 Reader and writer kernels are collectively referred to as data movement kernels.
 Data movement and compute kernels communicate through circular buffers in internal SRAM.
 The circular buffers act as producer-consumer FIFO (First In First Out) queues, enabling safe and efficient data exchange between kernels.
+Each circular buffer is assumed to have only one reader kernel and one writer kernel.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
 
 .. figure:: images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
