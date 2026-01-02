@@ -6,6 +6,14 @@ inputs:
     description: 'Name of the test suite that failed'
     required: true
     type: string
+  slack_bot_token:
+    description: 'Slack bot token'
+    required: true
+    type: string
+  slack_channel_id:
+    description: 'Slack channel ID'
+    required: true
+    type: string
 
 runs:
   using: composite
@@ -16,8 +24,9 @@ runs:
       run: |
         COMMIT_URL="https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}"
         COMMIT_SHA="${GITHUB_SHA:0:7}"
-        RUN_BASE="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        RUN_URL="$RUN_BASE/job/${{ job.check_run_id }}"
+        # GitHub does not expose job IDs; link to the workflow run instead
+        RUN_BASE="${{ github.server_url }}/${{ github.repository }}/actions/runs"
+        RUN_URL="$RUN_BASE/${{ github.run_id }}"
         TRIGGERER="${{ github.event.sender.login }}"
         if [ -z "$TRIGGERER" ]; then
           TRIGGERER="scheduled run"
@@ -36,9 +45,9 @@ runs:
       uses: slackapi/slack-github-action@v2.1.1
       with:
         method: chat.postMessage
-        token: ${{ secrets.SLACK_BOT_TOKEN }}
+        token: ${{ inputs.slack_bot_token }}
         payload: |
           {
-            "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
+            "channel": "${{ inputs.slack_channel_id }}",
             "text": "${{ steps.message.outputs.text }}"
           }
