@@ -66,7 +66,7 @@ Conversely, accessing matrix elements column-by-column is cache-unfriendly becau
 
 **Implications for Matrix Multiplication**
 
-In the standard matrix multiplication algorithm ``C = A * B``, where :math:`C[i][j] = \sum_k A[i][k] \cdot B[k][j]`, and assuming ``i``, ``j``, ``k`` loop order:
+In the standard matrix multiplication algorithm ``C = A * B``, where C[i][j] = ∑ₖ A[i][k] * B[k][j], and assuming ``i``, ``j``, ``k`` loop order:
 
 * Accessing matrix **A** is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
 * Accessing matrix **B** is not cache-friendly because memory accesses skip whole matrix rows for two consecutive values of ``k``.
