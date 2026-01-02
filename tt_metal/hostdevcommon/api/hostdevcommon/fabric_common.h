@@ -280,7 +280,8 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
         buffer[i] = 0;
     }
 
-    const uint32_t end_hop = start_hop + range_hops - 1;
+    // Last hop in the multicast range (inclusive)
+    const uint32_t last_hop = start_hop - 1 + range_hops - 1;
 
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t word_idx = hop_index / LowLatencyFields::BASE_HOPS;
@@ -297,13 +298,13 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
         set_hop_field(hop, LowLatencyFields::FORWARD_ONLY);
     }
 
-    // 2. Range: Write & Forward
-    for (uint32_t hop = start_hop - 1; hop < end_hop; hop++) {
+    // 2. Range: Write & Forward (for range_hops - 1 hops)
+    for (uint32_t hop = start_hop - 1; hop < last_hop; hop++) {
         set_hop_field(hop, LowLatencyFields::WRITE_AND_FORWARD);
     }
 
-    // 3. Tail: Write Only (stop)
-    set_hop_field(end_hop, LowLatencyFields::WRITE_ONLY);
+    // 3. Tail: Write Only (stop at last hop)
+    set_hop_field(last_hop, LowLatencyFields::WRITE_ONLY);
 }
 
 //=============================================================================

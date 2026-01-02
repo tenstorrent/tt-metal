@@ -769,9 +769,7 @@ FORCE_INLINE void receiver_forward_packet(
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
-        const uint64_t routing_value = cached_routing_fields.value;
-        const uint32_t routing_value_low = static_cast<uint32_t>(routing_value);
-        const auto routing = routing_value_low & LowLatencyFields::FIELD_MASK;
+        const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case LowLatencyFields::WRITE_ONLY:
