@@ -823,7 +823,7 @@ jobs:
           # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
           device_perf_enabled = event_name == "schedule" or measure_device_perf == "true"
           if schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
-              BATCH_SIZE = 1  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
+              BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
 
