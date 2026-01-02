@@ -16,5 +16,8 @@ if [[ -z "$REF" ]]; then
 fi
 
 # Uninstall tt-exalens if already installed
+python3 -m pip uninstall -y tt-exalens >/dev/null 2>&1 || true
+
+# Install tt-exalens to the requested version
 echo "Installing tt-exalens version: $REF"
 pip install --extra-index-url https://test.pypi.org/simple/ tt-exalens=="$REF"
