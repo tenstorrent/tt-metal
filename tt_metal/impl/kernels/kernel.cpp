@@ -743,6 +743,12 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     switch (processor) {
         case DataMovementProcessor::RISCV_0: os << "RISCV_0"; break;
         case DataMovementProcessor::RISCV_1: os << "RISCV_1"; break;
+        case DataMovementProcessor::RISCV_2: os << "RISCV_2"; break;
+        case DataMovementProcessor::RISCV_3: os << "RISCV_3"; break;
+        case DataMovementProcessor::RISCV_4: os << "RISCV_4"; break;
+        case DataMovementProcessor::RISCV_5: os << "RISCV_5"; break;
+        case DataMovementProcessor::RISCV_6: os << "RISCV_6"; break;
+        case DataMovementProcessor::RISCV_7: os << "RISCV_7"; break;
         default: TT_THROW("Unknown data movement processor");
     }
     return os;

@@ -1073,6 +1073,10 @@ KernelHandle CreateDataMovementKernel(
         "cores because both NOCs are in use!",
         kernel_name);
 
+    TT_FATAL(
+        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
+        "DataMovementKernel creation failure: Data movement kernels can only be created on DM0 or DM1 processors.");
+
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
 
     // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
@@ -1102,6 +1106,10 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_riscv_in_use =
         data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
+
+    TT_FATAL(
+        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
+        "EthernetKernel creation failure: Ethernet kernels can only be created on DM0 or DM1 processors.");
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
 
