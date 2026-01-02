@@ -8,12 +8,28 @@ on:
         required: false
         type: boolean
         default: false
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - llama3.1-8b
+          - llama3.3-70b
+          - qwen3-32b
+          - Flux.1-dev
+          - Wan2.2-T2V-A14B
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
         required: false
         type: boolean
         default: false
+      model:
+        required: false
+        type: string
+        default: 'all'
 
 jobs:
   build-artifact:
@@ -61,3 +77,4 @@ jobs:
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
+      model: ${{ inputs.model || 'all' }}
