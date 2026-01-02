@@ -499,7 +499,7 @@ inline void log_gcores_info(
         }
 
         if (total_pages > 0) {
-            log_info(
+            log_debug(
                 tt::LogTest,
                 "Gcore[{}]: local_id={}, global_id={}, local_coord={}, global_coord={}",
                 i,
@@ -507,14 +507,14 @@ inline void log_gcores_info(
                 gcore.global_id,
                 gcore.local_coord,
                 gcore.global_coord);
-            log_info(tt::LogTest, "  Total pages: {}", total_pages);
+            log_debug(tt::LogTest, "  Total pages: {}", total_pages);
 
             if (gcore.global_coord.dims() >= 2) {
-                uint32_t mesh_row = gcore.global_coord[0] / grid_shape[0];
-                uint32_t mesh_col = gcore.global_coord[1] / grid_shape[1];
-                uint32_t grid_row = gcore.global_coord[0] % grid_shape[0];
-                uint32_t grid_col = gcore.global_coord[1] % grid_shape[1];
-                log_info(
+                [[maybe_unused]] uint32_t mesh_row = gcore.global_coord[0] / grid_shape[0];
+                [[maybe_unused]] uint32_t mesh_col = gcore.global_coord[1] / grid_shape[1];
+                [[maybe_unused]] uint32_t grid_row = gcore.global_coord[0] % grid_shape[0];
+                [[maybe_unused]] uint32_t grid_col = gcore.global_coord[1] % grid_shape[1];
+                log_debug(
                     tt::LogTest,
                     "  → Mesh device: ({}, {}), Grid core: ({}, {}))",
                     mesh_row,
@@ -530,7 +530,7 @@ inline void log_gcores_info(
                 }
                 pages_str += std::to_string(gcores_info.dim_pages[i][d]);
             }
-            log_info(tt::LogTest, "  Dim pages: [{}]", pages_str);
+            log_debug(tt::LogTest, "  Dim pages: [{}]", pages_str);
 
             std::string offsets_str;
             for (size_t d = 0; d < gcores_info.dim_offsets[i].size(); ++d) {
@@ -539,7 +539,7 @@ inline void log_gcores_info(
                 }
                 offsets_str += std::to_string(gcores_info.dim_offsets[i][d]);
             }
-            log_info(tt::LogTest, "  Dim offsets: [{}]", offsets_str);
+            log_debug(tt::LogTest, "  Dim offsets: [{}]", offsets_str);
 
             std::string strides_str;
             for (size_t d = 0; d < gcores_info.dim_strides[i].size(); ++d) {
@@ -548,7 +548,7 @@ inline void log_gcores_info(
                 }
                 strides_str += std::to_string(gcores_info.dim_strides[i][d]);
             }
-            log_info(tt::LogTest, "  Dim strides: [{}]", strides_str);
+            log_debug(tt::LogTest, "  Dim strides: [{}]", strides_str);
         }
     }
     log_info(tt::LogTest, "==================");
