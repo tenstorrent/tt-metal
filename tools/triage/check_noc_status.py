@@ -10,6 +10,9 @@ Usage:
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
     stored in global variables from risc firmware and NOC status registers.
+
+Owner:
+    jbaumanTT
 """
 
 from ttexalens.context import Context

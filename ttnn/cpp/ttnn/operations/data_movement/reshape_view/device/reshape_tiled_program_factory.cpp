@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <numeric>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -110,7 +110,7 @@ struct TileIterator {
 
     auto operator*() { return std::make_tuple(this->h(), this->w()); }
 
-    uint32_t size() { return (tile_end_h + 1) * (tile_end_w + 1); }
+    uint32_t size() const { return (tile_end_h + 1) * (tile_end_w + 1); }
 
 protected:
     const uint32_t& start_h;
@@ -121,9 +121,9 @@ protected:
     const uint32_t tile_end_w;
     bool first{true};
 
-    uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() const { return start_h + tile_idx_h; }
 
-    uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() const { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
@@ -167,7 +167,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
         TT_ASSERT(wi < input_shape[2], "wi: {} input_shape[2]: {} ", wi, input_shape[2]);
         TT_ASSERT(offset_i < tile_shape[0] * tile_shape[1]);
 
-        if (map_data.count(page_idx_i)) {
+        if (map_data.contains(page_idx_i)) {
             if (page_idx_i == prev_page_idx_i && offset_i - prev_offset_i == 1 && offset_o - prev_offset_o == 1) {
                 ++map_data[page_idx_i].back().num_elements;
             } else {
