@@ -71,6 +71,12 @@ run_tg_tests() {
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 4x8 and real_weights and check_output and _1f"; fail+=$?
 
+  elif [[ "$1" == "qwenimage" ]]; then
+    echo "LOG_METAL: running QwenImage run_tg_frequent_tests"
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest -n auto models/experimental/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "4x8sp0tp1"; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/qwenimage/test_vae_qwenimage.py fail+=$?
+
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"
     FAKE_DEVICE=TG pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 4links-load_dit-large_latent or conv3d_1x1x1 or -4links-l768" --timeout=1500; fail+=$?
