@@ -311,23 +311,16 @@ class Generator:
                 logits[0] if isinstance(logits, list) else logits for logits in self.tt_logits_accumulated
             ]
 
-            if use_batched_prefill:
-                # Batched prefill: logits already have 32 entries (one per slot), ordered by slot.
-                tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
-            else:
-                # Non-batched prefill: we have `batch` logits, need to pad to 32.
-                # Logits are in batch order (same as tokens and sampling_params).
-                if len(logits_tensors) > 1:
-                    tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
-                else:
-                    tt_logits_batch = logits_tensors[0]
+            # Prepare list of 32 tensors, one per slot
+            dummy_logits = ttnn.clone(logits_tensors[-1])
+            slot_logits = [dummy_logits for _ in range(padded_batch)]
 
-                # Pad to 32 users for sampling
-                num_users = len(logits_tensors)
-                if num_users < padded_batch:
-                    padding_needed = padded_batch - num_users
-                    padding_tensors = [logits_tensors[-1]] * padding_needed
-                    tt_logits_batch = ttnn.concat([tt_logits_batch] + padding_tensors, dim=2)
+            # Put each real user's logits into the correct slot
+            for idx, empty_slot_idx in enumerate(empty_slots):
+                slot_logits[empty_slot_idx] = logits_tensors[idx]
+
+            # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
+            tt_logits_batch = ttnn.concat(slot_logits, dim=2)
 
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
