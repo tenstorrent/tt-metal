@@ -281,8 +281,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     uint32_t bias_cb_id = 32;  // Invalid CB ID by default
     if (has_bias && bias.has_value()) {
         bias_cb_id = next_cb_index++;
-        // Bias uses its own data format from the bias tensor (typically bfloat16)
-        const tt::DataFormat bias_data_format = datatype_to_dataformat_converter(bias.value().dtype());
+        // CRITICAL: Bias tensor is converted to weight dtype in prepare_conv_bias_internal
+        // So we must use the WEIGHT dtype here, not the original bias dtype
+        const tt::DataFormat bias_data_format = datatype_to_dataformat_converter(b.dtype());
         const uint32_t bias_cb_pagesize = tt::tile_size(bias_data_format);
         // One tile row of bias per output channel tile
         const uint32_t bias_cb_npages = params.in_ntiles_c;  // out_channels = in_channels for depthwise
@@ -290,7 +291,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             bias_cb_id, program, parallel_config.grid, bias_cb_pagesize, bias_cb_npages, bias_data_format);
         log_debug(
             tt::LogOp,
-            "CB {} (bias_cb) :: PS = {}, NP = {}, DF = {}",
+            "CB {} (bias_cb) :: PS = {}, NP = {}, DF = {} (using weight dtype)",
             bias_cb_id,
             bias_cb_pagesize,
             bias_cb_npages,
@@ -587,10 +588,24 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     reader0_ct_args.push_back(bias_cb_id);          // bias_cb_id
     reader0_ct_args.push_back(params.in_ntiles_c);  // bias_ntiles (same as out channel tiles for depthwise)
 
-    // Add tensor accessor args for bias buffer (only if has_bias)
+    // ALWAYS add TensorAccessorArgs for bias buffer to maintain consistent compile-time arg positions
+    // When has_bias=false, we use a placeholder (dram_interleaved) that won't be accessed at runtime
     if (has_bias && bias.has_value()) {
         tt::tt_metal::TensorAccessorArgs(bias.value().buffer()).append_to(reader0_ct_args);
+    } else {
+        // Add placeholder TensorAccessorArgs when no bias - kernel needs consistent arg positions
+        tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader0_ct_args);
     }
+
+    // Debug: Print bias-related compile-time arg positions
+    log_info(
+        tt::LogOp,
+        "Bias CT args: total_args={}, position_49={}, position_50={}, position_51={}, position_52={}",
+        reader0_ct_args.size(),
+        reader0_ct_args.size() > 49 ? reader0_ct_args[49] : 0,
+        reader0_ct_args.size() > 50 ? reader0_ct_args[50] : 0,
+        reader0_ct_args.size() > 51 ? reader0_ct_args[51] : 0,
+        reader0_ct_args.size() > 52 ? reader0_ct_args[52] : 0);
 
     // Create reader1 arguments by copying reader0 and updating reader_id
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
