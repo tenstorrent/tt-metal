@@ -224,6 +224,7 @@ jobs:
             filtered_tests=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"$model_filter\")]")
           fi
 
+          echo "Filtered tests: $filtered_tests"
           echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
   multi-card-demo-tests-large:
     needs: generate-large-models-matrix
@@ -313,27 +314,67 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+  generate-tt-dit-matrix:
+    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate filtered matrix
+        id: generate
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          MODEL_FILTER: ${{ inputs.model }}
+        run: |
+          # Define all test groups with model and runner-label fields for filtering
+          all_tests='[
+            {
+              "name": "Flux.1-dev P300-viommu performance (1x2sp0tp1)",
+              "model": "flux.1-dev",
+              "arch": "blackhole",
+              "runner-label": "P300-viommu",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"1x2sp0tp1\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            },
+            {
+              "name": "Flux.1-dev BH-QB-GE performance (2x2sp0tp1)",
+              "model": "flux.1-dev",
+              "arch": "blackhole",
+              "runner-label": "BH-QB-GE",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"2x2sp0tp1\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            },
+            {
+              "name": "Wan2.2-T2V-A14B BH-QB-GE performance",
+              "model": "wan2.2-t2v-a14b",
+              "arch": "blackhole",
+              "runner-label": "BH-QB-GE",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x4sp0tp1 and resolution_480p\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            }
+          ]'
+
+          # Filter by runner-label first
+          filtered_by_runner=$(echo "$all_tests" | jq -c "[.[] | select(.[\"runner-label\"] == \"$RUNNER_LABEL\")]")
+
+          # Then filter by model if not 'all'
+          if [ "$MODEL_FILTER" == "all" ]; then
+            filtered_tests="$filtered_by_runner"
+          else
+            filtered_tests=$(echo "$filtered_by_runner" | jq -c "[.[] | select(.model == \"$MODEL_FILTER\")]")
+          fi
+
+          echo "Filtered tests: $filtered_tests"
+          echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
   multi-card-demo-tt_dit-tests:
-    if: ${{ inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE' }}
+    needs: generate-tt-dit-matrix
+    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
     strategy:
       fail-fast: false
-      matrix:
-        test-group:
-          - name: "Flux.1-dev ${{ inputs.runner-label }} performance"
-            arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then
-                HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
-              else
-                HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
-              fi
-            owner_id: U08TED0JM9D # Samuel Adesoye
-          - name: "Wan2.2-T2V-A14B ${{ inputs.runner-label }} performance"
-            arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then echo "Skipping - not supported on viommu"; exit 0; fi
-              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x4sp0tp1 and resolution_480p"
-            owner_id: U08TED0JM9D # Samuel Adesoye
+      matrix: ${{ fromJSON(needs.generate-tt-dit-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"

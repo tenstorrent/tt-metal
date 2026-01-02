@@ -18,8 +18,8 @@ on:
           - llama3.1-8b
           - llama3.3-70b
           - qwen3-32b
-          - Flux.1-dev
-          - Wan2.2-T2V-A14B
+          - flux.1-dev
+          - wan2.2-t2v-a14b
   workflow_call:
     inputs:
       regenerate-ttnn-cache:
