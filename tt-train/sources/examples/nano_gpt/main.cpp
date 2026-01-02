@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
+#include <ttnn/config.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -303,6 +304,11 @@ int main(int argc, char **argv) {
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
 
+    // TTNN Visualizer options
+    bool enable_visualizer = false;
+    std::string visualizer_report_name = "nano_gpt_training";
+    bool enable_detailed_buffer_report = false;
+
     app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
     app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
 
@@ -313,7 +319,31 @@ int main(int argc, char **argv) {
         ->default_val(save_and_exit_path);
     app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
         ->default_val(safetensors_path);
+
+    // TTNN Visualizer CLI options
+    app.add_flag("--visualizer", enable_visualizer, "Enable TTNN Visualizer logging");
+    app.add_option("--visualizer-report-name", visualizer_report_name, "TTNN Visualizer report name")
+        ->default_val(visualizer_report_name);
+    app.add_flag(
+        "--visualizer-detailed-buffers", enable_detailed_buffer_report, "Enable detailed buffer report for visualizer");
+
     CLI11_PARSE(app, argc, argv);
+
+    // Configure TTNN Visualizer if enabled
+    if (enable_visualizer) {
+        ttnn::CONFIG.set<"enable_fast_runtime_mode">(false);  // Must be disabled for logging to work
+        ttnn::CONFIG.set<"enable_logging">(true);
+        ttnn::CONFIG.set<"report_name">(visualizer_report_name);
+        ttnn::CONFIG.set<"enable_detailed_buffer_report">(enable_detailed_buffer_report);
+
+        auto report_path = ttnn::CONFIG.get<"report_path">();
+        fmt::print("TTNN Visualizer enabled.\n");
+        fmt::print("  Report name: {}\n", visualizer_report_name);
+        fmt::print("  Report path: {}\n", report_path.has_value() ? report_path.value().string() : "not set");
+        if (enable_detailed_buffer_report) {
+            fmt::print("  Detailed buffer report: enabled\n");
+        }
+    }
 
     auto yaml_config = YAML::LoadFile(training_config_name);
 
