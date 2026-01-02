@@ -19,6 +19,7 @@ from ttnn._ttnn.graph import (
     count_intermediate_and_output_tensors,
     extract_output_info,
     extract_output_tensors,
+    extract_resource_usage_per_core,
 )
 
 

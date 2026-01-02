@@ -63,43 +63,6 @@ def test_extract_output_info():
         assert info.size > 0
 
 
-def test_extract_circular_buffers_peak_size_per_core():
-    """Test CB peak size extraction"""
-    with ttnn.manage_device(device_id=0) as device:
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
-        input_tensor = ttnn.from_torch(
-            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        ttnn.relu(input_tensor)
-        captured_graph = ttnn.graph.end_graph_capture()
-
-        cb_peak = ttnn.graph.extract_circular_buffers_peak_size_per_core(captured_graph)
-        assert isinstance(cb_peak, int)
-        assert cb_peak >= 0
-
-
-def test_extract_l1_buffer_allocation_peak_size_per_core():
-    """Test L1 buffer peak per core with device grid"""
-    with ttnn.manage_device(device_id=0) as device:
-        grid_size = device.compute_with_storage_grid_size()
-        cores = grid_size.x * grid_size.y
-
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
-        input_tensor = ttnn.from_torch(
-            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.relu(input_tensor)
-        captured_graph = ttnn.graph.end_graph_capture()
-
-        l1_peak_per_core = ttnn.graph.extract_l1_buffer_allocation_peak_size_per_core(captured_graph, cores)
-        assert isinstance(l1_peak_per_core, int)
-        assert l1_peak_per_core >= 0
-
-
 def test_empty_trace():
     """Test functions handle empty traces gracefully"""
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
@@ -194,38 +157,6 @@ def test_peak_memory_chained_operations():
         peak_l1 = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)
         assert isinstance(peak_l1, int)
         assert peak_l1 > 0, f"Expected non-zero peak L1 with chained ops, got {peak_l1}"
-
-
-def test_circular_buffers_with_operations():
-    """Test CB peak size with actual operations that allocate CBs"""
-    with ttnn.manage_device(device_id=0) as device:
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
-
-        input_a = ttnn.from_torch(
-            torch.rand(1, 1, 64, 64, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        input_b = ttnn.from_torch(
-            torch.rand(1, 1, 64, 64, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        # Binary operation should allocate circular buffers
-        ttnn.add(input_a, input_b)
-        captured_graph = ttnn.graph.end_graph_capture()
-
-        cb_peak = ttnn.graph.extract_circular_buffers_peak_size_per_core(captured_graph)
-        assert isinstance(cb_peak, int)
-        assert cb_peak >= 0
-        # Binary operations typically allocate CBs (expected 3*4096 = 12288 from C++ tests)
-        if cb_peak > 0:
-            assert cb_peak >= 4096, f"Expected CB allocation of at least 4KB, got {cb_peak}"
 
 
 def test_output_info_with_multiple_outputs():
@@ -359,3 +290,115 @@ def test_normal_mode_shows_real_addresses():
             # At least some addresses in NORMAL mode should be non-zero
             has_real_address = any(addr > 0 for addr in normal_addresses)
             assert has_real_address, "NORMAL mode should have real non-zero addresses"
+
+
+def test_extract_resource_usage_per_core():
+    """Test per-core resource usage extraction from graph trace"""
+    with ttnn.manage_device(device_id=0) as device:
+        grid_size = device.compute_with_storage_grid_size()
+        interleaved_storage_cores = grid_size.x * grid_size.y
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+
+        # Create tensors with known sizes
+        input_a = ttnn.from_torch(
+            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        input_b = ttnn.from_torch(
+            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.add(input_a, input_b)
+        captured_graph = ttnn.graph.end_graph_capture()
+
+        # Test the new function
+        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores)
+
+        # Verify the struct has correct attributes
+        assert hasattr(usage, "peak_cb"), "PeakMemoryUsagePerCore should have peak_cb attribute"
+        assert hasattr(usage, "peak_l1"), "PeakMemoryUsagePerCore should have peak_l1 attribute"
+        assert hasattr(usage, "peak_total"), "PeakMemoryUsagePerCore should have peak_total attribute"
+
+        # Verify types and values
+        assert isinstance(usage.peak_cb, int), "peak_cb should be an integer"
+        assert isinstance(usage.peak_l1, int), "peak_l1 should be an integer"
+        assert isinstance(usage.peak_total, int), "peak_total should be an integer"
+
+        assert usage.peak_cb >= 0, "peak_cb should be non-negative"
+        assert usage.peak_l1 >= 0, "peak_l1 should be non-negative"
+        assert usage.peak_total >= 0, "peak_total should be non-negative"
+
+        # Verify relationship: total should be sum of CB and L1
+        assert (
+            usage.peak_total == usage.peak_cb + usage.peak_l1
+        ), f"peak_total ({usage.peak_total}) should equal peak_cb ({usage.peak_cb}) + peak_l1 ({usage.peak_l1})"
+
+        # Should have some memory usage for this operation
+        assert usage.peak_total > 0, "Expected non-zero memory usage for add operation"
+
+        print(f"\nPer-core resource usage:")
+        print(f"  Cores:      {interleaved_storage_cores}")
+        print(f"  Peak CB:    {usage.peak_cb:,} bytes")
+        print(f"  Peak L1:    {usage.peak_l1:,} bytes")
+        print(f"  Peak Total: {usage.peak_total:,} bytes")
+
+
+def test_extract_resource_usage_per_core_repr():
+    """Test __repr__ and __str__ methods of PeakMemoryUsagePerCore"""
+    with ttnn.manage_device(device_id=0) as device:
+        grid_size = device.compute_with_storage_grid_size()
+        interleaved_storage_cores = grid_size.x * grid_size.y
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        input_tensor = ttnn.from_torch(
+            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.relu(input_tensor)
+        captured_graph = ttnn.graph.end_graph_capture()
+
+        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores)
+
+        # Test __repr__ - should return a valid Python representation
+        repr_str = repr(usage)
+        assert "PeakMemoryUsagePerCore" in repr_str, "__repr__ should contain class name"
+        assert "peak_cb=" in repr_str, "__repr__ should contain peak_cb"
+        assert "peak_l1=" in repr_str, "__repr__ should contain peak_l1"
+        assert "peak_total=" in repr_str, "__repr__ should contain peak_total"
+
+        # Test __str__ - should return a nicely formatted string
+        str_repr = str(usage)
+        assert "Peak Memory Usage Per Core" in str_repr, "__str__ should have header"
+        assert "CB:" in str_repr, "__str__ should show CB usage"
+        assert "L1:" in str_repr, "__str__ should show L1 usage"
+        assert "Total:" in str_repr, "__str__ should show total usage"
+        assert "bytes" in str_repr, "__str__ should include unit"
+
+        print(f"\n__repr__ output: {repr_str}")
+        print(f"\n__str__ output:\n{str_repr}")
+
+
+def test_extract_resource_usage_per_core_empty():
+    """Test per-core resource usage with empty trace"""
+    grid_size_x, grid_size_y = 8, 7  # Typical grid size
+    interleaved_storage_cores = grid_size_x * grid_size_y
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores)
+
+    # Empty trace should have zero usage
+    assert usage.peak_cb == 0, "Empty trace should have zero CB usage"
+    assert usage.peak_l1 == 0, "Empty trace should have zero L1 usage"
+    assert usage.peak_total == 0, "Empty trace should have zero total usage"

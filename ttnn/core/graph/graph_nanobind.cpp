@@ -53,6 +53,32 @@ void py_graph_module(nb::module_& m) {
             return ss.str();
         });
 
+    // Bind PeakMemoryUsagePerCore struct for extract_resource_usage_per_core
+    nb::class_<ttnn::graph::PeakMemoryUsagePerCore>(m, "PeakMemoryUsagePerCore")
+        .def_ro(
+            "peak_cb", &ttnn::graph::PeakMemoryUsagePerCore::peak_cb, "Peak circular buffer usage per core in bytes")
+        .def_ro("peak_l1", &ttnn::graph::PeakMemoryUsagePerCore::peak_l1, "Peak L1 buffer usage per core in bytes")
+        .def_ro(
+            "peak_total",
+            &ttnn::graph::PeakMemoryUsagePerCore::peak_total,
+            "Peak total memory (CB + L1) per core in bytes")
+        .def(
+            "__repr__",
+            [](const ttnn::graph::PeakMemoryUsagePerCore& usage) {
+                std::stringstream ss;
+                ss << "PeakMemoryUsagePerCore(peak_cb=" << usage.peak_cb << ", peak_l1=" << usage.peak_l1
+                   << ", peak_total=" << usage.peak_total << ")";
+                return ss.str();
+            })
+        .def("__str__", [](const ttnn::graph::PeakMemoryUsagePerCore& usage) {
+            std::stringstream ss;
+            ss << "Peak Memory Usage Per Core:\n"
+               << "  CB:    " << usage.peak_cb << " bytes\n"
+               << "  L1:    " << usage.peak_l1 << " bytes\n"
+               << "  Total: " << usage.peak_total << " bytes";
+            return ss.str();
+        });
+
     const auto* doc_begin =
         R"doc(begin_graph_capture()
     )doc";
@@ -147,6 +173,43 @@ void py_graph_module(nb::module_& m) {
         },
         "Extracts output tensor IDs from the trace. Returns set of tensor IDs",
         nb::arg("trace"));
+
+    m.def(
+        "extract_resource_usage_per_core",
+        [](const nb::object& py_trace, size_t interleaved_storage_cores) {
+            auto json_module = nb::module_::import_("json");
+            auto trace_str = std::string{nb::str(json_module.attr("dumps")(py_trace)).c_str()};
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_resource_usage_per_core(trace, interleaved_storage_cores);
+        },
+        R"doc(
+        Extract resource usage per core from graph trace.
+
+        This function calculates the worst-case peak memory usage per core, accounting for
+        how buffers are distributed across cores. This is more accurate than total memory
+        usage for devices with distributed memory architectures.
+
+        Args:
+            trace: Captured graph trace from end_graph_capture()
+            interleaved_storage_cores: Number of cores used for interleaved storage.
+                                       Typically grid_size.x * grid_size.y
+
+        Returns:
+            PeakMemoryUsagePerCore: Object with three fields:
+                - peak_cb: Peak circular buffer usage per core (bytes)
+                - peak_l1: Peak L1 buffer usage per core (bytes)
+                - peak_total: Peak total memory (CB + L1) per core (bytes)
+
+        Example:
+            >>> grid_size = device.compute_with_storage_grid_size()
+            >>> cores = grid_size.x * grid_size.y
+            >>> usage = ttnn.graph.extract_resource_usage_per_core(graph, cores)
+            >>> print(f"Peak per core: {usage.peak_total:,} bytes")
+            >>> if usage.peak_total > 256 * 1024:
+            ...     print("Warning: Exceeds 256KB L1 per core!")
+        )doc",
+        nb::arg("trace"),
+        nb::arg("interleaved_storage_cores"));
 }
 
 }  // namespace ttnn::graph
