@@ -27,7 +27,7 @@ struct is_mesh_tensor_accessor<MeshTensorAccessor<TensorAccessorT, Rank, NumGrid
  *
  * Caches the local chip's mesh_id and chip_id from routing table
  */
-inline bool dest_is_local(uint32_t dest_fabric_mesh_id, uint32_t dest_fabric_chip_id) {
+FORCE_INLINE bool dest_is_local(uint32_t dest_fabric_mesh_id, uint32_t dest_fabric_chip_id) {
     static bool initialized = false;
     static uint32_t my_fabric_mesh_id = 0;
     static uint32_t my_fabric_chip_id = 0;
@@ -91,7 +91,7 @@ FORCE_INLINE std::pair<DefaultMeshGcoreAccessor&, bool> get_or_init_gcore_access
  * @param noc NOC index to use
  */
 template <typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids, typename CoordT>
-inline void async_read(
+FORCE_INLINE void async_read(
     const MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>& accessor,
     const CoordT& coord,
     uint32_t src_addr,
@@ -131,7 +131,7 @@ inline void async_read(
  * @param noc NOC index to use
  */
 template <uint8_t posted = 0, typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids, typename CoordT>
-inline void async_write(
+FORCE_INLINE void async_write(
     const MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>& accessor,
     const CoordT& coord,
     uint32_t src_addr,
@@ -180,7 +180,7 @@ inline void async_write(
 template <
     typename CoordT,
     typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t> && !is_mesh_tensor_accessor<CoordT>::value>>
-inline void async_read(
+FORCE_INLINE void async_read(
     const CoordT& coord, uint32_t src_addr, uint32_t size, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
@@ -219,7 +219,7 @@ template <
     uint8_t posted = 0,
     typename CoordT,
     typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t> && !is_mesh_tensor_accessor<CoordT>::value>>
-inline void async_write(
+FORCE_INLINE void async_write(
     const CoordT& coord, uint32_t src_addr, uint32_t size, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
@@ -265,7 +265,7 @@ inline void async_write(
  * @param noc NOC index to use
  */
 template <uint8_t posted = 0, typename TensorAccessorT, uint32_t Rank, uint32_t NumGrids, typename CoordT>
-inline void semaphore_inc(
+FORCE_INLINE void semaphore_inc(
     const MeshTensorAccessor<TensorAccessorT, Rank, NumGrids>& accessor,
     const CoordT& coord,
     uint32_t incr_val,
@@ -311,7 +311,7 @@ template <
     uint8_t posted = 0,
     typename CoordT,
     typename = std::enable_if_t<!std::is_same_v<CoordT, uint32_t> && !is_mesh_tensor_accessor<CoordT>::value>>
-inline void semaphore_inc(const CoordT& coord, uint32_t incr_val, uint32_t offset = 0, uint8_t noc = noc_index) {
+FORCE_INLINE void semaphore_inc(const CoordT& coord, uint32_t incr_val, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
 
@@ -342,7 +342,7 @@ inline void semaphore_inc(const CoordT& coord, uint32_t incr_val, uint32_t offse
  * @param semaphore_addr L1 address of the semaphore
  * @param target_value Value to wait for
  */
-inline void semaphore_wait(uint32_t semaphore_addr, uint32_t target_value) {
+FORCE_INLINE void semaphore_wait(uint32_t semaphore_addr, uint32_t target_value) {
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr), target_value);
 }
 
@@ -358,7 +358,7 @@ inline void semaphore_wait(uint32_t semaphore_addr, uint32_t target_value) {
  * @param semaphore_addr L1 address of the semaphore
  * @param value Value to set the semaphore to
  */
-inline void semaphore_set(uint32_t semaphore_addr, uint32_t value) {
+FORCE_INLINE void semaphore_set(uint32_t semaphore_addr, uint32_t value) {
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr), value);
 }
 
@@ -372,7 +372,7 @@ inline void semaphore_set(uint32_t semaphore_addr, uint32_t value) {
  *
  * @param noc NOC index to use for local barrier
  */
-inline void async_read_barrier(uint8_t noc = noc_index) {
+FORCE_INLINE void async_read_barrier(uint8_t noc = noc_index) {
     noc_async_read_barrier(noc);
     tt::tt_fabric::udm::fabric_read_barrier();
 }
@@ -385,7 +385,7 @@ inline void async_read_barrier(uint8_t noc = noc_index) {
  *
  * @param noc NOC index to use for local barrier
  */
-inline void async_write_barrier(uint8_t noc = noc_index) {
+FORCE_INLINE void async_write_barrier(uint8_t noc = noc_index) {
     noc_async_write_barrier(noc);
     tt::tt_fabric::udm::fabric_write_barrier();
 }
@@ -398,7 +398,7 @@ inline void async_write_barrier(uint8_t noc = noc_index) {
  *
  * @param noc NOC index to use for local barrier
  */
-inline void atomic_barrier(uint8_t noc = noc_index) {
+FORCE_INLINE void atomic_barrier(uint8_t noc = noc_index) {
     noc_async_atomic_barrier(noc);
     tt::tt_fabric::udm::fabric_atomic_barrier();
 }
