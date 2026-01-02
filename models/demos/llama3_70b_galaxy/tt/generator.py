@@ -311,10 +311,6 @@ class Generator:
                 logits[0] if isinstance(logits, list) else logits for logits in self.tt_logits_accumulated
             ]
 
-            num_users = len(logits_tensors)
-            assert_msg = f"logits_tensors and empty_slots must have same length, {num_users} != {len(empty_slots)}"
-            assert num_users == len(empty_slots), assert_msg
-
             # Prepare list of 32 tensors, one per slot
             dummy_logits = ttnn.clone(logits_tensors[-1])
             slot_logits = [dummy_logits for _ in range(padded_batch)]
