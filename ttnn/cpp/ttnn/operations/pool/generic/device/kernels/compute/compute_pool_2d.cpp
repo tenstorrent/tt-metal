@@ -80,6 +80,7 @@ void MAIN {
     constexpr bool has_bias = (bool)get_compile_time_arg_val(33);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(34);
     constexpr uint32_t bias_ntiles = get_compile_time_arg_val(35);
+    constexpr uint32_t bias_temp_cb_id = get_compile_time_arg_val(36);  // Intermediate buffer for tilization
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 
@@ -195,7 +196,13 @@ void MAIN {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         if (is_output_tiled && !tilize_stick_counter) {
-            cb_reserve_back(out_cb_id, in_ntiles_c);
+            // When has_bias=true, tilize into bias_temp_cb first, then add bias and pack to out_cb
+            // This avoids CB ordering issues when there are multiple tile rows
+            if constexpr (has_bias) {
+                cb_reserve_back(bias_temp_cb_id, in_ntiles_c);
+            } else {
+                cb_reserve_back(out_cb_id, in_ntiles_c);
+            }
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -417,32 +424,34 @@ void MAIN {
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         unpack_tilizeA_B_uninit(curr_in_cb_id);
-                        pack_reconfig_data_format(out_cb_id);
-
-                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                         // ============ BIAS + ACTIVATION (post-tilization) ============
-                        // Only needed when has_bias - otherwise activation already applied per-stick
+                        // When has_bias=true, tilize into bias_temp_cb, then add bias and pack to out_cb
+                        // This avoids CB ordering issues when there are multiple tile rows
                         if constexpr (has_bias) {
-                            // Push tilized data to make it available for reading
-                            cb_push_back(out_cb_id, in_ntiles_c);
+                            // Tilize into bias_temp_cb (intermediate buffer)
+                            pack_reconfig_data_format(bias_temp_cb_id);
+                            fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, bias_temp_cb_id);
+                            fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, bias_temp_cb_id);
+                            fast_tilize_uninit(pre_tilize_cb_id, bias_temp_cb_id);
 
-                            // Wait for tilized data
-                            cb_wait_front(out_cb_id, in_ntiles_c);
+                            // Push tilized data to make it available for reading
+                            cb_push_back(bias_temp_cb_id, in_ntiles_c);
+
+                            // Wait for tilized data in bias_temp_cb
+                            cb_wait_front(bias_temp_cb_id, in_ntiles_c);
 
                             tile_regs_acquire();
 
                             // Reconfigure data format for bias addition (critical for mixed precision)
-                            reconfig_data_format(out_cb_id, bias_cb_id);
+                            reconfig_data_format(bias_temp_cb_id, bias_cb_id);
 
                             // Initialize for bias broadcast addition
-                            add_bcast_rows_init_short(out_cb_id, bias_cb_id);
+                            add_bcast_rows_init_short(bias_temp_cb_id, bias_cb_id);
 
-                            // Load tiles from out_cb and add bias using row broadcast
+                            // Load tiles from bias_temp_cb and add bias using row broadcast
                             for (uint32_t i = 0; i < in_ntiles_c; ++i) {
-                                add_tiles_bcast_rows(out_cb_id, bias_cb_id, i, i, i);
+                                add_tiles_bcast_rows(bias_temp_cb_id, bias_cb_id, i, i, i);
                             }
 
                             // Apply activation function after bias addition
@@ -454,10 +463,10 @@ void MAIN {
 
                             tile_regs_commit();
 
-                            // Pop front to consume original tilized data
-                            cb_pop_front(out_cb_id, in_ntiles_c);
+                            // Pop front to consume tilized data from bias_temp_cb (reuse for next iteration)
+                            cb_pop_front(bias_temp_cb_id, in_ntiles_c);
 
-                            // Reserve space and pack bias-added tiles back to out_cb
+                            // Reserve space and pack bias-added tiles to out_cb (final output)
                             tile_regs_wait();
                             cb_reserve_back(out_cb_id, in_ntiles_c);
                             for (uint32_t i = 0; i < in_ntiles_c; ++i) {
@@ -465,10 +474,16 @@ void MAIN {
                             }
                             tile_regs_release();
 
-                            // Push the bias-added tiles
+                            // Push the bias-added tiles to out_cb
                             cb_push_back(out_cb_id, in_ntiles_c);
                         } else {
-                            // No bias - just push the tilized output directly
+                            // No bias - tilize directly into out_cb
+                            pack_reconfig_data_format(out_cb_id);
+                            fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+
+                            // Push the tilized output directly
                             cb_push_back(out_cb_id, in_ntiles_c);
                         }
                         // ============ END BIAS + ACTIVATION ============
