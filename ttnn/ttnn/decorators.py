@@ -208,7 +208,10 @@ def get_all_tensors(object_value):
 def set_tensor_id(tensor, force=False):
     import torch
 
-    if isinstance(tensor, torch.Tensor):
+    if isinstance(tensor, ttnn.Tensor):
+        # ttnn.Tensor id is assigned in the constructor
+        pass
+    elif isinstance(tensor, torch.Tensor):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
         tensor.tensor_id = ttnn._ttnn.next_tensor_id()
