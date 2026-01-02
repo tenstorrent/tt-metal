@@ -129,10 +129,10 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
     auto output_placements = input_topology.placements();
 
     // For each distribution dimension, if sharded on the gather dim, make it replicated
-    for (size_t i = 0; i < output_placements.size(); i++) {
-        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placements[i])) {
+    for (auto& output_placement : output_placements) {
+        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
             if (shard->dim == static_cast<int>(operation_attributes.dim)) {
-                output_placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+                output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             }
         }
     }

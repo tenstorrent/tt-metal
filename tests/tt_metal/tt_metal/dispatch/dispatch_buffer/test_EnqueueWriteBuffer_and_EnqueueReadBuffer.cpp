@@ -399,8 +399,8 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
         uint32_t buf_size = num_pages * config.page_size;
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-        for (uint32_t i = 0; i < src.size(); i++) {
-            src[i] = rand();
+        for (unsigned int& val : src) {
+            val = rand();
         }
 
         BufferType buftype = BufferType::DRAM;
