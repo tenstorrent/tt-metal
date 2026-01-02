@@ -370,8 +370,16 @@ class FastOperation:
         """
         Parse pybind11/nanobind TypeError and create a concise error message showing
         how the function was called vs available signatures.
+        Returns None if this is not a pybind11/nanobind type error that we can enhance.
         """
         import re
+
+        # Only enhance pybind11/nanobind type errors
+        if not (
+            "incompatible function arguments" in original_error
+            and ("Invoked with:" in original_error or "Invoked with types:" in original_error)
+        ):
+            return None
 
         def clean(s):
             return s.replace("ttnn._ttnn.tensor.", "ttnn.").replace("ttnn._ttnn.operations.", "ttnn.")
@@ -441,15 +449,10 @@ class FastOperation:
                 with command_queue(cq_id):
                     result = self.function(*function_args, **function_kwargs)
         except TypeError as e:
-            # Enhance pybind11/nanobind error messages to make argument type mismatches clearer
-            error_msg = str(e)
-            if "incompatible function arguments" in error_msg and (
-                "Invoked with:" in error_msg or "Invoked with types:" in error_msg
-            ):
-                enhanced_msg = self._enhance_type_error_message(error_msg, function_args, function_kwargs)
+            enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
+            if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
-            else:
-                raise
+            raise
 
         return result
 
