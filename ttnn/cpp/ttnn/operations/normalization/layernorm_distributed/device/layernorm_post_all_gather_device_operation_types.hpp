@@ -11,16 +11,24 @@
 
 namespace ttnn::operations::normalization {
 
-struct LayerNormPreAllGatherOperationAttributes {
-    LayerNormDistributedType norm_type = LayerNormDistributedType::LAYERNORM;
-    std::optional<tt::tt_metal::DataType> dtype = std::nullopt;
+struct LayerNormPostAllGatherOperationAttributes {
+    LayerNormDistributedType norm_type;
+    float eps;
+    tt::tt_metal::MemoryConfig memory_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    LayerNormProgramConfig program_config;
+    std::optional<tt::tt_metal::DataType> dtype;
     std::optional<bool> use_2d_core_grid;
+    LayerNormProgramConfig program_config;
 };
 
-struct LayerNormPreAllGatherTensorArgs {
+struct LayerNormPostAllGatherTensorArgs {
     const Tensor& input;
+    const Tensor& stats;
+    std::optional<Tensor> gamma;
+    std::optional<Tensor> beta;
 };
+
+using LayerNormPostAllGatherTensorReturnValue = Tensor;
+using LayerNormPostAllGatherSpecReturnValue = TensorSpec;
 
 }  // namespace ttnn::operations::normalization
