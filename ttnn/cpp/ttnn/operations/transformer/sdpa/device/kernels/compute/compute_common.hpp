@@ -18,6 +18,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/reduce_custom.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ckernel_mutex_guard.h"
@@ -80,7 +81,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
              * Note that this special invocation of copy_tile is necessary to produce
              * tiles in DST with transposed faces, as `reduce_block_max_row` expects.
              */
-            sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
+            // sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
             for (uint32_t i = 0; i < dst_tiles; i++) {
                 const uint32_t cur_max_dst_idx = i;
                 copy_tile(prev_cb, (row_start_idx + i), cur_max_dst_idx);

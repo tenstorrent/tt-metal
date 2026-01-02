@@ -9,8 +9,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
