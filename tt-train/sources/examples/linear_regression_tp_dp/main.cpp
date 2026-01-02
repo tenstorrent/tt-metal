@@ -171,6 +171,7 @@ int main(int argc, char** argv) {
         /* loss is caclulated for each tp partition, so its averaged over 1/tp_size times less samples making gradient tp_size times greater*/
         learning_rate /= tp_size;
     }
+    // std::cout << "Learning rate: " << learning_rate << std::endl;
 
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
@@ -204,7 +205,7 @@ int main(int argc, char** argv) {
             loss->backward();
 
             // Synchronize gradients across DP groups (average gradients for data parallelism)
-            ttml::core::distributed::synchronize_parameters(model->parameters());
+            ttml::core::distributed::synchronize_parameters(model->parameters(), 0U);
 
             // Optimizer step
             optimizer.step();
