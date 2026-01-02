@@ -596,7 +596,7 @@ output location for FPU computations. The acquire operation also initializes all
 which is not important for our example, but is useful for operations like matrix multiplication where results accumulate.
 
 After the computation completes, the kernel marks the input tiles as consumed using ``cb_pop_front`` to free space in the circular buffers,
-then releases the destination register to signal that the compute core has finished writing, which allows the packer to read the result.
+then releases the destination register using ``tile_regs_commit`` to signal that the compute core has finished writing, which allows the packer to read the result.
 
 The packer core for its part waits for the destination register to be ready using ``tile_regs_wait``,
 ensures there is space in the output circular buffer, and then copies the result from the destination register to the output circular buffer using ``pack_tile``.
@@ -1001,32 +1001,62 @@ but with tiles instead of individual numbers. For instance, tile C0 corresponds 
 C0 = A0 * B0 + A1 * B2,
 
 where each * is an inner 3x2 by 2x3 matrix multiplication producing a 3x3 tile that is accumulated into C0.
-
 We can summarize computations for all C tiles in a table as follows:
 
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | Computing | From A | From B |   ``+``   | From A | From B |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | C0        | A0     | B0     |   ``+``   | A1     | B2     |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | C1        | A0     | B1     |   ``+``   | A1     | B3     |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | C2        | A2     | B0     |   ``+``   | A3     | B2     |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | C3        | A2     | B1     |   ``+``   | A3     | B3     |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | C4        | A4     | B0     |   ``+``   | A5     | B2     |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 | C5        | A4     | B1     |   ``+``   | A5     | B3     |
-+-----------+--------+--------+--------+--------+--------+
++-----------+--------+--------+-----------+--------+--------+
 
-If we compute the C tiles in row-major order (C0, C1, C2, C3, C4, C5), we will visit tiles of A and B in a regular pattern, and that pattern is exactly
-the same pattern that a straightforward implementation of matrix multiplication uses, visiting one row of tiles of A with all columns of tiles of B.
-For example, as we compute C0 and C1 we start with row of tiles A0, A1 while cycling through columns of tile B0, B2 followed by B1, B3, and so on.
+Further splitting each row so that only one multiplication is performed in each step, we get the following table:
+
++-----------+--------+--------+
+| Computing | From A | From B |
++-----------+--------+--------+
+| C0        | A0     | B0     |
++           +--------+--------+
+|           | A1     | B2     |
++-----------+--------+--------+
+| C1        | A0     | B1     |
++           +--------+--------+
+|           | A1     | B3     |
++-----------+--------+--------+
+| C2        | A2     | B0     |
++           +--------+--------+
+|           | A3     | B2     |
++-----------+--------+--------+
+| C3        | A2     | B1     |
++           +--------+--------+
+|           | A3     | B3     |
++-----------+--------+--------+
+| C4        | A4     | B0     |
++           +--------+--------+
+|           | A5     | B2     |
++-----------+--------+--------+
+| C5        | A4     | B1     |
++           +--------+--------+
+|           | A5     | B3     |
++-----------+--------+--------+
+
+
+From this table we can observe that if we compute the C tiles in row-major order (C0, C1, C2, ..., C5),
+we will visit tiles of A and B in a regular pattern, visiting one row of tiles of A with all columns of tiles of B.
+For example, to compute C0 and C1 we start with row of tiles A0, A1 while cycling through columns of tiles B0, B2 followed by B1, B3.
 From this viewpoint, we can think of A0, A1, ..., A5 as the "elements" of a 3x2 tile matrix, B0, ..., B3 as the "elements" of a 2x2 tile matrix,
 and C0, ..., C5 as the "elements" of a 3x2 tile matrix.
-The computation of C from A and B then follows the standard matrix multiplication algorithm,
-except that each "element" is itself a 2D tile, and each element-wise multiply is a small matrix multiply.
+The computation of C from A and B then follows the standard non-tiled matrix multiplication algorithm,
+except that each "element" is itself a 2D tile, and each element-wise multiply is a smaller matrix multiplication.
 
 This view fits neatly into the Tenstorrent architecture, where each Tensix core can perform matrix multiplication on two tiles in a single instruction.
 All that needs to be done is to present the tiles of A and B to the matrix engine in the correct order, and accumulate results into the correct output tile.
@@ -1048,7 +1078,10 @@ You will need to make the following changes:
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
    To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
-   Don't forget to accumulate the result of all multiplication results contributing to one output tile.
+   This function accumulates the result into the destination register; i.e. it adds to the values in the register rather than overwriting existing content.
+   By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
+   ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,
+   you can ensure that the result for each output tile is accumulated correctly.
 
 3. Update the reader kernel to read the tiles of A and B in the correct order. The order should match the pattern of visiting one row of tiles of A
    with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
