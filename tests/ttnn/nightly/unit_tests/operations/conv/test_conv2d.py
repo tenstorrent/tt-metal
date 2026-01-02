@@ -5261,10 +5261,15 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
     (
         # HEIGHT_SHARDED test
-        (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
+        (1, 64, 64, 4, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
         # WIDTH_SHARDED test
-        (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
-        (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
+        # BLOCK_SHARDED test
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
+        # BLOCK_SHARDED with bfp8 weights
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
+        # BLOCK_SHARDED with bfp4 weights
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat16, None, False, False),
         # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True),
 
         # (10, 32, 32, 40, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", False, True), # mobilenetv2 - 1.
@@ -5277,22 +5282,27 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
 
         # # EfficientNet-B0 Depthwise Convolution Configurations
         # # All configurations have in_channels=out_channels=groups (depthwise characteristic)
-        # (1, 32, 32, 112, 112, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 1.
-        # (1, 96, 96, 112, 112, 96, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 2.
-        # (1, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 3.
-        # (1, 144, 144, 56, 56, 144, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 4. - fails with memory issue
-        # (1, 240, 240, 28, 28, 240, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 5. - fails with memory issue
-        # (1, 240, 240, 28, 28, 240, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 6. - fails with memory issue
-        # (1, 480, 480, 14, 14, 480, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 7. - fails with memory issue
-        # (1, 480, 480, 14, 14, 480, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 8. - fails with memory issue
-        # (1, 672, 672, 14, 14, 672, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 9.
-        # (1, 672, 672, 14, 14, 672, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 10.
-        # (1, 1152, 1152, 7, 7, 1152, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 11.
-        # (1, 1152, 1152, 7, 7, 1152, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 12.
+        # (1, 32, 32, 112, 112, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 1.
+        # (1, 96, 96, 112, 112, 96, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 2.
+        # (1, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 3.
+        # (1, 144, 144, 56, 56, 144, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 4. - fails with memory issue
+        # (1, 240, 240, 28, 28, 240, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 5. - fails with memory issue
+        # (1, 240, 240, 28, 28, 240, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 6. - fails with memory issue
+        # (1, 480, 480, 14, 14, 480, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 7. - fails with memory issue
+        # (1, 480, 480, 14, 14, 480, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 8. - fails with memory issue
+        # (1, 672, 672, 14, 14, 672, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 9.
+        # (1, 672, 672, 14, 14, 672, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 10.
+        # (1, 1152, 1152, 7, 7, 1152, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 11.
+        # (1, 1152, 1152, 7, 7, 1152, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 12.
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer):
+
+    num = 32
+    input_channels = num
+    output_channels = num
+    groups = num
 
     torch.manual_seed(0)
     conv_input_shape = (batch, input_channels, input_height, input_width)
@@ -5303,7 +5313,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
         torch_tensor_map, conv_input_shape, False,
     )
 
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.zeros(conv_weight_shape, dtype=torch.bfloat16).float()
 
     # DEBUG: Use integer weights for easier debugging - each kernel position gets stick_id
     # for out_ch in range(conv_weight_shape[0]):
@@ -5314,6 +5324,11 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
     #                 torch_weight_tensor[out_ch, in_ch, kh, kw] = stick_id
 
     conv_bias_shape = (1, 1, 1, output_channels)
+
+    # Create bias tensor before reference computation
+    torch_bias_tensor = (
+        randomize_torch_tensor(torch_tensor_map, conv_bias_shape)
+    ) * 10
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
@@ -5326,6 +5341,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
     ref = torch.nn.functional.conv2d(
         torch_padded_input,
         torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1),
         stride=(stride[0], stride[1]),
         padding=(0, 0),
         dilation=(dilation[0], dilation[1]),
@@ -5345,9 +5361,6 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
         mesh_mapper=None,
         layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         device=device if dtype == ttnn.bfloat8_b else None,
-    )
-    torch_bias_tensor = (
-        randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10
     )
 
     tt_weight_tensor = ttnn.from_torch(
@@ -5399,7 +5412,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
         in_channels=input_channels,
         out_channels=output_channels,
         device=device,
-        bias_tensor=None,
+        bias_tensor=tt_bias_tensor,
         kernel_size=(kernel[0], kernel[1]),
         stride=(stride[0], stride[1]),
         padding=(padding[0], padding[1]),

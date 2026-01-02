@@ -277,6 +277,20 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         tt::tile_size(params.data_format),
         1);
 
+    // Bias CB - only allocated if has_bias is true
+    uint32_t bias_cb_id = 32;  // Invalid CB ID by default
+    if (has_bias) {
+        bias_cb_id = next_cb_index++;
+        // Bias uses same data format as weights
+        const tt::DataFormat bias_data_format = weight_data_format;
+        const uint32_t bias_cb_pagesize = tt::tile_size(bias_data_format);
+        // One tile row of bias per output channel tile
+        const uint32_t bias_cb_npages = params.in_ntiles_c;  // out_channels = in_channels for depthwise
+        tt::tt_metal::create_cb(
+            bias_cb_id, program, parallel_config.grid, bias_cb_pagesize, bias_cb_npages, bias_data_format);
+        log_debug(tt::LogOp, "CB {} (bias_cb) :: PS = {}, NP = {}", bias_cb_id, bias_cb_pagesize, bias_cb_npages);
+    }
+
     // Reader indices will be created after out_nhw_per_core is calculated
 
     // Now create the actual pool kernels by referencing their paths directly
@@ -561,6 +575,17 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // This allows the kernel to access weight data from DRAM via TensorAccessor
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(reader0_ct_args);
 
+    // Add bias compile-time args (after weight TensorAccessor args)
+    // These will be at positions 48+ after weight accessor args are appended
+    reader0_ct_args.push_back(has_bias);            // has_bias flag
+    reader0_ct_args.push_back(bias_cb_id);          // bias_cb_id
+    reader0_ct_args.push_back(params.in_ntiles_c);  // bias_ntiles (same as out channel tiles for depthwise)
+
+    // Add tensor accessor args for bias buffer (only if has_bias)
+    if (has_bias && bias.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(bias.value().buffer()).append_to(reader0_ct_args);
+    }
+
     // Create reader1 arguments by copying reader0 and updating reader_id
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -651,7 +676,12 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         weight_padded_rows,
         shard_ntiles);
 
+    // Get bias buffer address if bias exists
+    uint64_t bias_buffer_addr = has_bias && bias.has_value() ? bias.value().buffer()->address() : 0;
+
     // Helper lambda to create sender runtime args
+    // Sender args: 0=weight_addr, 1=is_sender, 2-5=mcast coords, 6-7=num_dests, 8-9=semaphores, 10=start_tile_id,
+    // 11=bias_addr
     auto make_sender_args = [&](uint32_t start_x,
                                 uint32_t start_y,
                                 uint32_t end_x,
@@ -669,18 +699,27 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             num_dests,  // num_dests == num_mcast_cores
             weights_mcast_sender_semaphore_id,
             weights_mcast_receiver_semaphore_id,
-            start_tile_id};
+            start_tile_id,
+            static_cast<uint32_t>(bias_buffer_addr)};  // 11 - bias buffer address for bias reading
     };
 
     // Helper lambda to create receiver runtime args
-    auto make_receiver_args = [&](uint32_t sender_x, uint32_t sender_y) {
+    // Receiver args: padded to match sender layout so bias reading works uniformly
+    // 0=weight_addr, 1=is_sender, 2-3=sender coords, 4-5=semaphores, 6-9=padding, 10=start_tile_id, 11=bias_addr
+    auto make_receiver_args = [&](uint32_t sender_x, uint32_t sender_y, uint32_t start_tile_id) {
         return std::vector<uint32_t>{
             static_cast<uint32_t>(weight_buffer_addr),
             0,  // is_sender = false
             sender_x,
             sender_y,
             weights_mcast_sender_semaphore_id,
-            weights_mcast_receiver_semaphore_id};
+            weights_mcast_receiver_semaphore_id,
+            0,
+            0,
+            0,
+            0,                                         // padding for args 6-9 to align with sender layout
+            start_tile_id,                             // 10 - used for bias reading (same channel offset as sender)
+            static_cast<uint32_t>(bias_buffer_addr)};  // 11 - bias buffer address for bias reading
     };
 
     if (num_cores > 0) {
@@ -699,6 +738,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                 CoreCoord core = all_cores[i];
                 uint32_t col_idx = i % num_cores_c;
                 uint32_t row_idx = i / num_cores_c;
+                uint32_t col_start_tile_id = col_idx * params.in_ntiles_c;
 
                 if (row_idx == 0) {
                     // Sender: multicast to entire column
@@ -711,18 +751,24 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                         col_end_phys.x,
                         col_end_phys.y,
                         num_cores_r - 1,
-                        col_idx * params.in_ntiles_c);
+                        col_start_tile_id);
                     SetRuntimeArgs(program, reader0_kernel, core, args);
                 } else {
                     // Receiver: wait for sender in row 0
+                    // Pass same start_tile_id as sender (same column = same channels)
                     CoreCoord sender_phys = device->worker_core_from_logical_core({col_idx, 0});
-                    SetRuntimeArgs(program, reader0_kernel, core, make_receiver_args(sender_phys.x, sender_phys.y));
+                    SetRuntimeArgs(
+                        program,
+                        reader0_kernel,
+                        core,
+                        make_receiver_args(sender_phys.x, sender_phys.y, col_start_tile_id));
                 }
             }
             log_info(tt::LogOp, "BLOCK_SHARDED: {} senders (row 0), {} receivers/col", num_cores_c, num_cores_r - 1);
 
         } else {
             // HEIGHT_SHARDED: First core reads and multicasts to all others
+            // All cores process same channels, so start_tile_id = 0 for all
             CoreCoord sender_phys = device->worker_core_from_logical_core(all_cores[0]);
             auto grid_start = parallel_config.grid.bounding_box().start_coord;
             auto grid_end = parallel_config.grid.bounding_box().end_coord;
@@ -733,9 +779,10 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             auto sender_args = make_sender_args(start_phys.x, start_phys.y, end_phys.x, end_phys.y, num_cores - 1, 0);
             SetRuntimeArgs(program, reader0_kernel, all_cores[0], sender_args);
 
-            // Receivers
+            // Receivers - all use start_tile_id=0 (same channels as sender)
             for (uint32_t i = 1; i < num_cores; i++) {
-                SetRuntimeArgs(program, reader0_kernel, all_cores[i], make_receiver_args(sender_phys.x, sender_phys.y));
+                SetRuntimeArgs(
+                    program, reader0_kernel, all_cores[i], make_receiver_args(sender_phys.x, sender_phys.y, 0));
             }
             log_info(tt::LogOp, "HEIGHT_SHARDED: 1 sender, {} receivers", num_cores - 1);
         }

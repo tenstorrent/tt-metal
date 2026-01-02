@@ -431,6 +431,11 @@ void kernel_main() {
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
     constexpr uint32_t weight_cb_id = get_compile_time_arg_val(46);
 
+    // Bias-related compile-time args (positions 49-51, after weight TensorAccessorArgs at 48)
+    constexpr bool has_bias = (bool)get_compile_time_arg_val(49);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(50);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(51);
+
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
@@ -589,9 +594,6 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            // Debug: print first few weight values from L1
-            tt::data_movement::common::print_bf16_pages(weights_start_address, 32, 32);
-
             // Calculate total size for multicast
             uint32_t weights_block_size_bytes = weight_ntiles * weight_tile_nbytes;
 
@@ -667,6 +669,49 @@ void kernel_main() {
             cb_push_back(weight_cb_id, weight_ntiles);
 
             DPRINT << "Receiver: Received " << weight_ntiles << " weight tiles via multicast" << ENDL();
+        }
+
+        // ============================================================
+        // BIAS READING (after weight reading, for depthwise conv with bias)
+        // ============================================================
+        // Bias is read once per core, tiles are reused for all output positions
+        // Uses same channel sharding as weights - start_col_tile_id determines offset
+        if constexpr (has_bias) {
+            // Bias TensorAccessorArgs starts at compile-time arg 52
+            constexpr auto s_bias_args = TensorAccessorArgs<52>();
+            const uint32_t bias_tile_nbytes = get_tile_size(bias_cb_id);
+
+            // Get bias base address from runtime arg 0 (same location as weight address)
+            // Note: For bias, we use a separate runtime arg or derive from weight pattern
+            // For now, bias address is passed after weight args - at position 11
+            uint32_t bias_addr_dram_base = get_arg_val<uint32_t>(11);
+
+            const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_tile_nbytes);
+
+            // Get start_col_tile_id from runtime args (same as weight) - position 10 for senders
+            // For receivers, they should read from the same column offset
+            uint32_t bias_start_tile_id = get_arg_val<uint32_t>(10);
+
+            DPRINT << "BIAS_READ: addr=0x" << HEX() << bias_addr_dram_base << DEC()
+                   << " start_tile=" << bias_start_tile_id << " ntiles=" << bias_ntiles << ENDL();
+
+            // Reserve space in bias CB
+            cb_reserve_back(bias_cb_id, bias_ntiles);
+            uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+
+            // Read all bias tiles for this core's channel shard
+            for (uint32_t tile_idx = 0; tile_idx < bias_ntiles; ++tile_idx) {
+                uint32_t global_tile_id = bias_start_tile_id + tile_idx;
+                noc_async_read_tile(global_tile_id, s_bias, bias_l1_addr);
+                bias_l1_addr += bias_tile_nbytes;
+            }
+            noc_async_read_barrier();
+
+            tt::data_movement::common::print_bf16_pages(get_write_ptr(bias_cb_id), bias_ntiles * 32, 32);
+
+            cb_push_back(bias_cb_id, bias_ntiles);
+
+            DPRINT << "BIAS_READ: Read " << bias_ntiles << " bias tiles" << ENDL();
         }
     }
 
