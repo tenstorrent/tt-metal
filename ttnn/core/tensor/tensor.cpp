@@ -148,9 +148,7 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-std::optional<std::uint64_t> Tensor::get_id() const {
-    return id_ != INVALID_TENSOR_ID ? std::make_optional(id_) : std::nullopt;
-}
+std::uint64_t Tensor::get_id() const { return id_; }
 
 std::uint64_t Tensor::next_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 

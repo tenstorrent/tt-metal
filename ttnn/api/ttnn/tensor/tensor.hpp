@@ -258,7 +258,7 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    std::optional<std::uint64_t> get_id() const;
+    std::uint64_t get_id() const;
 
     static std::uint64_t next_id();
 
