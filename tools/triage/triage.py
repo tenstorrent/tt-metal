@@ -674,6 +674,8 @@ def run_script(
     argv: list[str] | None = None,
     return_result: bool = False,
 ) -> Any:
+    force_exit = False
+
     # Resolve script path
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
@@ -681,6 +683,7 @@ def run_script(
         if stack is None or len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
         script_path = stack[1].filename
+        force_exit = True
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
@@ -719,6 +722,10 @@ def run_script(
     if return_result:
         return result
     serialize_result(script, result)
+
+    if force_exit:
+        # Remove nanobind leak check to avoid false positives on exit
+        os._exit(0)
 
 
 class TTTriageError(Exception):
@@ -833,6 +840,9 @@ def main():
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
+
+    # Remove nanobind leak check to avoid false positives on exit
+    os._exit(0)
 
 
 if __name__ == "__main__":
