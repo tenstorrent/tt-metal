@@ -28,6 +28,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/point_to_point/point_to_point.hpp"
+#include "ttnn/operations/point_to_point/device/host/point_to_point_device_op.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -1069,12 +1070,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
     CoreRangeSet sender_core_set(std::set<CoreRange>{CoreRange(sender_core)});
     CoreRangeSet receiver_core_set(std::set<CoreRange>{CoreRange(receiver_core)});
 
-    // Determine routing direction (sender -> receiver along dim 1)
-    const int dim = 1;  // transmit along row
-    const int hops = receiver_coord[dim] - sender_coord[dim];
-    const bool is_forward = (hops > 0);
-    const uint32_t num_hops = std::abs(hops);
-
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
@@ -1082,6 +1077,18 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
     tt::tt_metal::distributed::Synchronize(mesh_device.get(), std::nullopt, {});
+
+    // Determine routing direction and next fabric node ID (same logic as point_to_point operations)
+    const auto sender_fabric_id = mesh_device->get_fabric_node_id(sender_coord);
+    const auto receiver_fabric_id = mesh_device->get_fabric_node_id(receiver_coord);
+    const auto [num_hops_sender, dst_is_forward, next_fabric_id_sender] =
+        ttnn::operations::point_to_point::detail::fabric_1d_routing(
+            mesh_device.get(), sender_coord, receiver_coord, ttnn::ccl::Topology::Linear);
+    const auto [num_hops_receiver, sender_is_forward, next_fabric_id_receiver] =
+        ttnn::operations::point_to_point::detail::fabric_1d_routing(
+            mesh_device.get(), receiver_coord, sender_coord, ttnn::ccl::Topology::Linear);
+
+    constexpr uint32_t link_idx = 0;  // for single link implementation
 
     // =========================================================================
     // Build MeshProgramDescriptor
@@ -1150,13 +1157,13 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
             intermediate_tensor.buffer()->address(),
             0,                // page_idx_start
             input_num_pages,  // page_idx_end
-            num_hops,
+            num_hops_sender,
             input_page_size_bytes,
             packet_size_bytes,
             num_pages_per_packet,
             num_page_segments,
             semaphore.address(),
-            (uint32_t)is_forward,
+            (uint32_t)dst_is_forward,
         };
 
         KernelDescriptor reader_kernel = {
@@ -1182,16 +1189,22 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
             .cbs = {sender_cb_desc, packet_header_cb_desc, packet_cb_desc},
         };
 
-        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(sender_coord), sender_program);
+        // Manually append fabric connection args (same pattern as send_program_factory.cpp)
+        // Modify the writer kernel's runtime args in the descriptor
+        auto& writer_kernel_desc = sender_program.kernels[1];                  // writer is index 1
+        auto& writer_rt_args_ref = writer_kernel_desc.runtime_args[0].second;  // first (and only) core's args
 
-        mesh_program_descriptor.fabric_connections.push_back(tt::tt_metal::experimental::FabricConnectionDescriptor{
-            .src_coord = sender_coord,
-            .dst_coord = receiver_coord,
-            .kernel_index = 1,  // writer kernel
-            .worker_core = sender_core,
-            .link_idx = 0,
-            .core_type = tt::CoreType::WORKER,
-        });
+        if (dst_is_forward) {
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core, writer_rt_args_ref);
+        }
+        writer_rt_args_ref.push_back(!dst_is_forward);
+        if (!dst_is_forward) {
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core, writer_rt_args_ref);
+        }
+
+        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(sender_coord), sender_program);
     }
 
     // ----- RECEIVER PROGRAM -----
@@ -1242,7 +1255,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
         };
         tt::tt_metal::TensorAccessorArgs(*intermediate_tensor.buffer()).append_to(reader_ct_args);
 
-        const bool sender_is_forward = is_forward;
         std::vector<uint32_t> reader_rt_args = {
             0,                // page_idx_start
             input_num_pages,  // page_idx_end
@@ -1252,7 +1264,7 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
             input_page_size_bytes,
             num_page_segments,
             semaphore.address(),
-            num_hops,
+            num_hops_receiver,
             (uint32_t)sender_is_forward,
         };
 
@@ -1289,16 +1301,32 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
             .cbs = {packet_header_cb_desc, packet_cb_desc, receiver_cb_desc},
         };
 
-        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(receiver_coord), receiver_program);
+        // Manually append fabric connection args (same pattern as receive_program_factory.cpp)
+        // Modify the reader kernel's runtime args in the descriptor
+        auto& reader_kernel_desc = receiver_program.kernels[0];                // reader is index 0
+        auto& reader_rt_args_ref = reader_kernel_desc.runtime_args[0].second;  // first (and only) core's args
 
-        mesh_program_descriptor.fabric_connections.push_back(tt::tt_metal::experimental::FabricConnectionDescriptor{
-            .src_coord = receiver_coord,
-            .dst_coord = sender_coord,
-            .kernel_index = 0,  // reader kernel
-            .worker_core = receiver_core,
-            .link_idx = 0,
-            .core_type = tt::CoreType::WORKER,
-        });
+        if (sender_is_forward) {
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                receiver_fabric_id,
+                next_fabric_id_receiver,
+                link_idx,
+                receiver_program,
+                receiver_core,
+                reader_rt_args_ref);
+        }
+        reader_rt_args_ref.push_back(!sender_is_forward);
+        if (!sender_is_forward) {
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                receiver_fabric_id,
+                next_fabric_id_receiver,
+                link_idx,
+                receiver_program,
+                receiver_core,
+                reader_rt_args_ref);
+        }
+
+        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(receiver_coord), receiver_program);
     }
 
     ttnn::generic_op(std::vector<Tensor>{input_tensor, intermediate_tensor, output_tensor}, mesh_program_descriptor);
@@ -1436,7 +1464,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     // Build MeshProgramDescriptor (MUX mode - user handles all fabric setup)
     // =========================================================================
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
-    mesh_program_descriptor.mode = tt::tt_metal::experimental::FabricConnectionMode::MUX;
 
     for (uint32_t ring_index = 0; ring_index < ring_size; ring_index++) {
         const auto& device_coord = ring_coords[ring_index];
