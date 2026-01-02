@@ -50,8 +50,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
         sfpi::vFloat two_x = 2.f * val;
 
         // Perform sigmoid manually as 1/(1+exp(-x))
-        // (TODO: https://github.com/tenstorrent/tt-metal/pull/34862#discussion_r2639909601)
-        sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
+        sfpi::vFloat sig = _sfpu_sigmoid_(two_x);
 
         // Compute 2*sigmoid(2x) - 1
         result = 2.f * sig - sfpi::vConst1;
@@ -61,7 +60,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
     return result;
 }
 
-template <bool is_fp32_acc_to_dest_mode = true>
+template <bool is_fp32_acc_to_dest_mode>
 sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     // Formula found at
     // https://varietyofsound.wordpress.com/2011/02/14/efficient-tanh-computation-using-lamberts-continued-fraction/
@@ -89,7 +88,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     return result;
 }
 
-template <bool is_fp32_acc_to_dest_mode = true>
+template <bool is_fp32_acc_to_dest_mode>
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
     sfpi::vFloat val = sfpi::abs(x);  // set positive
@@ -118,7 +117,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
@@ -159,7 +158,7 @@ inline void calculate_tanh() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
         uint imm0 = 0x1DFF;  // 0.90625*x
@@ -170,8 +169,7 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            // Accurate tanh uses sigmoid which requires reciprocal
-            _init_reciprocal_<false, false>();
+            sigmoid_init<false>();
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
