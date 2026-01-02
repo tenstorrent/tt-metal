@@ -6,7 +6,6 @@
 
 #include <optional>
 
-#include <fmt/core.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
@@ -15,18 +14,6 @@
 #include "layernorm_post_all_gather.hpp"
 
 namespace ttnn::operations::normalization::detail {
-
-void bind_normalization_layernorm_distributed_program_config(nb::module_& mod) {
-    nb::class_<LayerNormDistributedDefaultProgramConfig>(mod, "LayerNormDistributedDefaultProgramConfig")
-        .def(
-            nb::init<bool, bool>(),
-            nb::kw_only(),
-            nb::arg("legacy_reduction").noconvert() = false,
-            nb::arg("legacy_rsqrt").noconvert() = false)
-        .def("__repr__", [](const LayerNormDistributedDefaultProgramConfig& config) {
-            return fmt::format("{}", config);
-        });
-}
 
 void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
@@ -57,7 +44,6 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
                 residual_input_tensor (ttnn.Tensor, optional): the residual input tensor. Defaults to None.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration. Defaults to None.
                 program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
-                distributed_program_config (ttnn.LayerNormDistributedDefaultProgramConfig, optional): the distributed program configuration. Defaults to LayerNormDistributedDefaultProgramConfig().
                 memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
 
               Returns:
@@ -97,7 +83,6 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("distributed_program_config") = nb::cast(LayerNormDistributedDefaultProgramConfig{}),
             nb::arg("memory_config") = nb::none()});
 }
 
@@ -133,7 +118,6 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
                   memory_config (ttnn.MemoryConfig, optional): the memory configuration. Defaults to None.
                   compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration. Defaults to None.
                   program_config (ttnn.ProgramConfig, optional): the program configuration. Defaults to None.
-                  distributed_program_config (ttnn.LayerNormDistributedDefaultProgramConfig, optional): the distributed program configuration. Defaults to LayerNormDistributedDefaultProgramConfig().
                   dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to None.
 
                 Returns:
@@ -185,12 +169,10 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("distributed_program_config") = nb::cast(LayerNormDistributedDefaultProgramConfig{}),
             nb::arg("dtype") = nb::none()});
 }
 
 void bind_normalization_layernorm_distributed(nb::module_& mod) {
-    bind_normalization_layernorm_distributed_program_config(mod);
     bind_normalization_layernorm_pre_all_gather_operation(mod);
     bind_normalization_layernorm_post_all_gather_operation(mod);
 }
