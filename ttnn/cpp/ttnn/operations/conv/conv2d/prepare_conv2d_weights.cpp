@@ -2148,22 +2148,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
                     params.full_inner_dim,
                     weight_tensor_.dtype());
             } else if (input_parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-                log_info(
-                    tt::LogOp,
-                    "WIDTH_SHARDED weight blocks: block_h_ntiles={}, block_w_ntiles={}, enable_activation_reuse={}",
-                    params.weight_block_h_ntiles,
-                    params.weight_block_w_ntiles,
-                    params.enable_activation_reuse);
-                log_info(
-                    tt::LogOp,
-                    "weight_tensor_ dims before convert_conv_weight_tensor_to_special_padding_tiled_layout: {}",
-                    weight_tensor_.logical_shape());
-                weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
-                    weight_tensor_,
-                    params.weight_block_h_ntiles,
-                    params.weight_block_w_ntiles,
-                    params.enable_activation_reuse,
-                    weight_tensor_.dtype());
+                weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
+                    weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
             } else {
                 TT_THROW("Unsupported conv weights params : {}", params);
             }
