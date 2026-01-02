@@ -66,10 +66,10 @@ Conversely, accessing matrix elements column-by-column is cache-unfriendly becau
 
 **Implications for Matrix Multiplication**
 
-In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] = Σₖ A[i][k] * B[k][j]``:
-Assuming i, j, k loop order:
-- Accessing matrix **A** is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
-- Accessing matrix **B** is not cache-friendly because memory accesses skip whole matrix rows for two consecutive values of ``k``.
+In the standard matrix multiplication algorithm ``C = A * B``, where :math:`C[i][j] = \sum_k A[i][k] \cdot B[k][j]`, and assuming ``i``, ``j``, ``k`` loop order:
+
+* Accessing matrix **A** is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
+* Accessing matrix **B** is not cache-friendly because memory accesses skip whole matrix rows for two consecutive values of ``k``.
 
 This asymmetry significantly impacts performance and motivates various optimization techniques such as loop reordering or tiling.
 
@@ -963,7 +963,7 @@ Matrix Multiplication in TT-Metalium
 Now that you have a basic understanding of using the TT-Metalium APIs and building data movement and compute kernels,
 we can look at a more complex example of matrix multiplication.
 As described earlier, matrix multiplication can be decomposed into a series of tile multiplications via tiling.
-In exercise 1, you implemented a tiled version of matrix multiplication by identifying appropriate indices in the input and output matrices,
+In Exercise 1, you implemented a tiled version of matrix multiplication by identifying appropriate indices in the input and output matrices,
 which were organized in a row-major layout, and then performing the necessary arithmetic operations on these smaller tiles.
 We will now show how the same can be achieved in TT-Metalium, while taking advantage of the built-in tiled memory layout.
 
@@ -1070,7 +1070,7 @@ Start by copying the files from the ``lab_eltwise_binary`` directory into a new 
 You will need to make the following changes:
 
 1. Update the host program to create input vectors of appropriate sizes for matrix multiplication, and copy golden reference matrix multiplication you created in
-   exercise 1 to verify the results. Similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
+   Exercise 1 to verify the results. Similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
    pass required parameters to kernels.
 
 2. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
@@ -1095,7 +1095,7 @@ You will need to make the following changes:
 
 6. Update ``CMakeLists.txt`` in the parent folder to add the new subdirectory to the list of subdirectories to build.
 
-7. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in exercise 1.
+7. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in Exercise 1.
    Note that because of limited precision of bfloat16, the results may not be exactly the same as the golden reference, but they should be
    numerically close (relative differences on the order of a few percent for input data in the range of 0-1).
 
