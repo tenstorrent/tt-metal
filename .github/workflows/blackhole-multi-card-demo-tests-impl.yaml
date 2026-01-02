@@ -219,7 +219,7 @@ jobs:
           # Filter based on model input
           model_filter="${{ inputs.model }}"
           if [ "$model_filter" == "all" ]; then
-            filtered_tests="$all_tests"
+            filtered_tests=$(echo "$all_tests" | jq -c '.')
           else
             filtered_tests=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"$model_filter\")]")
           fi
@@ -362,7 +362,7 @@ jobs:
 
           # Then filter by model if not 'all'
           if [ "$MODEL_FILTER" == "all" ]; then
-            filtered_tests="$filtered_by_runner"
+            filtered_tests=$(echo "$filtered_by_runner" | jq -c '.')
           else
             filtered_tests=$(echo "$filtered_by_runner" | jq -c "[.[] | select(.model == \"$MODEL_FILTER\")]")
           fi
