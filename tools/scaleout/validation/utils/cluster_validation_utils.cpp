@@ -412,7 +412,7 @@ LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
 
 void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_metrics) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto my_rank = *distributed_context.rank();
 
     std::vector<uint8_t> serialized_link_metrics;
@@ -1061,7 +1061,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 }
 
 void point_to_point_barrier(const ResetPair& reset_pair) {
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     TT_FATAL(
         *distributed_context.rank() == reset_pair.src_rank || *distributed_context.rank() == reset_pair.dst_rank,
         "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
@@ -1119,7 +1119,7 @@ void forward_link_reset_metadata_from_controller(
     std::vector<EthChannelIdentifier>& exit_nodes_to_reset,
     std::vector<ResetPair>& reset_pairs) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [rank, exit_nodes] : ordered_exit_nodes) {
@@ -1220,9 +1220,9 @@ void reset_local_ethernet_links(
                 auto src_chan = eth_connection.src_chan;
                 auto dst_chan = eth_connection.dst_chan;
 
-                if (reset_cores[*dst_asic_id].find(dst_chan) != reset_cores[*dst_asic_id].end()) {
+                if (reset_cores[*dst_asic_id].contains(dst_chan)) {
                     TT_FATAL(
-                        reset_cores[*asic_id].find(src_chan) != reset_cores[*asic_id].end(),
+                        reset_cores[*asic_id].contains(src_chan),
                         "Expected channel {} on ASIC {} to already be reset",
                         src_chan,
                         *asic_id);
@@ -1272,8 +1272,7 @@ void get_cross_node_ethernet_links_to_reset(
                 // These links are being retrained for the second time if the current dst_asic was paired with the
                 // current src_asic in a previous iteration.
                 // In this case, we skip the link reset.
-                if (paired_asic_ids.find(*dst_asic_id) != paired_asic_ids.end() and
-                    paired_asic_ids[*dst_asic_id].find(*asic_id) != paired_asic_ids[*dst_asic_id].end()) {
+                if (paired_asic_ids.contains(*dst_asic_id) and paired_asic_ids[*dst_asic_id].contains(*asic_id)) {
                     continue;
                 }
                 paired_asic_ids[*asic_id].insert(*dst_asic_id);
@@ -1424,7 +1423,7 @@ AsicTopology generate_asic_topology_from_connections(
             src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
             dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
-        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
+        if (!visited[src_asic_id].contains(dst_asic_id)) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
                  {EthConnection(
@@ -1435,7 +1434,7 @@ AsicTopology generate_asic_topology_from_connections(
             asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
                 *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
         }
-        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
+        if (!visited[dst_asic_id].contains(src_asic_id)) {
             asic_topology[dst_asic_id].push_back(
                 {src_asic_id,
                  {EthConnection(
@@ -1471,7 +1470,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
 
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     TT_FATAL(
-        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        asic_descriptors.contains(dst_asic_id),
         "Could not find ASIC descriptor for destination ASIC ID: {}",
         dst_asic_id);
 

@@ -17,6 +17,9 @@ Description:
 
     Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
     with TT_TRIAGE_COLOR environment variable (0=disable, 1=enable).
+
+Owner:
+    tt-vjovanovic
 """
 
 from triage import ScriptConfig, log_check_risc, run_script

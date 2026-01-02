@@ -176,7 +176,11 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     bool mirror_kernel) {
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
+    // Use weights_dtype from config if set, otherwise use weight tensor's dtype
+    DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
+    DeviceComputeKernelConfig compute_config =
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
     TT_ASSERT(
         weights_format == "IOHW",
         "PyTorch expects weights for ConvTranspose2D in IOHW format. If you have passed the correct weights, then make "
@@ -236,7 +240,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({in_channels, out_channels / groups, kernel_size[0], kernel_size[1]}),
                 tt::tt_metal::TensorLayout(
-                    conv_config.weights_dtype.value(),
+                    weight_dtype,
                     tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                     MemoryConfig{
                         TensorMemoryLayout::INTERLEAVED,
@@ -249,7 +253,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
                 tt::tt_metal::TensorSpec(
                     ttnn::Shape({1, 1, 1, out_channels}),
                     tt::tt_metal::TensorLayout(
-                        conv_config.weights_dtype.value(),
+                        weight_dtype,
                         tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
                         MemoryConfig{
                             TensorMemoryLayout::INTERLEAVED,

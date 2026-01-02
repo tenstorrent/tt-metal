@@ -185,6 +185,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         make_process<std::vector<Tensor>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<Tensor>>, &GraphProcessor::begin_function_process>(),
         make_process<std::vector<std::optional<const Tensor>>, &GraphProcessor::begin_function_process>(),
+        make_process<std::vector<std::reference_wrapper<const Tensor>>, &GraphProcessor::begin_function_process>(),
         make_process<Tensor, &GraphProcessor::begin_function_process>(),
         make_process<const Tensor, &GraphProcessor::begin_function_process>(),
         make_process<std::optional<Tensor>, &GraphProcessor::begin_function_process>(),
@@ -318,7 +319,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     std::uint64_t tensor_id = t.get_id().value();
-    auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
+    node_id tensor_counter = tensor_id_to_counter.contains(tensor_id) ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
@@ -326,7 +327,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         {kTensorId, fmt::format("{}", tensor_id)},
     };
 
-    if (tensor_id_to_counter.count(tensor_id) == 0) {
+    if (!tensor_id_to_counter.contains(tensor_id)) {
         int stacking_level = static_cast<int>(current_op_id.size()) - 1;
         graph.push_back(Vertex{
             .counter = tensor_counter,
@@ -380,6 +381,10 @@ void GraphProcessor::begin_function_process(const Tensor& tensor) {
     node_id tensor_node_id = add_tensor(tensor);
     graph[tensor_node_id].connections.push_back(current_op_id.top());
     current_input_tensors.push_back(tensor_node_id);
+}
+
+void GraphProcessor::begin_function_process(const std::reference_wrapper<const Tensor>& tensor_ref) {
+    begin_function_process(tensor_ref.get());
 }
 
 template <typename T>
