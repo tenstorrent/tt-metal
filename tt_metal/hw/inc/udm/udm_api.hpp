@@ -42,6 +42,87 @@ FORCE_INLINE bool dest_is_local(uint32_t dest_fabric_mesh_id, uint32_t dest_fabr
     return (my_fabric_mesh_id == dest_fabric_mesh_id) && (my_fabric_chip_id == dest_fabric_chip_id);
 }
 
+// ==================== Implementation Functions ====================
+
+/**
+ * @brief Implementation of async read (handles both local and remote)
+ *
+ * @param fabric_mesh_id Fabric mesh ID of destination
+ * @param fabric_chip_id Fabric chip ID of destination
+ * @param noc_addr NOC address of destination
+ * @param local_addr Local L1 address to receive the data
+ * @param size Size of data to read
+ */
+FORCE_INLINE void async_read_impl(
+    uint32_t fabric_mesh_id, uint32_t fabric_chip_id, uint64_t noc_addr, uint32_t local_addr, uint32_t size) {
+    if (dest_is_local(fabric_mesh_id, fabric_chip_id)) {
+        // Local transaction - use NOC directly
+        noc_async_read(noc_addr, local_addr, size);
+    } else {
+        // Remote transaction - use fabric
+        tt::tt_fabric::udm::fabric_fast_read_any_len(fabric_chip_id, fabric_mesh_id, noc_addr, local_addr, size);
+    }
+}
+
+/**
+ * @brief Implementation of async write (handles both local and remote)
+ *
+ * @tparam posted Posted write flag (0 = non-posted, 1 = posted)
+ * @param fabric_mesh_id Fabric mesh ID of destination
+ * @param fabric_chip_id Fabric chip ID of destination
+ * @param noc_addr NOC address of destination
+ * @param src_addr Local L1 address to send data from
+ * @param size Size of data to write
+ */
+template <uint8_t posted = 0>
+FORCE_INLINE void async_write_impl(
+    uint32_t fabric_mesh_id, uint32_t fabric_chip_id, uint64_t noc_addr, uint32_t src_addr, uint32_t size) {
+    if (dest_is_local(fabric_mesh_id, fabric_chip_id)) {
+        // Local transaction - use NOC directly
+        noc_async_write(src_addr, noc_addr, size);
+    } else {
+        // Remote transaction - use fabric
+        tt::tt_fabric::udm::fabric_fast_write_any_len(
+            fabric_chip_id,
+            fabric_mesh_id,
+            src_addr,
+            noc_addr,
+            size,
+            false,  // multicast
+            1,      // num_dests
+            0,      // trid
+            posted);
+    }
+}
+
+/**
+ * @brief Implementation of semaphore increment (handles both local and remote)
+ *
+ * @tparam posted Posted atomic flag (0 = non-posted, 1 = posted)
+ * @param fabric_mesh_id Fabric mesh ID of destination
+ * @param fabric_chip_id Fabric chip ID of destination
+ * @param noc_addr NOC address of destination semaphore
+ * @param incr_val Value to increment the semaphore by
+ * @param noc NOC index to use
+ */
+template <uint8_t posted = 0>
+FORCE_INLINE void semaphore_inc_impl(
+    uint32_t fabric_mesh_id, uint32_t fabric_chip_id, uint64_t noc_addr, uint32_t incr_val, uint8_t noc) {
+    if (dest_is_local(fabric_mesh_id, fabric_chip_id)) {
+        // Local transaction - use NOC atomic increment
+        noc_semaphore_inc<posted>(noc_addr, incr_val, noc);
+    } else {
+        // Remote transaction - use fabric atomic increment
+        tt::tt_fabric::udm::fabric_fast_atomic_inc(
+            fabric_chip_id,
+            fabric_mesh_id,
+            incr_val,
+            noc_addr,
+            0,  // trid
+            posted);
+    }
+}
+
 // ==================== Gcore Accessor Management ====================
 
 /**
@@ -99,15 +180,8 @@ FORCE_INLINE void async_read(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
-
-    if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
-        // Local transaction - use NOC directly
-        noc_async_read(fabric_noc_info.noc_addr, src_addr, size);
-    } else {
-        // Remote transaction - use fabric
-        tt::tt_fabric::udm::fabric_fast_read_any_len(
-            fabric_noc_info.fabric_chip_id, fabric_noc_info.fabric_mesh_id, fabric_noc_info.noc_addr, src_addr, size);
-    }
+    async_read_impl(
+        fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id, fabric_noc_info.noc_addr, src_addr, size);
 }
 
 /**
@@ -139,23 +213,8 @@ FORCE_INLINE void async_write(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
-
-    if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
-        // Local transaction - use NOC directly
-        noc_async_write(src_addr, fabric_noc_info.noc_addr, size);
-    } else {
-        // Remote transaction - use fabric
-        tt::tt_fabric::udm::fabric_fast_write_any_len(
-            fabric_noc_info.fabric_chip_id,
-            fabric_noc_info.fabric_mesh_id,
-            src_addr,
-            fabric_noc_info.noc_addr,
-            size,
-            false,  // multicast
-            1,      // num_dests
-            0,      // trid
-            posted);
-    }
+    async_write_impl<posted>(
+        fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id, fabric_noc_info.noc_addr, src_addr, size);
 }
 
 /**
@@ -184,15 +243,8 @@ FORCE_INLINE void async_read(
     const CoordT& coord, uint32_t src_addr, uint32_t size, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
-
-    if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
-        // Local transaction - use NOC directly
-        noc_async_read(fabric_noc_info.noc_addr, src_addr, size);
-    } else {
-        // Remote transaction - use fabric
-        tt::tt_fabric::udm::fabric_fast_read_any_len(
-            fabric_noc_info.fabric_chip_id, fabric_noc_info.fabric_mesh_id, fabric_noc_info.noc_addr, src_addr, size);
-    }
+    async_read_impl(
+        fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id, fabric_noc_info.noc_addr, src_addr, size);
 }
 
 /**
@@ -223,23 +275,8 @@ FORCE_INLINE void async_write(
     const CoordT& coord, uint32_t src_addr, uint32_t size, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
-
-    if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
-        // Local transaction - use NOC directly
-        noc_async_write(src_addr, fabric_noc_info.noc_addr, size);
-    } else {
-        // Remote transaction - use fabric
-        tt::tt_fabric::udm::fabric_fast_write_any_len(
-            fabric_noc_info.fabric_chip_id,
-            fabric_noc_info.fabric_mesh_id,
-            src_addr,
-            fabric_noc_info.noc_addr,
-            size,
-            false,  // multicast
-            1,      // num_dests
-            0,      // trid
-            posted);
-    }
+    async_write_impl<posted>(
+        fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id, fabric_noc_info.noc_addr, src_addr, size);
 }
 
 // ==================== Semaphore APIs ====================
@@ -272,20 +309,8 @@ FORCE_INLINE void semaphore_inc(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
-
-    if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
-        // Local transaction - use NOC atomic increment
-        noc_semaphore_inc<posted>(fabric_noc_info.noc_addr, incr_val, noc);
-    } else {
-        // Remote transaction - use fabric atomic increment
-        tt::tt_fabric::udm::fabric_fast_atomic_inc(
-            fabric_noc_info.fabric_chip_id,
-            fabric_noc_info.fabric_mesh_id,
-            incr_val,
-            fabric_noc_info.noc_addr,
-            0,  // trid
-            posted);
-    }
+    semaphore_inc_impl<posted>(
+        fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id, fabric_noc_info.noc_addr, incr_val, noc);
 }
 
 /**
@@ -314,20 +339,8 @@ template <
 FORCE_INLINE void semaphore_inc(const CoordT& coord, uint32_t incr_val, uint32_t offset = 0, uint8_t noc = noc_index) {
     auto [accessor, is_init] = get_or_init_gcore_accessor();
     auto fabric_noc_info = accessor.get_fabric_node_and_noc_addr(coord, offset, noc);
-
-    if (dest_is_local(fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id)) {
-        // Local transaction - use NOC atomic increment
-        noc_semaphore_inc<posted>(fabric_noc_info.noc_addr, incr_val, noc);
-    } else {
-        // Remote transaction - use fabric atomic increment
-        tt::tt_fabric::udm::fabric_fast_atomic_inc(
-            fabric_noc_info.fabric_chip_id,
-            fabric_noc_info.fabric_mesh_id,
-            incr_val,
-            fabric_noc_info.noc_addr,
-            0,  // trid
-            posted);
-    }
+    semaphore_inc_impl<posted>(
+        fabric_noc_info.fabric_mesh_id, fabric_noc_info.fabric_chip_id, fabric_noc_info.noc_addr, incr_val, noc);
 }
 
 /**
