@@ -6,9 +6,9 @@ from typing import Optional, Dict
 from framework.sweeps_logger import sweeps_logger as logger
 
 
-def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch: bool = True) -> Optional[int]:
+def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch: bool = True) -> Optional[Dict]:
     """
-    Capture peak L1 memory usage using graph trace.
+    Capture peak L1 memory usage per core using graph trace.
 
     Args:
         test_module: Sweep test module with run() function
@@ -18,10 +18,22 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
                         If False, use NORMAL mode (actual execution, real addresses)
 
     Returns:
-        Peak L1 memory in bytes, or None if capture fails
+        Dict with per-core memory metrics:
+        {
+            'peak_total_per_core': int,  # Total peak per core (bytes)
+            'peak_cb_per_core': int,     # CB peak per core (bytes)
+            'peak_l1_per_core': int,     # L1 buffers peak per core (bytes)
+            'num_cores': int,            # Number of cores
+            'peak_total': int,           # Total across all cores (for backwards compat)
+        }
+        or None if capture fails
     """
     try:
         import ttnn
+
+        # Get core count from device
+        grid_size = device.compute_with_storage_grid_size()
+        num_cores = grid_size.x * grid_size.y
 
         mode = ttnn.graph.RunMode.NO_DISPATCH if use_no_dispatch else ttnn.graph.RunMode.NORMAL
         ttnn.graph.begin_graph_capture(mode)
@@ -34,9 +46,17 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
             logger.debug(f"Test execution failed during memory capture: {e}")
 
         captured_graph = ttnn.graph.end_graph_capture()
-        peak_l1 = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)
 
-        return peak_l1
+        # Use per-core API (new, recommended)
+        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, num_cores)
+
+        return {
+            "peak_total_per_core": usage.peak_total,
+            "peak_cb_per_core": usage.peak_cb,
+            "peak_l1_per_core": usage.peak_l1,
+            "num_cores": num_cores,
+            "peak_total": usage.peak_total * num_cores,  # For backwards compatibility
+        }
 
     except Exception as e:
         # If memory capture fails, return None but don't fail the test
@@ -44,7 +64,7 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         return None
 
 
-def capture_peak_memory_with_cache_comparison(test_module, test_vector: dict, device) -> Dict[str, Optional[int]]:
+def capture_peak_memory_with_cache_comparison(test_module, test_vector: dict, device) -> Dict[str, Optional[Dict]]:
     """
     Capture peak L1 memory for both uncached and cached runs.
 

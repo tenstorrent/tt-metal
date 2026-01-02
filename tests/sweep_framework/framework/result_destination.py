@@ -185,18 +185,36 @@ def _add_device_metrics(metrics: set, raw: dict[str, Any]) -> None:
 
 def _add_memory_metrics(metrics: set, raw: dict[str, Any]) -> None:
     """Extract memory metrics from result dict and add to metrics set"""
-    peak_memory = raw.get("peak_l1_memory")
 
+    # New per-core metrics (primary)
+    _add_metric(metrics, "peak_l1_memory_per_core_bytes", raw.get("peak_l1_memory_per_core"))
+    _add_metric(metrics, "peak_cb_per_core_bytes", raw.get("peak_cb_per_core"))
+    _add_metric(metrics, "peak_l1_buffers_per_core_bytes", raw.get("peak_l1_buffers_per_core"))
+    _add_metric(metrics, "num_cores", raw.get("num_cores"))
+
+    # Per-core with cache comparison
+    _add_metric(metrics, "peak_l1_memory_per_core_uncached_bytes", raw.get("peak_l1_memory_per_core_uncached"))
+    _add_metric(metrics, "peak_l1_memory_per_core_cached_bytes", raw.get("peak_l1_memory_per_core_cached"))
+    _add_metric(metrics, "peak_cb_per_core_uncached_bytes", raw.get("peak_cb_per_core_uncached"))
+    _add_metric(metrics, "peak_cb_per_core_cached_bytes", raw.get("peak_cb_per_core_cached"))
+    _add_metric(metrics, "peak_l1_buffers_per_core_uncached_bytes", raw.get("peak_l1_buffers_per_core_uncached"))
+    _add_metric(metrics, "peak_l1_buffers_per_core_cached_bytes", raw.get("peak_l1_buffers_per_core_cached"))
+
+    # Total memory (for backwards compatibility and context)
+    _add_metric(metrics, "peak_l1_memory_total_bytes", raw.get("peak_l1_memory_total"))
+
+    # Legacy handling - keep for backwards compatibility
+    peak_memory = raw.get("peak_l1_memory")
     if peak_memory is not None:
         if isinstance(peak_memory, dict):
-            # Cache comparison mode - two separate metrics
+            # Old cache comparison mode - nested dict
             _add_metric(metrics, "peak_l1_memory_uncached_bytes", peak_memory.get("uncached"))
             _add_metric(metrics, "peak_l1_memory_cached_bytes", peak_memory.get("cached"))
-        else:
-            # Single run mode - one metric
+        elif isinstance(peak_memory, int):
+            # Old single run mode - int
             _add_metric(metrics, "peak_l1_memory_bytes", peak_memory)
 
-    # Also capture explicit fields when present (back/forward compat)
+    # Also capture explicit legacy fields when present
     _add_metric(metrics, "peak_l1_memory_uncached_bytes", raw.get("peak_l1_memory_uncached"))
     _add_metric(metrics, "peak_l1_memory_cached_bytes", raw.get("peak_l1_memory_cached"))
 

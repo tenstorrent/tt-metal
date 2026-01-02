@@ -147,7 +147,7 @@ def simplify_device_perf(perf: Optional[dict]) -> dict:
 
 def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, int]]]:
+) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, Dict]]]:
     # Capture peak memory (NO_DISPATCH mode) if enabled
     peak_memory_dict = None
     if getattr(config, "measure_memory", False):
@@ -225,7 +225,7 @@ def run_with_cache_comparison(
 
 def run_single(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[int]]:
+) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[Dict]]:
     status, message, e2e_ms = execute_test(test_module, test_vector, device)
 
     # Capture peak memory if enabled
