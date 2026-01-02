@@ -160,6 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
+      has_tests: ${{ steps.generate.outputs.has_tests }}
     steps:
       - name: Generate filtered matrix
         id: generate
@@ -225,10 +226,19 @@ jobs:
           fi
 
           echo "Filtered tests: $filtered_tests"
-          echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
+
+          # Check if there are any tests to run
+          test_count=$(echo "$filtered_tests" | jq 'length')
+          if [ "$test_count" -eq 0 ]; then
+            echo "No tests match the filter criteria"
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
+          fi
   multi-card-demo-tests-large:
     needs: generate-large-models-matrix
-    if: ${{ inputs.num_devices >= 4 && (inputs.model == 'all' || inputs.model == 'llama3.3-70b' || inputs.model == 'qwen3-32b') }}
+    if: ${{ needs.generate-large-models-matrix.outputs.has_tests == 'true' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-large-models-matrix.outputs.matrix) }}
@@ -319,6 +329,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
+      has_tests: ${{ steps.generate.outputs.has_tests }}
     steps:
       - name: Generate filtered matrix
         id: generate
@@ -368,10 +379,19 @@ jobs:
           fi
 
           echo "Filtered tests: $filtered_tests"
-          echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
+
+          # Check if there are any tests to run
+          test_count=$(echo "$filtered_tests" | jq 'length')
+          if [ "$test_count" -eq 0 ]; then
+            echo "No tests match the filter criteria"
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
+          fi
   multi-card-demo-tt_dit-tests:
     needs: generate-tt-dit-matrix
-    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
+    if: ${{ needs.generate-tt-dit-matrix.outputs.has_tests == 'true' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-tt-dit-matrix.outputs.matrix) }}
