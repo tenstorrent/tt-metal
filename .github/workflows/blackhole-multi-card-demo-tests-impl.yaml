@@ -28,9 +28,14 @@ on:
         required: false
         type: boolean
         default: false
+      model:
+        required: false
+        type: string
+        default: 'all'
 
 jobs:
   multi-card-demo-tests:
+    if: ${{ inputs.model == 'all' || inputs.model == 'llama3.1-8b' }}
     strategy:
       fail-fast: false
       matrix:
@@ -150,36 +155,83 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+  generate-large-models-matrix:
+    if: ${{ inputs.num_devices >= 4 && (inputs.model == 'all' || inputs.model == 'llama3.3-70b' || inputs.model == 'qwen3-32b') }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate filtered matrix
+        id: generate
+        run: |
+          # Define all test groups
+          all_tests='[
+            {
+              "name": "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance",
+              "model": "llama3.3-70b",
+              "arch": "blackhole",
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k \"performance and ci-32\" --max_seq_len 131072",
+              "owner_id": "U03PUAKE719",
+              "owner_name": "Miguel Tairum"
+            },
+            {
+              "name": "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)",
+              "model": "llama3.3-70b",
+              "arch": "blackhole",
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k \"prefill-llama3_70b-2-131072-2-2-1-1-False\"",
+              "owner_id": "U08GELBB1AP",
+              "owner_name": "Ambrose Ling"
+            },
+            {
+              "name": "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)",
+              "model": "llama3.3-70b",
+              "arch": "blackhole",
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k \"decode-llama3_70b-2-131072-2-10-1-1-False\"",
+              "owner_id": "U08GELBB1AP",
+              "owner_name": "Ambrose Ling"
+            },
+            {
+              "name": "qwen3-32b ${{ inputs.runner-label }} batch-32 performance",
+              "model": "qwen3-32b",
+              "arch": "blackhole",
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k \"performance and ci-32\" --max_seq_len 40960",
+              "owner_id": "U08GELBB1AP",
+              "owner_name": "Ambrose Ling"
+            },
+            {
+              "name": "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill",
+              "model": "qwen3-32b",
+              "arch": "blackhole",
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k \"prefill-qwen3_32b-2-40960-2-2-1-1-False\"",
+              "owner_id": "U08GELBB1AP",
+              "owner_name": "Ambrose Ling"
+            },
+            {
+              "name": "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode",
+              "model": "qwen3-32b",
+              "arch": "blackhole",
+              "cmd": "HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k \"decode-qwen3_32b-2-40960-2-10-1-1-False\"",
+              "owner_id": "U08GELBB1AP",
+              "owner_name": "Ambrose Ling"
+            }
+          ]'
+
+          # Filter based on model input
+          model_filter="${{ inputs.model }}"
+          if [ "$model_filter" == "all" ]; then
+            filtered_tests=$(echo "$all_tests" | jq -c '.')
+          else
+            filtered_tests=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"$model_filter\")]")
+          fi
+
+          echo "Filtered tests: $filtered_tests"
+          echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
   multi-card-demo-tests-large:
-    if: ${{ inputs.num_devices >= 4 }}
+    needs: generate-large-models-matrix
+    if: ${{ inputs.num_devices >= 4 && (inputs.model == 'all' || inputs.model == 'llama3.3-70b' || inputs.model == 'qwen3-32b') }}
     strategy:
       fail-fast: false
-      matrix:
-        test-group:
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
-            owner_id: U03PUAKE719 # Miguel Tairum
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "qwen3-32b ${{ inputs.runner-label }} batch-32 performance"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 40960
-            owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-40960-2-2-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "qwen3-32b ${{ inputs.runner-label }} batch-1 TP device perf decode"
-            arch: blackhole
-            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-32B pytest models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-40960-2-10-1-1-False"
-            owner_id: U08GELBB1AP # Ambrose Ling
+      matrix: ${{ fromJSON(needs.generate-large-models-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
@@ -262,27 +314,67 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+  generate-tt-dit-matrix:
+    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate filtered matrix
+        id: generate
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          MODEL_FILTER: ${{ inputs.model }}
+        run: |
+          # Define all test groups with model and runner-label fields for filtering
+          all_tests='[
+            {
+              "name": "Flux.1-dev P300-viommu performance (1x2sp0tp1)",
+              "model": "flux.1-dev",
+              "arch": "blackhole",
+              "runner-label": "P300-viommu",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"1x2sp0tp1\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            },
+            {
+              "name": "Flux.1-dev BH-QB-GE performance (2x2sp0tp1)",
+              "model": "flux.1-dev",
+              "arch": "blackhole",
+              "runner-label": "BH-QB-GE",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"2x2sp0tp1\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            },
+            {
+              "name": "Wan2.2-T2V-A14B BH-QB-GE performance",
+              "model": "wan2.2-t2v-a14b",
+              "arch": "blackhole",
+              "runner-label": "BH-QB-GE",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"1x4sp0tp1 and resolution_480p\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            }
+          ]'
+
+          # Filter by runner-label first
+          filtered_by_runner=$(echo "$all_tests" | jq -c "[.[] | select(.[\"runner-label\"] == \"$RUNNER_LABEL\")]")
+
+          # Then filter by model if not 'all'
+          if [ "$MODEL_FILTER" == "all" ]; then
+            filtered_tests=$(echo "$filtered_by_runner" | jq -c '.')
+          else
+            filtered_tests=$(echo "$filtered_by_runner" | jq -c "[.[] | select(.model == \"$MODEL_FILTER\")]")
+          fi
+
+          echo "Filtered tests: $filtered_tests"
+          echo "matrix={\"test-group\":$filtered_tests}" >> $GITHUB_OUTPUT
   multi-card-demo-tt_dit-tests:
-    if: ${{ inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE' }}
+    needs: generate-tt-dit-matrix
+    if: ${{ (inputs.runner-label == 'P300-viommu' || inputs.runner-label == 'BH-QB-GE') && (inputs.model == 'all' || inputs.model == 'flux.1-dev' || inputs.model == 'wan2.2-t2v-a14b') }}
     strategy:
       fail-fast: false
-      matrix:
-        test-group:
-          - name: "Flux.1-dev ${{ inputs.runner-label }} performance"
-            arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then
-                HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
-              else
-                HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
-              fi
-            owner_id: U08TED0JM9D # Samuel Adesoye
-          - name: "Wan2.2-T2V-A14B ${{ inputs.runner-label }} performance"
-            arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then echo "Skipping - not supported on viommu"; exit 0; fi
-              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x4sp0tp1 and resolution_480p"
-            owner_id: U08TED0JM9D # Samuel Adesoye
+      matrix: ${{ fromJSON(needs.generate-tt-dit-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
