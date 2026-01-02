@@ -303,6 +303,16 @@ def test_qwenimage_pipeline_performance(
                 ("vae", measurements["vae_decoding_time"], expected_metrics["vae_decoding_time"]),
                 ("run", measurements["total_time"], expected_metrics["total_time"]),
             ]:
+                # Hack to add data to the profiler.
+                from datetime import datetime, timedelta
+                import pytz
+
+                current_time = datetime.now(tz=pytz.UTC)
+                benchmark_profiler.start_times[(iteration, step_name)] = current_time
+                benchmark_profiler.end_times[(iteration, step_name)] = current_time + timedelta(
+                    seconds=measurement_value
+                )
+
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=iteration,
