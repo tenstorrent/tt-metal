@@ -115,8 +115,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
 
-    uint32_t num_tiles_per_block_in0 = per_core_M_per_batch * (transpose_a ? 1 : K);
-    uint32_t num_tiles_per_block_in1 = K * per_core_N;
     uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
@@ -458,17 +456,45 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     const auto cores = grid_to_cores(num_cores, core_range.x, core_range.y, row_major);
 
+    // Work can be split in two ways:
+    // (a) by batch: each core processes all M,N dimensions of b number of batches
+    // (b) by M dimension: each core processes a subset of M dimension within batches
+    // In the general case, some cores may have work split by batch while others have work
+    // split over the M dimension. We compute each core's start tile based on its global
+    // position in the work distribution.
+
+    // Compute the number of M and N blocks per batch
+    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    uint32_t n_blocks_per_batch = N / per_core_N;
+    uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
+
+    // Strides for computing start tile IDs
+    uint32_t in0_batch_stride = M * K;
+    uint32_t in1_batch_stride = K * N;
+    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
+
     for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
         uint32_t num_output_blocks_per_core =
             i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
-        // Write runtime args to device
-        mm_reader_args[1] = num_blocks_written * num_tiles_per_block_in0;          // in0_tensor_start_tile_id
-        mm_reader_args[2] = num_output_blocks_per_core;                            // batch
+        // Compute starting batch and position within batch based on global block position
+        uint32_t start_batch = num_blocks_written / blocks_per_batch;
+        uint32_t block_within_batch = num_blocks_written % blocks_per_batch;
+        uint32_t start_m_block = block_within_batch / n_blocks_per_batch;
+        uint32_t start_n_block = block_within_batch % n_blocks_per_batch;
 
-        mm_writer_args[1] =
-            (num_blocks_written * per_core_M_per_batch / M) * num_tiles_per_block_in1;  // in1_tensor_start_tile_id
+        // Compute start tile IDs based on batch and block position
+        uint32_t in0_start_tile_id = (start_batch * in0_batch_stride) + (start_m_block * in0_m_block_stride);
+        uint32_t in1_start_tile_id =
+            (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
+
+        // Write runtime args to device
+        mm_reader_args[1] = in0_start_tile_id;           // in0_tensor_start_tile_id
+        mm_reader_args[2] = num_output_blocks_per_core;  // batch
+
+        mm_writer_args[1] = in1_start_tile_id;                             // in1_tensor_start_tile_id
         mm_writer_args[2] = num_output_blocks_per_core;                    // batch
         mm_writer_args[4] = num_blocks_written * num_tiles_per_block_out;  // out_tensor_start_tile_id
 

@@ -5,6 +5,9 @@
 #include "reports.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn/reports.hpp"
 #include <tt-metalium/allocator.hpp>

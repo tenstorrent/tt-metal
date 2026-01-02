@@ -369,7 +369,7 @@ private:
     MuxConnectionInfo get_mux_connection_info(
         const std::pair<uint32_t, uint32_t>* noc_coords,
         uint32_t mux_channel_id,
-        uint32_t mux_idx,
+        uint32_t connection_region_idx,
         uint32_t stream_id) const;
 
     // Number of mux connections: [0]=local, [1]=downstream_en, [2]=downstream_ws

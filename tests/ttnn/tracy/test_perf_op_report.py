@@ -53,9 +53,7 @@ def run_test_do_post_proc(request, do_postproc):
 def run_test_do_cpp_and_python_post_procs(request):
     assert "command" in request.param, "Bad test setup, command not found in test setup dict"
     assert "name" in request.param, "Bad test setup, name not found in test setup dict"
-    run_device_profiler(
-        request.param["command"], request.param["name"], cpp_post_process=True, python_post_process=True
-    )
+    run_device_profiler(request.param["command"], request.param["name"], python_post_process=True)
     return request
 
 
@@ -70,7 +68,6 @@ def run_test_do_cpp_post_proc(request):
     run_device_profiler(
         request.param["command"],
         request.param["name"],
-        cpp_post_process=True,
         python_post_process=False,
         sum_profiling=sum_profiling,
         op_support_count=op_support_count,

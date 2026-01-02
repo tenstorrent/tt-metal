@@ -127,6 +127,7 @@ jobs:
     with:
       build-type: TSan
       version: 24.04
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
 
@@ -200,6 +201,7 @@ jobs:
     with:
       build-type: ASan
       version: 22.04
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
 
@@ -284,7 +286,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
@@ -313,6 +314,25 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  fabric-cpu-only-unit-tests:
+    needs: [build, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.any-code-changed == 'true'
+        }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0 },
+        ]
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
@@ -362,7 +382,7 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
