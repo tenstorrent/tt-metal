@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <algorithm>
 
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 

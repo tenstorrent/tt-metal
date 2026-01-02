@@ -87,13 +87,11 @@ void kernel_main() {
             const uint32_t src_l1_addr = src_l1_addr_base + (page_in_group * PAGE_SIZE);
             const uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/page_id, /*offset=*/0, /*noc=*/0);
 
-            tt_fabric::fabric_write_chunked<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
-                sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes);
+            // tt_fabric::fabric_write_chunked<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
+            //     sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes);
 
-            // tt_fabric::fabric_write_chunked_nonblocking<decltype(sender), PACKET_HEADER_TYPE,
-            // NocUnicastCommandHeader>(
-            //     sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes, dst_dev_id,
-            //     dst_mesh_id);
+            tt_fabric::fabric_write_chunked_nonblocking<decltype(sender), PACKET_HEADER_TYPE, NocUnicastCommandHeader>(
+                sender, pkt_hdr, dest_noc_addr, src_l1_addr, PAGE_SIZE, max_packet_size_bytes, dst_dev_id, dst_mesh_id);
         }
         noc_async_writes_flushed();
 
