@@ -373,10 +373,20 @@ class FastOperation:
         """
         import re
 
-        lines = original_error.split("\n")
+        def clean(s):
+            return s.replace("ttnn._ttnn.tensor.", "ttnn.").replace("ttnn._ttnn.operations.", "ttnn.")
 
-        # Extract all available signatures (there may be multiple overloads)
-        available_signatures = []
+        def pretty_type(v):
+            t = type(v)
+            if t.__module__ == "builtins":
+                return t.__name__
+            return clean(f"{t.__module__}.{t.__name__}")
+
+        name = self.python_fully_qualified_name.split(".")[-1]
+
+        # Parse signatures from the original error message
+        sigs = []
+        lines = original_error.split("\n")
         i = 0
         while i < len(lines):
             stripped = lines[i].strip()
@@ -390,80 +400,32 @@ class FastOperation:
                         break
                     j += 1
                 signature = " ".join(sig_lines)
-                available_signatures.append(signature)
+
+                # Extract just the parameters from the signature
+                match = re.search(r"__call__\(self,\s*(.+?)\)\s*->", signature)
+                if not match:
+                    match = re.search(r"\(self:[^,]+,\s*(.+?)\)\s*->", signature)
+
+                if match:
+                    params_str = clean(match.group(1).strip())
+                    sigs.append(f"{name}({params_str})")
+
                 i = j + 1
             else:
                 i += 1
 
-        # Format available signatures into clean function signatures
-        formatted_signatures = []
-        for sig in available_signatures:
-            # Remove the numbering and self parameter
-            # Format: "1. (self: ..., param1: type1, ...) -> return_type"
-            # Or nanobind: "1. __call__(self, param1: type1, ...) -> return_type"
-            match = re.search(r"__call__\(self,\s*(.+?)\)\s*->", sig)
-            if not match:
-                match = re.search(r"\(self:[^,]+,\s*(.+?)\)\s*->", sig)
-
-            if match:
-                params_str = match.group(1).strip()
-                # Simplify type names (remove module prefixes for readability)
-                params_str = params_str.replace("ttnn._ttnn.tensor.", "ttnn.")
-                # Build clean signature
-                op_name = self.python_fully_qualified_name.split(".")[-1]
-                formatted_signatures.append(f"  {op_name}({params_str})")
-
-        # Build the "Called with" line showing actual argument types
-        called_with_parts = []
-
-        # Get types for positional arguments
-        for arg in function_args:
-            arg_type = type(arg).__name__
-            if hasattr(arg, "__module__"):
-                module = arg.__module__
-                if module and module != "builtins":
-                    # Simplify type name
-                    full_type = f"{module}.{arg_type}"
-                    if "torch" in module:
-                        arg_type = "torch.Tensor" if arg_type == "Tensor" else full_type
-                    elif "ttnn" in module:
-                        arg_type = "ttnn.Tensor" if arg_type == "Tensor" else full_type
-                    else:
-                        arg_type = full_type
-            called_with_parts.append(arg_type)
-
-        # Build kwargs string
-        kwargs_parts = []
-        for key, value in function_kwargs.items():
-            value_type = type(value).__name__
-            if value is None:
-                kwargs_parts.append(f"{key}=None")
-            elif isinstance(value, bool):
-                kwargs_parts.append(f"{key}={value}")
-            elif isinstance(value, str):
-                kwargs_parts.append(f"{key}='{value}'")
-            else:
-                kwargs_parts.append(f"{key}={value}")
-
-        # Combine called_with line
-        op_name = self.python_fully_qualified_name.split(".")[-1]
-        called_with_str = f"  {op_name}(" + ", ".join(called_with_parts)
-        if kwargs_parts:
-            called_with_str += ", *, " + ", ".join(kwargs_parts)
-        called_with_str += ")"
-
-        # Build final error message
-        enhanced_lines = [
-            f"\n{self.python_fully_qualified_name}(): incompatible function arguments.",
-            "",
-            "Called with:",
-            called_with_str,
-            "",
-            "Available signatures:",
+        # Format the call with actual argument types
+        args = [pretty_type(a) for a in function_args]
+        kwargs = [
+            f"{k}={v!r}" if isinstance(v, (bool, str, type(None))) else f"{k}={v}" for k, v in function_kwargs.items()
         ]
-        enhanced_lines.extend(formatted_signatures if formatted_signatures else ["  (unable to parse signatures)"])
+        called = f"{name}({', '.join(args + kwargs)})"
 
-        return "\n".join(enhanced_lines)
+        return (
+            f"\n{self.python_fully_qualified_name}(): incompatible function arguments.\n\n"
+            f"Called with:\n  {called}\n\n"
+            f"Available signatures:\n  " + "\n  ".join(sigs or ["<unknown>"])
+        )
 
     def __call__(self, *function_args, **function_kwargs):
         cq_id = None
