@@ -20,7 +20,7 @@ Owner:
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ParsedElfFile
-from ttexalens.memory_access import MemoryAccess, L1MemoryAccess
+from ttexalens.memory_access import MemoryAccess
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache
 from run_checks import run as get_run_checks
