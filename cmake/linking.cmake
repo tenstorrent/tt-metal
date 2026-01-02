@@ -142,11 +142,11 @@ check_linker_flag(
     LINKER_SUPPORTS_COMPRESS_ZLIB
 )
 
-if(COMPILER_SUPPORTS_GZ_ZSTD AND LINKER_SUPPORTS_COMPRESS_ZSTD)
-    message(STATUS "Using zstd compressed debug sections")
-    add_compile_options(-gz=zstd)
-    add_link_options(-Wl,--compress-debug-sections=zstd)
-elseif(COMPILER_SUPPORTS_GZ AND LINKER_SUPPORTS_COMPRESS_ZLIB)
+#if(COMPILER_SUPPORTS_GZ_ZSTD AND LINKER_SUPPORTS_COMPRESS_ZSTD)
+#    message(STATUS "Using zstd compressed debug sections")
+#    add_compile_options(-gz=zstd)
+#    add_link_options(-Wl,--compress-debug-sections=zstd)
+if(COMPILER_SUPPORTS_GZ AND LINKER_SUPPORTS_COMPRESS_ZLIB)
     message(STATUS "Using zlib compressed debug sections")
     add_compile_options(-gz)
     add_link_options(-Wl,--compress-debug-sections=zlib)
