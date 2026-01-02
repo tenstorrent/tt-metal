@@ -216,7 +216,7 @@ ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGath
     auto tensor_args =
         OperationType::tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

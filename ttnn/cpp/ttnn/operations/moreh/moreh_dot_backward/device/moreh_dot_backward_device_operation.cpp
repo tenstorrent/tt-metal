@@ -102,6 +102,6 @@ namespace ttnn::prim {
     using OperationType = ::ttnn::operations::moreh::moreh_dot_backward::MorehDotBackwardOperation;
     auto operation_attributes = OperationType::operation_attributes_t{memory_config.value_or(input.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{output_grad, input, other, {input_grad, other_grad}};
-    return ::ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ::ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -26,7 +26,7 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
 std::uint32_t TensAddr::numel() const {
-    return std::accumulate(sh.begin(), sh.end(), 1u, std::multiplies<std::uint32_t>());
+    return std::accumulate(sh.begin(), sh.end(), std::uint32_t{1}, std::multiplies<>{});
 }
 
 int TensAddr::offs(int n, int c, int h, int w) {

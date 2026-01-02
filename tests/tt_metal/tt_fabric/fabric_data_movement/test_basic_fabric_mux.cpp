@@ -612,16 +612,16 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         };
 
         log_info(LogTest, "Waiting for senders to complete");
-        for (auto i = 0; i < devices.size(); i++) {
-            for (const auto& [core, _] : device_senders_map[devices[i]]) {
-                wait_for_worker_completion(devices[i]->get_devices()[0], core);
+        for (const auto& device : devices) {
+            for (const auto& [core, _] : device_senders_map[device]) {
+                wait_for_worker_completion(device->get_devices()[0], core);
             }
         }
 
         log_info(LogTest, "Senders done, waiting for receivers to complete");
-        for (auto i = 0; i < devices.size(); i++) {
-            for (const auto& [core, _] : device_receivers_map[devices[i]]) {
-                wait_for_worker_completion(devices[i]->get_devices()[0], core);
+        for (const auto& device : devices) {
+            for (const auto& [core, _] : device_receivers_map[device]) {
+                wait_for_worker_completion(device->get_devices()[0], core);
             }
         }
 
@@ -649,13 +649,13 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     };
 
     log_info(LogTest, "Programs done, validating results");
-    for (auto i = 0; i < devices.size(); i++) {
-        for (const auto& [core, _] : device_senders_map[devices[i]]) {
-            validate_worker_results(devices[i]->get_devices()[0], core);
+    for (const auto& device : devices) {
+        for (const auto& [core, _] : device_senders_map[device]) {
+            validate_worker_results(device->get_devices()[0], core);
         }
 
-        for (const auto& [core, _] : device_receivers_map[devices[i]]) {
-            validate_worker_results(devices[i]->get_devices()[0], core);
+        for (const auto& [core, _] : device_receivers_map[device]) {
+            validate_worker_results(device->get_devices()[0], core);
         }
     }
 }

@@ -15,8 +15,8 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     bool has_step = false;
-    for (uint32_t i = 0; i < operation_attributes.step.size(); i++) {
-        if (operation_attributes.step[i] != 1) {
+    for (unsigned int step_val : operation_attributes.step) {
+        if (step_val != 1) {
             has_step = true;
             break;
         }
@@ -144,7 +144,7 @@ ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_r
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .output = output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
