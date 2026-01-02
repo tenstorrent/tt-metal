@@ -17,4 +17,4 @@ fi
 
 # Uninstall tt-exalens if already installed
 echo "Installing tt-exalens version: $REF"
-pip install --index-url https://test.pypi.org/simple/ tt-exalens=="$REF"
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ tt-exalens=="$REF"
