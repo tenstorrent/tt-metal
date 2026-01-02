@@ -14,6 +14,7 @@
 #include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/bcast.h"
 #include "tt-metalium/constants.hpp"
 // #include "tt-metalium/tt_backend_api_types.hpp"
 
@@ -74,6 +75,11 @@ void MAIN {
     constexpr uint32_t pad_l = get_compile_time_arg_val(30);
     constexpr uint32_t weight_cb_id = get_compile_time_arg_val(31);
     constexpr uint32_t mul_cb_id = get_compile_time_arg_val(32);
+
+    // Bias-related compile-time args for depthwise conv
+    constexpr bool has_bias = (bool)get_compile_time_arg_val(33);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(34);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(35);
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 
@@ -159,6 +165,11 @@ void MAIN {
 
     // Wait for all weight tiles to be available before starting computation
     cb_wait_front(weight_cb_id, weight_ntiles);
+
+    // Wait for bias tiles to be available (read by reader kernel)
+    if constexpr (has_bias) {
+        cb_wait_front(bias_cb_id, bias_ntiles);
+    }
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
@@ -356,14 +367,17 @@ void MAIN {
             // dprint_tensix_dest_reg<true>(0);
             // dprint_tensix_dest_reg<true>(1);
 
+// Apply activation here ONLY if no bias - otherwise it's applied after bias addition (post-tilization)
 #ifdef SFPU_OP_FUNC_ACTIVATION
-            if (last_c_block) {
-                for (uint32_t i = 0; i < partial_iter_output_tiles; ++i) {
-                    SFPU_OP_FUNC_ACTIVATION
-                }
-            } else {
-                for (uint32_t i = 0; i < max_tiles_per_iter; ++i) {
-                    SFPU_OP_FUNC_ACTIVATION
+            if constexpr (!has_bias) {
+                if (last_c_block) {
+                    for (uint32_t i = 0; i < partial_iter_output_tiles; ++i) {
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+                } else {
+                    for (uint32_t i = 0; i < max_tiles_per_iter; ++i) {
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
                 }
             }
 #endif
@@ -409,9 +423,56 @@ void MAIN {
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
-                        // PACK((tt::compute::common::print_full_tile(out_cb_id, 0, true)));
+                        // ============ BIAS + ACTIVATION (post-tilization) ============
+                        // Only needed when has_bias - otherwise activation already applied per-stick
+                        if constexpr (has_bias) {
+                            // Push tilized data to make it available for reading
+                            cb_push_back(out_cb_id, in_ntiles_c);
 
-                        cb_push_back(out_cb_id, in_ntiles_c);
+                            // Wait for tilized data
+                            cb_wait_front(out_cb_id, in_ntiles_c);
+
+                            tile_regs_acquire();
+
+                            // Reconfigure data format for bias addition (critical for mixed precision)
+                            reconfig_data_format(out_cb_id, bias_cb_id);
+
+                            // Initialize for bias broadcast addition
+                            add_bcast_rows_init_short(out_cb_id, bias_cb_id);
+
+                            // Load tiles from out_cb and add bias using row broadcast
+                            for (uint32_t i = 0; i < in_ntiles_c; ++i) {
+                                add_tiles_bcast_rows(out_cb_id, bias_cb_id, i, i, i);
+                            }
+
+                            // Apply activation function after bias addition
+#ifdef SFPU_OP_FUNC_ACTIVATION
+                            for (uint32_t i = 0; i < in_ntiles_c; ++i) {
+                                SFPU_OP_FUNC_ACTIVATION
+                            }
+#endif
+
+                            tile_regs_commit();
+
+                            // Pop front to consume original tilized data
+                            cb_pop_front(out_cb_id, in_ntiles_c);
+
+                            // Reserve space and pack bias-added tiles back to out_cb
+                            tile_regs_wait();
+                            cb_reserve_back(out_cb_id, in_ntiles_c);
+                            for (uint32_t i = 0; i < in_ntiles_c; ++i) {
+                                pack_tile(i, out_cb_id);
+                            }
+                            tile_regs_release();
+
+                            // Push the bias-added tiles
+                            cb_push_back(out_cb_id, in_ntiles_c);
+                        } else {
+                            // No bias - just push the tilized output directly
+                            cb_push_back(out_cb_id, in_ntiles_c);
+                        }
+                        // ============ END BIAS + ACTIVATION ============
+
                         cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 

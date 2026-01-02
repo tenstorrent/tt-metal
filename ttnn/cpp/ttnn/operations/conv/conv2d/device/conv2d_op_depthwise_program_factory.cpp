@@ -279,16 +279,22 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
     // Bias CB - only allocated if has_bias is true
     uint32_t bias_cb_id = 32;  // Invalid CB ID by default
-    if (has_bias) {
+    if (has_bias && bias.has_value()) {
         bias_cb_id = next_cb_index++;
-        // Bias uses same data format as weights
-        const tt::DataFormat bias_data_format = weight_data_format;
+        // Bias uses its own data format from the bias tensor (typically bfloat16)
+        const tt::DataFormat bias_data_format = datatype_to_dataformat_converter(bias.value().dtype());
         const uint32_t bias_cb_pagesize = tt::tile_size(bias_data_format);
         // One tile row of bias per output channel tile
         const uint32_t bias_cb_npages = params.in_ntiles_c;  // out_channels = in_channels for depthwise
         tt::tt_metal::create_cb(
             bias_cb_id, program, parallel_config.grid, bias_cb_pagesize, bias_cb_npages, bias_data_format);
-        log_debug(tt::LogOp, "CB {} (bias_cb) :: PS = {}, NP = {}", bias_cb_id, bias_cb_pagesize, bias_cb_npages);
+        log_debug(
+            tt::LogOp,
+            "CB {} (bias_cb) :: PS = {}, NP = {}, DF = {}",
+            bias_cb_id,
+            bias_cb_pagesize,
+            bias_cb_npages,
+            bias_data_format);
     }
 
     // Reader indices will be created after out_nhw_per_core is calculated
@@ -624,7 +630,10 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         eff_kernel_w,                   // 29 - eff_kernel_w
         pad_l,                          // 30
         weight_cb_id,                   // 31
-        mul_cb_id                       // 32
+        mul_cb_id,                      // 32
+        has_bias,                       // 33 - has_bias flag for bias addition
+        bias_cb_id,                     // 34 - bias_cb_id
+        params.in_ntiles_c              // 35 - bias_ntiles (same as out channel tiles for depthwise)
     };
 
     // Create reader kernels using pool reader kernel path (same pattern as pool factory)
@@ -896,7 +905,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
          mul_cb_id,
          in_reader_indices_cb_id,
          reader_indices_on_device,
-         raw_in_cb](
+         raw_in_cb,
+         has_bias,
+         all_cores](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -922,6 +933,18 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             auto reader_indices_buffer = reader_indices_on_device.buffer();
             UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb_id, *reader_indices_buffer);
 
+            // Update bias buffer address in runtime args if bias is present
+            if (has_bias && !optional_input_tensors.empty() && optional_input_tensors.at(0).has_value()) {
+                const auto& bias_tensor = optional_input_tensors.at(0).value();
+                uint32_t bias_buffer_addr = static_cast<uint32_t>(bias_tensor.buffer()->address());
+
+                // Update runtime arg 11 (bias_buffer_addr) for all cores
+                for (const auto& core : all_cores) {
+                    auto& runtime_args = GetRuntimeArgs(program, reader0_kernel, core);
+                    runtime_args[11] = bias_buffer_addr;
+                }
+                log_debug(tt::LogOp, "Updated bias buffer address to 0x{:x}", bias_buffer_addr);
+            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

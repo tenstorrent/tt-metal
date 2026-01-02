@@ -5261,7 +5261,7 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
     (
         # HEIGHT_SHARDED test
-        (1, 64, 64, 4, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, False),
+        (1, 64, 64, 4, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, False, False),
         # WIDTH_SHARDED test
         # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
         # BLOCK_SHARDED test
@@ -5313,7 +5313,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
         torch_tensor_map, conv_input_shape, False,
     )
 
-    torch_weight_tensor = torch.zeros(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
 
     # DEBUG: Use integer weights for easier debugging - each kernel position gets stick_id
     # for out_ch in range(conv_weight_shape[0]):
@@ -5372,7 +5372,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
 
     tt_bias_tensor = ttnn.from_torch(
         torch_bias_tensor,
-        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        bias_dtype,  # Use the actual bias_dtype parameter
         mesh_mapper=None,
     )
 

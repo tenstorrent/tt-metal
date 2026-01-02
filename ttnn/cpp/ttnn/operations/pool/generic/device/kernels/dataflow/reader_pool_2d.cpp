@@ -707,8 +707,6 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            tt::data_movement::common::print_bf16_pages(get_write_ptr(bias_cb_id), bias_ntiles * 32, 32);
-
             cb_push_back(bias_cb_id, bias_ntiles);
 
             DPRINT << "BIAS_READ: Read " << bias_ntiles << " bias tiles" << ENDL();
