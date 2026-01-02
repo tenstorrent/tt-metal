@@ -594,9 +594,19 @@ class MasterConfigLoader:
                 print(f"    Treating as unary operation with first argument as input")
                 return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
             elif tensor_count == 1:
+                # Special case: scale_mask_softmax_in_place has 1 tensor + scale + optional mask
+                if self._matches_operation(operation_name, "scale_mask_softmax_in_place"):
+                    print(
+                        f"🔧 Detected scale_mask_softmax_in_place operation: {operation_name} (1 tensor input + scale + optional mask)"
+                    )
+                    return self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
                 print(f"🔧 Detected unary operation: {operation_name} (1 tensor input)")
                 return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
             elif tensor_count == 2:
+                # Special case: update_cache has 2 tensors + 2 scalars, needs custom extraction
+                if self._matches_operation(operation_name, "update_cache"):
+                    print(f"🔧 Detected update_cache operation: {operation_name} (2 tensor inputs + scalars)")
+                    return self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
                 print(f"🔧 Detected binary operation: {operation_name} (2 tensor inputs)")
                 return self._get_binary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
             elif tensor_count >= 3:
@@ -2434,6 +2444,62 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For scale_mask_softmax_in_place (1 tensor input + scale + optional mask)
+                    elif (
+                        clean_op_name == "scale_mask_softmax_in_place"
+                        or clean_op_name == "ttnn::scale_mask_softmax_in_place"
+                    ):
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,mask_shape,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_id"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("mask_shape"),  # Optional - can be None
+                                    cfg.get("input_b_dtype"),  # Optional
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),  # Optional
+                                    cfg.get("input_b_memory_config"),  # Optional
+                                    cfg.get("output_memory_config"),
+                                    cfg.get("scalar"),  # Scale value
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    f"config_{idx}",  # Unique config ID
+                                )
+                                for idx, cfg in enumerate(transformed_configs)
+                            ]
+                        ]
+                        return {param_names[0]: param_lists[0]}
+
+                    # For update_cache (2 tensor inputs + 2 scalars)
+                    elif clean_op_name == "update_cache" or clean_op_name == "ttnn::update_cache":
+                        param_names = [
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_id"
+                        ]
+                        param_lists = [
+                            [
+                                (
+                                    cfg.get("input_shape"),
+                                    cfg.get("input_a_dtype"),
+                                    cfg.get("input_a_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_a_memory_config"),
+                                    cfg.get("input_b_dtype"),
+                                    cfg.get("input_b_layout", ttnn.TILE_LAYOUT),
+                                    cfg.get("input_b_memory_config"),
+                                    cfg.get("output_memory_config"),
+                                    cfg.get("scalar"),  # Dict with update_index and batch_offset
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
+                                    extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]

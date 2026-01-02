@@ -1130,6 +1130,260 @@ class OperationParameterExtractors:
             return None
 
     @staticmethod
+    def _extract_update_cache_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for update_cache operation
+
+        Extracts:
+        - arg0: cache_tensor (input_a)
+        - arg1: input_tensor (input_b)
+        - arg2: cache_idx (scalar)
+        - arg3: batch_offset (scalar_1)
+        - arg4: memory_config (optional, often nullopt)
+        """
+        try:
+            params = {}
+
+            # Extract first tensor (cache)
+            if len(config) > 0 and isinstance(config[0], dict) and "arg0" in config[0]:
+                tensor_config_a = OperationParameterExtractors.extract_tensor_config(config[0]["arg0"])
+                if tensor_config_a:
+                    cache_shape = tensor_config_a.shape
+                    params["input_a_dtype"] = tensor_config_a.dtype.replace("DataType::", "")
+                    params["input_a_layout"] = tensor_config_a.layout.replace("Layout::", "")
+                    params["input_a_memory_config"] = tensor_config_a.memory_config
+                else:
+                    return None
+
+            # Extract second tensor (input)
+            if len(config) > 1 and isinstance(config[1], dict) and "arg1" in config[1]:
+                tensor_config_b = OperationParameterExtractors.extract_tensor_config(config[1]["arg1"])
+                if tensor_config_b:
+                    input_shape = tensor_config_b.shape
+                    params["input_b_dtype"] = tensor_config_b.dtype.replace("DataType::", "")
+                    params["input_b_layout"] = tensor_config_b.layout.replace("Layout::", "")
+                    params["input_b_memory_config"] = tensor_config_b.memory_config
+                else:
+                    return None
+
+            # Store shapes separately for transform step
+            params["input_shape"] = cache_shape  # Primary input (cache)
+            params["input_b_shape"] = input_shape  # Secondary input
+
+            # Extract cache_idx (arg2)
+            if len(config) > 2 and isinstance(config[2], dict) and "arg2" in config[2]:
+                cache_idx = config[2]["arg2"]
+                # Extract batch_offset (arg3)
+                batch_offset = None
+                if len(config) > 3 and isinstance(config[3], dict) and "arg3" in config[3]:
+                    batch_offset = config[3]["arg3"]
+
+                # Store both scalars in a dict
+                params["scalar"] = {
+                    "update_index": str(cache_idx),
+                    "batch_offset": str(batch_offset) if batch_offset is not None else "0",
+                }
+
+            # Use cache tensor's memory config as output
+            params["output_memory_config"] = tensor_config_a.memory_config
+
+            return params
+
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting update_cache parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _extract_scale_mask_softmax_in_place_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for scale_mask_softmax_in_place operation
+
+        Extracts:
+        - arg0: input_tensor (input_a)
+        - arg1: scale (scalar)
+        - arg2: mask_tensor (input_b, optional - can be nullopt)
+        """
+        try:
+            params = {}
+
+            # Extract input tensor (arg0)
+            if len(config) > 0 and isinstance(config[0], dict) and "arg0" in config[0]:
+                tensor_config_a = OperationParameterExtractors.extract_tensor_config(config[0]["arg0"])
+                if tensor_config_a:
+                    params["input_shape"] = tensor_config_a.shape
+                    params["input_a_dtype"] = tensor_config_a.dtype.replace("DataType::", "")
+                    params["input_a_layout"] = tensor_config_a.layout.replace("Layout::", "")
+                    params["input_a_memory_config"] = tensor_config_a.memory_config
+                else:
+                    return None
+
+            # Extract scale (arg1)
+            if len(config) > 1 and isinstance(config[1], dict) and "arg1" in config[1]:
+                scale_value = config[1]["arg1"]
+                if scale_value != "nullopt":
+                    params["scalar"] = str(scale_value)
+
+            # Extract mask tensor (arg2, optional)
+            if len(config) > 2 and isinstance(config[2], dict) and "arg2" in config[2]:
+                arg2_value = config[2]["arg2"]
+                if arg2_value != "nullopt":
+                    tensor_config_b = OperationParameterExtractors.extract_tensor_config(arg2_value)
+                    if tensor_config_b:
+                        params["input_b_shape"] = tensor_config_b.shape
+                        params["input_b_dtype"] = tensor_config_b.dtype.replace("DataType::", "")
+                        params["input_b_layout"] = tensor_config_b.layout.replace("Layout::", "")
+                        params["input_b_memory_config"] = tensor_config_b.memory_config
+
+            # Use input tensor's memory config as output
+            params["output_memory_config"] = tensor_config_a.memory_config
+
+            return params
+
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting scale_mask_softmax_in_place parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _transform_scale_mask_softmax_in_place_parameters(
+        extracted_params: List[Dict],
+        parse_dtype=None,
+        parse_layout=None,
+        parse_memory_config=None,
+    ) -> List[Dict]:
+        """Transform extracted scale_mask_softmax_in_place parameters to match test function signature"""
+        transformed = []
+
+        for params in extracted_params:
+            transformed_config = {}
+
+            # Transform input_shape
+            if "input_shape" in params:
+                transformed_config["input_shape"] = tuple(params["input_shape"])
+
+            # Transform input tensor properties
+            if "input_a_dtype" in params:
+                transformed_config["input_a_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_a_dtype']}") if parse_dtype else params["input_a_dtype"]
+                )
+            if "input_a_layout" in params:
+                transformed_config["input_a_layout"] = (
+                    parse_layout(f"Layout::{params['input_a_layout']}") if parse_layout else params["input_a_layout"]
+                )
+            if "input_a_memory_config" in params:
+                transformed_config["input_a_memory_config"] = (
+                    parse_memory_config(params["input_a_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_a_memory_config"]
+                )
+
+            # Transform mask tensor properties (optional)
+            if "input_b_shape" in params:
+                transformed_config["mask_shape"] = tuple(params["input_b_shape"])
+            if "input_b_dtype" in params:
+                transformed_config["input_b_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_b_dtype']}") if parse_dtype else params["input_b_dtype"]
+                )
+            if "input_b_layout" in params:
+                transformed_config["input_b_layout"] = (
+                    parse_layout(f"Layout::{params['input_b_layout']}") if parse_layout else params["input_b_layout"]
+                )
+            if "input_b_memory_config" in params:
+                transformed_config["input_b_memory_config"] = (
+                    parse_memory_config(params["input_b_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_b_memory_config"]
+                )
+
+            # Output memory config
+            if "output_memory_config" in params:
+                transformed_config["output_memory_config"] = (
+                    parse_memory_config(params["output_memory_config"], [])
+                    if parse_memory_config
+                    else params["output_memory_config"]
+                )
+
+            # Pass through scale value
+            if "scalar" in params:
+                transformed_config["scalar"] = float(params["scalar"])
+
+            transformed.append(transformed_config)
+
+        return transformed
+
+    @staticmethod
+    def _transform_update_cache_parameters(
+        extracted_params: List[Dict],
+        parse_dtype=None,
+        parse_layout=None,
+        parse_memory_config=None,
+    ) -> List[Dict]:
+        """Transform extracted update_cache parameters to match test function signature"""
+        transformed = []
+
+        for params in extracted_params:
+            transformed_config = {}
+
+            # Transform input_shape (build dict with 'self' and 'other' keys from separate shape fields)
+            input_shape_dict = {}
+            if "input_shape" in params:
+                # input_shape is the cache tensor shape (self)
+                input_shape_dict["self"] = tuple(params["input_shape"])
+            if "input_b_shape" in params:
+                # input_b_shape is the input tensor shape (other)
+                input_shape_dict["other"] = tuple(params["input_b_shape"])
+            transformed_config["input_shape"] = input_shape_dict
+
+            # Transform dtypes, layouts, memory configs for both tensors
+            if "input_a_dtype" in params:
+                transformed_config["input_a_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_a_dtype']}") if parse_dtype else params["input_a_dtype"]
+                )
+            if "input_b_dtype" in params:
+                transformed_config["input_b_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_b_dtype']}") if parse_dtype else params["input_b_dtype"]
+                )
+
+            if "input_a_layout" in params:
+                transformed_config["input_a_layout"] = (
+                    parse_layout(f"Layout::{params['input_a_layout']}") if parse_layout else params["input_a_layout"]
+                )
+            if "input_b_layout" in params:
+                transformed_config["input_b_layout"] = (
+                    parse_layout(f"Layout::{params['input_b_layout']}") if parse_layout else params["input_b_layout"]
+                )
+
+            if "input_a_memory_config" in params:
+                transformed_config["input_a_memory_config"] = (
+                    parse_memory_config(params["input_a_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_a_memory_config"]
+                )
+            if "input_b_memory_config" in params:
+                transformed_config["input_b_memory_config"] = (
+                    parse_memory_config(params["input_b_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_b_memory_config"]
+                )
+            if "output_memory_config" in params:
+                transformed_config["output_memory_config"] = (
+                    parse_memory_config(params["output_memory_config"], [])
+                    if parse_memory_config
+                    else params["output_memory_config"]
+                )
+
+            # Pass through scalar (cache_idx and batch_offset)
+            if "scalar" in params:
+                transformed_config["scalar"] = params["scalar"]
+
+            transformed.append(transformed_config)
+
+        return transformed
+
+    @staticmethod
     def _extract_paged_update_cache_parameters(config: List) -> Optional[Dict]:
         """Extract parameters for paged_update_cache operation
 
@@ -1714,6 +1968,30 @@ OperationParameterExtractors.register_extractor(
     "ttnn::transformer::paged_scaled_dot_product_attention_decode",
     extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+
+# Register scale_mask_softmax_in_place extractor (input, scale, optional mask)
+OperationParameterExtractors.register_extractor(
+    "scale_mask_softmax_in_place",
+    extract_func=OperationParameterExtractors._extract_scale_mask_softmax_in_place_parameters,
+    transform_func=OperationParameterExtractors._transform_scale_mask_softmax_in_place_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::scale_mask_softmax_in_place",
+    extract_func=OperationParameterExtractors._extract_scale_mask_softmax_in_place_parameters,
+    transform_func=OperationParameterExtractors._transform_scale_mask_softmax_in_place_parameters,
+)
+
+# Register update_cache extractor (custom extractor for cache, input, cache_idx, batch_offset)
+OperationParameterExtractors.register_extractor(
+    "update_cache",
+    extract_func=OperationParameterExtractors._extract_update_cache_parameters,
+    transform_func=OperationParameterExtractors._transform_update_cache_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::update_cache",
+    extract_func=OperationParameterExtractors._extract_update_cache_parameters,
+    transform_func=OperationParameterExtractors._transform_update_cache_parameters,
 )
 
 # Register paged_update_cache extractor (custom extractor for arg positions 0,1,3,5)

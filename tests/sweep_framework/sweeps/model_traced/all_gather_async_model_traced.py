@@ -358,4 +358,7 @@ def run(
                 eq, output = comp_pcc(tt_output_tensor, torch_reference)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-            return [(eq, output), e2e_perf]
+            # Return the actual comparison result (eq is bool, output is pcc value)
+            # For comp_equal, output is None. For comp_pcc, output is the PCC value
+            pcc_result = output if output is not None else (1.0 if eq else 0.0)
+            return [pcc_result, e2e_perf]
