@@ -532,7 +532,6 @@ def test_ttnn_all_gather(
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
-    silicon_arch_wormhole_b0,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -931,7 +930,6 @@ def test_all_gather_async_sharded_to_interleaved(
     enable_trace,
     num_iters,
     all_gather_topology,
-    silicon_arch_wormhole_b0,
 ):
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -1179,7 +1177,7 @@ NUM_ITERS = 2
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology, silicon_arch_wormhole_b0):
+def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
         pytest.skip("Invalid gather dim")
 
@@ -1248,7 +1246,7 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         [2, 2, 32, 32],
     ],
 )
-def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape, silicon_arch_wormhole_b0):
+def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
     torch.manual_seed(2005)
     devices = mesh_device.get_num_devices()
     input_shape[-1] *= devices

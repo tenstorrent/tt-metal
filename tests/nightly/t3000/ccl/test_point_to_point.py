@@ -75,7 +75,7 @@ torch.set_printoptions(threshold=10000)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("shape_coords_layout", _get_test_coords_and_shapes_with_layout(MESH_SHAPE, TEST_SHAPES))
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_point_to_point(mesh_device, shape_coords_layout, dtype, silicon_arch_wormhole_b0):
+def test_point_to_point(mesh_device, shape_coords_layout, dtype):
     shape, coords, layout = shape_coords_layout
 
     devices = prod(list(mesh_device.shape))
@@ -140,7 +140,7 @@ def test_point_to_point(mesh_device, shape_coords_layout, dtype, silicon_arch_wo
     ids=["row_major", "tile"],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_point_to_point_with_device_delay(mesh_device, shape_coords_layout, dtype, silicon_arch_wormhole_b0):
+def test_point_to_point_with_device_delay(mesh_device, shape_coords_layout, dtype):
     shape, coords, layout = shape_coords_layout
 
     devices = prod(list(mesh_device.shape))
@@ -231,7 +231,7 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords_layout, dtyp
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-def test_point_to_point_optional_intermediate(mesh_device, silicon_arch_wormhole_b0):
+def test_point_to_point_optional_intermediate(mesh_device):
     shape, coords = ((1, 1, 1, 16), ((0, 0), (0, 1)))
 
     devices = prod(list(mesh_device.shape))

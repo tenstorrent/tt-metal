@@ -113,9 +113,7 @@ def test_moe_routing_remap(
 @pytest.mark.parametrize("expert_parallel_size", [2, 4])
 @pytest.mark.parametrize("num_cluster_experts", [32])
 @pytest.mark.parametrize("cluster_axis", [0, 1])
-def test_gen_tensors(
-    mesh_device, non_zero_size, expert_parallel_size, num_cluster_experts, cluster_axis, silicon_arch_wormhole_b0
-):
+def test_gen_tensors(mesh_device, non_zero_size, expert_parallel_size, num_cluster_experts, cluster_axis):
     mesh_shape = tuple(mesh_device.shape)
     # TODO check that this restriction is firm
     if expert_parallel_size != mesh_shape[cluster_axis]:

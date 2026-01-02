@@ -200,16 +200,7 @@ def test_moe_expert_token_remaps(
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("scheme", ["random", "sequential"])
-def test_gen_tensors(
-    mesh_device,
-    mesh_shape,
-    experts_per_device,
-    batches_per_device,
-    seq,
-    select_experts_k,
-    scheme,
-    silicon_arch_wormhole_b0,
-):
+def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_device, seq, select_experts_k, scheme):
     devices = prod(mesh_shape)
     batch = batches_per_device * devices
     experts = experts_per_device * devices

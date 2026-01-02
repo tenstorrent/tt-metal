@@ -556,7 +556,6 @@ def test_reduce_scatter_async(
     mem_config_rs,
     ones_tensor,
     rs_topology,
-    silicon_arch_wormhole_b0,
 ):
     run_reduce_scatter_impl(
         mesh_device,
@@ -655,7 +654,6 @@ def test_reduce_scatter_async_training_shapes(
     mem_config_rs,
     ones_tensor,
     rs_topology,
-    silicon_arch_wormhole_b0,
 ):
     run_reduce_scatter_impl(
         mesh_device,
@@ -1171,7 +1169,6 @@ def test_reduce_scatter_minimal_async_linear_sharded(
     rs_input_dtype,
     layout,
     cluster_axis,
-    silicon_arch_wormhole_b0,
 ):
     num_devices = tuple(mesh_device.shape)[cluster_axis]
 
@@ -1287,7 +1284,7 @@ def _get_tensors(
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
-def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology, silicon_arch_wormhole_b0):
+def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
         pytest.skip("Invalid scatter dim")
 
@@ -1330,7 +1327,7 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
-def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape, silicon_arch_wormhole_b0):
+def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
     torch.manual_seed(520)
     devices = mesh_device.get_num_devices()
     input_shape[-1] *= devices

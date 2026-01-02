@@ -65,7 +65,6 @@ def test_ring_all_reduce_post_commit(
     mem_config,
     math_op,
     function_level_defaults,
-    silicon_arch_wormhole_b0,
     num_iters=2,
 ):
     run_all_reduce_test(
@@ -127,7 +126,6 @@ def test_ring_all_reduce_post_commit_2chip(
     layout,
     buffer_type,
     function_level_defaults,
-    silicon_arch_wormhole_b0,
     num_iters=2,
 ):
     run_all_reduce_with_mesh_tensor_along_row(
@@ -192,7 +190,7 @@ NUM_ITERS = 2
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topology, silicon_arch_wormhole_b0):
+def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topology):
     tt_input, torch_reference = _get_tensors(
         input_shape, cluster_axis, tuple(mesh_device.shape), dtype, LAYOUT, memory_config, mesh_device
     )
@@ -218,7 +216,7 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
-def test_all_reduce_2x4_non_flat_mesh(mesh_device, input_shape, silicon_arch_wormhole_b0):
+def test_all_reduce_2x4_non_flat_mesh(mesh_device, input_shape):
     torch.manual_seed(520)
     devices = mesh_device.get_num_devices()
     input_shape[-1] *= devices
