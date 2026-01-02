@@ -19,10 +19,10 @@ Owner:
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess, ParsedElfFile
-from ttexalens.elf.variable import L1MemoryAccess
+from ttexalens.elf import ParsedElfFile
+from ttexalens.memory_access import MemoryAccess, L1MemoryAccess
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from elfs_cache import run as get_elfs_cache, ElfsCache
+from elfs_cache import run as get_elfs_cache
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
 
@@ -92,7 +92,7 @@ def try_read_magic_with_dispatcher_data(
 
 
 def try_read_magic_with_elf(
-    l1_mem_access: L1MemoryAccess,
+    l1_mem_access: MemoryAccess,
     fw_elf: ParsedElfFile,
 ) -> int | None:
     """
@@ -142,7 +142,7 @@ def check_core_magic(
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        l1_mem_access = MemoryAccess.get_l1(location)
+        l1_mem_access = MemoryAccess.create_l1(location)
         other_magic = try_read_magic_with_elf(l1_mem_access, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)
