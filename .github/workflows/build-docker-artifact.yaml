@@ -193,11 +193,11 @@ jobs:
             echo "manylinux-exists=false" >> $GITHUB_OUTPUT
           fi
 
-  # Assume if dev-tag does not exist, the others will not exist either
-  build-docker-image:
-    name: "🐳️ Build images"
+  # Build Ubuntu images (runs in parallel with Fedora and ManyLinux)
+  build-ubuntu-images:
+    name: "🐳️ Build Ubuntu images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
+    if: needs.check-docker-images.outputs.distro == 'ubuntu' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -211,9 +211,8 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Ubuntu builds
-      - name: Build and push CI Build image (Ubuntu)
-        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
+      - name: Build and push CI Build image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -224,8 +223,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push CI Test image (Ubuntu)
-        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
+      - name: Build and push CI Test image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -236,8 +235,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Dev image (Ubuntu)
-        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
+      - name: Build and push Dev image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -248,8 +247,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic Dev image (Ubuntu)
-        if: needs.check-docker-images.outputs.basic-dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
+      - name: Build and push Basic Dev image
+        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -260,8 +259,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic TTNN runtime image (Ubuntu)
-        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
+      - name: Build and push Basic TTNN runtime image
+        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -272,9 +271,27 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      # Fedora builds
-      - name: Build and push CI Build image (Fedora)
-        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'fedora'
+
+  # Build Fedora images (runs in parallel with Ubuntu and ManyLinux)
+  build-fedora-images:
+    name: "🐳️ Build Fedora images"
+    needs: check-docker-images
+    if: needs.check-docker-images.outputs.distro == 'fedora' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push CI Build image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -285,8 +302,8 @@ jobs:
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Dev image (Fedora)
-        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'fedora'
+      - name: Build and push Dev image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -297,8 +314,8 @@ jobs:
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic TTNN runtime image (Fedora)
-        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' && needs.check-docker-images.outputs.distro == 'fedora'
+      - name: Build and push Basic TTNN runtime image
+        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -309,8 +326,26 @@ jobs:
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+
+  # Build ManyLinux image (runs in parallel with Ubuntu and Fedora)
+  build-manylinux-image:
+    name: "🐳️ Build ManyLinux image"
+    needs: check-docker-images
+    if: needs.check-docker-images.outputs.manylinux-exists != 'true'
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
-        if: needs.check-docker-images.outputs.manylinux-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -320,7 +355,7 @@ jobs:
           cache-to: type=inline
           pull: true
 
-  # Cannot use needs.build-docker-image to ensure this job runs sequentially after the build job because it would break when the build job is skipped
+  # Cannot use needs.build-*-images to ensure this job runs sequentially after the build jobs because it would break when the build jobs are skipped
   # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
   # However, this isn't a huge issue because the image should already have been built on a branch before merging, and if it wasn't (like in a push scenario),
   # the problem would self-correct on the next merge to main, which happens frequently.
