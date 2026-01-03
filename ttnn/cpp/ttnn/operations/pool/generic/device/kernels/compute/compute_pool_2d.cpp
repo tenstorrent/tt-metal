@@ -467,7 +467,10 @@ void MAIN {
                             cb_pop_front(bias_temp_cb_id, in_ntiles_c);
 
                             // Reserve space and pack bias-added tiles to out_cb (final output)
+                            // CRITICAL: Reconfigure packer for out_cb format (may be bfloat8_b)
+                            // bias_temp_cb is bfloat16 but out_cb may be bfloat8_b
                             tile_regs_wait();
+                            pack_reconfig_data_format(out_cb_id);
                             cb_reserve_back(out_cb_id, in_ntiles_c);
                             for (uint32_t i = 0; i < in_ntiles_c; ++i) {
                                 pack_tile(i, out_cb_id);

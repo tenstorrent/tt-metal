@@ -301,10 +301,12 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // Bias temp CB - intermediate buffer for tilized data before bias addition
     // This is needed to avoid CB ordering issues when there are multiple tile rows
     // Without this, the second tilization would read stale data from out_cb's front
+    // CRITICAL: Use params.data_format (bfloat16) NOT output_data_format (bfloat8_b)
+    // because add_tiles_bcast_rows cannot unpack block float formats like bfloat8_b
     uint32_t bias_temp_cb_id = 32;  // Invalid CB ID by default
     if (has_bias && bias.has_value() && is_output_tiled) {
         bias_temp_cb_id = next_cb_index++;
-        const uint32_t bias_temp_cb_pagesize = tt::tile_size(params.output_data_format);
+        const uint32_t bias_temp_cb_pagesize = tt::tile_size(params.data_format);
         const uint32_t bias_temp_cb_npages = params.in_ntiles_c;  // Same as output tiles per row
         tt::tt_metal::create_cb(
             bias_temp_cb_id,
@@ -312,13 +314,15 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             parallel_config.grid,
             bias_temp_cb_pagesize,
             bias_temp_cb_npages,
-            params.output_data_format);
+            params.data_format);
         log_debug(
             tt::LogOp,
-            "CB {} (bias_temp_cb) :: PS = {}, NP = {} (intermediate tilized buffer for bias)",
+            "CB {} (bias_temp_cb) :: PS = {}, NP = {}, DF = {} (intermediate tilized buffer for bias, using input "
+            "format)",
             bias_temp_cb_id,
             bias_temp_cb_pagesize,
-            bias_temp_cb_npages);
+            bias_temp_cb_npages,
+            params.data_format);
     }
 
     // Reader indices will be created after out_nhw_per_core is calculated
