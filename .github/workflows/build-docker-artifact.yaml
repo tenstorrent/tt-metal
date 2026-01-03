@@ -53,33 +53,7 @@ on:
             - "amd64"
 
 jobs:
-  parse-platform:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    outputs:
-      distro: ${{ steps.parse.outputs.distro }}
-      version: ${{ steps.parse.outputs.version }}
-    steps:
-      - id: parse
-        run: |
-          case "${{ inputs.platform }}" in
-            "Ubuntu 22.04")
-              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
-              echo "version=22.04" >> "$GITHUB_OUTPUT"
-              ;;
-            "Ubuntu 24.04")
-              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
-              echo "version=24.04" >> "$GITHUB_OUTPUT"
-              ;;
-            "Fedora 43")
-              echo "distro=fedora" >> "$GITHUB_OUTPUT"
-              echo "version=43" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-
   check-docker-images:
-    needs: [parse-platform]
-    if: ${{ !cancelled() && (needs.parse-platform.result == 'success' || needs.parse-platform.result == 'skipped') }}
     runs-on: ubuntu-latest
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
@@ -97,9 +71,26 @@ jobs:
     steps:
       - name: Set environment variables
         run: |
+          # Parse platform for workflow_dispatch, use inputs for workflow_call
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            DISTRO="${{ needs.parse-platform.outputs.distro }}"
-            VERSION="${{ needs.parse-platform.outputs.version }}"
+            case "${{ inputs.platform }}" in
+              "Ubuntu 22.04")
+                DISTRO="ubuntu"
+                VERSION="22.04"
+                ;;
+              "Ubuntu 24.04")
+                DISTRO="ubuntu"
+                VERSION="24.04"
+                ;;
+              "Fedora 43")
+                DISTRO="fedora"
+                VERSION="43"
+                ;;
+              *)
+                DISTRO="ubuntu"
+                VERSION="22.04"
+                ;;
+            esac
           else
             DISTRO="${{ inputs.distro || 'ubuntu' }}"
             VERSION="${{ inputs.version || '22.04' }}"
