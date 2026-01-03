@@ -1,58 +1,213 @@
+# TT-Metalium Dockerfile for Fedora
+
+#############################################################
+
+# Accept an argument to specify the Fedora version
 ARG FEDORA_VERSION=43
 FROM mirror.gcr.io/fedora:${FEDORA_VERSION} AS base
-# Re-declare ARG to make it available in the build stage
+
+# Install uv early so all stages can use it
+RUN dnf install -y uv python3-devel && dnf clean all
+
+# Install runtime deps
+COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
+COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
+RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh && \
+    /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
+
+#############################################################
+
+FROM base AS ci-build
+
+# Re-declare ARG to make it available in this stage
 ARG FEDORA_VERSION
 
-# Install basic tools to build
-RUN dnf update -y && dnf install -y \
-    cmake \
-    ninja-build \
-    clang \
-    gcc \
-    gcc-c++ \
-    make \
-    mold \
-    git \
-    wget \
-    tar \
-    xz \
-    zstd \
+# Install ClangBuildAnalyzer from source (not packaged in Fedora)
+RUN mkdir -p /tmp/cba \
+    && wget -O /tmp/cba/cba.tar.gz https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v1.6.0.tar.gz \
+    && tar -xzf /tmp/cba/cba.tar.gz -C /tmp/cba --strip-components=1 \
+    && cmake -S /tmp/cba/ -B /tmp/cba/build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /tmp/cba/build \
+    && cmake --install /tmp/cba/build \
+    && rm -rf /tmp/cba
+
+# Install CI requirements - Fedora packages
+# ccache, doxygen, mold available as dnf packages
+# libxml2, libxslt, patch, which for build requirements
+RUN dnf install -y \
+    bc \
     ccache \
-    wget \
-    wget2 \
-    openmpi \
-    openmpi-devel \
+    clang-devel \
+    clang-tools-extra \
+    compiler-rt \
+    curl \
+    dialog \
+    doxygen \
+    file \
+    graphviz \
+    gtest-devel \
+    jq \
     libxml2 \
     libxml2-devel \
     libxslt \
     libxslt-devel \
+    libuuid-devel \
+    mold \
     patch \
+    sudo \
+    wget \
+    wget2 \
     which \
+    zstd \
+    && dnf clean all
+
+# Set up virtual environment using uv
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN umask 000 && uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+# Numpy needed for tt-train to build
+RUN uv pip install --no-cache build numpy setuptools
+
+RUN git config --global --add safe.directory '*'
+
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
+#############################################################
+
+FROM ci-build AS ci-test
+
+ARG FEDORA_VERSION
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Create directories for infra
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+# Copy requirements from tt-metal folders with requirements.txt docs
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
+# Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+# Configure PyTorch CPU index and install Python packages using uv
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
+COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
+# Note: Debugger installation may need adaptation for Fedora
+# Skipping debugger for now as it's Ubuntu-specific
+
+#############################################################
+
+FROM ci-test AS dev
+
+ARG FEDORA_VERSION
+
+# Install dev deps - Fedora packages
+# mesa-libGL is the Fedora equivalent of libgl1
+RUN dnf install -y \
+    acl \
+    emacs \
+    gdb \
+    less \
+    mpfr-devel \
+    nano \
+    openssh-server \
+    vim \
+    mesa-libGL \
+    ipmitool \
+    && dnf clean all
+
+# Fedora has modern gdb by default, no need to build from source
+
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+#############################################################
+
+FROM base AS release
+
+# Set up virtual environment using uv
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+
+ARG WHEEL_FILENAME
+ADD $WHEEL_FILENAME $WHEEL_FILENAME
+RUN uv pip install $WHEEL_FILENAME
+
+#############################################################
+
+FROM base AS release-models
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+# Accept git reference argument
+ARG GIT_REF=main
+
+# Clone tt-metal
+RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
+    https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
+    && cd ${TT_METAL_HOME} \
+    && git checkout ${GIT_REF} \
+    && git submodule update --init --recursive"
+
+WORKDIR /tt-metal
+
+# Build tt-metal and venv, then clear cache
+RUN /bin/bash -c "./build_metal.sh \
+    && ./create_venv.sh \
+    && source $PYTHON_ENV_DIR/bin/activate \
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
+
+# Extra system deps - Fedora packages
+RUN dnf install -y \
+    gosu \
+    mesa-libGL \
+    libsndfile \
     && dnf clean all
 
 #############################################################
 
 FROM base AS basic-ttnn-runtime
 
-# Install basic runtime dependencies
-RUN dnf install -y \
-    git \
-    python3-devel \
-    python3-pip \
-    uv \
-    && dnf clean all
-
-# Install the SFPI compiler
-COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
-COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
-
-# Set up virtual environment
+# Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN uv python install 3.12
-RUN uv venv $PYTHON_ENV_DIR --python 3.12
+RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -64,60 +219,3 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bashrc
 # Add PyTorch CPU wheels to pip config
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
-
-#############################################################
-
-FROM base AS evaluation
-
-RUN mkdir /tt-metal
-WORKDIR /tt-metal
-
-# Install additional runtime dependencies
-RUN dnf install -y \
-    python3 \
-    python3-pip \
-    git \
-    uv \
-    ccache \
-    slurm-slurmd \
-    && dnf clean all
-
-# Install Python deps (skip venv)
-COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/
-COPY docs/requirements-docs.txt docs/
-COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
-COPY tools/triage/requirements.txt tools/triage/
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
-RUN uv pip install --upgrade setuptools
-RUN uv pip install --ignore-installed -r tt_metal/python_env/requirements-dev.txt
-
-## Install Metal dependencies
-COPY install_dependencies.sh .
-COPY tt_metal/sfpi-info.sh tt_metal/
-COPY tt_metal/sfpi-version tt_metal/
-COPY scripts/ttexalens_ref.txt scripts/
-RUN ./install_dependencies.sh --docker
-
-# Build & install Metal
-COPY . .
-
-ARG BUILD_METAL_ARGS=""
-
-# Configure with CPM cache shared LOCKED mount
-RUN --mount=type=cache,target=/tt-metal/.cpmcache,sharing=locked,id=cpm \
-    ./build_metal.sh $BUILD_METAL_ARGS --configure-only --cpm-source-cache /tt-metal/.cpmcache --build-dir /usr --enable-ccache
-
-# Build & install with CCACHE_REMOTE_STORAGE secret and CPM non-locking mount
-RUN --mount=type=secret,id=CCACHE_REMOTE_STORAGE \
-    --mount=type=cache,target=/tt-metal/.cpmcache,sharing=shared,id=cpm \
-    export CCACHE_REMOTE_STORAGE=$(cat /run/secrets/CCACHE_REMOTE_STORAGE) && \
-    export CCACHE_REMOTE_ONLY=1 && \
-    cmake --build /usr --target install
-
-# Build & install Python package
-RUN uv pip install -e .
-
-# Add permissions for all users (MPI uses non-root users and some tests write here)
-RUN chmod -R 777 /usr/libexec/tt-metalium
-
-WORKDIR /root

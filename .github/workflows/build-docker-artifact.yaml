@@ -296,7 +296,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.fedora
-          target: base
+          target: ci-build
           push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
@@ -308,7 +308,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.fedora
-          target: basic-ttnn-runtime
+          target: dev
           push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}

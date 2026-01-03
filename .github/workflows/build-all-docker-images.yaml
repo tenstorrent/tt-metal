@@ -411,7 +411,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.fedora
-          target: base
+          target: ci-build
           push: true
           tags: ${{ needs.check-images.outputs.fedora-43-ci-build-tag }}
           build-args: FEDORA_VERSION=43
@@ -422,7 +422,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.fedora
-          target: basic-ttnn-runtime
+          target: ci-test
           push: true
           tags: ${{ needs.check-images.outputs.fedora-43-ci-test-tag }}
           build-args: FEDORA_VERSION=43
@@ -433,7 +433,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.fedora
-          target: basic-ttnn-runtime
+          target: dev
           push: true
           tags: ${{ needs.check-images.outputs.fedora-43-dev-tag }}
           build-args: FEDORA_VERSION=43
