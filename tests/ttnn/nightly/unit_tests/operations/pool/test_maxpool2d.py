@@ -52,6 +52,7 @@ def run_max_pool2d(
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     use_reshaped_tensor=True,
+    dram_slice_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -164,6 +165,7 @@ def run_max_pool2d(
         reallocate_halo_output=True,
         dtype=out_dtype,
         output_layout=output_layout,
+        dram_slice_config=dram_slice_config,
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
