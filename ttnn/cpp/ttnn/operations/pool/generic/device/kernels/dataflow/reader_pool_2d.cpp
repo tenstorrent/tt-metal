@@ -442,9 +442,7 @@ void kernel_main() {
     constexpr uint32_t config_page_size = get_compile_time_arg_val(48);
     constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(49);
     constexpr uint32_t reader_page_size = get_compile_time_arg_val(50);
-    constexpr uint32_t config_tensor_args_index = 51;
-    constexpr uint32_t reader_tensor_args_index =
-        TensorAccessorArgs<config_tensor_args_index>().next_compile_time_args_offset();
+    constexpr uint32_t reader_tensor_args_index = 51;
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
@@ -540,6 +538,8 @@ void kernel_main() {
     if constexpr (!one_scalar_per_core) {
         uint32_t config_l1_addr = get_read_ptr(config_cb_id);
         if constexpr (config_in_dram) {
+            constexpr uint32_t config_tensor_args_index =
+                TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset();
             load_config_tensor_if_in_dram<config_dram_addr, config_page_size, config_tensor_args_index, config_cb_id>(
                 core_nhw_index);
         }

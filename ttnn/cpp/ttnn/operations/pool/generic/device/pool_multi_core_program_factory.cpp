@@ -598,60 +598,63 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             config_tensor_in_dram ? nullptr : config_buffer);
     }
     std::vector<uint32_t> reader0_ct_args = {
-        max_out_nhw_per_core,                                      // 0
-        kernel_h,                                                  // 1
-        kernel_w,                                                  // 2
-        pad_w,                                                     // 3
-        in_nbytes_leftover,                                        // 4
-        in_w,                                                      // 5
-        in_c_per_shard_ceil,                                       // 6
-        params.split_reader,                                       // enable split reader //7
-        0,                                                         // split reader id //8
-        bf16_scalar,                                               // 9
-        bf16_init_value,                                           // 10
-        in_nblocks_c,                                              // 11
-        in_cb_sz,                                                  // 12
-        params.max_rows_for_reduction,                             // 13
-        ceil_pad_w,                                                // 14
-        in_cb_id_0,                                                // 15
-        in_cb_id_1,                                                // 16
-        raw_in_cb_id,                                              // 17
-        in_reader_indices_cb_id,                                   // 18
-        in_scalar_cb_id_0,                                         // 19
-        in_scalar_cb_id_1,                                         // 20
-        in_idx_cb_id,                                              // 21
-        pack_tmp_cb_id,                                            // 22
-        pack_idx_tmp_cb_id,                                        // 23
-        right_inc_cb_id,                                           // 24
-        down_left_wrap_inc_cb_id,                                  // 25
-        up_left_wrap_inc_cb_id,                                    // 26
-        clear_value_cb_id,                                         // 27
-        (uint32_t)pool_type,                                       // 28
-        one_scalar_per_core,                                       // 29
-        config_cb_id,                                              // 30
-        in_nbytes_c,                                               // 31
-        shard_width_bytes,                                         // 32
-        params.multi_buffering_factor,                             // 33
-        stride_w,                                                  // 34
-        dilation_h,                                                // 35
-        dilation_w,                                                // 36
-        (uint32_t)return_indices,                                  // 37
-        pad_t,                                                     // 38
-        pad_l,                                                     // 39
-        right_inc,                                                 // 40
-        down_left_wrap_inc,                                        // 41
-        up_left_wrap_inc,                                          // 42
-        (uint32_t)zero_pages,                                      // 43
-        out_cb_id,                                                 // 44
-        out_idx_cb_id,                                             // 45
-        config_tensor_in_dram,                                     // 46
-        config_tensor.device_storage().get_buffer()->address(),    // 47
-        config_tensor.device_storage().get_buffer()->page_size(),  // 48
-        reader_indices_storage.get_buffer()->address(),            // 49
-        reader_indices_storage.get_buffer()->page_size()           // 50
+        max_out_nhw_per_core,                                                                // 0
+        kernel_h,                                                                            // 1
+        kernel_w,                                                                            // 2
+        pad_w,                                                                               // 3
+        in_nbytes_leftover,                                                                  // 4
+        in_w,                                                                                // 5
+        in_c_per_shard_ceil,                                                                 // 6
+        params.split_reader,                                                                 // enable split reader //7
+        0,                                                                                   // split reader id //8
+        bf16_scalar,                                                                         // 9
+        bf16_init_value,                                                                     // 10
+        in_nblocks_c,                                                                        // 11
+        in_cb_sz,                                                                            // 12
+        params.max_rows_for_reduction,                                                       // 13
+        ceil_pad_w,                                                                          // 14
+        in_cb_id_0,                                                                          // 15
+        in_cb_id_1,                                                                          // 16
+        raw_in_cb_id,                                                                        // 17
+        in_reader_indices_cb_id,                                                             // 18
+        in_scalar_cb_id_0,                                                                   // 19
+        in_scalar_cb_id_1,                                                                   // 20
+        in_idx_cb_id,                                                                        // 21
+        pack_tmp_cb_id,                                                                      // 22
+        pack_idx_tmp_cb_id,                                                                  // 23
+        right_inc_cb_id,                                                                     // 24
+        down_left_wrap_inc_cb_id,                                                            // 25
+        up_left_wrap_inc_cb_id,                                                              // 26
+        clear_value_cb_id,                                                                   // 27
+        (uint32_t)pool_type,                                                                 // 28
+        one_scalar_per_core,                                                                 // 29
+        config_cb_id,                                                                        // 30
+        in_nbytes_c,                                                                         // 31
+        shard_width_bytes,                                                                   // 32
+        params.multi_buffering_factor,                                                       // 33
+        stride_w,                                                                            // 34
+        dilation_h,                                                                          // 35
+        dilation_w,                                                                          // 36
+        (uint32_t)return_indices,                                                            // 37
+        pad_t,                                                                               // 38
+        pad_l,                                                                               // 39
+        right_inc,                                                                           // 40
+        down_left_wrap_inc,                                                                  // 41
+        up_left_wrap_inc,                                                                    // 42
+        (uint32_t)zero_pages,                                                                // 43
+        out_cb_id,                                                                           // 44
+        out_idx_cb_id,                                                                       // 45
+        config_tensor_in_dram,                                                               // 46
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 47
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 48
+        reader_indices_storage.get_buffer()->address(),                                      // 49
+        reader_indices_storage.get_buffer()->page_size()                                     // 50
     };
-    tt::tt_metal::TensorAccessorArgs(config_tensor.device_storage().get_buffer()).append_to(reader0_ct_args);
+
     tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
+    if (!one_scalar_per_core) {
+        tt::tt_metal::TensorAccessorArgs(config_tensor.device_storage().get_buffer()).append_to(reader0_ct_args);
+    }
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
