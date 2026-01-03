@@ -121,7 +121,8 @@ struct NoOp {
  * @tparam input_mode Input handling mode (STREAMING or PRELOADED) - defaults to STREAMING
  * @tparam init If true, calls reduce_init before processing (default: true)
  * @tparam uninit If true, calls reduce_uninit after processing (default: true)
- * @tparam enforce_fp32_accumulation Enable FP32 accumulation (default: false)
+ *
+ * @note FP32 accumulation is auto-detected from ENABLE_FP32_DEST_ACC define via get_fp32_dest_acc_enabled()
  *
  * @param icb Input circular buffer containing tiles to reduce
  * @param icb_scaler Circular buffer containing scaler tile
@@ -209,12 +210,8 @@ ALWI void reduce(
     uint32_t input_stride = 0,
     uint32_t max_batch_tiles = 1,
     PostReduceOp post_reduce_op = {}) {
-// Auto-detect FP32 dest accumulation mode from compile-time define
-#ifdef ENABLE_FP32_DEST_ACC
-    constexpr bool enforce_fp32_accumulation = (ENABLE_FP32_DEST_ACC == 1);
-#else
-    constexpr bool enforce_fp32_accumulation = false;
-#endif
+    // Auto-detect FP32 dest accumulation mode from compile-time define
+    constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
 
     // Initialization
     if constexpr (init) {
