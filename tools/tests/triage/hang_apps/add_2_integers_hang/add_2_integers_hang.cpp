@@ -146,12 +146,13 @@ int main() {
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
 
     // Add the program to the workload and execute it.
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
     try {
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
     } catch (std::runtime_error& e) {
-        if (std::string(e.what()).find("device timeout") != std::string::npos) {
+        std::string error_msg = e.what();
+        if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
             printf("Device timeout detected as expected.\n");
             std::_Exit(0);
         } else {

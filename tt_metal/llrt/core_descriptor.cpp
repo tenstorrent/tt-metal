@@ -138,7 +138,7 @@ const core_descriptor_t& get_core_descriptor_config(
         tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
-    if (config_by_num_cqs.count(num_hw_cqs)) {
+    if (config_by_num_cqs.contains(num_hw_cqs)) {
         return config_by_num_cqs.at(num_hw_cqs);
     }
 
@@ -222,7 +222,7 @@ const core_descriptor_t& get_core_descriptor_config(
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
             if (dispatch_core_config.get_core_type() == CoreType::ETH) {
                 auto logical_coord = get_core_coord_from_relative(coord, grid_size);
-                if (logical_active_eth_cores.find(logical_coord) != logical_active_eth_cores.end()) {
+                if (logical_active_eth_cores.contains(logical_coord)) {
                     continue;
                 }
             }
@@ -296,7 +296,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     uint32_t config_hash = ((uint8_t)(dispatch_core_config.get_core_type())) |
                            ((uint8_t)(dispatch_core_config.get_dispatch_core_axis()) << 4) | (num_hw_cqs << 8) |
                            (device_id << 16);
-    if (physical_grid_config_cache.find(config_hash) == physical_grid_config_cache.end()) {
+    if (!physical_grid_config_cache.contains(config_hash)) {
         auto worker_grid = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config);
         std::size_t tensix_num_worker_cols = worker_grid.x;
         std::size_t tensix_num_worker_rows = worker_grid.y;
