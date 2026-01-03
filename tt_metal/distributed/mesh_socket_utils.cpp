@@ -437,6 +437,46 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     return local_endpoint_desc;
 }
 
+template <typename OperationType, typename... Args>
+void execute_with_timeout(OperationType&& operation, Args&&... args) {
+    const auto timeout = std::chrono::duration<float>(10.0f);
+
+    std::atomic<bool> completed{false};
+    std::atomic<bool> failed{false};
+    std::exception_ptr exception_ptr{nullptr};
+
+    std::thread thread([&]() {
+        try {
+            operation(std::forward<Args>(args)...);
+            completed = true;
+        } catch (...) {
+            exception_ptr = std::current_exception();
+            failed = true;
+        }
+    });
+
+    auto start = std::chrono::steady_clock::now();
+    while (!completed && !failed) {
+        std::this_thread::yield();
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration<float>(now - start).count();
+        if (elapsed >= timeout.count()) {
+            thread.detach();
+            TT_THROW(
+                "Timed out trying to establish a socket connection. Please ensure that the socket is being created on "
+                "all hosts mapped to the requested meshes.");
+        }
+    }
+
+    if (thread.joinable()) {
+        thread.join();
+    }
+
+    if (failed && exception_ptr) {
+        std::rethrow_exception(exception_ptr);
+    }
+}
+
 void validate_subordinate_descriptors(
     const SocketPeerDescriptor& desc,
     std::vector<uint8_t>& serialized_local_desc,
@@ -506,7 +546,9 @@ void forward_descriptor_to_peer(
 
     // Forward descriptor to controller host. This host is on the same mesh with the lowest host rank.
     std::vector<uint8_t> serialized_local_desc = serialize_to_bytes(desc);
-    validate_subordinate_descriptors(desc, serialized_local_desc, controller_rank, my_mesh_id_ranks, context);
+    execute_with_timeout([&]() {
+        validate_subordinate_descriptors(desc, serialized_local_desc, controller_rank, my_mesh_id_ranks, context);
+    });
     int local_descriptor_size_bytes = serialized_local_desc.size();
     // Once all descriptors are validated, forward the socket descriptor from the controller to all peers.
     if (context->rank() == controller_rank) {
@@ -518,12 +560,14 @@ void forward_descriptor_to_peer(
                 desc.exchange_tag  // Forward this descriptor over the specified tag
             );
             // Send the serialized descriptor
-            context->send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
-                Rank{peer_rank},
-                desc.exchange_tag  // Forward this descriptor over the specified tag
-            );
+            execute_with_timeout([&]() {
+                context->send(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
+                    Rank{peer_rank},
+                    desc.exchange_tag  // Forward this descriptor over the specified tag
+                );
+            });
         }
     }
 }
@@ -541,7 +585,9 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         *std::min_element(peer_ranks.begin(), peer_ranks.end());
 
     // Query the size of the serialized descriptor first (this is the only element in the header)
-    auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_controller_rank}, desc.exchange_tag);
+    std::size_t msg_header_size = 0;
+    execute_with_timeout(
+        [&]() { msg_header_size = context->snoop_incoming_msg_size(Rank{peer_controller_rank}, desc.exchange_tag); });
     TT_FATAL(
         msg_header_size == sizeof(int),
         "Expected {} bytes in the header for socket descriptor, but got {} bytes during multi-host handshake.",
@@ -549,12 +595,14 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         msg_header_size);
 
     int expected_descriptor_size_bytes = 0;
-    context->recv(
-        tt::stl::Span<std::byte>(
-            reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
-        Rank{peer_controller_rank},
-        desc.exchange_tag  // Read the descriptor over the specified tag
-    );
+    execute_with_timeout([&]() {
+        context->recv(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
+            Rank{peer_controller_rank},
+            desc.exchange_tag  // Read the descriptor over the specified tag
+        );
+    });
     // Validate that the size in the header matches the descriptor message size
     auto descriptor_size_bytes = context->snoop_incoming_msg_size(Rank{peer_controller_rank}, desc.exchange_tag);
     TT_FATAL(
@@ -566,12 +614,14 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     // Allocate a buffer to receive the serialized descriptor
     std::vector<uint8_t> serialized_remote_desc(descriptor_size_bytes);
     // Receive the serialized descriptor
-    context->recv(
-        tt::stl::as_writable_bytes(
-            tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
-        Rank{peer_controller_rank},
-        desc.exchange_tag  // Read the descriptor over the specified tag
-    );
+    execute_with_timeout([&]() {
+        context->recv(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
+            Rank{peer_controller_rank},
+            desc.exchange_tag  // Read the descriptor over the specified tag
+        );
+    });
     // Deserialize the received descriptor
     auto remote_desc = deserialize_from_bytes(serialized_remote_desc);
     validate_remote_desc(desc, remote_desc, false);

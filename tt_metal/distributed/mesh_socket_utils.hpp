@@ -65,4 +65,7 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
 std::vector<multihost::Rank> get_ranks_for_mesh_id(
     tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
+template <typename OperationType, typename... Args>
+void execute_with_timeout(OperationType&& operation, Args&&... args);
+
 }  // namespace tt::tt_metal::distributed

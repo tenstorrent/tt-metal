@@ -227,7 +227,7 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
     std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
     // Barrier across all sender and receiver ranks. This ensures that the downstream workloads using these socket
     // will start after the socket is initialized across all hosts.
-    barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context);
+    execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(

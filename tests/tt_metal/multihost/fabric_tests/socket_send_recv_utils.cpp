@@ -82,6 +82,12 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
     return seed;
 }
 
+MeshId get_local_mesh_id() {
+    auto local_mesh_bindings = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
+    TT_FATAL(local_mesh_bindings.size() == 1, "Must only have a single local mesh binding.");
+    return local_mesh_bindings[0];
+}
+
 bool test_socket_send_recv(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
     tt_metal::distributed::MeshSocket& socket,
@@ -98,7 +104,7 @@ bool test_socket_send_recv(
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    auto my_mesh_id = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings()[0];
+    auto my_mesh_id = get_local_mesh_id();
 
     if (!gen.has_value()) {
         // Synchronize seed across ranks
@@ -265,11 +271,11 @@ bool test_socket_send_recv(
         }
         // Increment the source vector for the next iteration
         // This is to ensure that the data is different for each transaction
-        for (int i = 0; i < src_vec.size(); i++) {
-            src_vec[i]++;
+        for (unsigned int& val : src_vec) {
+            val++;
         }
-        for (int i = 0; i < src_vec_per_core.size(); i++) {
-            src_vec_per_core[i]++;
+        for (unsigned int& val : src_vec_per_core) {
+            val++;
         }
     }
     return is_data_match;
@@ -291,12 +297,6 @@ std::vector<tt::tt_fabric::MeshId> get_neighbor_mesh_ids(SystemConfig system_con
         TT_THROW("Unsupported system configuration for multi-mesh single connection test.");
     }
     return recv_mesh_ids;
-}
-
-MeshId get_local_mesh_id() {
-    auto local_mesh_bindings = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
-    TT_FATAL(local_mesh_bindings.size() == 1, "Must only have a single local mesh binding.");
-    return local_mesh_bindings[0];
 }
 
 void test_multi_mesh_single_conn_bwd(
