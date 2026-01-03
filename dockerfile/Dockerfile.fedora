@@ -21,6 +21,7 @@ RUN dnf update -y && dnf install -y \
     openmpi{,devel} \
     libxml2{,-devel} \
     libxslt{,-devel} \
+    patch \
     && dnf clean all
 
 #############################################################
