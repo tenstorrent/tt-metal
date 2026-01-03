@@ -346,8 +346,9 @@ public:
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarDataMovementKernel is only supported on Quasar");
         TT_FATAL(
-            config.processors.size() == dm_cores.size(),
-            "Number of processors in config must match number of DM cores");
+            config.num_processors_per_cluster == dm_cores.size(),
+            "Number of processors per cluster specified in config must match number of DM cores per cluster that have "
+            "been reserved");
         TT_FATAL(std::is_sorted(dm_cores_.begin(), dm_cores_.end()), "DM cores must be ordered");
     }
 
