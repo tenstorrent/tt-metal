@@ -34,7 +34,7 @@ void bind_sdpa(nb::module_& mod) {
             input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
 
         Keyword args:
-            attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
+            attn_mask (ttnn.Tensor, optional): Defaults to `None`. Either [b x 1 x s x s] with head broadcasting implied or [b x nqh x s x s].
             is_causal (bool): Defaults to `true`.
             scale (float, optional): Defaults to `None`.
             sliding_window_size (int, optional): Defaults to `None`. Size of sliding window for attention. If provided && is_causal, only attends to the last `sliding_window_size` tokens. If provided && !is_causal, attends to a window of size `sliding_window_size` centered at the current position.
