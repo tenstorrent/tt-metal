@@ -27,6 +27,7 @@ RUN dnf update -y && dnf install -y \
     libxslt \
     libxslt-devel \
     patch \
+    which \
     && dnf clean all
 
 #############################################################
