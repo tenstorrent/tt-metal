@@ -129,7 +129,7 @@ uint32_t firmware_config_init(
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                          launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
 
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !(defined(IS_D_VARIANT) || defined(IS_H_VARIANT))
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
     extern uint32_t rta_count;
     extern uint32_t crta_count;
     if (launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset == 0xBEEF) {

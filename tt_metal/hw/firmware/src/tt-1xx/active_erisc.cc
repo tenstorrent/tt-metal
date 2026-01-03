@@ -49,7 +49,7 @@ uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
-#if defined(WATCHER_ENABLED)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 uint32_t rta_count __attribute__((used));
 uint32_t crta_count __attribute__((used));
 #endif

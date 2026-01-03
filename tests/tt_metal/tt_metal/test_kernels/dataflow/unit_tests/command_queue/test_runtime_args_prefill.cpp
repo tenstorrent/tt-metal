@@ -15,5 +15,4 @@ void kernel_main() {
     ptr[2] = get_arg_val<uint32_t>(2);
     ptr[3] = get_arg_val<uint32_t>(3);
     ptr[4] = get_arg_val<uint32_t>(4);
-    ptr[5] = get_arg_val<uint32_t>(5);
 }

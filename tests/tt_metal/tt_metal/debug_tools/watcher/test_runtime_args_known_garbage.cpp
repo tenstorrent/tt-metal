@@ -25,7 +25,7 @@ namespace tt::tt_metal {
 
 // Test if RTA payload region initialized by HostMemDeviceCommand
 // is filled with known garbage (with 0xBEEF####) for cores with unset RTAs
-// This feature is useful for RTAs only when watcher asserts are disabled
+// This test is useful only when watcher asserts are disabled
 TEST_F(MeshWatcherFixture, WatcherKnownGarbageRTAs) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
@@ -97,7 +97,7 @@ TEST_F(MeshWatcherFixture, WatcherKnownGarbageRTAs) {
 
 // This test reads back RTA and CRTA counts and verifies all RTA and CRTAs payload as dispatched.
 // There should be no watcher asserts here as MAX_RTA_IDX/MAX_CRTA_IDX accessed on device side kernel
-// is within the allocated RTA/CRTA bounds
+// are within the allocated RTA/CRTA bounds
 TEST_F(MeshWatcherFixture, WatcherArgCountCheck) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
@@ -150,6 +150,7 @@ TEST_F(MeshWatcherFixture, WatcherArgCountCheck) {
     SetCommonRuntimeArgs(program, kernel, crtas);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
 
     std::vector<uint32_t> read_result;
     for (const auto& core : core_range) {
@@ -169,8 +170,8 @@ TEST_F(MeshWatcherFixture, WatcherArgCountCheck) {
 }
 
 // This test sets MAX_RTA_IDX == size of RTA payload. This should trigger dev_msgs::DebugAssertRtaOutOfBounds
-// as we're accessing an index out of dispatched RTA bounds
-TEST_F(MeshWatcherFixture, WatcherCRTACountAsserts) {
+// as we're accessing an index beyond the dispatched RTA bounds
+TEST_F(MeshWatcherFixture, WatcherRTACountAsserts) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
         GTEST_SKIP() << "This test can only be run with fast dispatch mode";
@@ -190,10 +191,12 @@ TEST_F(MeshWatcherFixture, WatcherCRTACountAsserts) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     const std::vector<uint32_t> rtas = {0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD, 0xEEEEEEEE};
+    const std::vector<uint32_t> crtas = {0x22222222, 0x33333333, 0x44444444, 0x55555555, 0x66666666, 0x77777777};
+    const uint32_t total_read_size = (2 + rtas.size() + crtas.size()) * sizeof(uint32_t);
 
     // Configure CB to store read-back args
     const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    uint32_t cb_size = tt::align(rtas.size() * sizeof(uint32_t), l1_alignment);
+    uint32_t cb_size = tt::align(total_read_size, l1_alignment);
     CircularBufferConfig cb_config =
         CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float32}}).set_page_size(0, cb_size);
 
@@ -233,7 +236,7 @@ TEST_F(MeshWatcherFixture, WatcherCRTACountAsserts) {
 
 // This test sets MAX_CRTA_IDX == size of CRTA payload. This should trigger dev_msgs::DebugAssertCrtaOutOfBounds
 // as we're accessing an index out of dispatched CRTA bounds
-TEST_F(MeshWatcherFixture, WatcherRTACountAsserts) {
+TEST_F(MeshWatcherFixture, WatcherCRTACountAsserts) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
         GTEST_SKIP() << "This test can only be run with fast dispatch mode";
@@ -252,11 +255,13 @@ TEST_F(MeshWatcherFixture, WatcherRTACountAsserts) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
+    const std::vector<uint32_t> rtas = {0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD, 0xEEEEEEEE};
     const std::vector<uint32_t> crtas = {0x22222222, 0x33333333, 0x44444444, 0x55555555, 0x66666666, 0x77777777};
+    const uint32_t total_read_size = (2 + rtas.size() + crtas.size()) * sizeof(uint32_t);
 
     // Configure CB to store read-back args
     const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    uint32_t cb_size = tt::align(crtas.size() * sizeof(uint32_t), l1_alignment);
+    uint32_t cb_size = tt::align(total_read_size, l1_alignment);
     CircularBufferConfig cb_config =
         CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float32}}).set_page_size(0, cb_size);
 
@@ -294,11 +299,16 @@ TEST_F(MeshWatcherFixture, WatcherRTACountAsserts) {
     }
 }
 
-// No RTA/CRTA set, so counts read back should be zero
+// In this test no RTA or CRTA are set, so counts read back should be zero
 TEST_F(MeshWatcherFixture, ZeroArgCheck) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
         GTEST_SKIP() << "This test can only be run with fast dispatch mode";
+    }
+
+    bool watcher_assert_disabled = tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+    if (watcher_assert_disabled) {
+        GTEST_SKIP() << "This test can only be run when watcher assert checks (RTA/CRTA) are enabled";
     }
 
     // First run the program with the initial runtime args
@@ -331,6 +341,7 @@ TEST_F(MeshWatcherFixture, ZeroArgCheck) {
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
 
     std::vector<uint32_t> read_result;
     for (const auto& core : core_range) {

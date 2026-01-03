@@ -675,8 +675,6 @@ BatchedTransfers assemble_runtime_args_commands(
 
     // kernel group multicast can merge with CB multicast, so prefer it in general.
     bool use_kernel_group_crta_multicast = kernel_group_crta_multicast_count <= per_kernel_crta_multicast_count;
-    // std::cout << "use_kernel_group_crta_multicast: " << static_cast<uint16_t>(use_kernel_group_crta_multicast) <<
-    // '\n';
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
@@ -784,7 +782,6 @@ BatchedTransfers assemble_runtime_args_commands(
                                 unique_rt_data_and_sizes.back().emplace_back(nullptr, 0, sizeof(uint32_t));
                             }
                             for (auto kernel_id : kg->kernel_ids) {
-                                // std::cout << "kernel_id: " << kernel_id << '\n';
                                 auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
@@ -869,8 +866,6 @@ BatchedTransfers assemble_runtime_args_commands(
                     if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) {
                         common_rt_data_and_sizes.back().emplace_back(nullptr, 0, sizeof(uint32_t));
                     }
-                    // TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
-                    // TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
                     uint32_t payload_size = common_rt_args.size() * sizeof(uint32_t);
                     if (watcher_assert_enabled) {
                         TT_ASSERT(payload_size == common_size);
@@ -1470,7 +1465,6 @@ public:
                 last_end = transfer.end();
             }
             std::vector<uint8_t*> data_collection_location;
-            // std::cout << "batched_dispatch_subcmds[i].size(): " << batched_dispatch_subcmds[i].size() << '\n';
             device_command_sequence.add_dispatch_write_packed_large(
                 CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
                 l1_alignment,
@@ -1497,23 +1491,12 @@ public:
                         // rt_args_data points to the original vector. Update it so later modifications directly modify
                         // the command stream.
                         transfer.rta_data->rt_args_data = reinterpret_cast<uint32_t*>(data_collection_location[j]);
-                        // const auto num_words = transfer.data.size() / sizeof(uint32_t);
-                        // const auto words_ptr = reinterpret_cast<const uint32_t*>(data_collection_location[j]);
-                        // for (size_t i = 0; i < num_words; i++) {
-                        //     std::cout << "cond1: 0x" << std::hex << words_ptr[i] << '\n';
-                        // }
-
                     } else {
                         // rt_args_data points into the command stream. Setup a copy from that other location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
                             transfer.rta_data->rt_args_data,
                             data_collection_location[j],
                             static_cast<uint32_t>(transfer.data.size())});
-                        // const auto num_words = transfer.data.size() / sizeof(uint32_t);
-                        // const auto words_ptr = reinterpret_cast<const uint32_t*>(transfer.data.data());
-                        // for (size_t i = 0; i < num_words; i++) {
-                        //     std::cout << "Cond2: 0x" << std::hex << words_ptr[i] << '\n';
-                        // }
                     }
                 }
                 j++;
