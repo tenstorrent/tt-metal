@@ -52,8 +52,10 @@ permissions:
   packages: write
 
 jobs:
+  # parse-platform and build-dispatch are for direct workflow_dispatch calls
+  # They only run if NO pre-built docker image tags were provided (i.e., not called from merge-gate)
   parse-platform:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
     runs-on: ubuntu-latest
     outputs:
       distro: ${{ steps.parse.outputs.distro }}
@@ -85,7 +87,7 @@ jobs:
           esac
 
   build-dispatch:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
     needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -102,8 +104,10 @@ jobs:
       skip-tt-train: true
       tracy: false
 
+  # build job runs the matrix - either when called from merge-gate with pre-built tags,
+  # or when called via workflow_call without the platform dropdown
   build:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write

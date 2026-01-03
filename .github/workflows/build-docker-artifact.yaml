@@ -74,8 +74,8 @@ jobs:
       - name: Set environment variables
         id: platform
         run: |
-          # Parse platform for workflow_dispatch, use inputs for workflow_call
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # Parse platform dropdown if set (direct workflow_dispatch), otherwise use distro/version inputs
+          if [ -n "${{ inputs.platform }}" ]; then
             case "${{ inputs.platform }}" in
               "Ubuntu 22.04")
                 DISTRO="ubuntu"
