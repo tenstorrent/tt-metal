@@ -86,8 +86,8 @@ COPY docs/requirements-docs.txt docs/
 COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
 COPY tools/triage/requirements.txt tools/triage/
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
-RUN pip3 install --upgrade setuptools
-RUN pip3 install --ignore-installed -r tt_metal/python_env/requirements-dev.txt
+RUN uv pip install --upgrade setuptools
+RUN uv pip install --ignore-installed -r tt_metal/python_env/requirements-dev.txt
 
 ## Install Metal dependencies
 COPY install_dependencies.sh .
