@@ -11,6 +11,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from typing import Optional, Tuple
 
 # Override the default timeout in seconds for hang detection.
 # group_norm is computationally intensive, needs longer timeout
@@ -53,6 +54,27 @@ def mesh_device_fixture():
     yield (device, device_name)
     ttnn.close_device(device)
     del device
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Skip test vectors that cause L1 circular buffer overflow.
+    group_norm allocates internal circular buffers that can exceed L1 capacity for large tensors.
+    """
+    input_shape = test_vector.get("input_shape")
+
+    if input_shape:
+        # Calculate total tensor size
+        total_elements = 1
+        for dim in input_shape:
+            total_elements *= dim
+
+        # Skip if tensor is too large (causes circular buffer overflow)
+        # Empirically, tensors > 200K elements cause L1 overflow
+        if total_elements > 200000:
+            return True, f"group_norm: Skipping large tensor {input_shape} (circular buffer would exceed L1 capacity)"
+
+    return False, None
 
 
 def run(

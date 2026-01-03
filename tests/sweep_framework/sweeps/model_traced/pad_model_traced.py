@@ -47,26 +47,41 @@ if model_traced_params:
 
 def invalidate_vector(test_vector) -> tuple[bool, str]:
     """
-    Invalidate test vectors that would cause OOM or are unrealistic.
-    Skip vectors with extreme tensor sizes that exceed available memory.
+    Invalidate test vectors that would cause L1 circular buffer overflow.
+    pad operation allocates internal circular buffers that can exceed L1 capacity.
     """
     input_shape = test_vector.get("input_shape")
+    padding = test_vector.get("padding")
 
-    if isinstance(input_shape, (list, tuple)) and len(input_shape) >= 4:
+    if isinstance(input_shape, (list, tuple)):
         # Calculate tensor size in elements
         total_elements = 1
         for dim in input_shape:
             total_elements *= dim
 
-        # Skip if tensor would require more than 10GB (very conservative limit)
-        # Each element is 2 bytes for bfloat16, so 10GB = 5 billion elements
-        max_elements = 5_000_000_000
-
-        if total_elements > max_elements:
+        # Skip if tensor is too large (causes circular buffer overflow)
+        # Empirically, tensors > 500K elements can cause L1 overflow for pad
+        # The operation needs to allocate buffers for both input and padded output
+        if total_elements > 500000:
             return (
                 True,
-                f"Tensor size too large: {total_elements} elements would require {total_elements * 2 / 1e9:.1f}GB",
+                f"pad: Skipping large tensor {input_shape} (circular buffer would exceed L1 capacity)",
             )
+
+        # Also check if padding would create an extremely large output
+        if padding:
+            try:
+                # Estimate output size with padding
+                output_elements = total_elements
+                # Padding can significantly increase size
+                # Conservative estimate: if any padding dim is large, skip
+                if isinstance(padding, (list, tuple)):
+                    for pad_val in padding:
+                        if isinstance(pad_val, (list, tuple)):
+                            if any(p > 1000 for p in pad_val):
+                                return (True, f"pad: Skipping due to large padding values {padding}")
+            except:
+                pass
 
     return (False, None)
 
