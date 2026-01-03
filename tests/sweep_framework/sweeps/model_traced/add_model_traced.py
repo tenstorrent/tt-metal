@@ -71,6 +71,13 @@ def run(
             shape_a = input_shape
             shape_b = input_shape
 
+    # Validate shapes are not None
+    if shape_a is None or shape_b is None:
+        from loguru import logger
+
+        logger.error(f"Invalid shapes: shape_a={shape_a}, shape_b={shape_b}")
+        return [(False, "Invalid input shapes (None)"), 0.0]
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)

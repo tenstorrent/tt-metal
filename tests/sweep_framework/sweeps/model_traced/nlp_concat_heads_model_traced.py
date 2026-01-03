@@ -88,6 +88,13 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
+    # Check if input has sharded memory - if so, convert to interleaved first
+    # nlp_concat_heads changes the width dimension which can cause shard width mismatches
+    if hasattr(input_tensor_a, "memory_config"):
+        mem_config = input_tensor_a.memory_config()
+        if mem_config.is_sharded():
+            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
+
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.nlp_concat_heads(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)

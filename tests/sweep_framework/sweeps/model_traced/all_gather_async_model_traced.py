@@ -197,6 +197,55 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, buffer_type,
     return tt_input, torch_reference, output_memory_config
 
 
+def skip(**kwargs) -> tuple:
+    """
+    Validate test vector and skip if invalid.
+    Returns: (should_skip: bool, skip_reason: str or None)
+    """
+    # Check if this is a model_traced run
+    is_model_traced = kwargs.get("input_a_memory_config") is not None
+
+    if is_model_traced:
+        # For model_traced, check if we have multi-device setup
+        if NUM_DEVICES < 2:
+            return True, "Requires multi-device setup (2+ devices)"
+    else:
+        # For generality suite, use the same validation as ccl/generality/all_gather.py
+        test_vector = kwargs
+        cluster_axis = test_vector.get("cluster_axis")
+        mesh_shape = test_vector.get("mesh_shape")
+        input_shape = test_vector.get("input_shape")
+        dim = test_vector.get("dim")
+
+        if not mesh_shape or not input_shape or dim is None:
+            return False, None
+
+        cluster_size = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
+
+        if not validate_serializable_shard_spec(
+            input_shape, test_vector.get("shard_specs"), dim, cluster_size, "gather"
+        ):
+            return True, "Invalid shard spec"
+
+        # hardcode for 6U
+        if mesh_shape in [(16, 2), (2, 16)]:
+            return True, "Invalid mesh shape for 6U"
+
+        if cluster_axis is not None and mesh_shape[cluster_axis] == 1:
+            return True, "Only one device along axis"
+
+        if dim >= len(input_shape):
+            return True, "Dim greater than rank"
+
+        if (
+            test_vector.get("topology") == ttnn.Topology.Ring
+            and test_vector.get("fabric_config") != ttnn.FabricConfig.FABRIC_1D_RING
+        ):
+            return True, "Ring fabric config required for ring topology"
+
+    return False, None
+
+
 def run(
     mesh_shape=None,
     fabric_config=None,
@@ -223,11 +272,6 @@ def run(
     is_model_traced = input_a_memory_config is not None
 
     if is_model_traced:
-        # Model traced format - use defaults for multi-device setup
-        if NUM_DEVICES < 2:
-            logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
-            return [1.0, 0.0]
-
         # Use defaults for model_traced
         mesh_shape = (2, 1)
         fabric_config = ttnn.FabricConfig.FABRIC_1D
@@ -358,7 +402,8 @@ def run(
                 eq, output = comp_pcc(tt_output_tensor, torch_reference)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-            # Return the actual comparison result (eq is bool, output is pcc value)
-            # For comp_equal, output is None. For comp_pcc, output is the PCC value
-            pcc_result = output if output is not None else (1.0 if eq else 0.0)
+            # Return in the format expected by sweeps_runner: [(status, message), e2e_perf]
+            # For comp_pcc, output is the PCC value as a float
+            pcc_value = output if output is not None else (1.0 if eq else 0.0)
+            pcc_result = (eq, str(pcc_value))
             return [pcc_result, e2e_perf]

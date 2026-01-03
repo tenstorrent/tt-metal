@@ -89,15 +89,29 @@ def run(
     # So head_dim = hidden_dim / (num_q_heads + 2 * num_kv_heads)
     head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)
 
+    # Calculate actual split sizes that sum to hidden_dim
+    q_size = num_q_heads * head_dim
+    kv_size = num_kv_heads * head_dim
+
+    # Verify the split sizes sum to hidden_dim
+    if q_size + 2 * kv_size != hidden_dim:
+        from loguru import logger
+
+        logger.warning(
+            f"Split sizes don't match: q_size={q_size}, kv_size={kv_size}, sum={q_size + 2*kv_size}, hidden_dim={hidden_dim}"
+        )
+        # Adjust the last split size to make it exact
+        v_size = hidden_dim - q_size - kv_size
+    else:
+        v_size = kv_size
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
     # Compute proper torch reference (from test_nlp_create_qkv_heads.py)
     # Split input into Q, K, V components
-    (ref_q, _, _) = torch.split(
-        torch_input_tensor_a, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
-    )
+    (ref_q, _, _) = torch.split(torch_input_tensor_a, [q_size, kv_size, v_size], dim=-1)
 
     # Reshape and transpose to get proper head dimensions
     # [B, 1, S, heads*head_dim] -> [B, S, heads, head_dim] -> [B, heads, S, head_dim]

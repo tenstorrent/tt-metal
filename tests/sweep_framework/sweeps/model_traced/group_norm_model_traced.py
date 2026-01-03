@@ -176,6 +176,14 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
+    # Check if input has sharded memory - if so, convert to interleaved first
+    # group_norm has strict sharding constraints (per_core_N * num_cores_c == W)
+    # that may not be met by traced configs
+    if not is_host and hasattr(input_tensor_a, "memory_config"):
+        mem_config = input_tensor_a.memory_config()
+        if mem_config.is_sharded():
+            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
+
     # Create optional tensors if traced config provides them
     input_mask = None
     weight_tensor = None

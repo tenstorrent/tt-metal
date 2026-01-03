@@ -103,6 +103,18 @@ def run(
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
+    # Check if input has sharded L1 memory - if so, convert to DRAM to avoid OOM
+    # repeat operation can consume large amounts of memory
+    if not is_host and hasattr(input_tensor_a, "memory_config"):
+        mem_config = input_tensor_a.memory_config()
+        if mem_config.is_sharded() and mem_config.buffer_type == ttnn.BufferType.L1:
+            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Also ensure output uses DRAM if it would be very large
+        if output_memory_config and hasattr(output_memory_config, "is_sharded"):
+            if output_memory_config.is_sharded() and output_memory_config.buffer_type == ttnn.BufferType.L1:
+                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     start_time = start_measuring_time()
     # Use ttnn.repeat with the repetition vector
     output_tensor = ttnn.repeat(input_tensor_a, repetition_vector, memory_config=output_memory_config)

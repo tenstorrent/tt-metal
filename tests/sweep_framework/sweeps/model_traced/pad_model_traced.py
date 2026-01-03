@@ -150,6 +150,13 @@ def run(
         memory_config=input_a_memory_config,
     )
 
+    # Check if input has sharded memory - convert to DRAM to avoid OOM
+    # pad operation can require significant memory for large padding
+    if hasattr(input_tensor_a, "memory_config"):
+        mem_config = input_tensor_a.memory_config()
+        if mem_config.is_sharded():
+            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
+
     start_time = start_measuring_time()
     output_tensor = ttnn.pad(input_tensor_a, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)

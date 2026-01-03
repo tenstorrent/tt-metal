@@ -76,11 +76,27 @@ def run(
 
     # Get golden function for split_query_key_value_and_split_heads
     golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
-    (
-        torch_query_tensor,
-        torch_key_tensor,
-        torch_value_tensor,
-    ) = golden_function(torch_input_tensor_a, num_heads=num_heads)
+
+    # Golden function expects 3D input [batch, seq_len, hidden_dim]
+    # but traced configs have 4D [batch, 1, seq_len, hidden_dim]
+    if len(shape) == 4 and shape[1] == 1:
+        # Squeeze out the second dimension for golden function
+        torch_input_3d = torch_input_tensor_a.squeeze(1)
+        (
+            torch_query_tensor,
+            torch_key_tensor,
+            torch_value_tensor,
+        ) = golden_function(torch_input_3d, num_heads=num_heads)
+        # Unsqueeze back to 4D to match ttnn output
+        torch_query_tensor = torch_query_tensor.unsqueeze(1)
+        torch_key_tensor = torch_key_tensor.unsqueeze(1)
+        torch_value_tensor = torch_value_tensor.unsqueeze(1)
+    else:
+        (
+            torch_query_tensor,
+            torch_key_tensor,
+            torch_value_tensor,
+        ) = golden_function(torch_input_tensor_a, num_heads=num_heads)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -95,6 +111,14 @@ def run(
     if not is_host:
         from_torch_kwargs["device"] = device
         from_torch_kwargs["memory_config"] = input_a_memory_config
+
+    # The operation expects 3D input [batch, seq_len, hidden_dim]
+    # but traced configs have 4D [batch, 1, seq_len, hidden_dim]
+    needs_unsqueeze = False
+    if len(shape) == 4 and shape[1] == 1:
+        # Squeeze out the second dimension for ttnn operation
+        torch_input_tensor_a = torch_input_tensor_a.squeeze(1)
+        needs_unsqueeze = True
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
@@ -116,12 +140,22 @@ def run(
     value_tensor = ttnn.to_torch(value_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
+    # Unsqueeze back to 4D if we squeezed earlier
+    if needs_unsqueeze:
+        query_tensor = query_tensor.unsqueeze(1)
+        key_tensor = key_tensor.unsqueeze(1)
+        value_tensor = value_tensor.unsqueeze(1)
+
     # Check with PCC for all three outputs
+    # check_with_pcc returns (bool, str) tuple
     pcc_q = check_with_pcc(torch_query_tensor, query_tensor, 0.999)
     pcc_k = check_with_pcc(torch_key_tensor, key_tensor, 0.999)
     pcc_v = check_with_pcc(torch_value_tensor, value_tensor, 0.999)
 
-    # Return minimum PCC of the three outputs
-    pcc = min(pcc_q, pcc_k, pcc_v)
+    # All three must pass for overall success
+    all_pass = pcc_q[0] and pcc_k[0] and pcc_v[0]
+    # Use minimum PCC value as the reported value
+    min_pcc_value = min(float(pcc_q[1]), float(pcc_k[1]), float(pcc_v[1]))
+    pcc_result = (all_pass, str(min_pcc_value))
 
-    return [pcc, e2e_perf]
+    return [pcc_result, e2e_perf]

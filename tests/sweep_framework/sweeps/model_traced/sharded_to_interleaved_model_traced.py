@@ -122,17 +122,13 @@ def run(
     # Verify output is interleaved
     output_mem_config = output_tensor.memory_config()
     if output_mem_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError(
-            f"sharded_to_interleaved should produce interleaved output, but got {output_mem_config.memory_layout}"
-        )
+        return [(False, f"Expected interleaved output, got {output_mem_config.memory_layout}"), e2e_perf]
 
-    # Convert back to sharded to verify correctness (round-trip test)
-    # This ensures the data movement is correct
-    output_sharded = ttnn.interleaved_to_sharded(output_tensor, input_a_memory_config)
-    output_torch = ttnn.to_torch(output_sharded)
+    # Verify correctness by comparing tensors directly
+    output_torch = ttnn.to_torch(output_tensor)
     input_torch = ttnn.to_torch(sharded_tensor)
 
-    # Check with PCC - compare original sharded tensor with round-trip result
+    # Check with PCC - compare original sharded tensor with interleaved result
     pcc = check_with_pcc(input_torch, output_torch, 0.999)
 
     return [pcc, e2e_perf]
