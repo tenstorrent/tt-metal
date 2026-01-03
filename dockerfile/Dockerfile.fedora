@@ -17,7 +17,7 @@ RUN dnf update -y && dnf install -y \
     xz \
     zstd \
     ccache \
-    wget, \
+    wget \
     wget2 \
     openmpi \
     openmpi-devel \
