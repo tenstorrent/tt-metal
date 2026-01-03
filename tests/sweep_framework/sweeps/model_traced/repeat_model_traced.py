@@ -97,23 +97,13 @@ def run(
     }
 
     # Only add device and memory_config if not HOST storage
-    # Check memory config BEFORE creating tensor to avoid OOM
+    # Always use DRAM to avoid OOM - repeat can create very large outputs
     if not is_host:
         from_torch_kwargs["device"] = device
-
-        # Use DRAM instead of sharded L1 to avoid OOM for repeat operation
-        if input_a_memory_config and hasattr(input_a_memory_config, "is_sharded"):
-            if input_a_memory_config.is_sharded():
-                from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-            else:
-                from_torch_kwargs["memory_config"] = input_a_memory_config
-        else:
-            from_torch_kwargs["memory_config"] = input_a_memory_config
+        from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
         # Also ensure output uses DRAM
-        if output_memory_config and hasattr(output_memory_config, "is_sharded"):
-            if output_memory_config.is_sharded():
-                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 

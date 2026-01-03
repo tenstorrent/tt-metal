@@ -143,10 +143,8 @@ def run(
 
     # NOTE: HOST storage does not work properly for pad operation - always use DEVICE
     # Use DRAM instead of sharded memory to avoid OOM for pad operation
-    actual_memory_config = input_a_memory_config
-    if input_a_memory_config and hasattr(input_a_memory_config, "is_sharded"):
-        if input_a_memory_config.is_sharded():
-            actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    # Always use DRAM for pad operation due to large output allocations
+    actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
