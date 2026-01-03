@@ -429,7 +429,7 @@ public:
         const op_slicing::Op2DSliceConfig& slice_config) const override;
     tt::tt_metal::MemoryConfig get_input_memory_config(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const override;
-    ttnn::Tensor run_L1_op(
+    std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) override;
@@ -581,8 +581,8 @@ Result conv2d_DRAM(
         compute_config,
         device);
 
-    ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config_);
+    std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
+    ttnn::operations::op_slicing::run_sliced_op(input_tensor_on_device, output_tensors, &slice_attr, dram_slice_config_);
 
     if (should_deallocate_act) {
         input_tensor_on_device.deallocate(true);
@@ -915,7 +915,7 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
 
 std::string Conv2dSliceAttr::name() const { return "Conv2D"; }
 
-ttnn::Tensor Conv2dSliceAttr::run_L1_op(
+std::vector<ttnn::Tensor> Conv2dSliceAttr::run_L1_op(
     const ttnn::Tensor& sliced_input_tensor, const IOShape& output_slice_start, const IOShape& output_slice_end) {
     // Use helper function to calculate slice bounds and padding
     auto [input_slicing, this_op_padding] = get_input_slice_and_padding(output_slice_start, output_slice_end);
@@ -960,7 +960,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     if (bias_tensor.has_value()) {
         bias_tensor->get() = std::get<4>(conv2d_result).value();
     }
-    return std::get<0>(conv2d_result);
+    return {std::get<0>(conv2d_result)};
 }
 
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
