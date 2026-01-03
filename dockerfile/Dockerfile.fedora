@@ -49,6 +49,7 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
+RUN uv python install 3.12
 RUN uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands

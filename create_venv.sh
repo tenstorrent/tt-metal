@@ -24,6 +24,7 @@ fi
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
 # Create and activate virtual environment
+uv python install 3.12
 uv venv $PYTHON_ENV_DIR --python 3.12
 source $PYTHON_ENV_DIR/bin/activate
 
