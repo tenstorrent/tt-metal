@@ -464,56 +464,21 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 # Set memory metrics if available
                 if config.measure_memory and peak_memory:
                     if isinstance(peak_memory, dict):
-                        # Check if it's cache comparison mode (has 'uncached'/'cached' keys)
-                        # or single run mode (has 'peak_total_per_core' key directly)
-                        if "uncached" in peak_memory or "cached" in peak_memory:
-                            # Cache comparison mode - peak_memory is {'uncached': {...}, 'cached': {...}}
-                            uncached_mem = peak_memory.get("uncached")
-                            cached_mem = peak_memory.get("cached")
-
-                            if uncached_mem:
-                                result["peak_l1_memory_per_core"] = uncached_mem.get("peak_total_per_core")
-                                result["peak_cb_per_core"] = uncached_mem.get("peak_cb_per_core")
-                                result["peak_l1_buffers_per_core"] = uncached_mem.get("peak_l1_per_core")
-                                result["num_cores"] = uncached_mem.get("num_cores")
-                                result["peak_l1_memory_total"] = uncached_mem.get("peak_total")
-
-                                # Store uncached variants
-                                result["peak_l1_memory_per_core_uncached"] = uncached_mem.get("peak_total_per_core")
-                                result["peak_cb_per_core_uncached"] = uncached_mem.get("peak_cb_per_core")
-                                result["peak_l1_buffers_per_core_uncached"] = uncached_mem.get("peak_l1_per_core")
-
-                            if cached_mem:
-                                # Store cached variants
-                                result["peak_l1_memory_per_core_cached"] = cached_mem.get("peak_total_per_core")
-                                result["peak_cb_per_core_cached"] = cached_mem.get("peak_cb_per_core")
-                                result["peak_l1_buffers_per_core_cached"] = cached_mem.get("peak_l1_per_core")
-
-                            # Legacy fields for backwards compatibility
-                            result["peak_l1_memory"] = peak_memory
-                            result["peak_l1_memory_uncached"] = uncached_mem.get("peak_total") if uncached_mem else None
-                            result["peak_l1_memory_cached"] = cached_mem.get("peak_total") if cached_mem else None
-                        else:
-                            # Single run mode - peak_memory is a dict directly
-                            result["peak_l1_memory_per_core"] = peak_memory.get("peak_total_per_core")
-                            result["peak_cb_per_core"] = peak_memory.get("peak_cb_per_core")
-                            result["peak_l1_buffers_per_core"] = peak_memory.get("peak_l1_per_core")
-                            result["num_cores"] = peak_memory.get("num_cores")
-                            result["peak_l1_memory_total"] = peak_memory.get("peak_total")
-
-                            # Legacy field
-                            result["peak_l1_memory"] = peak_memory.get("peak_total")
-                    else:
-                        # Fallback for old int format
-                        result["peak_l1_memory"] = peak_memory
+                        # Extract per-core memory metrics
+                        result["peak_l1_memory_per_core"] = peak_memory.get("peak_total_per_core")
+                        result["peak_cb_per_core"] = peak_memory.get("peak_cb_per_core")
+                        result["peak_l1_buffers_per_core"] = peak_memory.get("peak_l1_per_core")
+                        result["num_cores"] = peak_memory.get("num_cores")
+                        result["peak_l1_memory_aggregate"] = peak_memory.get("peak_total_aggregate")
+                        result["peak_l1_memory_device"] = peak_memory.get("peak_l1_memory_device")
                 else:
                     # No memory captured
                     result["peak_l1_memory_per_core"] = None
                     result["peak_cb_per_core"] = None
                     result["peak_l1_buffers_per_core"] = None
                     result["num_cores"] = None
-                    result["peak_l1_memory_total"] = None
-                    result["peak_l1_memory"] = None
+                    result["peak_l1_memory_aggregate"] = None
+                    result["peak_l1_memory_device"] = None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
@@ -532,8 +497,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["peak_cb_per_core"] = None
                 result["peak_l1_buffers_per_core"] = None
                 result["num_cores"] = None
-                result["peak_l1_memory_total"] = None
-                result["peak_l1_memory"] = None
+                result["peak_l1_memory_aggregate"] = None
+                result["peak_l1_memory_device"] = None
                 result["original_vector_data"] = original_vector_data
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
@@ -909,7 +874,7 @@ if __name__ == "__main__":
         "--measure-memory",
         required=False,
         action="store_true",
-        help="Capture peak L1 memory usage using graph trace (NO_DISPATCH mode). Memory data will be included in test results.",
+        help="Capture L1 memory usage per core using graph trace (NO_DISPATCH mode). Memory data will be included in test results.",
     )
 
     parser.add_argument(

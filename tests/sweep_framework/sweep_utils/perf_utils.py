@@ -149,12 +149,12 @@ def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
 ) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, Dict]]]:
     # Capture peak memory (NO_DISPATCH mode) if enabled
-    peak_memory_dict = None
+    peak_memory = None
     if getattr(config, "measure_memory", False):
-        from sweep_utils.memory_utils import capture_peak_memory_with_cache_comparison
+        from sweep_utils.memory_utils import capture_peak_memory
 
         logger.info("Capturing peak memory in NO_DISPATCH mode")
-        peak_memory_dict = capture_peak_memory_with_cache_comparison(test_module, test_vector, device)
+        peak_memory = capture_peak_memory(test_module, test_vector, device)
 
     # Prepare program cache state
     prepare_program_cache_for_comparison(device)
@@ -218,9 +218,9 @@ def run_with_cache_comparison(
             simplified_perf["uncached"] = simplify_device_perf(device_perf_uncached)
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
-        return status, message, e2e_perf, simplified_perf, peak_memory_dict
+        return status, message, e2e_perf, simplified_perf, peak_memory
     else:
-        return status, message, e2e_perf, None, peak_memory_dict
+        return status, message, e2e_perf, None, peak_memory
 
 
 def run_single(
