@@ -514,18 +514,11 @@ void kernel_main() {
         constexpr uint32_t weight_ntiles_height = weight_padded_rows / TILE_HEIGHT;
         constexpr uint32_t weight_ntiles = weight_ntiles_height * in_ntiles_c;
 
-        DPRINT << "weight_ntiles " << weight_ntiles << " (rows_per_stick=" << weight_rows_per_stick
-               << ", height=" << weight_ntiles_height << ", width=" << in_ntiles_c << ", total_cols=" << total_tile_cols
-               << ")" << ENDL();
-
         const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
 
         // Get common runtime args
         uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(0);
         bool is_sender = get_arg_val<uint32_t>(1) != 0;
-
-        DPRINT << "WEIGHT_READ: weight_addr_dram_base=0x" << HEX() << weight_addr_dram_base << DEC()
-               << " is_sender=" << (uint32_t)is_sender << " weight_ntiles=" << weight_ntiles << ENDL();
 
         if (is_sender) {
             // ============================================================
@@ -572,10 +565,6 @@ void kernel_main() {
             uint32_t weight_l1_addr = get_write_ptr(weight_cb_id);
             uint32_t weights_start_address = weight_l1_addr;
 
-            DPRINT << "WEIGHT_ADDR_DEBUG: base=0x" << HEX() << weight_addr_dram_base << DEC()
-                   << " start_col=" << start_col_tile_id << " weight_ntiles=" << weight_ntiles
-                   << " tile_nbytes=" << weight_tile_nbytes << ENDL();
-
             // Read all weight tiles from DRAM using 2D tile iteration
             // Weight tensor is laid out as [padded_rows, padded_cols] where tiles are stored row-major
             // Each core reads in_ntiles_c columns and weight_ntiles_height rows
@@ -584,9 +573,6 @@ void kernel_main() {
                     // Calculate global tile ID for this (row, col) position
                     // Tiles are stored row-major: tile_id = row * total_cols + col
                     uint32_t global_tile_id = row * total_tile_cols + start_col_tile_id + col;
-
-                    DPRINT << "  tile[" << (row * in_ntiles_c + col) << "] row=" << row << " col=" << col
-                           << " global_tile_id=" << global_tile_id << ENDL();
 
                     noc_async_read_tile(global_tile_id, s_weight, weight_l1_addr);
                     weight_l1_addr += weight_tile_nbytes;
@@ -632,9 +618,6 @@ void kernel_main() {
 
             cb_push_back(weight_cb_id, weight_ntiles);
 
-            DPRINT << "Sender: Multicast " << weight_ntiles << " weight tiles to " << weights_mcast_num_dests
-                   << " receivers" << ENDL();
-
         } else {
             // ============================================================
             // RECEIVER PATH - Wait for multicast from sender
@@ -667,8 +650,6 @@ void kernel_main() {
 
             // Push to CB (data is now in CB from multicast)
             cb_push_back(weight_cb_id, weight_ntiles);
-
-            DPRINT << "Receiver: Received " << weight_ntiles << " weight tiles via multicast" << ENDL();
         }
 
         // ============================================================
@@ -692,9 +673,6 @@ void kernel_main() {
             // For receivers, they should read from the same column offset
             uint32_t bias_start_tile_id = get_arg_val<uint32_t>(10);
 
-            DPRINT << "BIAS_READ: addr=0x" << HEX() << bias_addr_dram_base << DEC()
-                   << " start_tile=" << bias_start_tile_id << " ntiles=" << bias_ntiles << ENDL();
-
             // Reserve space in bias CB
             cb_reserve_back(bias_cb_id, bias_ntiles);
             uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
@@ -708,8 +686,6 @@ void kernel_main() {
             noc_async_read_barrier();
 
             cb_push_back(bias_cb_id, bias_ntiles);
-
-            DPRINT << "BIAS_READ: Read " << bias_ntiles << " bias tiles" << ENDL();
         }
     }
 

@@ -32,153 +32,6 @@
 namespace ttnn::operations::conv {
 using namespace tt;
 using sliding_window::ParallelConfig;
-
-// Helper function to print full tensor content on host
-template <typename T>
-static void print_full_tensor_on_host(
-    const Tensor& tensor, const std::string& tensor_name, uint32_t max_elements = 1000) {
-    if (tensor.layout() != Layout::ROW_MAJOR) {
-        log_info(
-            tt::LogOp,
-            "DEBUG: Skipping print for tensor '{}' - not in ROW_MAJOR layout (layout: {})",
-            tensor_name,
-            tensor.layout());
-        return;
-    }
-
-    auto host_buffer = tt::tt_metal::host_buffer::get_as<T>(tensor);
-    const auto& shape = tensor.logical_shape();
-    uint32_t total_elements = shape.volume();
-
-    log_info(tt::LogOp, "DEBUG: Full tensor '{}' content:", tensor_name);
-    log_info(
-        tt::LogOp,
-        "DEBUG: Shape: [{}, {}, {}, {}], Total elements: {}, DataType: {}",
-        shape[0],
-        shape[1],
-        shape[2],
-        shape[3],
-        total_elements,
-        tensor.dtype());
-
-    // Print up to max_elements to avoid excessive logging
-    uint32_t elements_to_print = std::min(total_elements, max_elements);
-
-    if (elements_to_print == total_elements) {
-        log_info(tt::LogOp, "DEBUG: Printing all {} elements:", total_elements);
-    } else {
-        log_info(tt::LogOp, "DEBUG: Printing first {} of {} elements:", elements_to_print, total_elements);
-    }
-
-    // For 4D tensor, print with structure [batch][channel][height][width]
-    std::string content;
-    for (uint32_t i = 0; i < elements_to_print; i++) {
-        // Calculate 4D indices from flat index
-        uint32_t remaining = i;
-        uint32_t w_idx = remaining % shape[3];
-        remaining /= shape[3];
-        uint32_t h_idx = remaining % shape[2];
-        remaining /= shape[2];
-        uint32_t c_idx = remaining % shape[1];
-        remaining /= shape[1];
-        uint32_t b_idx = remaining;
-
-        float value = static_cast<float>(host_buffer[i]);
-
-        // Add structure markers for readability
-        if (w_idx == 0 && h_idx == 0 && c_idx == 0) {
-            content += "\n  Batch[" + std::to_string(b_idx) + "]:";
-        }
-        if (w_idx == 0 && h_idx == 0) {
-            content += "\n    Channel[" + std::to_string(c_idx) + "]:";
-        }
-        if (w_idx == 0) {
-            content += "\n      Row[" + std::to_string(h_idx) + "]: ";
-        }
-
-        content += std::to_string(value);
-        if (w_idx < shape[3] - 1) {
-            content += ", ";
-        }
-
-        // Break into chunks to avoid overly long log lines
-        if ((i + 1) % 50 == 0 || i == elements_to_print - 1) {
-            log_info(tt::LogOp, "DEBUG: {}", content);
-            content.clear();
-        }
-    }
-
-    if (elements_to_print < total_elements) {
-        log_info(tt::LogOp, "DEBUG: ... (remaining {} elements not shown)", total_elements - elements_to_print);
-    }
-}
-
-// Helper function to print tensor in 32x32 raw memory layout for debugging
-template <typename T>
-static void print_tensor_raw_memory_layout_on_device(const Tensor& tensor, const std::string& name) {
-    auto shape = tensor.logical_shape();
-
-    log_info(tt::LogOp, "DEBUG: === {} ===", name);
-    log_info(tt::LogOp, "DEBUG: Shape: [{}, {}, {}, {}]", shape[0], shape[1], shape[2], shape[3]);
-    log_info(tt::LogOp, "DEBUG: Layout: {}, Device: {}", tensor.layout(), tensor.device() != nullptr);
-
-    // Move to host and get raw data for visualization
-    auto host_tensor = tensor;
-    if (tensor.device() != nullptr) {
-        host_tensor = tt::tt_metal::tensor_impl::to_host(tensor);
-        log_info(tt::LogOp, "DEBUG: Moved tensor from device to host for visualization");
-    }
-
-    // Get raw buffer data without untilization to preserve memory layout
-    auto raw_buffer = tt::tt_metal::host_buffer::get_as<T>(host_tensor);
-    std::vector<T> data(raw_buffer.begin(), raw_buffer.end());
-    log_info(tt::LogOp, "DEBUG: Total elements: {}", data.size());
-    log_info(tt::LogOp, "DEBUG: RAW MEMORY LAYOUT (32x32):");
-
-    // Print exactly 32 values per row, showing raw memory layout
-    const uint32_t values_per_row = 32;
-    uint32_t total_elements = data.size();
-    uint32_t num_rows = (total_elements + values_per_row - 1) / values_per_row;
-
-    for (uint32_t row = 0; row < num_rows; row++) {
-        std::string row_content = "DEBUG: " + std::to_string(row) + ": ";
-        for (uint32_t col = 0; col < values_per_row; col++) {
-            uint32_t idx = row * values_per_row + col;
-            if (idx < total_elements) {
-                row_content += std::to_string(static_cast<int>(static_cast<float>(data[idx]))) + " ";
-            } else {
-                row_content += "  ";  // padding for incomplete rows
-            }
-        }
-        log_info(tt::LogOp, row_content);
-    }
-    log_info(tt::LogOp, "DEBUG: ");
-}
-
-// Overloaded function to automatically determine template parameter
-// static void print_full_tensor_on_host(const Tensor& tensor, const std::string& tensor_name, uint32_t max_elements =
-// 1000) {
-//     switch (tensor.dtype()) {
-//         case DataType::FLOAT32:
-//             print_full_tensor_on_host<float>(tensor, tensor_name, max_elements);
-//             break;
-//         case DataType::BFLOAT16:
-//             print_full_tensor_on_host<bfloat16>(tensor, tensor_name, max_elements);
-//             break;
-//         case DataType::UINT32:
-//             print_full_tensor_on_host<uint32_t>(tensor, tensor_name, max_elements);
-//             break;
-//         case DataType::INT32:
-//             print_full_tensor_on_host<int32_t>(tensor, tensor_name, max_elements);
-//             break;
-//         case DataType::UINT16:
-//             print_full_tensor_on_host<uint16_t>(tensor, tensor_name, max_elements);
-//             break;
-//         default:
-//             log_info(tt::LogOp, "DEBUG: Unsupported data type {} for tensor '{}'", tensor.dtype(), tensor_name);
-//     }
-// }
-
 namespace conv2d {
 
 /**
@@ -1157,20 +1010,6 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
         }
     }
 
-    log_info(
-        tt::LogOp,
-        "Width sharded weight layout: channels={}, ch_per_core=[{}], padded_ch_per_core=[{}], "
-        "kernel_pos={}, rows_per_stick={}, padded_rows={}, cores={}, output_shape=[{},{}]",
-        out_channels,
-        ch_per_core_str,
-        padded_ch_per_core_str,
-        total_kernel_positions,
-        rows_per_stick_padded,
-        padded_kernel_positions,
-        num_channel_shards,
-        padded_kernel_positions,
-        padded_out_channels);
-
     auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
         auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
         auto output_buffer = std::vector<T>(output_shape.volume(), static_cast<T>(0));
@@ -1266,38 +1105,6 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
             }
         }
 
-        // Debug print: show the pre-tilization layout
-        log_info(
-            tt::LogOp,
-            "=== WIDTH_SHARDED Pre-Tilization Layout ({}x{}) ===",
-            padded_kernel_positions,
-            padded_out_channels);
-        for (uint32_t row = 0; row < std::min(padded_kernel_positions, 18u); row++) {
-            std::string row_str = fmt::format("Row {:2d}: ", row);
-
-            // Show faces separately
-            for (uint32_t face = 0; face < 4; face++) {
-                row_str += fmt::format("F{}[", face);
-                for (uint32_t i = 0; i < 4; i++) {  // Show first 4 values of each face
-                    uint32_t col = face * FACE_SIZE + i;
-                    if (col < padded_out_channels) {
-                        uint32_t idx = row * output_width + col;
-                        if (idx < output_buffer.size()) {
-                            row_str += fmt::format("{:2.0f}", static_cast<float>(output_buffer[idx]));
-                            if (i < 3) {
-                                row_str += ",";
-                            }
-                        }
-                    }
-                }
-                row_str += "...]";
-                if (face < 3) {
-                    row_str += " ";
-                }
-            }
-            log_info(tt::LogOp, "{}", row_str);
-        }
-
         return tt::tt_metal::HostBuffer(std::move(output_buffer));
     };
 
@@ -1310,15 +1117,6 @@ static Tensor conv_2d_depthwise_weight_layout_helper(
 Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
     const auto& original_shape = conv_weight_tensor.logical_shape();
-
-    log_info(
-        tt::LogOp,
-        "Width sharded weight prep: num_shards={}, weight_shape=[{},{},{},{}]",
-        num_channel_shards,
-        original_shape[0],
-        original_shape[1],
-        original_shape[2],
-        original_shape[3]);
 
     const static std::
         unordered_map<DataType, std::function<Tensor(const Tensor&, const ttnn::Shape&, uint32_t, DataType)>>
@@ -1732,13 +1530,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             dram_slice_config_,
             conv_config.output_layout,
             device);
-        log_info(
-            tt::LogOp,
-            "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
-            dram_slice_config,
-            conv2d_slice_attr->name());
         if (dram_slice_config.num_slices == 1) {
-            log_info(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
             is_dram_conv = false;
         }
         uint32_t slice_rounding_value = 1;
@@ -1942,34 +1734,15 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 original_weights_shape[2],
                 original_weights_window_w,
                 params.input_width)) {
-            log_info(
-                tt::LogOp,
-                "Using 2D depthwise layout conversion for groups={}, channels={}, kernel={}x{}",
-                params.groups,
-                original_weights_out_channels,
-                original_weights_shape[2],
-                original_weights_window_w);
-
             // Unified weight preparation for all sharding schemes
             // num_channel_shards is determined by get_num_cores_channels_from_parallel_config:
             // - HEIGHT_SHARDED: 1 (all cores use same weights)
             // - WIDTH_SHARDED: total_cores (each core gets different channels)
             // - BLOCK_SHARDED: num_cores_c (each column gets different channels)
             uint32_t num_channel_shards = 1;
-            TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
             if (params.input_parallel_config.has_value()) {
-                shard_layout = params.input_parallel_config->shard_scheme;
                 num_channel_shards = get_num_cores_channels_from_parallel_config(params.input_parallel_config.value());
             }
-
-            const char* shard_layout_name = shard_layout == TensorMemoryLayout::BLOCK_SHARDED   ? "BLOCK_SHARDED"
-                                            : shard_layout == TensorMemoryLayout::WIDTH_SHARDED ? "WIDTH_SHARDED"
-                                                                                                : "HEIGHT_SHARDED";
-            log_info(
-                tt::LogOp,
-                "Using {} depthwise weight prep with {} channel shards",
-                shard_layout_name,
-                num_channel_shards);
 
             weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout(
                 weight_tensor_, num_channel_shards, weight_tensor_.dtype());
@@ -1977,13 +1750,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
             is_2d_depthwise_layout = true;
 
         } else {
-            log_info(
-                tt::LogOp,
-                "Using regular grouped layout conversion for groups={}, channels={}, kernel={}x{}",
-                params.groups,
-                original_weights_out_channels,
-                original_weights_shape[2],
-                original_weights_window_w);
             weight_tensor_ =
                 convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
         }
@@ -2042,69 +1808,17 @@ static ttnn::Tensor prepare_conv_weights_internal(
             padded_kernel_positions = dim0;
             padded_channels = dim1;
             reshaped_shape = ttnn::Shape({1, 1, padded_kernel_positions, padded_channels});
-            log_info(
-                tt::LogOp,
-                "WIDTH_SHARDED reshape: [{}, {}] -> [1, 1, {}, {}]",
-                dim0,
-                dim1,
-                padded_kernel_positions,
-                padded_channels);
         } else {
             // HEIGHT_SHARDED: tensor is [channels, kernel_positions] = [64, 32]
             // Swap to: [1, 1, kernel_positions, channels] = [1, 1, 32, 64]
             padded_channels = dim0;
             padded_kernel_positions = dim1;
             reshaped_shape = ttnn::Shape({1, 1, padded_kernel_positions, padded_channels});
-            log_info(
-                tt::LogOp,
-                "HEIGHT_SHARDED reshape: [{}, {}] -> [1, 1, {}, {}]",
-                dim0,
-                dim1,
-                padded_kernel_positions,
-                padded_channels);
         }
         weight_tensor_ = ttnn::reshape(weight_tensor_, reshaped_shape);
 
         // Tilize the tensor
-        log_info(tt::LogOp, "weight_tensor_ dims before tilize: {}", weight_tensor_.logical_shape());
-
-        // Print raw memory BEFORE tilization - value by value
-        {
-            uint32_t total = weight_tensor_.logical_shape().volume();
-            std::string all_vals = "BEFORE_TILIZE: ";
-            if (weight_tensor_.dtype() == DataType::BFLOAT16) {
-                auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
-                for (uint32_t i = 0; i < std::min(total, 1032u); i++) {
-                    all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
-                }
-            } else if (weight_tensor_.dtype() == DataType::FLOAT32) {
-                auto data_ptr = tt::tt_metal::host_buffer::get_as<float>(weight_tensor_);
-                for (uint32_t i = 0; i < std::min(total, 1032u); i++) {
-                    all_vals += fmt::format("{} ", data_ptr[i]);
-                }
-            }
-            log_info(tt::LogOp, "{}", all_vals);
-        }
-
         weight_tensor_ = ttnn::to_layout(weight_tensor_, Layout::TILE);
-
-        // Print raw memory AFTER tilization - value by value
-        {
-            uint32_t total = weight_tensor_.logical_shape().volume();
-            std::string all_vals = "AFTER_TILIZE: ";
-            if (weight_tensor_.dtype() == DataType::BFLOAT16) {
-                auto data_ptr = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
-                for (uint32_t i = 0; i < std::min(total, 2048u); i++) {
-                    all_vals += fmt::format("{} ", static_cast<float>(data_ptr[i]));
-                }
-            } else if (weight_tensor_.dtype() == DataType::FLOAT32) {
-                auto data_ptr = tt::tt_metal::host_buffer::get_as<float>(weight_tensor_);
-                for (uint32_t i = 0; i < std::min(total, 2048u); i++) {
-                    all_vals += fmt::format("{} ", data_ptr[i]);
-                }
-            }
-            log_info(tt::LogOp, "{}", all_vals);
-        }
 
         // Set target shapes for consistency with downstream code
         // For 2D depthwise width/block-sharded layout, use padded_channels (which includes
@@ -2127,7 +1841,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
             in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
             out_channels_padded = calculate_out_channels_padded(out_channels, output_parallel_config);
             out_channel_padding = out_channels_padded - out_channels;
-            log_info(tt::LogOp, "out_channel_padding: {}", out_channel_padding);
             ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
 
             weight_tensor_ = ttnn::pad(

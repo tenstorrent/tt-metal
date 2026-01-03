@@ -165,15 +165,7 @@ ParallelConfig determine_parallel_config(
     uint32_t groups) {
     bool is_depthwise_conv = (groups == input_channels) && (groups == output_channels);
     if (is_depthwise_conv) {
-        log_info(tt::LogOp, "Jeste depthwise!");
         input_channels_alignment = 32;
-    } else {
-        log_info(
-            tt::LogOp,
-            "Nije depthwise! groups: {} input_channels: {} output_channels: {}",
-            groups,
-            input_channels,
-            output_channels);
     }
     // Currently, convolution requires multiples of the tile size for both shard height and width,
     // while pooling can accept any height and either a tile multiple or half a tile for width.

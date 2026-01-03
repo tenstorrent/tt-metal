@@ -85,21 +85,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
     std::optional<bool> force_split_reader) {
-    log_info(tt::LogOp, "output_channels: {}, groups: {}", output_channels, groups);
     TT_FATAL(
         groups == ashape[3] && groups == output_channels,
         "Depthwise factory requires groups == input_channels == output_channels");
-
-    log_debug(tt::LogOp, "Creating 2D depthwise convolution program using pool-based approach");
-    log_debug(
-        tt::LogOp,
-        "Input shape: [{}, {}, {}, {}], groups: {}, output_channels: {}",
-        ashape[0],
-        ashape[1],
-        ashape[2],
-        ashape[3],
-        groups,
-        output_channels);
 
     // Extract parameters from sliding window config for pool kernel
     const uint32_t kernel_h = sliding_window_config.window_hw.first;
@@ -112,32 +100,10 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t pad_r = sliding_window_config.padding[3];
     const uint32_t num_shards_c = parallelization_config.num_cores_c_in;
 
-    log_debug(
-        tt::LogOp,
-        "Kernel: {}x{}, Stride: {}x{}, Padding: t={} b={} l={} r={}",
-        kernel_h,
-        kernel_w,
-        stride_h,
-        stride_w,
-        pad_t,
-        pad_b,
-        pad_l,
-        pad_r);
-
     // Get output shape from sliding window config
     auto output_shape = sliding_window_config.get_output_shape();
     const uint32_t out_h = output_shape[1];
     const uint32_t out_w = output_shape[2];
-
-    log_debug(
-        tt::LogOp, "Sliding window output shape: [{}, {}, {}], groups: {}", ashape[0], out_h, out_w, output_channels);
-    log_debug(
-        tt::LogOp,
-        "Actual output tensor shape: [{}, {}, {}, {}]",
-        output.logical_shape()[0],
-        output.logical_shape()[1],
-        output.logical_shape()[2],
-        output.logical_shape()[3]);
 
     // Suppress unused variable warnings for parameters that will be used in kernel integration
     (void)stride_h;
@@ -167,7 +133,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
     // Calculate effective tiles the same way as pool factory
     uint32_t effective_tiles = (kernel_h * kernel_w * params.in_ntiles_c * 32 + 1023) / 1024;
-    log_debug(tt::LogOp, "Effective tiles for depthwise conv: {}", effective_tiles);
 
     // Create circular buffers for depthwise convolution (same as pool factory pattern)
     uint32_t next_cb_index = 0;
@@ -177,7 +142,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t in_cb_pagesize = tt::tile_size(params.data_format);
     const uint32_t in_cb_npages = params.multi_buffering_factor * std::min(effective_tiles, 3u);
     tt::tt_metal::create_cb(in_cb_id, program, parallel_config.grid, in_cb_pagesize, in_cb_npages, params.data_format);
-    log_debug(tt::LogOp, "CB {} (input) :: PS = {}, NP = {}", in_cb_id, in_cb_pagesize, in_cb_npages);
 
     // mul_cb - stores results of element-wise multiplication (using effective_tiles logic)
     const uint32_t mul_cb_id = next_cb_index++;
@@ -185,7 +149,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t mul_cb_npages = std::min(effective_tiles, 3u) * params.multi_buffering_factor;
     tt::tt_metal::create_cb(
         mul_cb_id, program, parallel_config.grid, mul_cb_pagesize, mul_cb_npages, params.data_format);
-    log_debug(tt::LogOp, "CB {} (mul_cb) :: PS = {}, NP = {}", mul_cb_id, mul_cb_pagesize, mul_cb_npages);
 
     // weight_cb - stores weight tensors for depthwise conv
     // Weight layout uses face-based format: rows_per_stick = ceil(channels_per_core / 16)
@@ -206,14 +169,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     const uint32_t weight_cb_npages = weight_ntiles_height * weight_ntiles_width;
     tt::tt_metal::create_cb(
         weight_cb_id, program, parallel_config.grid, weight_cb_pagesize, weight_cb_npages, weight_data_format);
-    log_debug(
-        tt::LogOp,
-        "CB {} (weight_cb) :: PS = {}, NP = {} ({}x{} tiles)",
-        weight_cb_id,
-        weight_cb_pagesize,
-        weight_cb_npages,
-        weight_ntiles_height,
-        weight_ntiles_width);
 
     // Output CB - match pool factory sizing based on output layout (same as pool factory)
     const bool is_output_tiled = output.layout() == Layout::TILE;
@@ -225,8 +180,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         out_cb_npages =
             output.shard_spec().value().shape[0] * output.shard_spec().value().shape[1] / tt::constants::TILE_HW;
     } else {
-        log_info(tt::LogOp, "Shard spec: {}", output.shard_spec().value());
-        log_info(tt::LogOp, "params.out_ntiles_c: {}", params.out_ntiles_c);
         // Match pool factory logic for non-tiled output
         out_cb_pagesize = std::min(
                               static_cast<uint32_t>(tt::constants::TILE_WIDTH),
@@ -236,8 +189,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     }
 
     // CRITICAL: Use same CB creation pattern as pool factory to avoid CB ID mismatches
-    log_info(
-        tt::LogOp, "CB {} (output) :: PS = {}, NP = {} [BOUND TO OUTPUT BUFFER]", 0, out_cb_pagesize, out_cb_npages);
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++,
         program,
@@ -259,23 +210,11 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         in_scalar_cb_pagesize,
         in_scalar_cb_npages,
         params.data_format);
-    log_debug(
-        tt::LogOp,
-        "CB {} (in_scalar_cb_0) :: PS = {}, NP = {}",
-        in_scalar_cb_id_0,
-        in_scalar_cb_pagesize,
-        in_scalar_cb_npages);
 
     // Clear value CB - stores "clear value" (-inf for maxpool, 0 for avgpool)
     const uint32_t clear_value_cb_id = next_cb_index++;
     tt::tt_metal::create_cb(
         clear_value_cb_id, program, parallel_config.grid, tt::tile_size(params.data_format), 1, params.data_format);
-    log_debug(
-        tt::LogOp,
-        "CB {} (clear_value_cb) :: PS = {}, NP = {}",
-        clear_value_cb_id,
-        tt::tile_size(params.data_format),
-        1);
 
     // Bias CB - only allocated if has_bias is true
     uint32_t bias_cb_id = 32;  // Invalid CB ID by default
@@ -289,13 +228,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         const uint32_t bias_cb_npages = params.in_ntiles_c;  // out_channels = in_channels for depthwise
         tt::tt_metal::create_cb(
             bias_cb_id, program, parallel_config.grid, bias_cb_pagesize, bias_cb_npages, bias_data_format);
-        log_debug(
-            tt::LogOp,
-            "CB {} (bias_cb) :: PS = {}, NP = {}, DF = {} (using weight dtype)",
-            bias_cb_id,
-            bias_cb_pagesize,
-            bias_cb_npages,
-            bias_data_format);
     }
 
     // Bias temp CB - intermediate buffer for tilized data before bias addition
@@ -315,33 +247,17 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             bias_temp_cb_pagesize,
             bias_temp_cb_npages,
             params.data_format);
-        log_debug(
-            tt::LogOp,
-            "CB {} (bias_temp_cb) :: PS = {}, NP = {}, DF = {} (intermediate tilized buffer for bias, using input "
-            "format)",
-            bias_temp_cb_id,
-            bias_temp_cb_pagesize,
-            bias_temp_cb_npages,
-            params.data_format);
     }
 
     // Reader indices will be created after out_nhw_per_core is calculated
 
     // Now create the actual pool kernels by referencing their paths directly
-    log_debug(tt::LogOp, "Setting up pool kernels for depthwise convolution");
-
     // Calculate out_nhw_per_core exactly like pool factory does
     // Use the output tensor's shard specification rather than simple division
     const uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
     // Generate proper top_left_indices using sliding window infrastructure
     // This ensures correct multi-core memory access patterns like pool operations
-    log_debug(
-        tt::LogOp,
-        "Generating proper sliding window indices: cores={}, output_per_core={}",
-        parallel_config.grid.num_cores(),
-        out_nhw_per_core);
-
     // Use the sliding window infrastructure to generate proper reader indices
     // This accounts for stride patterns, shard boundaries, and memory access patterns
     std::vector<std::vector<uint16_t>> top_left_indices = sliding_window::generate_sliding_window_op_config(
@@ -352,49 +268,11 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         // true   // pad_cores = true
     );
 
-    // for (const auto& core_indices : top_left_indices) {
-    //     log_info(tt::LogOp, "Core indices size: {}", core_indices.size());
-    //     for (size_t i = 0; i < std::min(core_indices.size(), size_t(10)); ++i) {
-    //         log_info(tt::LogOp, "  Index[{}] = {}", i, core_indices[i]);
-    //     }
-    // }
-
-    log_debug(
-        tt::LogOp,
-        "Generated proper sliding window indices: cores={}, indices_per_core={}",
-        top_left_indices.size(),
-        top_left_indices.empty() ? 0 : top_left_indices[0].size());
-    if (!top_left_indices.empty() && !top_left_indices[0].empty()) {
-        log_debug(
-            tt::LogOp,
-            "Core 0 indices: size={}, first_few=[{}, {}, {}...]",
-            top_left_indices[0].size(),
-            !top_left_indices[0].empty() ? top_left_indices[0][0] : 0,
-            top_left_indices[0].size() > 1 ? top_left_indices[0][1] : 0,
-            top_left_indices[0].size() > 2 ? top_left_indices[0][2] : 0);
-    }
-
-    log_debug(tt::LogOp, "About to call construct_on_host_config_tensor with {} cores", top_left_indices.size());
     Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
-    log_debug(tt::LogOp, "construct_on_host_config_tensor completed successfully");
-    const auto& reader_shape = reader_indices.logical_shape();
-    log_debug(tt::LogOp, "reader_indices shape: rank={}, shape_size={}", reader_shape.rank(), reader_shape.size());
-    for (uint32_t i = 0; i < reader_shape.rank(); ++i) {
-        log_debug(tt::LogOp, "  shape[{}] = {}", i, reader_shape[i]);
-    }
 
     bool is_block_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
-    log_debug(tt::LogOp, "About to call move_config_tensor_to_device with is_block_sharded={}", is_block_sharded);
     Tensor reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, a.device());
-    log_debug(tt::LogOp, "move_config_tensor_to_device completed successfully");
-
-    const auto& moved_shape = reader_indices_on_device.logical_shape();
-    log_debug(
-        tt::LogOp, "Reader indices tensor on device: rank={}, shape_size={}", moved_shape.rank(), moved_shape.size());
-    for (uint32_t i = 0; i < moved_shape.rank(); ++i) {
-        log_debug(tt::LogOp, "  moved_shape[{}] = {}", i, moved_shape[i]);
-    }
 
     // Create reader indices CB using the same pattern as pool factory
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices_on_device.device_storage();
@@ -411,14 +289,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         in_reader_indices_cb_npages,
         tt::DataFormat::UInt16,
         reader_indices_storage.get_buffer());
-
-    log_debug(
-        tt::LogOp,
-        "CB {} (reader_indices_cb) :: PS = {}, NP = {}, reader_size={}",
-        in_reader_indices_cb_id,
-        in_reader_indices_cb_pagesize,
-        in_reader_indices_cb_npages,
-        reader_indices_size);
 
     const uint32_t in_w = ashape[2];
 
@@ -468,21 +338,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     }
     const bool is_output_block_format = is_block_float(output.dtype());
 
-    // Add debug logging similar to pool factory
-    log_debug(tt::LogOp, "Calculated parameters like pool factory:");
-    log_debug(tt::LogOp, "  in_c_per_shard_ceil: {}", in_c_per_shard_ceil);
-    log_debug(tt::LogOp, "  in_nbytes_c: {}", in_nbytes_c);
-    log_debug(tt::LogOp, "  shard_width_bytes: {}", shard_width_bytes);
-    log_debug(tt::LogOp, "  in_nbytes_leftover: {}", in_nbytes_leftover);
-    log_debug(tt::LogOp, "  in_cb_sz: {}", in_cb_sz);
-    log_debug(tt::LogOp, "  in_nblocks_c: {}", in_nblocks_c);
-    log_debug(tt::LogOp, "  is_wide_reduction: {}", params.is_wide_reduction);
-    log_debug(tt::LogOp, "  MAX_TILES_PER_REDUCTION: {}", params.MAX_TILES_PER_REDUCTION);
-    log_debug(tt::LogOp, "  split_reader: {}", params.split_reader);
-    log_debug(tt::LogOp, "  multi_buffering_factor: {}", params.multi_buffering_factor);
-    log_debug(tt::LogOp, "  max_rows_for_reduction: {}", params.max_rows_for_reduction);
-    log_debug(tt::LogOp, "  in_ntiles_c: {}", params.in_ntiles_c);
-
     // Calculate proper BF16 scalar values for depthwise convolution
     // Use AVG_POOL2D with divisor_override=1 to get SUM instead of AVERAGE
     // This gives us summation of element-wise multiplications without division by kernel size
@@ -521,12 +376,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             pre_tilize_cb_pagesize,
             pre_tilize_cb_npages,
             params.data_format);
-        log_debug(
-            tt::LogOp,
-            "CB {} (pre_tilize_cb) :: PS = {}, NP = {}",
-            pre_tilize_cb_id,
-            pre_tilize_cb_pagesize,
-            pre_tilize_cb_npages);
     }
 
     // Raw input CB - match pool factory sizing pattern
@@ -540,17 +389,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         raw_in_cb_npages,
         params.data_format,
         a.buffer());
-    log_debug(
-        tt::LogOp,
-        "CB {} (raw_in_cb) :: PS = {}, NP = {} [BOUND TO INPUT BUFFER]",
-        raw_in_cb_id,
-        raw_in_cb_pagesize,
-        raw_in_cb_npages);
 
     // For depthwise convolution, we don't need the complex CBs that pool factory creates
     // We'll point unused CB arguments to existing valid CBs to avoid kernel hangs
-
-    log_debug(tt::LogOp, "Setting up pool kernel arguments: out_nhw_per_core={}, in_w={}", out_nhw_per_core, in_w);
 
     // Set up reader arguments following exact pool factory pattern (47 args)
     // First, create base arguments for reader0
@@ -624,16 +465,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader0_ct_args);
     }
 
-    // Debug: Print bias-related compile-time arg positions
-    log_info(
-        tt::LogOp,
-        "Bias CT args: total_args={}, position_49={}, position_50={}, position_51={}, position_52={}",
-        reader0_ct_args.size(),
-        reader0_ct_args.size() > 49 ? reader0_ct_args[49] : 0,
-        reader0_ct_args.size() > 50 ? reader0_ct_args[50] : 0,
-        reader0_ct_args.size() > 51 ? reader0_ct_args[51] : 0,
-        reader0_ct_args.size() > 52 ? reader0_ct_args[52] : 0);
-
     // Create reader1 arguments by copying reader0 and updating reader_id
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -706,27 +537,9 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // Check sharding mode early for weight distribution
     const bool is_width_sharded = (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED);
 
-    // ============================================================
-    // Weight Distribution Setup - Common calculations for all sharding modes
-    // Reuse weight_cb_npages calculated earlier (same as shard_ntiles)
-    // ============================================================
-    const uint32_t padded_ch_per_shard = tt::round_up(in_c_per_shard_ceil, tt::constants::TILE_WIDTH);
-    const uint32_t shard_ntiles = weight_cb_npages;  // Already calculated for CB allocation
-
-    // Grid dimensions for block sharding (also used for logging)
+    // Grid dimensions for block sharding
     const uint32_t num_cores_c = parallelization_config.num_cores_c_in;
     const uint32_t num_cores_r = num_cores_c > 0 ? num_cores / num_cores_c : num_cores;
-
-    log_info(
-        tt::LogOp,
-        "Weight setup: {} cores ({}r x {}c), ch_per_shard={}, padded_ch={}, weight_rows={}, shard_ntiles={}",
-        num_cores,
-        num_cores_r,
-        num_cores_c,
-        in_c_per_shard_ceil,
-        padded_ch_per_shard,
-        weight_padded_rows,
-        shard_ntiles);
 
     // Get bias buffer address if bias exists
     uint64_t bias_buffer_addr = has_bias && bias.has_value() ? bias.value().buffer()->address() : 0;
@@ -782,8 +595,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                 auto args = make_sender_args(0, 0, 0, 0, 0, i * params.in_ntiles_c);  // num_dests=0 skips multicast
                 SetRuntimeArgs(program, reader0_kernel, all_cores[i], args);
             }
-            log_info(tt::LogOp, "WIDTH_SHARDED: {} cores each reading own weight shard", num_cores);
-
         } else if (is_block_sharded) {
             // BLOCK_SHARDED: Row 0 cores read from DRAM and multicast to their column
             for (uint32_t i = 0; i < num_cores; i++) {
@@ -816,8 +627,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                         make_receiver_args(sender_phys.x, sender_phys.y, col_start_tile_id));
                 }
             }
-            log_info(tt::LogOp, "BLOCK_SHARDED: {} senders (row 0), {} receivers/col", num_cores_c, num_cores_r - 1);
-
         } else {
             // HEIGHT_SHARDED: First core reads and multicasts to all others
             // All cores process same channels, so start_tile_id = 0 for all
@@ -836,7 +645,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                 SetRuntimeArgs(
                     program, reader0_kernel, all_cores[i], make_receiver_args(sender_phys.x, sender_phys.y, 0));
             }
-            log_info(tt::LogOp, "HEIGHT_SHARDED: 1 sender, {} receivers", num_cores - 1);
         }
     }
 
@@ -878,34 +686,12 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             .compile_args = compute_ct_args,
             .defines = compute_defines});
 
-    log_debug(tt::LogOp, "Depthwise conv2d factory: Pool kernels created successfully");
-    log_debug(tt::LogOp, "Using reader: {}", reader_kernel_path);
-    log_debug(tt::LogOp, "Using compute: {}", compute_kernel_path);
-    log_debug(
-        tt::LogOp,
-        "Grid size: {}x{} = {} cores",
-        parallel_config.grid.bounding_box().grid_size().x,
-        parallel_config.grid.bounding_box().grid_size().y,
-        parallel_config.grid.num_cores());
-    log_debug(
-        tt::LogOp,
-        "out_nhw_per_core={}, expected_sticks={}",
-        out_nhw_per_core,
-        out_nhw_per_core * in_c_per_shard_ceil / in_nblocks_c);
-
     // Set runtime args for compute kernel (same pattern as pool2d factory)
     // This passes out_nhw_this_core to each core since compile arg 3 is set to 0
     const uint32_t max_out_nhw_per_core = out_nhw_per_core;
     const uint32_t total_out_nhw = ashape[0] * out_h * out_w;
     const uint32_t rectangular_x = is_block_sharded ? parallel_config.grid.ranges()[0].end_coord.x + 1
                                                     : parallel_config.grid.bounding_box().grid_size().x;
-    // Note: is_width_sharded already declared at line 608
-    log_info(
-        tt::LogOp,
-        "Depthwise conv2d sharding mode: height={}, block={}, width={}",
-        !is_block_sharded && !is_width_sharded,
-        is_block_sharded,
-        is_width_sharded);
 
     for (uint32_t core_i = 0; core_i < num_cores; core_i++) {
         const uint32_t core_x_i = core_i % rectangular_x;
@@ -928,8 +714,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
 
         SetRuntimeArgs(program, compute_kernel, core, compute_rt_args);
     }
-
-    log_debug(tt::LogOp, "Set compute kernel runtime args for {} cores", num_cores);
 
     // Suppress unused variable warnings for kernel handles (they are stored in the program)
     (void)reader0_kernel;
@@ -956,8 +740,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            log_debug(tt::LogOp, "Setting up runtime arguments for depthwise conv2d pool kernels");
-
             const auto& input_tensor = input_tensors.at(0);
             // const auto& weight_tensor = input_tensors.at(1);
 
@@ -986,7 +768,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
                     auto& runtime_args = GetRuntimeArgs(program, reader0_kernel, core);
                     runtime_args[11] = bias_buffer_addr;
                 }
-                log_debug(tt::LogOp, "Updated bias buffer address to 0x{:x}", bias_buffer_addr);
             }
         };
 
