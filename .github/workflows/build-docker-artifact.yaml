@@ -68,8 +68,11 @@ jobs:
       basic-ttnn-runtime-tag: ${{ steps.tags.outputs.basic-ttnn-runtime-tag }}
       manylinux-exists: ${{ steps.images.outputs.manylinux-exists }}
       manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
+      distro: ${{ steps.platform.outputs.distro }}
+      version: ${{ steps.platform.outputs.version }}
     steps:
       - name: Set environment variables
+        id: platform
         run: |
           # Parse platform for workflow_dispatch, use inputs for workflow_call
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -96,6 +99,10 @@ jobs:
             VERSION="${{ inputs.version || '22.04' }}"
           fi
           ARCH="${{ inputs.architecture || 'amd64' }}"
+
+          # Output for use by other jobs
+          echo "distro=${DISTRO}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
           echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
           echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
@@ -213,7 +220,7 @@ jobs:
           target: ci-build
           push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
       - name: Build and push CI Test image
@@ -225,7 +232,7 @@ jobs:
           target: ci-test
           push: true
           tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
       - name: Build and push Dev image
@@ -237,7 +244,7 @@ jobs:
           target: dev
           push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
       - name: Build and push Basic Dev image
@@ -249,7 +256,7 @@ jobs:
           target: base
           push: true
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
       - name: Build and push Basic TTNN runtime image
@@ -261,7 +268,7 @@ jobs:
           target: basic-ttnn-runtime
           push: true
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
       - name: Build and push ManyLinux image
