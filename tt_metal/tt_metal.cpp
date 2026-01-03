@@ -5,6 +5,7 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
+#include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include "device/device_manager.hpp"
@@ -1532,13 +1533,62 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
 
+std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
+    Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
+    TT_FATAL(
+        core_ranges.num_cores() == 1,
+        "Currently, data movement kernels can only be created on a single cluster in Quasar.");
+
+    TT_FATAL(
+        1 <= num_processors_per_cluster && num_processors_per_cluster <= 8,
+        "Requested number of data movement processors per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_DM_CORES_PER_CLUSTER);
+
+    std::set<DataMovementProcessor> dm_cores(
+        enchantum::values<DataMovementProcessor>.begin(), enchantum::values<DataMovementProcessor>.end());
+    const auto& hal = MetalContext::instance().hal();
+    for (const auto& core_range : core_ranges.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                const KernelGroup* kernel_group = program.impl().kernels_on_core(
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                if (kernel_group != nullptr) {
+                    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+                        const auto kernel = program.impl().get_kernel(kernel_id);
+                        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+                            for (uint32_t i = 0; i < kernel->expected_num_binaries(); i++) {
+                                dm_cores.erase(
+                                    static_cast<DataMovementProcessor>(kernel->get_kernel_processor_type(i)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    while (dm_cores.size() > num_processors_per_cluster) {
+        dm_cores.erase(std::prev(dm_cores.end()));
+    }
+
+    TT_FATAL(
+        dm_cores.size() == num_processors_per_cluster,
+        "Unable to reserve {} data movement processors per cluster as only {} processors per cluster are available.",
+        num_processors_per_cluster,
+        dm_cores.size());
+
+    return dm_cores;
+}
+
 KernelHandle CreateQuasarDataMovementKernel(
     Program& program,
     const KernelSource& kernel_src,
     const CoreRangeSet& core_ranges,
     const experimental::QuasarDataMovementConfig& config) {
-    const std::set<DataMovementProcessor> dm_cores = std::set<DataMovementProcessor>(config.processors.begin(), config.processors.end());
-    std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
+    const std::set<DataMovementProcessor> dm_cores =
+        GetDataMovementProcessorsPerClusterQuasar(program, core_ranges, config.num_processors_per_cluster);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 

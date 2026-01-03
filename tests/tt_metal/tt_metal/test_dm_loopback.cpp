@@ -62,13 +62,13 @@ int main() {
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
         core,
-        experimental::QuasarDataMovementConfig{.processors = {DataMovementProcessor::RISCV_0}});
+        experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
 
     KernelHandle data_movement_kernel_1 = experimental::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
         core,
-        experimental::QuasarDataMovementConfig{.processors = {DataMovementProcessor::RISCV_1}});
+        experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
 
     const uint32_t sem_id = CreateSemaphore(program, core, 0);
 

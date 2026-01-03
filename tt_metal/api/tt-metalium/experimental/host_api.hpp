@@ -13,10 +13,10 @@ namespace tt::tt_metal {
 class Program;
 
 namespace experimental {
-static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 2;
+static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
 
 struct QuasarDataMovementConfig {
-    std::vector<DataMovementProcessor> processors = {DataMovementProcessor::RISCV_0};
+    uint32_t num_processors_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
 
     std::vector<uint32_t> compile_args;
 
