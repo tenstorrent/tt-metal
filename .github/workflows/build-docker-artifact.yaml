@@ -211,8 +211,9 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push CI Build image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
+      # Ubuntu builds
+      - name: Build and push CI Build image (Ubuntu)
+        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -223,8 +224,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push CI Test image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
+      - name: Build and push CI Test image (Ubuntu)
+        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -235,8 +236,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Dev image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
+      - name: Build and push Dev image (Ubuntu)
+        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -247,8 +248,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic Dev image
-        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
+      - name: Build and push Basic Dev image (Ubuntu)
+        if: needs.check-docker-images.outputs.basic-dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -259,8 +260,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic TTNN runtime image
-        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
+      - name: Build and push Basic TTNN runtime image (Ubuntu)
+        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' && needs.check-docker-images.outputs.distro == 'ubuntu'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -269,6 +270,43 @@ jobs:
           push: true
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
           build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      # Fedora builds
+      - name: Build and push CI Build image (Fedora)
+        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'fedora'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: base
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Dev image (Fedora)
+        if: needs.check-docker-images.outputs.dev-exists != 'true' && needs.check-docker-images.outputs.distro == 'fedora'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-ttnn-runtime
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.dev-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic TTNN runtime image (Fedora)
+        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' && needs.check-docker-images.outputs.distro == 'fedora'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-ttnn-runtime
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
       - name: Build and push ManyLinux image
