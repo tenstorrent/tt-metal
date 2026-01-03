@@ -102,7 +102,7 @@ jobs:
             VERSION="${{ needs.parse-platform.outputs.version }}"
           else
             DISTRO="${{ inputs.distro || 'ubuntu' }}"
-            VERSION="${{ inputs.version || '20.04' }}"
+            VERSION="${{ inputs.version || '22.04' }}"
           fi
           ARCH="${{ inputs.architecture || 'amd64' }}"
 
