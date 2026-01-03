@@ -437,46 +437,6 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     return local_endpoint_desc;
 }
 
-template <typename OperationType, typename... Args>
-void execute_with_timeout(OperationType&& operation, Args&&... args) {
-    const auto timeout = std::chrono::duration<float>(10.0f);
-
-    std::atomic<bool> completed{false};
-    std::atomic<bool> failed{false};
-    std::exception_ptr exception_ptr{nullptr};
-
-    std::thread thread([&]() {
-        try {
-            operation(std::forward<Args>(args)...);
-            completed = true;
-        } catch (...) {
-            exception_ptr = std::current_exception();
-            failed = true;
-        }
-    });
-
-    auto start = std::chrono::steady_clock::now();
-    while (!completed && !failed) {
-        std::this_thread::yield();
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration<float>(now - start).count();
-        if (elapsed >= timeout.count()) {
-            thread.detach();
-            TT_THROW(
-                "Timed out trying to establish a socket connection. Please ensure that the socket is being created on "
-                "all hosts mapped to the requested meshes.");
-        }
-    }
-
-    if (thread.joinable()) {
-        thread.join();
-    }
-
-    if (failed && exception_ptr) {
-        std::rethrow_exception(exception_ptr);
-    }
-}
-
 void validate_subordinate_descriptors(
     const SocketPeerDescriptor& desc,
     std::vector<uint8_t>& serialized_local_desc,
@@ -673,8 +633,7 @@ std::vector<multihost::Rank> get_ranks_for_mesh_id(
     std::vector<multihost::Rank> ranks;
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
-        if (std::get<0>(mesh_id_and_host_rank) == mesh_id &&
-            rank_translation_table.find(rank) != rank_translation_table.end()) {
+        if (std::get<0>(mesh_id_and_host_rank) == mesh_id && rank_translation_table.contains(rank)) {
             ranks.push_back(rank_translation_table.at(rank));
         }
     }

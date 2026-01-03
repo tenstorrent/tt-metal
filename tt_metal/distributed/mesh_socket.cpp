@@ -85,8 +85,7 @@ void MeshSocket::process_host_ranks() {
     const auto& global_logical_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
     TT_FATAL(
-        global_logical_bindings.find(sender_rank) != global_logical_bindings.end() &&
-            global_logical_bindings.find(receiver_rank) != global_logical_bindings.end(),
+        global_logical_bindings.contains(sender_rank) && global_logical_bindings.contains(receiver_rank),
         "Invalid socket sender rank {} or receiver rank {} specified.",
         *sender_rank,
         *receiver_rank);

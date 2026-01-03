@@ -66,6 +66,43 @@ std::vector<multihost::Rank> get_ranks_for_mesh_id(
     tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 template <typename OperationType, typename... Args>
-void execute_with_timeout(OperationType&& operation, Args&&... args);
+void execute_with_timeout(OperationType&& operation, Args&&... args) {
+    const auto timeout = std::chrono::duration<float>(10.0f);
+
+    std::atomic<bool> completed{false};
+    std::atomic<bool> failed{false};
+    std::exception_ptr exception_ptr{nullptr};
+
+    std::thread thread([&]() {
+        try {
+            operation(std::forward<Args>(args)...);
+            completed = true;
+        } catch (...) {
+            exception_ptr = std::current_exception();
+            failed = true;
+        }
+    });
+
+    auto start = std::chrono::steady_clock::now();
+    while (!completed && !failed) {
+        std::this_thread::yield();
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration<float>(now - start).count();
+        if (elapsed >= timeout.count()) {
+            thread.detach();
+            TT_THROW(
+                "Timed out trying to establish a socket connection. Please ensure that the socket is being created on "
+                "all hosts mapped to the requested meshes.");
+        }
+    }
+
+    if (thread.joinable()) {
+        thread.join();
+    }
+
+    if (failed && exception_ptr) {
+        std::rethrow_exception(exception_ptr);
+    }
+}
 
 }  // namespace tt::tt_metal::distributed

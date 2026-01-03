@@ -335,10 +335,10 @@ std::vector<tt_metal::distributed::SocketConnection> generate_random_socket_conn
     while (generated_sender_device_coords.size() < mesh_device_shape[0] * mesh_device_shape[1]) {
         auto sender_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
         auto recv_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
-        while (generated_sender_device_coords.find(sender_device_coord) != generated_sender_device_coords.end()) {
+        while (generated_sender_device_coords.contains(sender_device_coord)) {
             sender_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
         }
-        while (generated_recv_device_coords.find(recv_device_coord) != generated_recv_device_coords.end()) {
+        while (generated_recv_device_coords.contains(recv_device_coord)) {
             recv_device_coord = MeshCoordinate(gen() % mesh_device_shape[0], gen() % mesh_device_shape[1]);
         }
         generated_sender_device_coords.insert(sender_device_coord);
