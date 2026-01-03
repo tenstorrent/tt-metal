@@ -23,13 +23,14 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(13);
     constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(18);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(19);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(19);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(20);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(21) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<21>();
+    constexpr auto q_args = TensorAccessorArgs<22>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -97,7 +98,6 @@ void kernel_main() {
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
-    const auto mask_tile_shape = TensorTileShape(B, 1, valid_Sqt, valid_Skt);
     const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
@@ -130,7 +130,10 @@ void kernel_main() {
                 page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
             }
 
-            const uint32_t mask_batch_offset = nb * Sqt * Skt;
+            uint32_t mask_batch_offset = nb * Sqt * Skt;
+            if constexpr (!broadcast_provided_mask_heads) {
+                mask_batch_offset *= NQH;
+            }
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 // Read attention sink for this Q chunk if enabled
                 if constexpr (use_attention_sink) {
@@ -246,6 +249,9 @@ void kernel_main() {
                             barrier_count = 0;
                             mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * Skt /*row_offset*/ +
                                            k_chunk * Sk_chunk_t /*col_offset*/;
+                            if constexpr (!broadcast_provided_mask_heads) {
+                                mask_tile_id += nq * Sqt * Skt;
+                            }
                             for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                                 for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                                     noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
