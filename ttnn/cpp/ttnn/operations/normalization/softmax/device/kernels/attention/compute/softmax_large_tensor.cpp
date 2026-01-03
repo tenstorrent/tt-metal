@@ -439,9 +439,8 @@ void reduce_cb(
     pack_reconfig_data_format(cb_out);
 
     // Single reduce call with lambda that conditionally accumulates
-    // Use max_batch_tiles=1 for one-at-a-time mode to maintain numerical precision
     compute_kernel_lib::reduce<reduce_type, REDUCE_DIM>(
-        cb_in, cb_scaler, cb_out, 1, cb_length_t, 1, 0, 1,
+        cb_in, cb_scaler, cb_out, 1, cb_length_t, 1, 0,
         // PostReduceOp: conditionally accumulate with previous result
         [cb_prev_out, use_prev_reduce]() {
             if (use_prev_reduce) {
