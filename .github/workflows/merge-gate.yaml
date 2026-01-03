@@ -61,15 +61,24 @@ jobs:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
 
+  # Build all Docker images ONCE at the start, then share with all downstream jobs
+  docker-images:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/build-all-docker-images.yaml
+    secrets: inherit
+
   code-analysis:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    needs: docker-images
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
       version: 24.04
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
 
   fail-fast:
     if: failure()
@@ -102,7 +111,7 @@ jobs:
             needs.find-changes.outputs.docs-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
         }}
-    needs: find-changes
+    needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -112,6 +121,12 @@ jobs:
       build-wheel: true
       version: 22.04
       skip-tt-train: false
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
@@ -119,7 +134,7 @@ jobs:
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
         }}
-    needs: find-changes
+    needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -130,17 +145,32 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true'
         }}
-    needs: find-changes
+    needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
       packages: write
     secrets: inherit
+    with:
+      ubuntu-2204-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+      ubuntu-2204-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
+      ubuntu-2204-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      fedora-43-ci-build-tag: ${{ needs.docker-images.outputs.fedora-43-ci-build-tag }}
+      fedora-43-dev-tag: ${{ needs.docker-images.outputs.fedora-43-dev-tag }}
 
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
@@ -193,7 +223,7 @@ jobs:
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
         }}
-    needs: find-changes
+    needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -204,6 +234,12 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
 
   metalium-basic-tests:
     if: ${{
@@ -382,7 +418,7 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
+    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed

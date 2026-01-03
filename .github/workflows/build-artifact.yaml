@@ -88,22 +88,56 @@ on:
         type: string
         default: ""
         description: "Workflow run ID to download artifacts from (skips build)"
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Build Docker image tag"
+      ci-test-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Test Docker image tag"
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Dev Docker image tag"
+      basic-dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Basic Dev Docker image tag"
+      basic-ttnn-runtime-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Basic TTNN Runtime Docker image tag"
+      manylinux-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built ManyLinux Docker image tag"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+        value: ${{ inputs.ci-build-docker-image || jobs.build-docker-image.outputs.ci-build-tag }}
       ci-test-docker-image:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+        value: ${{ inputs.ci-test-docker-image || jobs.build-docker-image.outputs.ci-test-tag }}
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.dev-tag }}
+        value: ${{ inputs.dev-docker-image || jobs.build-docker-image.outputs.dev-tag }}
       basic-dev-docker-image:
         description: "Docker tag for the basic dev Docker image for basic development"
-        value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
+        value: ${{ inputs.basic-dev-docker-image || jobs.build-docker-image.outputs.basic-dev-tag }}
       basic-ttnn-runtime-docker-image:
         description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
-        value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
+        value: ${{ inputs.basic-ttnn-runtime-docker-image || jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image:
+        description: "Docker tag for the ManyLinux Docker image"
+        value: ${{ inputs.manylinux-docker-image || jobs.build-docker-image.outputs.manylinux-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
@@ -170,7 +204,9 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # Only build docker images if pre-built tags are not provided
   build-docker-image:
+    if: ${{ inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
@@ -236,7 +272,7 @@ jobs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -408,6 +444,6 @@ jobs:
     secrets: inherit
     with:
       python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
-      docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+      docker-image: ${{ inputs.manylinux-docker-image || needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}

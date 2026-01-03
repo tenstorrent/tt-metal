@@ -17,6 +17,17 @@ on:
         required: false
         type: string
         default: "amd64"
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Build Docker image tag"
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Dev Docker image tag"
   workflow_dispatch:
     inputs:
       platform:
@@ -53,7 +64,9 @@ jobs:
           echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
           echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
 
+  # Only build docker images if pre-built tags are not provided
   build-docker-image:
+    if: ${{ inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
@@ -70,7 +83,7 @@ jobs:
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache

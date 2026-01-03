@@ -2,6 +2,40 @@ name: "Build TT-Metalium across all configs"
 
 on:
   workflow_call:
+    inputs:
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ubuntu-2204-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2204-dev-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2204-manylinux-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-dev-tag:
+        required: false
+        type: string
+        default: ""
+      ubuntu-2404-manylinux-tag:
+        required: false
+        type: string
+        default: ""
+      fedora-43-ci-build-tag:
+        required: false
+        type: string
+        default: ""
+      fedora-43-dev-tag:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       platform:
@@ -109,3 +143,7 @@ jobs:
       publish-package: false
       skip-tt-train: true
       tracy: false
+      # Pass pre-built docker image tags based on distro/version
+      ci-build-docker-image: ${{ matrix.config.distro == 'fedora' && inputs.fedora-43-ci-build-tag || (matrix.config.version == '24.04' && inputs.ubuntu-2404-ci-build-tag || inputs.ubuntu-2204-ci-build-tag) }}
+      dev-docker-image: ${{ matrix.config.distro == 'fedora' && inputs.fedora-43-dev-tag || (matrix.config.version == '24.04' && inputs.ubuntu-2404-dev-tag || inputs.ubuntu-2204-dev-tag) }}
+      manylinux-docker-image: ${{ matrix.config.version == '24.04' && inputs.ubuntu-2404-manylinux-tag || inputs.ubuntu-2204-manylinux-tag }}
