@@ -3,12 +3,73 @@ name: "Build TT-Metalium across all configs"
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        description: "Platform to build for"
 
 permissions:
   packages: write
 
 jobs:
+  parse-platform:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+      toolchain: ${{ steps.parse.outputs.toolchain }}
+      enable-lto: ${{ steps.parse.outputs.enable-lto }}
+    steps:
+      - id: parse
+        run: |
+          case "${{ inputs.platform }}" in
+            "Ubuntu 22.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=22.04" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              echo "enable-lto=false" >> "$GITHUB_OUTPUT"
+              ;;
+            "Ubuntu 24.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=24.04" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              echo "enable-lto=true" >> "$GITHUB_OUTPUT"
+              ;;
+            "Fedora 43")
+              echo "distro=fedora" >> "$GITHUB_OUTPUT"
+              echo "version=43" >> "$GITHUB_OUTPUT"
+              echo "toolchain=cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              echo "enable-lto=true" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+  build-dispatch:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: parse-platform
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      distro: ${{ needs.parse-platform.outputs.distro }}
+      version: ${{ needs.parse-platform.outputs.version }}
+      toolchain: ${{ needs.parse-platform.outputs.toolchain }}
+      build-type: "Release"
+      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
+      publish-artifact: false
+      publish-package: false
+      skip-tt-train: true
+      tracy: false
+
   build:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -33,7 +94,13 @@ jobs:
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
+          - distro: "fedora"
+            version: "43"
+            toolchain: "cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            enable-lto: true
     with:
+      distro: ${{ matrix.config.distro || 'ubuntu' }}
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
