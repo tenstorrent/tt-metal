@@ -128,7 +128,6 @@ void MAIN {
         block_h,
         num_reduce_tiles_per_block_h,  // Wt
         1,                             // num_batches
-        0,                             // row_chunk (default)
         block_w);                      // input_stride
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
@@ -178,7 +177,6 @@ void MAIN {
         block_h,
         num_reduce_tiles_per_block_h,  // Wt
         1,                             // num_batches
-        0,                             // row_chunk (default)
         block_w);                      // input_stride
     cb_pop_front(cb_x2, num_tiles_per_block);
 

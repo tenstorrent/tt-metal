@@ -218,7 +218,7 @@ void MAIN {
         cb_wait_front(cb_exps, block_w);
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, block_w, 1, 0, 0, 1, []() {
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, block_w, 1, 0, 1, []() {
                     recip_tile_init();
                     recip_tile(0);
                 });
