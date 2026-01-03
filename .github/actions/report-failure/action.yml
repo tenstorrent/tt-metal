@@ -22,7 +22,7 @@ runs:
       id: message
       shell: bash
       run: |
-        COMMIT_URL="https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}"
+        COMMIT_URL="https://github.com/tenstorrent/tt-llk/commit/${{ github.sha }}"
         COMMIT_SHA="${GITHUB_SHA:0:7}"
         # GitHub does not expose job IDs; link to the workflow run instead
         RUN_BASE="${{ github.server_url }}/${{ github.repository }}/actions/runs"
@@ -32,10 +32,10 @@ runs:
           TRIGGERER="scheduled run"
         fi
         MESSAGE=":alert: *${{ inputs.test_name }}* have failed :alert:"
-        MESSAGE="$MESSAGE\n\n⚠️ Looks like something broke! The nightly tests didn't complete successfully."
+        MESSAGE="$MESSAGE\n\nLooks like something broke! Something broke in the scheduled run."
         MESSAGE="$MESSAGE\n\nTriggered by: \`$TRIGGERER\`"
         MESSAGE="$MESSAGE\nCommit: <$COMMIT_URL|$COMMIT_SHA>"
-        MESSAGE="$MESSAGE\n<${RUN_URL}|Check what went wrong>"
+        MESSAGE="$MESSAGE\n<${RUN_URL}|Take a a look at the logs to investigate.>"
         {
           echo 'text<<EOF'
           echo "$MESSAGE"
