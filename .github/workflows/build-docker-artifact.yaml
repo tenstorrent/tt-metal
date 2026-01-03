@@ -36,19 +36,15 @@ on:
         value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
   workflow_dispatch:
     inputs:
-      distro:
+      platform:
         required: false
         type: choice
-        default: "ubuntu"
+        default: "Ubuntu 22.04"
         options:
-            - "ubuntu"
-      version:
-        required: false
-        type: choice
-        default: "22.04"
-        options:
-            - "22.04"
-            - "24.04"
+            - "Ubuntu 22.04"
+            - "Ubuntu 24.04"
+            - "Fedora 43"
+        description: "Platform to build Docker images for"
       architecture:
         required: false
         type: choice
@@ -56,16 +52,34 @@ on:
         options:
             - "amd64"
 
-env:
-  CI_BUILD_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-build-${{ inputs.architecture }}
-  CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
-  DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
-  BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
-  BASIC_TTNN_RUNTIME_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-ttnn-runtime-${{ inputs.architecture }}
-  MANYLINUX_IMAGE_NAME: manylinux-${{ inputs.architecture }}
-
 jobs:
+  parse-platform:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - id: parse
+        run: |
+          case "${{ inputs.platform }}" in
+            "Ubuntu 22.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=22.04" >> "$GITHUB_OUTPUT"
+              ;;
+            "Ubuntu 24.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=24.04" >> "$GITHUB_OUTPUT"
+              ;;
+            "Fedora 43")
+              echo "distro=fedora" >> "$GITHUB_OUTPUT"
+              echo "version=43" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
   check-docker-images:
+    needs: [parse-platform]
+    if: ${{ !cancelled() && (needs.parse-platform.result == 'success' || needs.parse-platform.result == 'skipped') }}
     runs-on: ubuntu-latest
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
@@ -81,6 +95,24 @@ jobs:
       manylinux-exists: ${{ steps.images.outputs.manylinux-exists }}
       manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
     steps:
+      - name: Set environment variables
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DISTRO="${{ needs.parse-platform.outputs.distro }}"
+            VERSION="${{ needs.parse-platform.outputs.version }}"
+          else
+            DISTRO="${{ inputs.distro || 'ubuntu' }}"
+            VERSION="${{ inputs.version || '22.04' }}"
+          fi
+          ARCH="${{ inputs.architecture || 'amd64' }}"
+
+          echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
+          echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
+          echo "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> $GITHUB_ENV
+          echo "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> $GITHUB_ENV
+          echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
+          echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
+
       - name: Checkout repo
         uses: actions/checkout@v3
         with:

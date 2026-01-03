@@ -135,14 +135,15 @@ on:
         type: boolean
         default: false
         description: "Build Python Wheel"
-      distro:
+      platform:
         required: false
-        type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "22.04"
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        description: "Platform to build for"
       architecture:
         required: false
         type: string
@@ -169,12 +170,38 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  parse-platform:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - id: parse
+        run: |
+          case "${{ inputs.platform }}" in
+            "Ubuntu 22.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=22.04" >> "$GITHUB_OUTPUT"
+              ;;
+            "Ubuntu 24.04")
+              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              echo "version=24.04" >> "$GITHUB_OUTPUT"
+              ;;
+            "Fedora 43")
+              echo "distro=fedora" >> "$GITHUB_OUTPUT"
+              echo "version=43" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
   build-docker-image:
+    needs: [parse-platform]
+    if: ${{ !cancelled() && (needs.parse-platform.result == 'success' || needs.parse-platform.result == 'skipped') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      distro: ${{ inputs.distro }}
-      version: ${{ inputs.version }}
+      distro: ${{ github.event_name == 'workflow_dispatch' && needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      version: ${{ github.event_name == 'workflow_dispatch' && needs.parse-platform.outputs.version || inputs.version || '22.04' }}
       architecture: ${{ inputs.architecture }}
 
   download-artifacts:
