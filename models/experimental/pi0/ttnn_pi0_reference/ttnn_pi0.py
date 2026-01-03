@@ -694,7 +694,24 @@ class PI0ModelTTNN:
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
         # Get timesteps (on host for control flow)
-        timesteps = torch.linspace(1.0, 0.0, self.denoising.config.num_steps + 1)
+        num_steps = self.denoising.config.num_steps
+        timesteps = torch.linspace(1.0, 0.0, num_steps + 1)
+
+        # OPTIMIZATION: Pre-compute all timestep tensors on device (saves 9 transfers!)
+        # Create tensor of shape [batch_size, num_steps] with each column being the timestep value
+        timestep_values = timesteps[:-1]  # [t0, t1, ..., t9] - exclude final 0.0
+        timesteps_expanded = timestep_values.unsqueeze(0).expand(batch_size, -1)  # [batch, num_steps]
+        # Pad to tile-aligned size (num_steps=10 -> 32)
+        pad_steps = ((num_steps + 31) // 32) * 32
+        timesteps_padded = torch.zeros(batch_size, pad_steps, dtype=torch.float32)
+        timesteps_padded[:, :num_steps] = timesteps_expanded
+        timesteps_ttnn = ttnn.from_torch(
+            timesteps_padded,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # Step 3: Sample initial noise and convert to TTNN ONCE (not per step!)
         x_t_torch = torch.randn(batch_size, self.config.action_horizon, self.config.action_dim)
@@ -707,18 +724,14 @@ class PI0ModelTTNN:
         )
 
         # Step 4: Denoising loop (stays on device!)
-        for i in range(self.denoising.config.num_steps):
+        for i in range(num_steps):
             t = timesteps[i].item()
             t_next = timesteps[i + 1].item()
-            dt = t_next - t
+            dt = t_next - t  # Negative since we go from 1.0 to 0.0
 
-            # Create timestep tensor (still needed per step since t changes)
-            t_tensor = ttnn.from_torch(
-                torch.full((batch_size,), t, dtype=torch.float32),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
+            # OPTIMIZATION: Slice timestep from pre-computed tensor (no transfer per step!)
+            t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
+            t_tensor = ttnn.reshape(t_tensor, (batch_size,))
 
             # Embed suffix (x_t_ttnn already on device - no transfer!)
             suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)

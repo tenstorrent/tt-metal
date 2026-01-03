@@ -285,6 +285,30 @@ class SuffixEmbeddingTTNN:
         self.config = config
         self.device = device
         self.weights = weights
+        
+        # OPTIMIZATION: Pre-compute attention mask pattern (saves 10 transfers per inference!)
+        # Attention mask is constant for a given config: [1, 1, 0, ..., 0] for PI0
+        # or [1, 0, ..., 0] for PI05
+        att_mask_pattern = []
+        if not config.pi05:
+            att_mask_pattern.append(1)  # State token
+        att_mask_pattern.append(1)  # First action token
+        att_mask_pattern.extend([0] * (config.action_horizon - 1))  # Remaining action tokens
+        
+        # Store as TTNN tensor with batch_size=1, will repeat at runtime
+        # Pad to tile-aligned size (suffix_len typically ~51 -> 64)
+        suffix_len = len(att_mask_pattern)
+        pad_len = ((suffix_len + 31) // 32) * 32
+        att_mask_padded = att_mask_pattern + [0] * (pad_len - suffix_len)
+        
+        self._att_mask_pattern = ttnn.from_torch(
+            torch.tensor([att_mask_padded], dtype=torch.float32),  # [1, pad_len]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._att_mask_suffix_len = suffix_len
     
     def embed_actions(self, noisy_actions: "ttnn.Tensor") -> "ttnn.Tensor":
         """
@@ -414,15 +438,12 @@ class SuffixEmbeddingTTNN:
         """
         batch_size = noisy_actions.shape[0]
         embs = []
-        att_masks = []
         
         # Embed state (PI0 only, not PI05)
         if not self.config.pi05:
             state_emb = self.embed_state(state)
             if state_emb is not None:
                 embs.append(state_emb)
-                # State token starts causal attention boundary
-                att_masks.append(1)
         
         # Embed timestep
         time_emb = self.embed_timestep(timestep)
@@ -435,10 +456,6 @@ class SuffixEmbeddingTTNN:
         
         # Add action-time embeddings
         embs.append(action_time_emb)
-        
-        # First action token continues causal boundary, rest are causal
-        att_masks.append(1)
-        att_masks.extend([0] * (self.config.action_horizon - 1))
         
         # Concatenate embeddings along sequence dimension
         if len(embs) > 1:
@@ -458,16 +475,27 @@ class SuffixEmbeddingTTNN:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         
-        # Attention mask: from list
-        att_mask_tensor = torch.tensor(att_masks, dtype=torch.bool)
-        att_mask_tensor = att_mask_tensor.unsqueeze(0).expand(batch_size, -1)
-        suffix_att_masks = ttnn.from_torch(
-            att_mask_tensor.float(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # OPTIMIZATION: Use pre-computed attention mask pattern (no transfer per step!)
+        # Pattern is pre-computed in __init__, just repeat for batch_size
+        if batch_size == 1:
+            # Most common case: batch_size=1, just slice to suffix_len
+            suffix_att_masks = ttnn.slice(
+                self._att_mask_pattern,
+                [0, 0],
+                [1, suffix_len],
+            )
+        else:
+            # Repeat pattern for batch_size > 1
+            att_mask_sliced = ttnn.slice(
+                self._att_mask_pattern,
+                [0, 0],
+                [1, suffix_len],
+            )
+            suffix_att_masks = ttnn.repeat(
+                att_mask_sliced,
+                (batch_size, 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
     
