@@ -79,7 +79,8 @@ jobs:
   clang-tidy:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
-    if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
+    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
+    if: ${{ always() && !failure() && !cancelled() && needs.determine-scan-type.outputs.do-scan == 'true' }}
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:

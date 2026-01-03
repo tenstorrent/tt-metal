@@ -262,7 +262,8 @@ jobs:
           retention-days: 1
 
   build-artifact:
-    if: ${{ inputs.use-artifacts-from-run == '' }}
+    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
+    if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 100
@@ -437,7 +438,8 @@ jobs:
           compression-level: 0
 
   build-wheel:
-    if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
+    # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
+    if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     uses: ./.github/workflows/wheels.yaml
     needs: build-docker-image
