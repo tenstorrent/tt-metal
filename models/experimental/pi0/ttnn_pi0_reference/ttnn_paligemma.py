@@ -36,6 +36,7 @@ from .ttnn_gemma import (
     rms_norm_torch,
     rms_norm_ttnn,
     precompute_freqs_cis_torch,
+    precompute_freqs_cis_meta_format,
 )
 from .ttnn_siglip import (
     SigLIPConfig,
@@ -395,7 +396,7 @@ class PaliGemmaBackboneTTNN:
         # Store torch weights for blocks (converted on demand)
         self.torch_weights = weights
 
-        # Precompute RoPE on device
+        # Precompute RoPE for PyTorch fallback (old format: [seq, head_dim/2])
         cos, sin = precompute_freqs_cis_torch(
             config.vlm_config.head_dim,
             config.max_seq_len,
@@ -403,7 +404,7 @@ class PaliGemmaBackboneTTNN:
         self.cos = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         self.sin = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        # Expert RoPE (may have different head_dim)
+        # Expert RoPE (old format for PyTorch fallback)
         expert_cos, expert_sin = precompute_freqs_cis_torch(
             config.expert_config.head_dim,
             config.max_seq_len,
@@ -411,17 +412,57 @@ class PaliGemmaBackboneTTNN:
         self.expert_cos = ttnn.from_torch(expert_cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         self.expert_sin = ttnn.from_torch(expert_sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
+        # OPTIMIZATION: Also precompute Meta format for native TTNN RoPE
+        # This format is required by ttnn.experimental.rotary_embedding (split-half pattern)
+        cos_meta, sin_meta = precompute_freqs_cis_meta_format(
+            config.vlm_config.head_dim,
+            config.max_seq_len,
+        )
+        self.cos_meta = ttnn.from_torch(cos_meta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.sin_meta = ttnn.from_torch(sin_meta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Expert RoPE in Meta format
+        expert_cos_meta, expert_sin_meta = precompute_freqs_cis_meta_format(
+            config.expert_config.head_dim,
+            config.max_seq_len,
+        )
+        self.expert_cos_meta = ttnn.from_torch(
+            expert_cos_meta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.expert_sin_meta = ttnn.from_torch(
+            expert_sin_meta, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
         # Initialize VLM transformer blocks (18 layers for Gemma 2B)
+        # Pass meta cos/sin for native TTNN RoPE (split-half pattern)
         self.vlm_blocks = []
         for i in range(config.vlm_config.depth):
             block_weights = self._get_vlm_block_weights_ttnn(weights["vlm_language"], i)
-            self.vlm_blocks.append(GemmaBlockTTNN(config.vlm_config, block_weights, i, device))
+            self.vlm_blocks.append(
+                GemmaBlockTTNN(
+                    config.vlm_config,
+                    block_weights,
+                    i,
+                    device,
+                    self.cos_meta,
+                    self.sin_meta,
+                )
+            )
 
         # Initialize Expert transformer blocks (6 layers for Gemma 300M)
         self.expert_blocks = []
         for i in range(config.expert_config.depth):
             block_weights = self._get_expert_block_weights_ttnn(weights["action_expert"], i)
-            self.expert_blocks.append(GemmaBlockTTNN(config.expert_config, block_weights, i, device))
+            self.expert_blocks.append(
+                GemmaBlockTTNN(
+                    config.expert_config,
+                    block_weights,
+                    i,
+                    device,
+                    self.expert_cos_meta,
+                    self.expert_sin_meta,
+                )
+            )
 
     def _get_vlm_block_weights_ttnn(
         self,

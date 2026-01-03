@@ -18,10 +18,10 @@ Structure:
 Usage:
     # PyTorch reference
     from models.experimental.pi0.reference import GemmaBlock, SigLIPVisionTower
-    
+
     # TTNN implementation
     from models.experimental.pi0.tt import TtGemmaBlock, TtSigLIPVisionTower
-    
+
     # Configs
     from models.experimental.pi0.common import GemmaConfig, PI0ModelConfig
 
@@ -34,7 +34,3 @@ Model Architecture:
 """
 
 __version__ = "0.1.0"
-
-
-
-

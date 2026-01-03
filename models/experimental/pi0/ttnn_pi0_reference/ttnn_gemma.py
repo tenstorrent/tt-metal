@@ -132,6 +132,7 @@ def rms_norm_ttnn(
 # Rotary Position Embeddings
 # ============================================================================
 
+
 def precompute_freqs_cis_torch(
     head_dim: int,
     max_seq_len: int,
@@ -162,6 +163,58 @@ def precompute_freqs_cis_torch(
     freqs_outer = torch.outer(t, freqs)
 
     return torch.cos(freqs_outer), torch.sin(freqs_outer)
+
+
+def precompute_freqs_cis_meta_format(
+    head_dim: int,
+    max_seq_len: int,
+    base: float = 10000.0,
+    dtype: torch.dtype = torch.float32,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Precompute cos and sin for rotary embeddings for ttnn.experimental.rotary_embedding.
+
+    ttnn.experimental.rotary_embedding uses the split-half pattern (same as Gemma):
+    - rotate_half(x) = cat(-x[..., dim/2:], x[..., :dim/2])
+    - result = x * cos + rotate_half(x) * sin
+
+    For this to work correctly, cos/sin must have shape [1, 1, max_seq_len, head_dim]
+    where the values are repeated: [c0, c1, ..., c_{n/2-1}, c0, c1, ..., c_{n/2-1}]
+
+    This matches how the rotation pairs x[i] with x[i+dim/2] for i < dim/2.
+
+    Args:
+        head_dim: Dimension per head (must be even)
+        max_seq_len: Maximum sequence length
+        base: Base for frequency computation
+        dtype: Output dtype
+
+    Returns:
+        Tuple of (cos, sin) each of shape (1, 1, max_seq_len, head_dim)
+    """
+    # Compute inverse frequencies
+    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=dtype) / head_dim))
+
+    # Compute positions
+    t = torch.arange(max_seq_len, dtype=dtype)
+
+    # Outer product: [max_seq_len, head_dim/2]
+    freqs_outer = torch.outer(t, freqs)
+
+    # Compute cos/sin: [max_seq_len, head_dim/2]
+    cos = torch.cos(freqs_outer)
+    sin = torch.sin(freqs_outer)
+
+    # Repeat for full head_dim: [c0, c1, ..., c_{n/2-1}, c0, c1, ..., c_{n/2-1}]
+    # This matches the split-half rotation where x[i] pairs with x[i+dim/2]
+    cos = torch.cat([cos, cos], dim=-1)  # [seq, dim]
+    sin = torch.cat([sin, sin], dim=-1)  # [seq, dim]
+
+    # Add batch and head dimensions: [1, 1, seq, dim]
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+
+    return cos, sin
 
 
 def apply_rotary_emb_torch(
@@ -338,42 +391,54 @@ class GemmaAttentionTorch:
 class GemmaAttentionTTNN:
     """
     Gemma Multi-Query Attention using TTNN operations.
-    
-    Leverages TTNN's optimized attention kernels.
+
+    OPTIMIZED: Uses ttnn.experimental.rotary_embedding for native RoPE (split-half
+    pattern matching Gemma), eliminating 4 device↔host transfers per layer.
     """
-    
+
     def __init__(
         self,
         config: GemmaConfig,
         weights: Dict[str, "ttnn.Tensor"],
         layer_idx: int,
         device: "ttnn.Device",
+        cos_meta: Optional["ttnn.Tensor"] = None,
+        sin_meta: Optional["ttnn.Tensor"] = None,
     ):
         """
         Initialize attention layer with TTNN weights.
-        
+
         Args:
             config: Gemma configuration
             weights: TTNN weight tensors
             layer_idx: Layer index
             device: TTNN device
+            cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
+            sin_meta: Precomputed sin for native TTNN RoPE [1, 1, max_seq, head_dim]
         """
         if not TTNN_AVAILABLE:
             raise RuntimeError("TTNN not available")
-        
+
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
-        
+
         self.q_proj = weights["self_attn.q_proj.weight"]
         self.k_proj = weights["self_attn.k_proj.weight"]
         self.v_proj = weights["self_attn.v_proj.weight"]
         self.o_proj = weights["self_attn.o_proj.weight"]
-        
+
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.head_dim
         self.scale = 1.0 / math.sqrt(self.head_dim)
+
+        # Store meta format cos/sin for native TTNN RoPE (split-half pattern)
+        self.cos_meta = cos_meta
+        self.sin_meta = sin_meta
+
+        # Enable native RoPE when precomputed tensors are available
+        self.use_native_rope = cos_meta is not None and sin_meta is not None
     
     def forward(
         self,
@@ -416,60 +481,79 @@ class GemmaAttentionTTNN:
         q = ttnn.permute(q, (0, 2, 1, 3))
         k = ttnn.permute(k, (0, 2, 1, 3))
         v = ttnn.permute(v, (0, 2, 1, 3))
-        
-        # Apply RoPE using hybrid approach (convert to torch, apply RoPE, convert back)
-        # This handles the complex broadcasting required for rotary embeddings
-        q_torch = ttnn.to_torch(q)
-        k_torch = ttnn.to_torch(k)
-        cos_torch = ttnn.to_torch(cos) if hasattr(cos, 'shape') else cos
-        sin_torch = ttnn.to_torch(sin) if hasattr(sin, 'shape') else sin
-        
-        # Apply rotary embeddings in torch
-        def apply_rope_torch(x, cos_t, sin_t):
-            # x: (batch, heads, seq, dim)
-            # cos_t, sin_t: (seq, dim/2) - need to repeat for full dim
-            if len(cos_t.shape) == 2:
-                cos_t = cos_t.unsqueeze(0).unsqueeze(0)  # (1, 1, seq, dim/2)
-                sin_t = sin_t.unsqueeze(0).unsqueeze(0)
-            elif len(cos_t.shape) == 3:
-                cos_t = cos_t.unsqueeze(0)  # (1, 1, seq, dim/2)
-                sin_t = sin_t.unsqueeze(0)
-            
-            # Slice to match sequence length
-            seq_len = x.shape[2]
-            cos_t = cos_t[:, :, :seq_len, :]
-            sin_t = sin_t[:, :, :seq_len, :]
-            
-            # Repeat cos/sin to match full head_dim
-            cos_t = torch.cat([cos_t, cos_t], dim=-1)  # (1, 1, seq, dim)
-            sin_t = torch.cat([sin_t, sin_t], dim=-1)  # (1, 1, seq, dim)
-            
-            # Split x into two halves for rotation
-            x1 = x[..., : x.shape[-1] // 2]
-            x2 = x[..., x.shape[-1] // 2 :]
-            
-            # Rotate
-            rotated = torch.cat([-x2, x1], dim=-1)
-            
-            # Apply RoPE
-            return x * cos_t + rotated * sin_t
-        
-        q_rope_torch = apply_rope_torch(q_torch, cos_torch, sin_torch)
-        k_rope_torch = apply_rope_torch(k_torch, cos_torch, sin_torch)
-        
-        # Convert back to TTNN
-        q_rope = ttnn.from_torch(
-            q_rope_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        k_rope = ttnn.from_torch(
-            k_rope_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
+
+        # Apply RoPE using native TTNN (no device↔host transfers!)
+        if self.use_native_rope:
+            # OPTIMIZED: Use ttnn.experimental.rotary_embedding (split-half pattern, same as Gemma)
+            # NOT rotary_embedding_llama which uses interleaved pattern!
+            # Use stored meta format cos/sin [1, 1, max_seq_len, head_dim]
+            # Slice to match actual sequence length
+            cos_sliced = ttnn.slice(
+                self.cos_meta,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, self.head_dim],
+            )
+            sin_sliced = ttnn.slice(
+                self.sin_meta,
+                [0, 0, 0, 0],
+                [1, 1, seq_len, self.head_dim],
+            )
+
+            # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma:
+            # rotate_half(x) = cat(-x[..., dim/2:], x[..., :dim/2])
+            # result = x * cos + rotate_half(x) * sin
+            q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
+            k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
+
+            ttnn.deallocate(cos_sliced)
+            ttnn.deallocate(sin_sliced)
+
+            # rotary_embedding pads output to tile boundary, slice back to original seq_len
+            # to match v's shape for SDPA
+            # Note: Don't deallocate padded tensors as slice might share memory
+            q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
+            k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
+        else:
+            # FALLBACK: Use PyTorch for RoPE (for backward compatibility)
+            q_torch = ttnn.to_torch(q)
+            k_torch = ttnn.to_torch(k)
+            cos_torch = ttnn.to_torch(cos) if hasattr(cos, "shape") else cos
+            sin_torch = ttnn.to_torch(sin) if hasattr(sin, "shape") else sin
+
+            def apply_rope_torch(x, cos_t, sin_t):
+                if len(cos_t.shape) == 2:
+                    cos_t = cos_t.unsqueeze(0).unsqueeze(0)
+                    sin_t = sin_t.unsqueeze(0).unsqueeze(0)
+                elif len(cos_t.shape) == 3:
+                    cos_t = cos_t.unsqueeze(0)
+                    sin_t = sin_t.unsqueeze(0)
+
+                cur_seq_len = x.shape[2]
+                cos_t = cos_t[:, :, :cur_seq_len, :]
+                sin_t = sin_t[:, :, :cur_seq_len, :]
+                cos_t = torch.cat([cos_t, cos_t], dim=-1)
+                sin_t = torch.cat([sin_t, sin_t], dim=-1)
+
+                x1 = x[..., : x.shape[-1] // 2]
+                x2 = x[..., x.shape[-1] // 2 :]
+                rotated = torch.cat([-x2, x1], dim=-1)
+                return x * cos_t + rotated * sin_t
+
+            q_rope_torch = apply_rope_torch(q_torch, cos_torch, sin_torch)
+            k_rope_torch = apply_rope_torch(k_torch, cos_torch, sin_torch)
+
+            q_rope = ttnn.from_torch(
+                q_rope_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            k_rope = ttnn.from_torch(
+                k_rope_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
         
         # Handle KV cache
         if past_key_value is not None:
@@ -699,34 +783,40 @@ class GemmaBlockTTNN:
     """
     Complete Gemma transformer block using TTNN.
     """
-    
+
     def __init__(
         self,
         config: GemmaConfig,
         weights: Dict[str, "ttnn.Tensor"],
         layer_idx: int,
         device: "ttnn.Device",
+        cos_meta: Optional["ttnn.Tensor"] = None,
+        sin_meta: Optional["ttnn.Tensor"] = None,
     ):
         """
         Initialize transformer block with TTNN weights.
-        
+
         Args:
             config: Gemma configuration
             weights: TTNN weight tensors
             layer_idx: Layer index
             device: TTNN device
+            cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
+            sin_meta: Precomputed sin for native TTNN RoPE [1, 1, max_seq, head_dim]
         """
         if not TTNN_AVAILABLE:
             raise RuntimeError("TTNN not available")
-        
+
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
-        
+
         self.input_layernorm_weight = weights["input_layernorm.weight"]
         self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
-        
-        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device)
+
+        self.attention = GemmaAttentionTTNN(
+            config, weights, layer_idx, device, cos_meta, sin_meta
+        )
         self.mlp = GemmaMLPTTNN(config, weights, device)
     
     def forward(
