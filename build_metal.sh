@@ -96,9 +96,6 @@ else
     toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
 fi
 
-
-# Requested handling for 20.04 -> 22.04 migration
-
 configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
