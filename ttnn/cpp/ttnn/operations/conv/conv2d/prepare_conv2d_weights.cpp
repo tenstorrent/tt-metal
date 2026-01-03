@@ -1264,7 +1264,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
 
     if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
-        Tensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
+        PreparedConv2dWeightBiasTensor dummy_weight_tensor = tt::tt_metal::create_device_tensor(
             tt::tt_metal::TensorSpec(
                 ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], kernel_size[1]}),
                 tt::tt_metal::TensorLayout(
@@ -1275,7 +1275,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                         BufferType::DRAM,
                     })),
             device);
-        std::optional<Tensor> dummy_bias_tensor = std::nullopt;
+        PreparedConv2dWeightBiasTensor dummy_bias_tensor = std::nullopt;
         if (has_bias) {
             dummy_bias_tensor = tt::tt_metal::create_device_tensor(
                 tt::tt_metal::TensorSpec(
@@ -1303,8 +1303,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             input_layout,
             input_dtype,
             conv_output_dtype,
-            std::ref(dummy_weight_tensor),
-            has_bias ? std::make_optional(std::ref(dummy_bias_tensor.value())) : std::nullopt,
+            dummy_weight_tensor,
+            dummy_bias_tensor,
             conv_config,
             compute_config,
             device);
@@ -1483,7 +1483,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         orig_stride);
 }
 
-static ttnn::Tensor prepare_conv_weights_internal(
+static PreparedConv2dWeightBiasTensor prepare_conv_weights_internal(
     const ttnn::Tensor& weight_tensor, Conv2dWeightsBiasPrepConfig& params, MeshDevice* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
     Shape weight_shape = weight_tensor.logical_shape();
@@ -1597,17 +1597,17 @@ static ttnn::Tensor prepare_conv_weights_internal(
     // Always move parameters to device
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
-    return weight_tensor_;
+    return PreparedConv2dWeightBiasTensor(weight_tensor_, false, params);
 }
 
-std::optional<ttnn::Tensor> prepare_conv_bias_internal(
+PreparedConv2dWeightBiasTensor prepare_conv_bias_internal(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     uint32_t out_channels,
     const Conv2dWeightsBiasPrepConfig& params,
     DataType weight_dtype,
     MeshDevice* device) {
     if (!bias_tensor.has_value()) {
-        return std::optional<ttnn::Tensor>();
+        return PreparedConv2dWeightBiasTensor(std::nullopt);
     }
 
     ttnn::Tensor bias_tensor_ = bias_tensor.value();
@@ -1635,22 +1635,24 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     return bias_tensor_;
 }
 
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
+std::pair<PreparedConv2dWeightBiasTensor, PreparedConv2dWeightBiasTensor>
+prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     Conv2dWeightsBiasPrepConfig& params,
     MeshDevice* device) {
     // Prepare weights
-    ttnn::Tensor weight_tensor_prepared = prepare_conv_weights_internal(weight_tensor, params, device);
+    PreparedConv2dWeightBiasTensor weight_tensor_prepared =
+        prepare_conv_weights_internal(weight_tensor, params, device);
 
     // Prepare bias if provided
-    std::optional<ttnn::Tensor> bias_tensor_prepared =
-        prepare_conv_bias_internal(bias_tensor, params.out_channels, params, weight_tensor_prepared.dtype(), device);
+    PreparedConv2dWeightBiasTensor bias_tensor_prepared = prepare_conv_bias_internal(
+        bias_tensor, params.out_channels, params, ((const Tensor&)weight_tensor_prepared).dtype(), device);
 
     return {weight_tensor_prepared, bias_tensor_prepared};
 }
 
-ttnn::Tensor prepare_conv_weights(
+PreparedConv2dWeightBiasTensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_layout,
@@ -1716,10 +1718,10 @@ ttnn::Tensor prepare_conv_weights(
         dram_slice_config_);
 
     // Use internal API to prepare weights
-    return prepare_conv_weights_internal(weight_tensor, params, device);
+    return PreparedConv2dWeightBiasTensor(prepare_conv_weights_internal(weight_tensor, params, device), false, params);
 }
 
-ttnn::Tensor prepare_conv_bias(
+PreparedConv2dWeightBiasTensor prepare_conv_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_layout,
@@ -1776,7 +1778,7 @@ ttnn::Tensor prepare_conv_bias(
         conv_config.weights_dtype.value(),
         device);
 
-    return prepared_bias.value();  // We know bias exists since we passed it
+    return PreparedConv2dWeightBiasTensor(prepared_bias, true, params);
 }
 
 }  // namespace conv2d

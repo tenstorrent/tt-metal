@@ -8,10 +8,10 @@
 #include <tuple>
 #include <variant>
 
+#include "prepare_conv2d_weights.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -20,21 +20,21 @@ namespace ttnn::operations::conv::conv2d {
 
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+using Result =
+    std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, PreparedConv2dWeightBiasTensor, PreparedConv2dWeightBiasTensor>;
 using ResultWithOptions = std::variant<
     ttnn::Tensor,
     std::tuple<ttnn::Tensor, std::tuple<OutputHeight, OutputWidth>>,
-    std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
+    std::tuple<ttnn::Tensor, std::tuple<PreparedConv2dWeightBiasTensor, PreparedConv2dWeightBiasTensor>>,
     std::tuple<
         ttnn::Tensor,
         std::tuple<OutputHeight, OutputWidth>,
-        std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
-
+        std::tuple<PreparedConv2dWeightBiasTensor, PreparedConv2dWeightBiasTensor>>>;
 // Public operation interface
 struct Conv2dOperation {
     static ResultWithOptions invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
+        const PreparedConv2dWeightBiasTensor& weight_tensor,
         MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
@@ -47,7 +47,7 @@ struct Conv2dOperation {
         std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
         uint32_t groups = 1,
         const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
+        const PreparedConv2dWeightBiasTensor& bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
@@ -70,8 +70,8 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     Layout input_layout,
     DataType input_dtype,
     DataType conv_output_dtype,
-    Tensor& weight_tensor,
-    std::optional<std::reference_wrapper<Tensor>> bias_tensor,
+    PreparedConv2dWeightBiasTensor& weight_tensor,
+    PreparedConv2dWeightBiasTensor& bias_tensor,
     const Conv2dConfig& conv_config_,
     const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device);

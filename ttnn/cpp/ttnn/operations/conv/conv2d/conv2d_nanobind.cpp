@@ -155,7 +155,7 @@ void bind_conv2d(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
+               const PreparedConv2dWeightBiasTensor& weight_tensor,
                ttnn::MeshDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
@@ -168,7 +168,7 @@ void bind_conv2d(nb::module_& mod) {
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
+               const std::optional<PreparedConv2dWeightBiasTensor>& bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
@@ -190,7 +190,7 @@ void bind_conv2d(nb::module_& mod) {
                     dilation,
                     groups,
                     dtype,
-                    bias_tensor,
+                    bias_tensor.value_or(std::nullopt),
                     conv_config,
                     compute_config,
                     memory_config,
@@ -558,6 +558,21 @@ void bind_conv2d(nb::module_& mod) {
     )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
+
+    auto py_prepared_conv_weights_tensor = nb::class_<PreparedConv2dWeightBiasTensor>(
+        mod,
+        "PreparedConv2dWeightBiasTensor",
+        R"doc(
+        | PreparedConv2dWeightBiasTensor is a class that stores the prepared weight and bias tensors for Conv2D operations.
+        | As the weights preparation is dependant on how the Conv2d operation is executed, this class encapsulates
+        | both the prepared weight and bias tensors along with metadata about their preparation.
+        | This can prevent errors that may arise from a mismatch between the prepared weights/bias and the Conv2D operation configuration.
+        )doc");
+    py_prepared_conv_weights_tensor.def(nb::init<ttnn::Tensor>(), nb::arg("tensor"));
+
+    py_prepared_conv_weights_tensor.def(nb::init_implicit<Tensor>());
+    py_prepared_conv_weights_tensor.def(
+        "__repr__", [](const PreparedConv2dWeightBiasTensor& tensor) { return fmt::format("{}", tensor); });
 }
 
 }  // namespace ttnn::operations::conv::conv2d
