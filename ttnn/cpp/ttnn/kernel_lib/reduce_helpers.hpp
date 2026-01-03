@@ -130,10 +130,6 @@ struct NoOp {
  * @param Ht Height in tiles (number of tile rows)
  * @param Wt Width in tiles (number of tile columns)
  * @param num_batches Number of batches to process (NC dimension)
- * @param row_chunk Chunk size for REDUCE_COL (default: 0 = use auto-detected DEST limit)
- *                  For REDUCE_ROW and REDUCE_SCALAR, this parameter is ignored.
- *                  For REDUCE_COL, if the host arranges tiles with a specific chunk size,
- *                  pass that value here to ensure correct data interpretation.
  * @param input_stride Stride between row groups for PRELOADED mode (default: 0 = use Wt)
  *                     Only used when input_mode is PRELOADED.
  * @param max_batch_tiles Maximum tiles STREAMING mode can batch at once (default: 1 for compatibility)
@@ -206,7 +202,6 @@ ALWI void reduce(
     uint32_t Ht,
     uint32_t Wt,
     uint32_t num_batches,
-    uint32_t row_chunk = 0,
     uint32_t input_stride = 0,
     uint32_t max_batch_tiles = 1,
     PostReduceOp post_reduce_op = {}) {
@@ -392,8 +387,9 @@ ALWI void reduce(
         // PRELOADED: Tiles in row-major order, indexed as batch_offset + ht*stride + wt
         // =================================================================
 
-        // Use provided row_chunk if > 0, otherwise use auto-detected DEST limit
-        const uint32_t chunk_size = (row_chunk > 0) ? row_chunk : DEST_AUTO_LIMIT;
+        // Auto-detect chunk size from DEST register capacity
+        // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
+        constexpr uint32_t chunk_size = DEST_AUTO_LIMIT;
         const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
         const uint32_t tiles_per_batch = Ht * stride;
         const uint32_t total_outputs = Wt * num_batches;

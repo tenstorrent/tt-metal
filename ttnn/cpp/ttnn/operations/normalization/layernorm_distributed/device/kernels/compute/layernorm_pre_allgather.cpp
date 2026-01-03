@@ -68,7 +68,7 @@ void MAIN {
         pack_reconfig_data_format(cb_out);
         // STREAMING with batching: All Wt tiles already in CB (see cumulative wait above)
         // Enable batching for optimal performance
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_reduce, cb_out, 1, Wt, 1, 0, 0, Wt);
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_x2, cb_reduce, cb_out, 1, Wt, 1, 0, Wt);
 
         /*
          * sum(x)
@@ -77,7 +77,7 @@ void MAIN {
         pack_reconfig_data_format(cb_out);
         // STREAMING with batching: All Wt tiles already in CB (see cumulative wait above)
         // Enable batching for optimal performance
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_inp, cb_reduce, cb_out, 1, Wt, 1, 0, 0, Wt);
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_inp, cb_reduce, cb_out, 1, Wt, 1, 0, Wt);
     }
     cb_pop_front(cb_reduce, 1);
 }
