@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
-#include "debug/dprint_tile.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint_tile.h"
 
 void kernel_main() {
     // CB indices

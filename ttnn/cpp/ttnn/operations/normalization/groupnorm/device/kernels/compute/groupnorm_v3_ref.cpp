@@ -15,10 +15,10 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tensix.h"
-#include "api/debug/dprint_tile.h"
-#include "api/debug/dprint_pages.h"
+#include "debug/dprint.h"
+#include "debug/dprint_tensix.h"
+#include "debug/dprint_tile.h"
+#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -42,13 +42,7 @@ void MAIN {
 
     // Destination regs
     // ----------------
-    constexpr uint32_t sum_dst_reg = 0;
-    constexpr uint32_t mean_dst_reg = 1;
-    constexpr uint32_t xmm_dst_reg = 2;
-    constexpr uint32_t var_dst_reg = 3;
-    constexpr uint32_t varsum_dst_reg = 4;
-    constexpr uint32_t std_dst_reg = 5;
-    constexpr uint32_t out_dst_reg = 6;
+    constexpr uint32_t mean_dst_reg = 4;
 
     //-------------------------------------------------------------------------
     // Sum
@@ -57,8 +51,6 @@ void MAIN {
 
     cb_wait_front(sum_scaler_cb_idx, 1);
     cb_reserve_back(sum_cb_idx, 1);
-
-    // dprint_tensix_dest_reg(0);
 
     tile_regs_acquire();  // compute thread acquires the tile registers
     for (uint32_t batch = 0; batch < num_batches; ++batch) {
@@ -71,18 +63,18 @@ void MAIN {
                     sum_scaler_cb_idx,
                     tile,
                     0,
-                    sum_dst_reg);  // every element is multiplied by sum_scaler in a reduce operation (in this case
-                                   // everything is multiplied by 1.0f)
+                    mean_dst_reg);  // every element is multiplied by sum_scaler in a reduce operation (in this case
+                                    // everything is multiplied by 1.0f)
             }
 
             cb_pop_front(src_cb_idx, src_tiles_per_page);
         }
     }
-    dprint_tensix_dest_reg(sum_dst_reg);
+    dprint_tensix_dest_reg(mean_dst_reg);
     tile_regs_commit();  // compute thread releases the tile registers
 
     tile_regs_wait();  // packing thread acquires the tile registers
-    pack_tile(sum_dst_reg, sum_cb_idx);
+    pack_tile(mean_dst_reg, sum_cb_idx);
     tile_regs_release();  // packing thread releases the tile registers
 
     cb_push_back(sum_cb_idx, 1);
@@ -98,7 +90,7 @@ void MAIN {
 
     tile_regs_acquire();
     mul_tiles(sum_cb_idx, mean_scaler_cb_idx, 0, 0, 0);
-    // dprint_tensix_dest_reg(0);
+    dprint_tensix_dest_reg(0);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -133,9 +125,9 @@ void MAIN {
                 // reduce_tile(src_cb_idx, sum_scaler_cb_idx, tile, 0, mean_dst_reg);
                 // dprint_tensix_dest_reg(mean_dst_reg);
             }
-            add_binary_tile(0, 1, 0);  // dest[0] = dest[0] + dest[1]
-            add_binary_tile(2, 3, 2);  // dest[2] = dest[2] + dest[3]
-            add_binary_tile(0, 2, 0);  // dest[0] = dest[0] + dest[2]
+            add_binary_tile(0, 1);
+            add_binary_tile(2, 3);
+            add_binary_tile(0, 2);
 
             tile_regs_commit();
 
@@ -184,14 +176,5 @@ void MAIN {
             cb_push_back(dst_cb_idx, dst_tiles_per_page);
         }
     }
-
-    // for (uint32_t batch = 0; batch < num_batches; ++batch) {
-    //     for (uint32_t page = 0; page < num_pages; ++page) {
-
-    //         for (uint32_t tile = 0; tile < src_tiles_per_page; ++tile) {
-    //             dprint_tensix_dest_reg(tile);
-    //         }
-    //     }
-    // }
 }
 }  // namespace NAMESPACE

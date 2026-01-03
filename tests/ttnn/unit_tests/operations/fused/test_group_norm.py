@@ -964,3 +964,70 @@ def test_group_norm_negative_tests(
             core_grid=ttnn.CoreGrid(y=1, x=1),
             inplace=False,
         )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_group_norm_v3_simple_passthrough(device):
+    """
+    Simple test to confirm input tensor is successfully passed to the kernel.
+    Uses recognizable input values (all 1s) so DPRINT output is easy to verify.
+
+    Run with: pytest tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_v3_simple_passthrough -v -s
+
+    To see DPRINT output from the kernel:
+        export TT_METAL_DPRINT_CORES="0,0"
+    """
+    torch.manual_seed(0)
+
+    # Simple input: 1 batch, 128 channels, 32x32 spatial
+    # With 32 groups, each group has 4 channels
+    N, C, H, W = 1, 128, 32, 32
+    num_groups = 32
+    chunk_size = 4096  # Each chunk is one tile (32x32 = 1024 elements, but chunk_size is in bytes) (group size)
+
+    # Use all 1s so it's easy to verify in DPRINT output
+    # GroupNorm of all 1s should output all 0s (since mean=1, var=0, so (x-mean)/std = 0/0 -> nan or 0 depending on eps)
+    torch_input_tensor = torch.ones((N, C, H, W), dtype=torch.bfloat16)
+
+    # Print what we're sending in
+    logger.info(f"Input shape: {torch_input_tensor.shape}")
+    logger.info(f"Input tensor (first 4 values): {torch_input_tensor.flatten()[:4]}")
+
+    # Permute to NHWC format and reshape for ttnn
+    # ttnn expects: (N, 1, H*W, C)
+    torch_input_permute = torch_input_tensor.permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+    logger.info(f"After permute shape: {torch_input_permute.shape}")
+
+    # Create ttnn tensor
+    tt_input = ttnn.from_torch(
+        torch_input_permute,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Permute back to NCHW for group_norm_v3
+    tt_input = ttnn.permute(tt_input, (0, 3, 1, 2))
+    logger.info(f"tt_input shape after permute: {tt_input.shape}")
+
+    # Execute group_norm_v3
+    tt_output = ttnn.group_norm_v3(
+        tt_input,
+        num_groups=num_groups,
+        chunk_size=chunk_size,
+        inplace=True,
+    )
+
+    # Get output back to torch
+    tt_output = ttnn.permute(tt_output, (0, 2, 3, 1))
+    torch_output = ttnn.to_torch(tt_output)
+
+    logger.info(f"Output shape: {torch_output.shape}")
+    logger.info(f"Output tensor (first 4 values): {torch_output.flatten()[:4]}")
+
+    # Basic sanity check - we got output with the right shape
+    assert (
+        torch_output.shape == torch_input_permute.shape
+    ), f"Output shape mismatch: {torch_output.shape} vs {torch_input_permute.shape}"
+    logger.info("Test passed - input was successfully processed and output returned!")
