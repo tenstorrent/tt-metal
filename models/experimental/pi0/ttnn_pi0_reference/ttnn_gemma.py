@@ -392,8 +392,11 @@ class GemmaAttentionTTNN:
     """
     Gemma Multi-Query Attention using TTNN operations.
 
-    OPTIMIZED: Uses ttnn.experimental.rotary_embedding for native RoPE (split-half
-    pattern matching Gemma), eliminating 4 device↔host transfers per layer.
+    OPTIMIZED:
+    1. Fused QKV projection (1 linear instead of 3)
+    2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+    3. Native ttnn.experimental.rotary_embedding (split-half pattern)
+    4. Native ttnn.experimental.nlp_concat_heads for output
     """
 
     def __init__(
@@ -410,7 +413,7 @@ class GemmaAttentionTTNN:
 
         Args:
             config: Gemma configuration
-            weights: TTNN weight tensors
+            weights: TTNN weight tensors (including fused wqkv)
             layer_idx: Layer index
             device: TTNN device
             cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
@@ -423,14 +426,14 @@ class GemmaAttentionTTNN:
         self.layer_idx = layer_idx
         self.device = device
 
-        self.q_proj = weights["self_attn.q_proj.weight"]
-        self.k_proj = weights["self_attn.k_proj.weight"]
-        self.v_proj = weights["self_attn.v_proj.weight"]
+        # OPTIMIZATION: Use fused QKV weight (single linear instead of 3)
+        self.wqkv = weights["self_attn.wqkv"]
         self.o_proj = weights["self_attn.o_proj.weight"]
 
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.head_dim
+        self.hidden_size = config.width
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
         # Store meta format cos/sin for native TTNN RoPE (split-half pattern)
@@ -439,6 +442,14 @@ class GemmaAttentionTTNN:
 
         # Enable native RoPE when precomputed tensors are available
         self.use_native_rope = cos_meta is not None and sin_meta is not None
+
+        # Compute kernel config for attention
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
     
     def forward(
         self,
@@ -451,118 +462,85 @@ class GemmaAttentionTTNN:
         use_cache: bool = False,
     ) -> Tuple["ttnn.Tensor", Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
         """
-        Forward pass using TTNN operations.
-        
+        OPTIMIZED forward pass using fused QKV and native TTNN operations.
+
+        Key optimizations:
+        1. Single fused QKV linear (3x fewer linear ops)
+        2. Native ttnn.experimental.nlp_create_qkv_heads (no PyTorch transfers)
+        3. Native ttnn.experimental.rotary_embedding (split-half pattern)
+        4. Native ttnn.experimental.nlp_concat_heads for output
+
         Args:
             hidden_states: TTNN tensor (batch, seq_len, hidden_dim)
-            cos, sin: RoPE embeddings
+            cos, sin: RoPE embeddings (unused when use_native_rope=True)
             attention_mask: Attention mask
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
-        
+
         Returns:
             Tuple of (output, optional_cache)
         """
-        # Project Q, K, V (use DRAM for large tensors)
-        q = ttnn.linear(hidden_states, self.q_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.linear(hidden_states, self.k_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.linear(hidden_states, self.v_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        
-        # Reshape and split heads using TTNN experimental ops
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
-        
-        q = ttnn.reshape(q, (batch_size, seq_len, self.num_heads, self.head_dim))
-        k = ttnn.reshape(k, (batch_size, seq_len, self.num_kv_heads, self.head_dim))
-        v = ttnn.reshape(v, (batch_size, seq_len, self.num_kv_heads, self.head_dim))
-        
-        # Transpose: (batch, seq, heads, dim) -> (batch, heads, seq, dim)
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.permute(v, (0, 2, 1, 3))
 
-        # Apply RoPE using native TTNN (no device↔host transfers!)
-        if self.use_native_rope:
-            # OPTIMIZED: Use ttnn.experimental.rotary_embedding (split-half pattern, same as Gemma)
-            # NOT rotary_embedding_llama which uses interleaved pattern!
-            # Use stored meta format cos/sin [1, 1, max_seq_len, head_dim]
-            # Slice to match actual sequence length
-            cos_sliced = ttnn.slice(
-                self.cos_meta,
-                [0, 0, 0, 0],
-                [1, 1, seq_len, self.head_dim],
-            )
-            sin_sliced = ttnn.slice(
-                self.sin_meta,
-                [0, 0, 0, 0],
-                [1, 1, seq_len, self.head_dim],
-            )
+        # Reshape to 4D for nlp_create_qkv_heads: [batch, 1, seq, hidden]
+        if len(hidden_states.shape) == 3:
+            hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
 
-            # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma:
-            # rotate_half(x) = cat(-x[..., dim/2:], x[..., :dim/2])
-            # result = x * cos + rotate_half(x) * sin
-            q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
-            k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
+        # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
+        # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
+        xqkv = ttnn.linear(
+            hidden_states,
+            self.wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
-            ttnn.deallocate(cos_sliced)
-            ttnn.deallocate(sin_sliced)
+        # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
+        # This splits the fused QKV into separate Q, K, V with proper head layout
+        # Output shapes: q=[batch, num_heads, seq, head_dim], k/v=[batch, num_kv_heads, seq, head_dim]
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-            # rotary_embedding pads output to tile boundary, slice back to original seq_len
-            # to match v's shape for SDPA
-            # Note: Don't deallocate padded tensors as slice might share memory
-            q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
-            k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
-        else:
-            # FALLBACK: Use PyTorch for RoPE (for backward compatibility)
-            q_torch = ttnn.to_torch(q)
-            k_torch = ttnn.to_torch(k)
-            cos_torch = ttnn.to_torch(cos) if hasattr(cos, "shape") else cos
-            sin_torch = ttnn.to_torch(sin) if hasattr(sin, "shape") else sin
+        # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
+        # Slice cos/sin to match actual sequence length
+        cos_sliced = ttnn.slice(
+            self.cos_meta,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, self.head_dim],
+        )
+        sin_sliced = ttnn.slice(
+            self.sin_meta,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, self.head_dim],
+        )
 
-            def apply_rope_torch(x, cos_t, sin_t):
-                if len(cos_t.shape) == 2:
-                    cos_t = cos_t.unsqueeze(0).unsqueeze(0)
-                    sin_t = sin_t.unsqueeze(0).unsqueeze(0)
-                elif len(cos_t.shape) == 3:
-                    cos_t = cos_t.unsqueeze(0)
-                    sin_t = sin_t.unsqueeze(0)
+        # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
+        q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
+        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
 
-                cur_seq_len = x.shape[2]
-                cos_t = cos_t[:, :, :cur_seq_len, :]
-                sin_t = sin_t[:, :, :cur_seq_len, :]
-                cos_t = torch.cat([cos_t, cos_t], dim=-1)
-                sin_t = torch.cat([sin_t, sin_t], dim=-1)
+        ttnn.deallocate(cos_sliced)
+        ttnn.deallocate(sin_sliced)
 
-                x1 = x[..., : x.shape[-1] // 2]
-                x2 = x[..., x.shape[-1] // 2 :]
-                rotated = torch.cat([-x2, x1], dim=-1)
-                return x * cos_t + rotated * sin_t
+        # rotary_embedding pads output to tile boundary, slice back to original seq_len
+        q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
+        k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
-            q_rope_torch = apply_rope_torch(q_torch, cos_torch, sin_torch)
-            k_rope_torch = apply_rope_torch(k_torch, cos_torch, sin_torch)
-
-            q_rope = ttnn.from_torch(
-                q_rope_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-            k_rope = ttnn.from_torch(
-                k_rope_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-        
         # Handle KV cache
         if past_key_value is not None:
             past_k, past_v = past_key_value
             k_rope = ttnn.concat([past_k, k_rope], dim=2)
             v = ttnn.concat([past_v, v], dim=2)
-        
+
         new_cache = (k_rope, v) if use_cache else None
-        
+
         # Use TTNN scaled dot product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_rope,
@@ -572,14 +550,26 @@ class GemmaAttentionTTNN:
             is_causal=False,  # Mask handles causality
             scale=self.scale,
         )
-        
-        # Transpose back and reshape
-        attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-        attn_output = ttnn.reshape(attn_output, (batch_size, seq_len, -1))
-        
+
+        # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
+        # attn_output: [batch, num_heads, seq, head_dim] -> [batch, 1, seq, num_heads * head_dim]
+        attn_concat = ttnn.experimental.nlp_concat_heads(
+            attn_output,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         # Output projection (DRAM for large tensors)
-        output = ttnn.linear(attn_output, self.o_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        
+        output = ttnn.linear(
+            attn_concat,
+            self.o_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
+        output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
+
         return output, new_cache
 
 

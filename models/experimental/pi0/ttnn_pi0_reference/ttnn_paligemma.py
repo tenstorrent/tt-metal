@@ -469,12 +469,40 @@ class PaliGemmaBackboneTTNN:
         weights: Dict[str, torch.Tensor],
         layer_idx: int,
     ) -> Dict[str, "ttnn.Tensor"]:
-        """Extract VLM block weights and convert to TTNN."""
+        """Extract VLM block weights and convert to TTNN with fused QKV optimization."""
         prefix = f"model.layers.{layer_idx}."
         block_weights = {}
+
+        # OPTIMIZATION: Create fused QKV weight for single linear call
+        q_key = f"{prefix}self_attn.q_proj.weight"
+        k_key = f"{prefix}self_attn.k_proj.weight"
+        v_key = f"{prefix}self_attn.v_proj.weight"
+
+        if q_key in weights and k_key in weights and v_key in weights:
+            # Get Q, K, V weights and transpose for TTNN linear
+            wq = weights[q_key].T  # [hidden, num_heads * head_dim]
+            wk = weights[k_key].T  # [hidden, num_kv_heads * head_dim]
+            wv = weights[v_key].T  # [hidden, num_kv_heads * head_dim]
+
+            # Concatenate: [hidden, Q_dim + K_dim + V_dim]
+            wqkv = torch.cat([wq, wk, wv], dim=-1)
+
+            block_weights["self_attn.wqkv"] = ttnn.from_torch(
+                wqkv.contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         for key, value in weights.items():
             if key.startswith(prefix):
                 new_key = key[len(prefix) :]
+
+                # Skip individual Q, K, V weights (now fused)
+                if new_key in ["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"]:
+                    continue
+
                 # Transpose weight matrices for TTNN linear
                 if "weight" in new_key and "layernorm" not in new_key and "norm" not in new_key:
                     value = value.T
@@ -500,12 +528,40 @@ class PaliGemmaBackboneTTNN:
         weights: Dict[str, torch.Tensor],
         layer_idx: int,
     ) -> Dict[str, "ttnn.Tensor"]:
-        """Extract expert block weights and convert to TTNN."""
+        """Extract expert block weights and convert to TTNN with fused QKV optimization."""
         prefix = f"model.layers.{layer_idx}."
         block_weights = {}
+
+        # OPTIMIZATION: Create fused QKV weight for single linear call
+        q_key = f"{prefix}self_attn.q_proj.weight"
+        k_key = f"{prefix}self_attn.k_proj.weight"
+        v_key = f"{prefix}self_attn.v_proj.weight"
+
+        if q_key in weights and k_key in weights and v_key in weights:
+            # Get Q, K, V weights and transpose for TTNN linear
+            wq = weights[q_key].T  # [hidden, num_heads * head_dim]
+            wk = weights[k_key].T  # [hidden, num_kv_heads * head_dim]
+            wv = weights[v_key].T  # [hidden, num_kv_heads * head_dim]
+
+            # Concatenate: [hidden, Q_dim + K_dim + V_dim]
+            wqkv = torch.cat([wq, wk, wv], dim=-1)
+
+            block_weights["self_attn.wqkv"] = ttnn.from_torch(
+                wqkv.contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         for key, value in weights.items():
             if key.startswith(prefix):
                 new_key = key[len(prefix) :]
+
+                # Skip individual Q, K, V weights (now fused)
+                if new_key in ["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"]:
+                    continue
+
                 # Transpose weight matrices for TTNN linear
                 if "weight" in new_key and "layernorm" not in new_key and "norm" not in new_key:
                     value = value.T

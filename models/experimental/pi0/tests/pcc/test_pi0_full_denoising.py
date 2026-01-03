@@ -43,7 +43,9 @@ from models.experimental.pi0.ttnn_pi0_reference.ttnn_siglip import SigLIPConfig
 CHECKPOINT_PATH = "/home/ubuntu/work/sdawle_pi0/torch_checkpoint/pi0_base"
 BATCH_SIZE = 1
 SEED = 42
-PCC_THRESHOLD = 0.85
+# PCC threshold set to 0.93 to account for BFloat16 precision and
+# hardware non-determinism over 240+ ops (10 denoising steps × 24 layers)
+PCC_THRESHOLD = 0.95
 
 
 def create_config() -> PI0ModelConfig:
