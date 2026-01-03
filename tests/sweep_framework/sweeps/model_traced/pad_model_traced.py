@@ -142,20 +142,19 @@ def run(
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
 
     # NOTE: HOST storage does not work properly for pad operation - always use DEVICE
+    # Use DRAM instead of sharded memory to avoid OOM for pad operation
+    actual_memory_config = input_a_memory_config
+    if input_a_memory_config and hasattr(input_a_memory_config, "is_sharded"):
+        if input_a_memory_config.is_sharded():
+            actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=actual_memory_config,
     )
-
-    # Check if input has sharded memory - convert to DRAM to avoid OOM
-    # pad operation can require significant memory for large padding
-    if hasattr(input_tensor_a, "memory_config"):
-        mem_config = input_tensor_a.memory_config()
-        if mem_config.is_sharded():
-            input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.pad(input_tensor_a, padding=padding, value=value)

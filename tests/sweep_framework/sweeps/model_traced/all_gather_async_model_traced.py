@@ -197,13 +197,13 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, buffer_type,
     return tt_input, torch_reference, output_memory_config
 
 
-def skip(**kwargs) -> tuple:
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     """
     Validate test vector and skip if invalid.
     Returns: (should_skip: bool, skip_reason: str or None)
     """
     # Check if this is a model_traced run
-    is_model_traced = kwargs.get("input_a_memory_config") is not None
+    is_model_traced = test_vector.get("input_a_memory_config") is not None
 
     if is_model_traced:
         # For model_traced, check if we have multi-device setup
@@ -211,7 +211,7 @@ def skip(**kwargs) -> tuple:
             return True, "Requires multi-device setup (2+ devices)"
     else:
         # For generality suite, use the same validation as ccl/generality/all_gather.py
-        test_vector = kwargs
+        pass  # test_vector is already the parameter
         cluster_axis = test_vector.get("cluster_axis")
         mesh_shape = test_vector.get("mesh_shape")
         input_shape = test_vector.get("input_shape")

@@ -5,6 +5,7 @@
 
 import torch
 import ttnn
+from typing import Tuple, Optional
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -42,13 +43,13 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def skip(**kwargs) -> tuple:
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     """
     Validate test vector and skip if invalid.
     plus_one requires INT32 or INT64 dtype.
     Returns: (should_skip: bool, skip_reason: str or None)
     """
-    input_a_dtype = kwargs.get("input_a_dtype")
+    input_a_dtype = test_vector.get("input_a_dtype")
 
     # plus_one only supports INT32 and INT64 dtypes
     if input_a_dtype not in [ttnn.int32, ttnn.uint32]:
