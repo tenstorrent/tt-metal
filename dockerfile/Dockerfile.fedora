@@ -1,6 +1,6 @@
 ARG FEDORA_VERSION=43
 FROM mirror.gcr.io/fedora:${FEDORA_VERSION} AS base
-# Re-declare ARG make it available in the build stage
+# Re-declare ARG to make it available in the build stage
 ARG FEDORA_VERSION
 
 # Install basic tools to build
@@ -17,10 +17,14 @@ RUN dnf update -y && dnf install -y \
     xz \
     zstd \
     ccache \
-    wget{,2} \
-    openmpi{,devel} \
-    libxml2{,-devel} \
-    libxslt{,-devel} \
+    wget, \
+    wget2 \
+    openmpi \
+    openmpi-devel \
+    libxml2 \
+    libxml2-devel \
+    libxslt \
+    libxslt-devel \
     patch \
     && dnf clean all
 

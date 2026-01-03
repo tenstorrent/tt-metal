@@ -15,8 +15,7 @@ if ! command -v $PYTHON_CMD &>/dev/null; then
 fi
 
 echo "Getting uv and python 3.12"
-python3 -m pip install uv
-uv python install 3.12
+${PYTHON_CMD} -m pip install uv
 
 # Set Python environment directory
 if [ -z "$PYTHON_ENV_DIR" ]; then
@@ -35,7 +34,6 @@ detect_os
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    #pip install --force-reinstall pip==25.1.1
     uv pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
     uv pip install setuptools wheel==0.45.1
 else
@@ -44,6 +42,7 @@ else
 fi
 
 echo "Installing dev dependencies"
+# need the index strategy to fallback to specified torch version buried in reqs
 uv pip install --index-strategy unsafe-best-match -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 
 echo "Installing tt-metal"

@@ -5,10 +5,10 @@ set(CMAKE_C_COMPILER clang-21 CACHE INTERNAL "C compiler")
 set(CMAKE_CXX_COMPILER clang++-21 CACHE INTERNAL "C++ compiler")
 
 # Use for configure time
-set(ENABLE_LIBCXX FALSE CACHE INTERNAL "Using clang's libc++")
+set(ENABLE_LIBCXX FALSE CACHE INTERNAL "Not using clang's libc++")
 
 # Our build is super slow; put a band-aid on it by choosing a linker that can cope better.
-# We really need to fix out code, though.
+# We really need to fix our code, though.
 find_program(MOLD ld.mold)
 if(MOLD)
     set(CMAKE_LINKER_TYPE MOLD)
