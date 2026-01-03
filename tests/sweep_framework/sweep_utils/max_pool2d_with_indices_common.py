@@ -129,6 +129,7 @@ def run_max_pool2d_with_indices(
     ceil_mode=False,
     memory_config=None,
     run_twice=False,
+    dram_slice_config=None,
 ):
     kernel_size = [kernel_h, kernel_w]
     stride = [stride_h, stride_w]
@@ -187,6 +188,7 @@ def run_max_pool2d_with_indices(
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=True,
+        dram_slice_config=dram_slice_config,
     )
 
     if run_twice:

@@ -395,7 +395,7 @@ public:
         const op_slicing::Op2DSliceConfig& slice_config) const override;
     tt::tt_metal::MemoryConfig get_input_memory_config(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const override;
-    ttnn::Tensor run_L1_op(
+    std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) override;
@@ -548,8 +548,10 @@ Result conv_transpose2d_DRAM(
         device,
         mirror_kernel);
 
+    std::vector<std::reference_wrapper<Tensor>> dram_output_tensors = {std::ref(dram_output_tensor)};
+
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config_);
+        input_tensor_on_device, dram_output_tensors, &slice_attr, dram_slice_config_);
 
     if (conv_config.deallocate_activation && !input_tensor_on_device.memory_config().is_dram()) {
         input_tensor_on_device.deallocate(true);
@@ -948,7 +950,7 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
         this_op_padding,
         this_output_pad};
 }
-ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
+std::vector<ttnn::Tensor> ConvT2DSliceAttr::run_L1_op(
     const ttnn::Tensor& sliced_input_tensor, const IOShape& output_slice_start, const IOShape& output_slice_end) {
     int output_slice_height_start, output_slice_width_start;
     int output_slice_height_end, output_slice_width_end;
@@ -1007,7 +1009,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
     if (bias_tensor.has_value()) {
         bias_tensor->get() = std::get<4>(conv2d_result).value();
     }
-    return std::get<0>(conv2d_result);
+    return {std::get<0>(conv2d_result)};
 }
 std::string ConvT2DSliceAttr::name() const { return "ConvTranspose2D"; }
 

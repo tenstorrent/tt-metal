@@ -80,6 +80,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                uint32_t channels,
                std::array<uint32_t, 2> output_size,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const op_slicing::Op2DSliceConfig>& dram_slice_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
                bool deallocate_input,
@@ -92,6 +93,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                     channels,
                     output_size,
                     memory_config,
+                    dram_slice_config,
                     applied_shard_scheme,
                     compute_kernel_config,
                     deallocate_input,
@@ -105,6 +107,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("output_size"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("deallocate_input") = false,
@@ -169,6 +172,7 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
                uint32_t channels,
                std::array<uint32_t, 2> output_size,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const op_slicing::Op2DSliceConfig>& dram_slice_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool deallocate_input,
                bool reallocate_output) -> ttnn::Tensor {
@@ -180,6 +184,7 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
                     channels,
                     output_size,
                     memory_config,
+                    dram_slice_config,
                     applied_shard_scheme,
                     deallocate_input,
                     reallocate_output);
@@ -192,6 +197,7 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
             nb::arg("output_size"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_output") = true});
