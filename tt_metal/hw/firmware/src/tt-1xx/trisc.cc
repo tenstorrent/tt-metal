@@ -34,6 +34,11 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !(defined(IS_D_VARIANT) || defined(IS_H_VARIANT))
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
+
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
@@ -162,6 +167,21 @@ int main(int argc, char* argv[]) {
                                             launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                              launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !(defined(IS_D_VARIANT) || defined(IS_H_VARIANT))
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset == 0xBEEF) {
+            rta_count = 0;
+        } else {
+            rta_count = rta_l1_base[0];
+            rta_l1_base = rta_l1_base + 1;
+        }
+
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == 0xBEEF) {
+            crta_count = 0;
+        } else {
+            crta_count = crta_l1_base[0];
+            crta_l1_base += 1;
+        }
+#endif
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 

@@ -405,11 +405,11 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 std::vector<uint32_t>& Kernel::get_dispatch_common_runtime_args() {
-    if (!MetalContext::instance().rtoptions().get_watcher_enabled() || common_runtime_args_.empty()) {
+    if (MetalContext::instance().rtoptions().watcher_assert_disabled() || common_runtime_args_.empty()) {
         return common_runtime_args_;
     }
 
-    // Lazy init - build [count|args] on first access
+    // Build [count|args] on first access
     if (common_runtime_args_dispatch_.empty()) {
         common_runtime_args_dispatch_.reserve(1 + common_runtime_args_.size());
         common_runtime_args_dispatch_.push_back(static_cast<uint32_t>(common_runtime_args_.size()));
@@ -417,9 +417,6 @@ std::vector<uint32_t>& Kernel::get_dispatch_common_runtime_args() {
             common_runtime_args_dispatch_.end(), common_runtime_args_.begin(), common_runtime_args_.end());
     }
 
-    for (const auto& each : common_runtime_args_dispatch_) {
-        std::cout << "CRTA entry in common_runtime_args_dispatch_: " << std::hex << each << '\n';
-    }
     return common_runtime_args_dispatch_;
 }
 

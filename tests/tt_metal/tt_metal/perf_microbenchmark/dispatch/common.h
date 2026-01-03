@@ -26,6 +26,9 @@
 #include <variant>
 #include <llrt/tt_cluster.hpp>
 
+#include "tt_metal/impl/event/dispatch.hpp"    // ReadEventDescriptor definition
+#include "tt_metal/impl/device/dispatch.hpp"   // ReadCoreDataDescriptor definition
+#include "tt_metal/impl/buffers/dispatch.hpp"  // ReadBufferDescriptor definition (+ variant alias)
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
@@ -556,6 +559,24 @@ class FDMeshCQTestAccessor {
 public:
     static tt_metal::SystemMemoryManager& sysmem(tt_metal::distributed::FDMeshCommandQueue& cq) {
         return cq.reference_sysmem_manager();
+    }
+
+    static void force_abort_for_watcher_kill(tt::tt_metal::distributed::FDMeshCommandQueue& cq) {
+        cq.in_use_.store(false);
+
+        // Unblock anyone waiting on completion progress
+        cq.thread_exception_state_.store(true);
+        cq.num_outstanding_reads_.store(0);
+
+        // Satisfy destructor TT_FATAL invariants
+        cq.completion_queue_reads_.clear();
+        for (auto& kv : cq.read_descriptors_) {
+            kv.second->clear();
+        }
+
+        // Wake reader thread so it can exit
+        cq.reader_thread_cv_.notify_one();
+        cq.reads_processed_cv_.notify_all();
     }
 };
 
