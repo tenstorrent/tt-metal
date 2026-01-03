@@ -121,7 +121,7 @@ void MAIN {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 #endif
     // E[x],
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true>(
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
         cb_in,
         cb_scaler,
         cb_ex_partial2,
@@ -171,7 +171,7 @@ void MAIN {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED, true, true>(
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
         cb_x2,
         cb_scaler,
         cb_ex_partial2,
