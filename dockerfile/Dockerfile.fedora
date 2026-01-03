@@ -12,6 +12,7 @@ RUN dnf update -y && dnf install -y \
     gcc-c++ \
     make \
     mold \
+    git \
     wget \
     tar \
     xz \
