@@ -31,7 +31,7 @@ std::unique_ptr<ISocket> create_socket(
     if (endpoint_socket_type == EndpointSocketType::BIDIRECTIONAL) {
         return BidirectionalFabricSocket::create(mesh_device, other_rank, socket_config);
     } else {
-        throw std::runtime_error("Unsupported         EndpointSocketType");
+        throw std::runtime_error("Unsupported EndpointSocketType");
     }
 }
 
