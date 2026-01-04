@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t data_size = get_compile_time_arg_val(4);
     constexpr uint32_t num_tiles_per_page = get_compile_time_arg_val(5);
     constexpr uint32_t num_pages = data_size / page_size;
-    SocketReceiverInterface2 receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
 
     uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
 

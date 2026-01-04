@@ -23,7 +23,7 @@ void kernel_main() {
     auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
     uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
 

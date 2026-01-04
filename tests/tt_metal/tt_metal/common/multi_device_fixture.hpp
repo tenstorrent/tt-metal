@@ -189,7 +189,7 @@ protected:
 // what is specified.
 class MeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}}) {}
+    MeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}}) {}
 };
 
 class MeshDevice4x8Fixture : public MeshDeviceFixtureBase {

@@ -31,32 +31,6 @@ struct sender_socket_md {
 // sender_downstream_encoding[num_downstreams]
 
 // Config Buffer on Receiver Cores will be populated as follows
-struct receiver_socket_md {
-    // Standard Config Entries
-    uint32_t bytes_sent = 0;       // 0
-    uint32_t read_ptr = 0;         // 4
-    uint32_t fifo_addr = 0;        // 8
-    uint32_t fifo_total_size = 0;  // 12
-
-    // Upstream Socket Metadata
-    uint32_t upstream_mesh_id = 0;           // 16
-    uint32_t upstream_chip_id = 0;           // 20
-    uint32_t upstream_noc_y = 0;             // 24
-    uint32_t upstream_noc_x = 0;             // 28
-    uint32_t bytes_acked = 0;                // 32
-    uint32_t upstream_bytes_acked_addr = 0;  // 36
-
-    uint32_t is_sender = 0;
-};
-
-struct receiver_socket_base {
-    uint32_t bytes_sent;       // 0
-    uint32_t read_ptr;         // 4
-    uint32_t fifo_addr;        // 8
-    uint32_t fifo_total_size;  // 12
-    uint32_t bytes_acked;      // 16
-    uint32_t is_h2d;           // 20
-};
 
 struct h2d_socket_md {
     uint32_t bytes_acked_addr_lo;
@@ -72,24 +46,17 @@ struct c2c_socket_md {
     uint32_t upstream_bytes_acked_addr;
 };
 
-struct receiver_socket_md_2 {
-    receiver_socket_base base;
+struct receiver_socket_md {
+    uint32_t bytes_sent;       // 0
+    uint32_t read_ptr;         // 4
+    uint32_t fifo_addr;        // 8
+    uint32_t fifo_total_size;  // 12
+    uint32_t bytes_acked;      // 16
+    uint32_t is_h2d;           // 20
     union {
         h2d_socket_md h2d;
         c2c_socket_md c2c;
     } __attribute__((packed));
-};
-
-struct SocketReceiverInterfaceBase {
-    uint32_t config_addr;
-    uint32_t read_ptr;
-    uint32_t bytes_acked;
-    uint32_t bytes_sent_addr;
-    uint32_t page_size;
-    uint32_t fifo_addr;
-    uint32_t fifo_total_size;
-    uint32_t fifo_curr_size;
-    uint32_t is_h2d;
 };
 
 struct H2DSocketInterface {
@@ -106,8 +73,16 @@ struct C2CSocketInterface {
     uint32_t upstream_bytes_acked_addr;
 };
 
-struct SocketReceiverInterface2 {
-    SocketReceiverInterfaceBase base;
+struct SocketReceiverInterface {
+    uint32_t config_addr;
+    uint32_t read_ptr;
+    uint32_t bytes_acked;
+    uint32_t bytes_sent_addr;
+    uint32_t page_size;
+    uint32_t fifo_addr;
+    uint32_t fifo_total_size;
+    uint32_t fifo_curr_size;
+    uint32_t is_h2d;
     union {
         H2DSocketInterface h2d;
         C2CSocketInterface c2c;
@@ -126,22 +101,4 @@ struct SocketSenderInterface {
     uint32_t downstream_fifo_total_size;
     uint32_t downstream_fifo_curr_size;
     uint32_t downstream_enc_base_addr;
-};
-
-struct SocketReceiverInterface {
-    uint32_t config_addr;
-    uint32_t read_ptr;
-    uint32_t bytes_acked;
-    uint32_t bytes_sent_addr;
-    uint32_t page_size;
-    uint32_t fifo_addr;
-    uint32_t fifo_total_size;
-    uint32_t fifo_curr_size;
-
-    // Upstream Socket Metadata
-    uint32_t upstream_mesh_id;
-    uint32_t upstream_chip_id;
-    uint32_t upstream_noc_y;
-    uint32_t upstream_noc_x;
-    uint32_t upstream_bytes_acked_addr;
 };

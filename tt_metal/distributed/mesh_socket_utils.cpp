@@ -188,7 +188,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         config_buffer_size =
             sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
     } else {
-        config_buffer_size = sizeof(receiver_socket_md_2);
+        config_buffer_size = sizeof(receiver_socket_md);
     }
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
@@ -337,8 +337,8 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
-        std::vector<receiver_socket_md_2> config_data(
-            config_buffer->size() / sizeof(receiver_socket_md_2), receiver_socket_md_2());
+        std::vector<receiver_socket_md> config_data(
+            config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
             for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
@@ -356,12 +356,12 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
-                md.base.bytes_sent = 0;
-                md.base.bytes_acked = 0;
-                md.base.read_ptr = local_descriptor.data_buffer_address;
-                md.base.fifo_addr = local_descriptor.data_buffer_address;
-                md.base.fifo_total_size = config.socket_mem_config.fifo_size;
-                md.base.is_h2d = 0;
+                md.bytes_sent = 0;
+                md.bytes_acked = 0;
+                md.read_ptr = local_descriptor.data_buffer_address;
+                md.fifo_addr = local_descriptor.data_buffer_address;
+                md.fifo_total_size = config.socket_mem_config.fifo_size;
+                md.is_h2d = 0;
                 md.c2c.upstream_mesh_id = *upstream_mesh_id;
                 md.c2c.upstream_chip_id = upstream_chip_id;
                 md.c2c.upstream_noc_y = sender_virtual_core.y;

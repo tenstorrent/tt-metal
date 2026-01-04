@@ -13,7 +13,7 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
-    SocketReceiverInterface2 receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
 
     set_receiver_socket_page_size(receiver_socket, page_size);
 
@@ -42,7 +42,7 @@ void kernel_main() {
             DPRINT << "Waiting for pages" << ENDL();
             socket_wait_for_pages(receiver_socket, 1);
             DPRINT << "Pages received" << ENDL();
-            noc_async_write(receiver_socket.base.read_ptr, dst_noc_addr, page_size);
+            noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
             dst_noc_addr += page_size;
             outstanding_data_size -= page_size;
             noc_async_write_barrier();

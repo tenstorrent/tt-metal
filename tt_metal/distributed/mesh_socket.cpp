@@ -171,7 +171,7 @@ H2DSocket::H2DSocket(
     uint32_t host_addr_hi = static_cast<uint32_t>(host_noc_addr.value().addr >> 32);
     uint32_t pcie_xy_enc = host_noc_addr.value().pcie_xy_enc;
 
-    uint32_t config_buffer_size = sizeof(receiver_socket_md_2);
+    uint32_t config_buffer_size = sizeof(receiver_socket_md);
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
 
@@ -225,8 +225,8 @@ H2DSocket::H2DSocket(
 
     const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
-    std::vector<receiver_socket_md_2> config_data(
-        config_buffer_->size() / sizeof(receiver_socket_md_2), receiver_socket_md_2());
+    std::vector<receiver_socket_md> config_data(
+        config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
     const auto& grouped_cores = group_recv_cores(recv_cores_);
 
@@ -234,12 +234,12 @@ H2DSocket::H2DSocket(
         for (const auto& core_coord : cores_set) {
             uint32_t idx = core_to_core_id.at(core_coord);
             auto& md = config_data[idx];
-            md.base.bytes_sent = 0;
-            md.base.bytes_acked = 0;
-            md.base.read_ptr = data_buffer_->address();
-            md.base.fifo_addr = data_buffer_->address();
-            md.base.fifo_total_size = fifo_size_;
-            md.base.is_h2d = 1;
+            md.bytes_sent = 0;
+            md.bytes_acked = 0;
+            md.read_ptr = data_buffer_->address();
+            md.fifo_addr = data_buffer_->address();
+            md.fifo_total_size = fifo_size_;
+            md.is_h2d = 1;
             md.h2d.bytes_acked_addr_lo = host_addr_lo;
             md.h2d.bytes_acked_addr_hi = host_addr_hi;
             md.h2d.pcie_xy_enc = pcie_xy_enc;
@@ -281,8 +281,7 @@ void H2DSocket::push_pages(uint32_t num_pages) {
 void H2DSocket::notify_receiver() {
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& mesh_device = config_buffer_->device();
-    uint32_t bytes_sent_addr =
-        config_buffer_->address() + offsetof(receiver_socket_md_2, base) + offsetof(receiver_socket_base, bytes_sent);
+    uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
     for (const auto& recv_core : recv_cores_) {
         auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
         auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();

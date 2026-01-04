@@ -120,14 +120,14 @@ void verify_socket_configs(
     EXPECT_EQ(recv_config.read_ptr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(recv_config.fifo_addr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(recv_config.fifo_total_size, socket_fifo_size);
-    EXPECT_EQ(recv_config.upstream_mesh_id, 0);
-    EXPECT_EQ(recv_config.upstream_chip_id, upstream_device_id);
-    EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
-    EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
+    EXPECT_EQ(recv_config.c2c.upstream_mesh_id, 0);
+    EXPECT_EQ(recv_config.c2c.upstream_chip_id, upstream_device_id);
+    EXPECT_EQ(recv_config.c2c.upstream_noc_y, sender_virtual_coord.y);
+    EXPECT_EQ(recv_config.c2c.upstream_noc_x, sender_virtual_coord.x);
     EXPECT_EQ(
-        recv_config.upstream_bytes_acked_addr,
+        recv_config.c2c.upstream_bytes_acked_addr,
         send_socket.get_config_buffer()->address() + tt::align(sizeof(sender_socket_md), l1_alignment));
-    EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
+    EXPECT_EQ(recv_config.c2c.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
 void test_single_connection_single_device_socket(

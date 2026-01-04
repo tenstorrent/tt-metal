@@ -61,7 +61,7 @@ void kernel_main() {
     fabric_connection.open();
 
     // Create Socket Interface
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
     for (uint32_t i = 0; i < num_blocks; ++i) {
