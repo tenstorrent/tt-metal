@@ -302,14 +302,21 @@ add_subdirectory(detail)
 add_subdirectory(distributed)
 
 # Set INSTALL_RPATH after distributed subdirectory is processed
+# $ORIGIN must come first - it allows the library to find sibling libraries in the install directory
 # Only include ULFM path if we're actually using ULFM MPI (set by distributed/CMakeLists.txt)
-set(TT_METAL_INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib;$ORIGIN")
+# Note: Do NOT include build directory paths - INSTALL_RPATH is for installed libraries only
+set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 if(TT_METAL_USING_ULFM)
-    set(TT_METAL_INSTALL_RPATH "/opt/openmpi-v5.0.7-ulfm/lib;${TT_METAL_INSTALL_RPATH}")
+    list(APPEND TT_METAL_INSTALL_RPATH "/opt/openmpi-v5.0.7-ulfm/lib")
 endif()
 set_target_properties(
     tt_metal
     PROPERTIES
+        # Prevent build paths from leaking into install RPATH
+        BUILD_WITH_INSTALL_RPATH
+            FALSE
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
         INSTALL_RPATH
             "${TT_METAL_INSTALL_RPATH}"
 )
