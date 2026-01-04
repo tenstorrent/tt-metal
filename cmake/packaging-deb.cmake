@@ -1,0 +1,32 @@
+# DEB packaging configuration for Debian-based distros (Ubuntu, Debian, etc.)
+
+set(CPACK_GENERATOR DEB)
+
+# Package sections (DEB-specific categorization)
+set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "devel")
+set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-EXAMPLES_PACKAGE_SECTION "doc")
+set(CPACK_DEBIAN_METALIUM-VALIDATION_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
+set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
+set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
+
+set(CPACK_DEB_COMPONENT_INSTALL YES)
+set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
+
+set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+
+set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
+# jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
+set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
+# ttml uses internal libraries from metalium/nn packages; dependencies are declared explicitly
+set(CPACK_DEBIAN_TTML_PACKAGE_SHLIBDEPS FALSE)
+
+# Package dependencies
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
+set(CPACK_DEBIAN_TTML_PACKAGE_DEPENDS "python3 (>= 3.8)")

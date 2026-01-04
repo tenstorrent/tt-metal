@@ -1,22 +1,12 @@
-set(CPACK_GENERATOR DEB)
+# TT-Metal CPack packaging configuration
+# Automatically detects distro type and includes appropriate DEB or RPM packaging
+
 set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
 set(CMAKE_PROJECT_HOMEPAGE_URL "https://tenstorrent.com")
 set(CPACK_PACKAGE_NAME tt)
 
 # Suppress the summary so that we can have per-component summaries
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
-set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "devel")
-set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
-set(CPACK_DEBIAN_METALIUM-EXAMPLES_PACKAGE_SECTION "doc")
-set(CPACK_DEBIAN_METALIUM-VALIDATION_PACKAGE_SECTION "utils")
-set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
-set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
-set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
-set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
-
-set(CPACK_DEB_COMPONENT_INSTALL YES)
-set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 
 # Use project config file to defer build-type-specific configuration to packaging time
 # This is necessary for multi-config generators.
@@ -26,9 +16,6 @@ configure_file(
     @ONLY
 )
 set(CPACK_PROJECT_CONFIG_FILE "${PROJECT_BINARY_DIR}/cpack-project-config.cmake")
-
-set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
-set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 
 set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     OWNER_READ
@@ -40,17 +27,71 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     WORLD_EXECUTE
 )
 
-set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
-# jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
-set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
-# ttml uses internal libraries from metalium/nn packages; dependencies are declared explicitly
-set(CPACK_DEBIAN_TTML_PACKAGE_SHLIBDEPS FALSE)
+# Detect package manager type: DEB vs RPM
+# Check for /etc/os-release to determine distro family
+set(TT_PACKAGING_TYPE "")
 
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
-set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
-set(CPACK_DEBIAN_TTML_PACKAGE_DEPENDS "python3 (>= 3.8)")
+if(EXISTS "/etc/os-release")
+    file(STRINGS "/etc/os-release" OS_RELEASE_CONTENTS)
+    foreach(LINE ${OS_RELEASE_CONTENTS})
+        # Check ID_LIKE first (more reliable for derivatives)
+        if(LINE MATCHES "^ID_LIKE=(.*)$")
+            string(TOLOWER "${CMAKE_MATCH_1}" ID_LIKE_VALUE)
+            # Remove quotes if present
+            string(REPLACE "\"" "" ID_LIKE_VALUE "${ID_LIKE_VALUE}")
+            if(ID_LIKE_VALUE MATCHES "debian|ubuntu")
+                set(TT_PACKAGING_TYPE "DEB")
+            elseif(ID_LIKE_VALUE MATCHES "fedora|rhel|centos|suse")
+                set(TT_PACKAGING_TYPE "RPM")
+            endif()
+        endif()
+        # Check ID if ID_LIKE didn't match
+        if(TT_PACKAGING_TYPE STREQUAL "" AND LINE MATCHES "^ID=(.*)$")
+            string(TOLOWER "${CMAKE_MATCH_1}" ID_VALUE)
+            # Remove quotes if present
+            string(REPLACE "\"" "" ID_VALUE "${ID_VALUE}")
+            if(ID_VALUE MATCHES "debian|ubuntu|linuxmint|pop")
+                set(TT_PACKAGING_TYPE "DEB")
+            elseif(ID_VALUE MATCHES "fedora|rhel|centos|rocky|alma|opensuse|sles")
+                set(TT_PACKAGING_TYPE "RPM")
+            endif()
+        endif()
+    endforeach()
+endif()
 
+# Fallback: check for package manager executables
+if(TT_PACKAGING_TYPE STREQUAL "")
+    find_program(DPKG_EXECUTABLE dpkg)
+    find_program(RPM_EXECUTABLE rpm)
+    if(DPKG_EXECUTABLE)
+        set(TT_PACKAGING_TYPE "DEB")
+    elseif(RPM_EXECUTABLE)
+        set(TT_PACKAGING_TYPE "RPM")
+    endif()
+endif()
+
+# Allow override via command line: -DTT_PACKAGING_TYPE=DEB or -DTT_PACKAGING_TYPE=RPM
+if(DEFINED CACHE{TT_PACKAGING_TYPE})
+    # User override takes precedence
+    set(TT_PACKAGING_TYPE "${TT_PACKAGING_TYPE}")
+endif()
+
+# Default to DEB if detection failed
+if(TT_PACKAGING_TYPE STREQUAL "")
+    message(WARNING "Could not detect distro package type, defaulting to DEB")
+    set(TT_PACKAGING_TYPE "DEB")
+endif()
+
+message(STATUS "Packaging type: ${TT_PACKAGING_TYPE}")
+
+# Include the appropriate packaging configuration
+if(TT_PACKAGING_TYPE STREQUAL "RPM")
+    include(${CMAKE_CURRENT_LIST_DIR}/packaging-rpm.cmake)
+else()
+    include(${CMAKE_CURRENT_LIST_DIR}/packaging-deb.cmake)
+endif()
+
+# Common CMake package config helpers
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
     ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
@@ -88,6 +129,7 @@ install(
     COMPONENT ttnn-dev
 )
 
+# Filter out components we don't want to package
 get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM
@@ -103,6 +145,7 @@ list(
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
+# Component groups and components (common to both DEB and RPM)
 cpack_add_component_group(metalium-jit)
 cpack_add_component(metalium-jit GROUP metalium-jit DESCRIPTION "TT-Metalium JIT runtime library")
 cpack_add_component(jit-build GROUP metalium-jit)
