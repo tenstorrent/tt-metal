@@ -1,0 +1,12 @@
+--- a/tt_metal_driver.c
++++ b/tt_metal_driver.c
+@@ -123,6 +123,9 @@ static int tt_metal_ioctl(struct inode *inode, struct file *file,
+ 	case IOCTL_TT_METAL_SET_BUFFER:
+ 		if (copy_from_user(&buffer_info, (void __user *)arg, sizeof(buffer_info)))
+ 			return -EFAULT;
++		if (buffer_info.size > MAX_BUFFER_SIZE) {
++			return -EINVAL;
++		}
+ 		mutex_lock(&tt_metal_mutex);
+ 		memcpy(current_buffer, &buffer_info, sizeof(buffer_info));
+ 		mutex_unlock(&tt_metal_mutex);
