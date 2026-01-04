@@ -11,7 +11,6 @@
 #include "compute_kernel_api/eltwise_unary/rand.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"

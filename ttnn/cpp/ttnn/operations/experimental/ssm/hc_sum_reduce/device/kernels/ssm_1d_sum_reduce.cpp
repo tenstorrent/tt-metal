@@ -7,7 +7,6 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
