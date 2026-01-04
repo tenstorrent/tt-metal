@@ -11,7 +11,8 @@ Fold::program_factory_t Fold::select_program_factory(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     if (op_attr.is_sharded) {
         return MultiCore{};
-    } else if (op_attr.is_dram_interleaved) {
+    }
+    if (op_attr.is_dram_interleaved) {
         return MultiCoreDRAMFold{};
     }
     return SingleCore{};
@@ -89,7 +90,8 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             output_shape,
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
-    } else if (op_attr.is_dram_interleaved) {
+    }
+    if (op_attr.is_dram_interleaved) {
         ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
         if (input_tensor.layout() == Layout::ROW_MAJOR) {
             output_logical_shape = ttnn::Shape(

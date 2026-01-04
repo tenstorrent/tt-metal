@@ -143,23 +143,22 @@ Tensor ProdOperation::invoke(
         return result;
     }
     // 4D or lower dimension Tensors
-    else {
-        // For lower dimension Tensors, we need to unsqueeze to 4D
-        auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
+    // For lower dimension Tensors, we need to unsqueeze to 4D
+    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
 
-        // Update the dim because we unsqueezed input to 4d
-        // If dim is negative, counting from the back is not impacted by the unsqueeze
-        const int64_t dim_4d = (*dim >= 0) ? (4 - old_rank + *dim) : *dim;
+    // Update the dim because we unsqueezed input to 4d
+    // If dim is negative, counting from the back is not impacted by the unsqueeze
+    const int64_t dim_4d = (*dim >= 0) ? (4 - old_rank + *dim) : *dim;
 
-        Tensor temp = input_tensor_4d;
-        // Permute for dim 2,3
-        if (dim_4d == 2 || dim_4d == -2) {
-            ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
-            temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
-        } else if (dim_4d == 3 || dim_4d == -1) {
-            ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
-            temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
-        }
+    Tensor temp = input_tensor_4d;
+    // Permute for dim 2,3
+    if (dim_4d == 2 || dim_4d == -2) {
+        ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
+        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
+    } else if (dim_4d == 3 || dim_4d == -1) {
+        ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
+        temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
+    }
         Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
         // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
         auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
@@ -187,7 +186,6 @@ Tensor ProdOperation::invoke(
             result = ttnn::squeeze_from_4D(res_host, old_rank);
         }
         return keepdim ? result : ttnn::squeeze(result, *dim);
-    }
 }
 
 Tensor ProdOperation::invoke(

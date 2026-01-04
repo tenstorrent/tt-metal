@@ -927,7 +927,8 @@ void ReadDeviceProfilerResults(
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
             ZoneScopedN("Skipping! Last FD dispatch is done");
             return;
-        } else if (state == ProfilerReadState::LAST_FD_READ) {
+        }
+        if (state == ProfilerReadState::LAST_FD_READ) {
             profiler.setLastFDReadAsDone();
         }
     }
@@ -1018,7 +1019,8 @@ void ReadMeshDeviceProfilerResults(
             if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
                 ZoneScopedN("Skipping! Last FD dispatch is done");
                 return;
-            } else if (state == ProfilerReadState::LAST_FD_READ) {
+            }
+            if (state == ProfilerReadState::LAST_FD_READ) {
                 profiler.setLastFDReadAsDone();
             }
         }

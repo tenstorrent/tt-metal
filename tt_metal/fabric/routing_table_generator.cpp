@@ -90,20 +90,20 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             if (intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
                 intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a) {
                 return a;
-            } else if (
-                intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
+            }
+            if (intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
                 intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b) {
                 return b;
-            } else {
-                a_valid = false;
-                b_valid = false;
-                for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_a]) {
-                    if (edge.port_direction == a) {
-                        curr_a = next_chip_id;
-                        a_valid = true;
-                        break;
-                    }
+            }
+            a_valid = false;
+            b_valid = false;
+            for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_a]) {
+                if (edge.port_direction == a) {
+                    curr_a = next_chip_id;
+                    a_valid = true;
+                    break;
                 }
+            }
                 for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_b]) {
                     if (edge.port_direction == b) {
                         curr_b = next_chip_id;
@@ -111,7 +111,6 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                         break;
                     }
                 }
-            }
         }
         TT_ASSERT(
             false,

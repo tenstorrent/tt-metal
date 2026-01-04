@@ -172,20 +172,17 @@ HostId resolve_path_from_proto(
 
         if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
             return HostId(child_mapping.host_id());
-        } else {
-            throw std::runtime_error("Node " + node_name + " is not a leaf node");
         }
-    } else {
-        // Multi-level path - descend into subgraph
-        const std::string& subgraph_name = path[index];
-        const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
-
-        if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-            return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
-        } else {
-            throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
-        }
+        throw std::runtime_error("Node " + node_name + " is not a leaf node");
     }
+    // Multi-level path - descend into subgraph
+    const std::string& subgraph_name = path[index];
+    const auto& child_mapping = graph_instance.child_mappings().at(subgraph_name);
+
+    if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+        return resolve_path_from_proto(path, child_mapping.sub_instance(), cluster_descriptor, index + 1);
+    }
+    throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
 }
 
 // Builds a resolved graph instance from a graph instance and deployment descriptor.
@@ -768,10 +765,10 @@ CableLength calc_cable_length(
     const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
     if (host1.hall != host2.hall) {
         return CableLength::UNKNOWN;
-    } else if (host1.aisle != host2.aisle) {
+    }
+    if (host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
-
 
     int tray_id_0 = tray_id1;
     int tray_id_1 = tray_id2;
@@ -797,17 +794,20 @@ CableLength calc_cable_length(
 
     if (cable_length <= 500.0) {
         return CableLength::CABLE_0P5;
-    } else if (cable_length <= 1000.0) {
-        return CableLength::CABLE_1;
-    } else if (cable_length <= 2500.0) {
-        return CableLength::CABLE_2P5;
-    } else if (cable_length <= 3000.0) {
-        return CableLength::CABLE_3;
-    } else if (cable_length <= 5000.0) {
-        return CableLength::CABLE_5;
-    } else {
-        return CableLength::UNKNOWN;
     }
+    if (cable_length <= 1000.0) {
+        return CableLength::CABLE_1;
+    }
+    if (cable_length <= 2500.0) {
+        return CableLength::CABLE_2P5;
+    }
+    if (cable_length <= 3000.0) {
+        return CableLength::CABLE_3;
+    }
+    if (cable_length <= 5000.0) {
+        return CableLength::CABLE_5;
+    }
+    return CableLength::UNKNOWN;
 }
 
 // Overload operator<< for readable test output

@@ -119,14 +119,11 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
             mesh_id,
             std::abs(static_cast<int>(sender_global_coord[0]) - static_cast<int>(recv_global_coord[0])) +
                 std::abs(static_cast<int>(sender_global_coord[1]) - static_cast<int>(recv_global_coord[1])));
-    } else {
-        // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
-        if (is_sender) {
-            return {recv_node_id.mesh_id, recv_node_id.chip_id};
-        } else {
-            return {sender_node_id.mesh_id, sender_node_id.chip_id};
-        }
+    }  // 2D/Mesh Fabric requires looking up "logical"         encodings from the control plane
+    if (is_sender) {
+        return {recv_node_id.mesh_id, recv_node_id.chip_id};
     }
+    return {sender_node_id.mesh_id, sender_node_id.chip_id};
 }
 
 void validate_remote_desc(const SocketPeerDescriptor& local_desc, const SocketPeerDescriptor& remote_desc) {

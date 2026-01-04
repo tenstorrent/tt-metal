@@ -129,16 +129,14 @@ static Op2DSliceConfig::SliceType best_guess_slice_type(
             return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
         }
         return Op2DSliceConfig::SliceType::DRAM_WIDTH;
-    } else {
-        if (input_width < 200) {
-            return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
-        } else {
-            if (input_height > input_width) {
-                return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
-            }
-            return Op2DSliceConfig::SliceType::DRAM_WIDTH;
-        }
     }
+    if (input_width < 200) {
+        return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+    }
+    if (input_height > input_width) {
+        return Op2DSliceConfig::SliceType::DRAM_HEIGHT;
+    }
+    return Op2DSliceConfig::SliceType::DRAM_WIDTH;
 }
 
 Op2DSliceConfig determine_slice_config(

@@ -77,9 +77,8 @@ std::string get_default_root_path() {
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
-    } else {
-        return "/tmp/tt-metal-cache/";
     }
+    return "/tmp/tt-metal-cache/";
 }
 
 JitBuildEnv::JitBuildEnv() = default;

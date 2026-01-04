@@ -12,7 +12,8 @@ DistributionMode compute_distribution_mode(
     if (!mesh_shape_override.has_value()) {
         // Note that when no shape is supplied, row-major order is equivalent to submesh.
         return DistributionMode::SUBMESH;
-    } else if (mesh_shape_override->dims() != device_shape.dims()) {
+    }
+    if (mesh_shape_override->dims() != device_shape.dims()) {
         // Shapes have different dimensions, so a reshape will be required.
         return DistributionMode::ROW_MAJOR;
     } else {

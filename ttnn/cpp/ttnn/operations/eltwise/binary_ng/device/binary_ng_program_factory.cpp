@@ -489,14 +489,14 @@ KernelName get_reader_kernel_name_and_defines(
     const SubtileBroadcastType subtile_broadcast_type, std::map<std::string, std::string>& reader_defines) {
     if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
         return KernelName::ReaderNoBcastNg;
-    } else if (
-        subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
         return KernelName::ReaderRowBcastNg;
-    } else if (
-        subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::COL_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
@@ -505,7 +505,8 @@ KernelName get_reader_kernel_name_and_defines(
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         reader_defines["SRC_BCAST_COL"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
-        reader_defines["SRC_BCAST_ROW_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        reader_defines["        SRC_BCAST_ROW_B"] =
+            subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         return KernelName::ReaderRowBColABcastNg;
     } else if (
         subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
@@ -514,7 +515,7 @@ KernelName get_reader_kernel_name_and_defines(
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
         return KernelName::ReaderScalarBcastNg;
     } else {
-        TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
+        TT_FATAL(false, "Unsupported subtile broadcast type         {}", static_cast<int>(subtile_broadcast_type));
     }
 }
 

@@ -93,9 +93,8 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
         if (sfpu_op_check) {
             return ElementWiseMultiCoreSfpu{};
-        } else {
-            return ElementWiseMultiCore{};
         }
+        return ElementWiseMultiCore{};
     }
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {

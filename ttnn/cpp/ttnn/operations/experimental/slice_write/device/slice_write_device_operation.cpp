@@ -27,11 +27,12 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
         TT_FATAL(!has_step, "Step is not supported for sharded slice_write operation");
         if (input.layout() == Layout::ROW_MAJOR) {
             return program::SliceWriteRMShardedInputProgramFactory{};
-        } else if (input.layout() == Layout::TILE) {
-            return program::SliceWriteTiledShardedInputProgramFactory{};
-        } else {
-            TT_THROW("Unsupported input memory layout for slice_write operation");
         }
+        if (input.layout() == Layout::TILE) {
+            return program::SliceWriteTiledShardedInputProgramFactory{};
+        }
+        TT_THROW("Unsupported input memory layout for slice_write operation");
+
     } else {
         return program::SliceWriteRMInterleavedProgramFactory{};
     }

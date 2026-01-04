@@ -249,11 +249,12 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     if (input.layout() == Layout::ROW_MAJOR) {
         if (input.is_sharded()) {
             return program::SliceRmShardedProgramFactory{};
-        } else if (has_step) {
-            return program::SliceRmStrideProgramFactory{};
-        } else {
-            return program::SliceRmProgramFactory{};
         }
+        if (has_step) {
+            return program::SliceRmStrideProgramFactory{};
+        }
+        return program::SliceRmProgramFactory{};
+
     } else {
         // Layout::TILE
         return program::SliceTileProgramFactory{};

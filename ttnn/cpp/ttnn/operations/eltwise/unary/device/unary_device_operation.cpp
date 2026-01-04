@@ -53,11 +53,11 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return program::UnaryShardedProgramFactory{};
-    } else if(args.sub_core_grids.has_value()) {
-        return program::UnarySubCoreGridProgramFactory{};
-    } else {
-        return program::UnaryProgramFactory{};
     }
+    if (args.sub_core_grids.has_value()) {
+        return program::UnarySubCoreGridProgramFactory{};
+    }         return program::UnaryProgramFactory{};
+
 }
 
 void UnaryDeviceOperation::validate_on_program_cache_hit(

@@ -342,9 +342,9 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             Tensor device_tensor = allocate_tensor_on_device(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
             write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
             return device_tensor;
-        } else {
-            return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
         }
+        return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
+
     }();
 
     EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
@@ -358,9 +358,9 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             Tensor host_tensor = allocate_tensor_on_host(device_tensor.tensor_spec(), mesh_device_.get());
             write_tensor(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
-        } else {
-            return tensor_impl::to_host(device_tensor);
         }
+        return tensor_impl::to_host(device_tensor);
+
     }();
 
     EXPECT_EQ(output_host_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());

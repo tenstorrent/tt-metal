@@ -318,8 +318,7 @@ Result conv2d_L1(
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
-    } else {
-        // Matmul expects inputs to be in Tile Layout
+    }  // Matmul expects inputs to be in Tile Layout
         tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
 
         // run conv as matmul
@@ -359,7 +358,6 @@ Result conv2d_L1(
         }
 
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
-    }
 }
 
 ResultWithOptions result_to_result_with_options(
@@ -369,9 +367,11 @@ ResultWithOptions result_to_result_with_options(
             std::get<0>(result),
             std::make_tuple(std::get<1>(result), std::get<2>(result)),
             std::make_tuple(std::get<3>(result), std::get<4>(result)));
-    } else if (return_output_dim) {
+    }
+    if (return_output_dim) {
         return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<1>(result), std::get<2>(result)));
-    } else if (return_weights_and_bias) {
+    }
+    if (return_weights_and_bias) {
         return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<3>(result), std::get<4>(result)));
     }
     return std::get<0>(result);

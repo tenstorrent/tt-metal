@@ -216,8 +216,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
         TT_FATAL(downstream_edms_connected_by_vc[vc_idx].size() == 1, "Downstream edms connected by vc should be 1 for non-2D routing. vc_idx: {}, size: {}", vc_idx, downstream_edms_connected_by_vc[vc_idx].size());
         auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().second);
         return ord;
-    } else {
-        // 2D routing: encode NOC coordinates using compact index (works for both VC0 and VC1)
+    }  // 2D routing: encode NOC coordinates using compact index (works for both VC0 and VC1)
         uint32_t ord = 0;
         for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
             // Calculate compact index based on direction relative to my_direction
@@ -225,7 +224,6 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
             ord |= (get_noc_ord(noc_xy) << (compact_index * 8));
         }
         return ord;
-    }
 }
 
 void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(

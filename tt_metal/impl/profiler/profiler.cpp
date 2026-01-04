@@ -328,17 +328,15 @@ tt::umd::CoreCoord translateNocCoordinatesToNoc0(
         const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
         if (MetalContext::instance().hal().is_coordinate_virtualization_enabled() && coord_is_translated) {
             return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-        } else {
-            if (noc_used_for_transfer == KernelProfilerNocEventMetadata::NocType::NOC_0) {
-                // Check for noc 0 coord and return
-                return soc_desc.get_coord_at(c, CoordSystem::NOC0);
-            } else {
-                // soc desc is not created with noc1 mapping by default so will have to manually convert to noc0
-                CoreCoord noc0_coord(soc_desc.grid_size.x - 1 - c.x, soc_desc.grid_size.y - 1 - c.y);
-                // Check for noc 0 coord and return
-                return soc_desc.get_coord_at(noc0_coord, CoordSystem::NOC0);
-            }
         }
+        if (noc_used_for_transfer == KernelProfilerNocEventMetadata::NocType::NOC_0) {
+            // Check for noc 0 coord and return
+            return soc_desc.get_coord_at(c, CoordSystem::NOC0);
+        }  // soc desc is not created with noc1 mapping by default         so will have to manually convert to noc0
+        CoreCoord noc0_coord(soc_desc.grid_size.x - 1 - c.x, soc_desc.grid_size.y - 1 - c.y);
+        // Check for         noc 0 coord and return
+        return soc_desc.get_coord_at(noc0_coord, CoordSystem::NOC0);
+
     } catch (const std::exception& e) {
         TT_FATAL(
             0,
@@ -1002,9 +1000,9 @@ bool isGalaxyMMIODevice(IDevice* device) {
     try {
         if (auto mesh_device = device->get_mesh_device()) {
             return false;
-        } else {
-            return MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
         }
+        return MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
+
     } catch (const std::bad_weak_ptr& e) {
         return false;
     }
@@ -1512,9 +1510,8 @@ tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
     auto marker_details_iter = hash_to_zone_src_locations.find(timer_id);
     if (marker_details_iter != hash_to_zone_src_locations.end()) {
         return marker_details_iter->second;
-    } else {
-        return tracy::UnidentifiedMarkerDetails;
     }
+    return tracy::UnidentifiedMarkerDetails;
 }
 
 std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(

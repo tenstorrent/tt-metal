@@ -89,9 +89,11 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
         if (arch == tt::ARCH::WORMHOLE_B0) {
             return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
-        } else if (arch == tt::ARCH::BLACKHOLE) {
+        }
+        if (arch == tt::ARCH::BLACKHOLE) {
             return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
-        } else if (arch == tt::ARCH::QUASAR) {
+        }
+        if (arch == tt::ARCH::QUASAR) {
             return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
         }
         return tt::tt_metal::ClusterType::INVALID;
@@ -485,9 +487,8 @@ size_t Cluster::number_of_user_devices() const {
         return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
             return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
         });
-    } else {
-        return this->driver_->get_target_device_ids().size();
     }
+    return this->driver_->get_target_device_ids().size();
 }
 
 std::set<ChipId> Cluster::user_exposed_chip_ids() const {
@@ -500,9 +501,8 @@ std::set<ChipId> Cluster::user_exposed_chip_ids() const {
             }
         }
         return galaxy_boards;
-    } else {
-        return this->driver_->get_target_device_ids();
     }
+    return this->driver_->get_target_device_ids();
 }
 
 const metal_SocDescriptor& Cluster::get_soc_desc(ChipId chip) const {
@@ -1397,9 +1397,8 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) con
 uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
     if (this->supports_dma_operations(chip_id, size_in_bytes)) {
         return this->hal_.get_dma_alignment();
-    } else {
-        return 1;
     }
+    return 1;
 }
 
 }  // namespace tt

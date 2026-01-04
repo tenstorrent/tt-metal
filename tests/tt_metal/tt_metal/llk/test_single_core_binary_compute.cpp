@@ -240,7 +240,8 @@ bool single_core_binary(
         [&](const bfloat16& lhs, const bfloat16& rhs) {
             if (test_config.binary_op == "add") {
                 return (static_cast<float>(lhs) + static_cast<float>(rhs));
-            } else if (test_config.binary_op == "sub") {
+            }
+            if (test_config.binary_op == "sub") {
                 return (static_cast<float>(lhs) - static_cast<float>(rhs));
             } else if (test_config.binary_op == "mul") {
                 return (
@@ -262,9 +263,11 @@ bool single_core_binary(
             // acc_to_dest accumulates dest value with binary output, for all binary operations
             if (test_config.acc_to_dest || test_config.binary_op == "add_with_dest_reuse") {
                 return (static_cast<float>(lhs) + rhs);
-            } else if (test_config.binary_op == "sub_with_dest_reuse") {
+            }
+            if (test_config.binary_op == "sub_with_dest_reuse") {
                 return (static_cast<float>(lhs) - rhs);
-            } else if (test_config.binary_op == "mul_with_dest_reuse") {
+            }
+            if (test_config.binary_op == "mul_with_dest_reuse") {
                 return (
                     static_cast<float>(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *

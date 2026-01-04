@@ -185,9 +185,11 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Me
 
     if (y_is_ring && x_is_ring) {
         return FabricType::TORUS_XY;
-    } else if (y_is_ring) {
+    }
+    if (y_is_ring) {
         return FabricType::TORUS_Y;
-    } else if (x_is_ring) {
+    }
+    if (x_is_ring) {
         return FabricType::TORUS_X;
     }
     return FabricType::MESH;
@@ -1179,8 +1181,8 @@ GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
         }
 
         return global_instance_id;
-
-    } else if (node_ref.has_switch_()) {
+    }
+    if (node_ref.has_switch_()) {
         // Check the instance id exists References are indexed by local id
         const auto local_instance_id = node_ref.switch_().switch_id();
         const auto it2 = parent_instance.sub_instances_local_id_to_global_id.find(local_instance_id);

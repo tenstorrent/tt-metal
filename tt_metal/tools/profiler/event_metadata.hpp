@@ -178,10 +178,10 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
                 return data.fabric_scatter_event;
-            } else {
-                return data.fabric_event;
             }
-        } else if (isFabricRoutingFields1D(data.raw_event.noc_xfer_type)) {
+            return data.fabric_event;
+        }
+        if (isFabricRoutingFields1D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_1d;
         } else if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_2d;

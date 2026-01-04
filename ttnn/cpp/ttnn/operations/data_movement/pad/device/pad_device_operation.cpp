@@ -56,9 +56,11 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                     "ttnn.pad: Unsupported sharded row-major padding configuration: pad_impl did not decompose padding "
                     "correctly.");
                 return {};
-            } else if (input_w != output_w) {
+            }
+            if (input_w != output_w) {
                 return program::PadRmShardedWidthOnlyProgramFactory{};
-            } else if (input_tot_h != output_tot_h) {
+            }
+            if (input_tot_h != output_tot_h) {
                 return program::PadRmShardedHeightOnlyProgramFactory{};
             } else {
                 // for no padding, we just use the height-only padding program
@@ -67,9 +69,8 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
         } else {
             if (operation_attributes.use_multicore) {
                 return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
-            } else {
-                return program::PadRmReaderWriterProgramFactory{};
             }
+            return program::PadRmReaderWriterProgramFactory{};
         }
     } else if (input_tensor.layout() == Layout::TILE) {
         if (operation_attributes.use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&

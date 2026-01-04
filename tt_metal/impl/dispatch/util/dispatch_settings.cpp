@@ -114,7 +114,8 @@ DispatchSettings DispatchSettings::defaults(
 
     if (core_type == CoreType::WORKER) {
         return worker_defaults(cluster, num_hw_cqs);
-    } else if (core_type == CoreType::ETH) {
+    }
+    if (core_type == CoreType::ETH) {
         return eth_defaults(cluster, num_hw_cqs);
     }
 

@@ -10,9 +10,11 @@ tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
     if (reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_H;
-    } else if (reduce_dim == tt::tt_metal::ReduceOpDim::W) {
+    }
+    if (reduce_dim == tt::tt_metal::ReduceOpDim::W) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_W;
-    } else if (reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
+    }
+    if (reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
         if (num_tiles > 1) {
             return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
         } else {

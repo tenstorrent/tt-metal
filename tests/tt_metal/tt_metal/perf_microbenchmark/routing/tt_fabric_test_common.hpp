@@ -1726,12 +1726,12 @@ private:
         // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
             return compute_unicast_destinations(src_coord, hops);
-        } else if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_node, src_coord, hops);
-        } else {
-            TT_THROW("Unsupported send type: {}", send_type);
-            return {};
         }
+        if (send_type == ChipSendType::CHIP_MULTICAST) {
+            return compute_multicast_destinations(src_node, src_coord, hops);
+        }
+        TT_THROW("Unsupported send type: {}", send_type);
+        return {};
     }
 
     std::vector<FabricNodeId> compute_unicast_destinations(
@@ -1945,7 +1945,8 @@ private:
     RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
         if (split_hops.contains(RoutingDirection::N) && split_hops.at(RoutingDirection::N) > 0) {
             return RoutingDirection::N;
-        } else if (split_hops.contains(RoutingDirection::S) && split_hops.at(RoutingDirection::S) > 0) {
+        }
+        if (split_hops.contains(RoutingDirection::S) && split_hops.at(RoutingDirection::S) > 0) {
             return RoutingDirection::S;
         }
         // If no NS, assume not a grid or handle error

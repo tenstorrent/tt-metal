@@ -39,24 +39,22 @@ ttnn::Tensor pad_impl(
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         if (eq_spans(input_logical_shape, output_padded_shape)) {
             return input_tensor;
-        } else {
-            return input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
         }
+        return input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
     }
 
     // on device
-    else {
-        auto input_tensor_shape = input_tensor.logical_shape();
-        const auto rank = input_tensor_shape.rank();
+    auto input_tensor_shape = input_tensor.logical_shape();
+    const auto rank = input_tensor_shape.rank();
 
-        TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
-        bool input_output_same = true;
-        for (size_t i = 0; i < rank; i++) {
-            if (input_tensor_shape[i] != output_padded_shape[i]) {
-                input_output_same = false;
-                break;
-            }
+    TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
+    bool input_output_same = true;
+    for (size_t i = 0; i < rank; i++) {
+        if (input_tensor_shape[i] != output_padded_shape[i]) {
+            input_output_same = false;
+            break;
         }
+    }
         if (input_output_same) {
             log_debug(tt::LogOp, "Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
             return input_tensor;
@@ -149,7 +147,6 @@ ttnn::Tensor pad_impl(
             value,
             output_memory_config,
             use_multicore);
-    }
 }
 
 ttnn::Tensor pad_impl(
@@ -359,9 +356,8 @@ ttnn::Tensor ExecutePad::invoke(
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         return detail::invoke_tile(input_tensor, working_padding, value, use_multicore, memory_config_arg);
-    } else {
-        return detail::invoke_rm(input_tensor, working_padding, value, use_multicore, memory_config_arg);
     }
+    return detail::invoke_rm(input_tensor, working_padding, value, use_multicore, memory_config_arg);
 }
 
 ttnn::Tensor ExecutePad::invoke(

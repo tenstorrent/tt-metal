@@ -515,17 +515,15 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         if (is_2d_fabric) {
             if (src_device_idx == 0) {
                 return hops;
-            } else {
-                return src_device_idx - hops;
             }
-        } else {
-            // for 1D return the neighboring device only
+            return src_device_idx - hops;
+
+        }  // for 1D return the neighboring device only
             if (src_device_idx == 0) {
                 return 1;
-            } else {
-                return src_device_idx - 1;
             }
-        }
+            return src_device_idx - 1;
+
     };
 
     for (auto i = 0; i < devices.size(); i++) {

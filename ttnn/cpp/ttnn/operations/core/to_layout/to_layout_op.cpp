@@ -98,7 +98,8 @@ Tensor to_layout_impl(
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return ttnn::untilize(
                     tensor, output_memory_config, use_multicore_untilize, true /*use_pack_untilize*/, sub_core_grids);
-            } else if (layout == ttnn::TILE_LAYOUT) {
+            }
+            if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
                     const auto tensor_tile = tensor.tensor_spec().tile();
                     uint32_t tile_height = tensor_tile.get_height();
@@ -202,7 +203,8 @@ Tensor to_layout_impl(
         TT_ASSERT(!dtype.has_value(), "dtype cannot be specified when converting layout on host!");
         if (!requires_padding_change(tensor, layout)) {
             return tensor.to_layout(layout);
-        } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
+        }
+        if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = tensor.to_layout(layout);
             tensor = tensor.unpad_from_tile(tensor.logical_shape());
             return ttnn::reshape(

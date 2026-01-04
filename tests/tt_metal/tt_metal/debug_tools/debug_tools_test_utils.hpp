@@ -53,9 +53,10 @@ inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str
                 result = result ? result + idx : str.size();
             }
             return result;
-        } else if (idx >= str.size()) {
+        }
+        if (idx >= str.size()) {
             return str.npos;
-        } else if (pattern[idx] == '?') {
+        } if (pattern[idx] == '?') {
             continue;
         } else if (str[idx] != pattern[idx]) {
             return str.npos;

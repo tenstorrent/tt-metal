@@ -148,28 +148,27 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             mask,
             negative_mask,
             reciprocals);
-    } else {
-        const ttnn::operations::normalization::group_norm::GroupNormMultiCoreProgramConfig program_config = {
-            .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .im_data_format = DataType::BFLOAT16,
-            .out_data_format = DataType::BFLOAT16,
-            .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.layout()),
-            .num_out_blocks = num_out_blocks.value_or(1)};
-        return ttnn::prim::group_norm(
-            input_tensor,
-            epsilon,
-            static_cast<uint32_t>(num_groups),
-            output_mem_config,
-            program_config,
-            kernel_config_val,
-            use_welford,
-            gamma,
-            beta,
-            mask,
-            negative_mask,
-            reciprocals);
     }
+    const ttnn::operations::normalization::group_norm::GroupNormMultiCoreProgramConfig program_config = {
+        .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
+        .im_data_format = DataType::BFLOAT16,
+        .out_data_format = DataType::BFLOAT16,
+        .inplace = inplace.value_or(false),
+        .output_layout = output_layout.value_or(input_tensor.layout()),
+        .num_out_blocks = num_out_blocks.value_or(1)};
+    return ttnn::prim::group_norm(
+        input_tensor,
+        epsilon,
+        static_cast<uint32_t>(num_groups),
+        output_mem_config,
+        program_config,
+        kernel_config_val,
+        use_welford,
+        gamma,
+        beta,
+        mask,
+        negative_mask,
+        reciprocals);
 }
 
 }  // namespace ttnn::operations::normalization

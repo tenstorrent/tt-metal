@@ -23,11 +23,9 @@ static std::array<uint32_t, 4> get_input_shape(const operation_attributes_t& arg
             slidingWindowConfig.input_hw.first,
             slidingWindowConfig.input_hw.second,
             slidingWindowConfig.channels};
-    } else {
-        // For nearest mode use input tensor dimensions
-        const Shape& input_shape = input.logical_shape();
-        return {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
-    }
+    }  // For nearest mode use input tensor dimensions
+    const Shape& input_shape = input.logical_shape();
+    return {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
 }
 
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
@@ -37,14 +35,15 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
         // Bilinear is only supported for sharded inputs
         // In case of interleaved input, autosharding had previously been performed
         return program::UpsampleBilinearProgramFactory{};
-    } else if (args.mode == "nearest") {
+    }
+    if (args.mode == "nearest") {
         if (input_tensor_0.is_sharded()) {
             return program::UpsampleMultiCoreShardedProgramFactory{};
-        } else {
-            return program::UpsampleMultiCoreInterleavedProgramFactory{};
         }
+        return program::UpsampleMultiCoreInterleavedProgramFactory{};
+
     } else {
-        TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
+        TT_THROW("Unsupported mode: only supported         modes are nearest and bilinear");
     }
 }
 

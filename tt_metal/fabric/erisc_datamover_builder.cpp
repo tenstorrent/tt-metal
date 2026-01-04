@@ -882,11 +882,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     uint32_t my_eth_channel_ = [&]() -> uint32_t {
         if (dispatch_core_type == CoreType::WORKER) {
             return this->my_eth_channel;
-        } else if (dispatch_core_type == CoreType::ETH) {
-            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
-        } else {
-            TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
         }
+        if (dispatch_core_type == CoreType::ETH) {
+            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+        }
+        TT_THROW("        Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
+
     }();
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

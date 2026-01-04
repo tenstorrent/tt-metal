@@ -131,10 +131,8 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
     if (curr_stage_index > neighbor_stage_index) {
         // Neighbor feeds into my stage
         return std::make_pair(my_stage.entry_node_coord, neighbor_stage.exit_node_coord);
-    } else {
-        // My stage feeds into neighbor
-        return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
-    }
+    }  // My stage feeds into neighbor
+    return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
 }
 
 PhysicalSystemDescriptor create_physical_system_descriptor() {

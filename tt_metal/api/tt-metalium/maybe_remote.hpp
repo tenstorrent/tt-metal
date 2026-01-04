@@ -205,9 +205,8 @@ template <typename LocalFunc, typename RemoteFunc>
 auto MaybeRemote<T>::when(LocalFunc&& on_local, RemoteFunc&& on_remote) const -> decltype(auto) {
     if (is_local()) {
         return std::invoke(std::forward<LocalFunc>(on_local), std::get<T>(value_));
-    } else {
-        return std::invoke(std::forward<RemoteFunc>(on_remote));
     }
+    return std::invoke(std::forward<RemoteFunc>(on_remote));
 }
 
 // if_local for void return types

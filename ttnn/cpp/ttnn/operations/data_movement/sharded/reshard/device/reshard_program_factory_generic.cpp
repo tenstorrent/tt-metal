@@ -114,7 +114,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                             break;
                         }
                         // not consecutive
-                        else if ((curr_input_page.value().second + 1) != next_input_page.value().second) {
+                        if ((curr_input_page.value().second + 1) != next_input_page.value().second) {
                             break;
                         }
                         // next page is padding

@@ -19,11 +19,11 @@ EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_p
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor_arg.layout() == ttnn::TILE_LAYOUT) {
         return program::EmbeddingsTilizedIndicesProgramFactory{};
-    } else if (operation_attributes.tilized) {
-        return program::EmbeddingsFusedProgramFactory{};
-    } else {
-        return program::EmbeddingsRMProgramFactory{};
     }
+    if (operation_attributes.tilized) {
+        return program::EmbeddingsFusedProgramFactory{};
+    }         return program::EmbeddingsRMProgramFactory{};
+
 }
 
 void EmbeddingsDeviceOperation::validate_on_program_cache_hit(

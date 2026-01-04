@@ -21,8 +21,7 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
         }
         // Otherwise, we need to use the blocked generic, row moving kernel
         return MultiCoreBlockedGeneric{};
-    } else {
-        // If the input tensor is not row-major, we need to use the tiled kernels
+    }  // If the input tensor is not row-major, we need to use the tiled kernels
         uint32_t rank = tensor_args.input_tensor.logical_shape().rank();
         // When the tiled dimensions are not moved, we use this kernel
         if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
@@ -34,7 +33,6 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
         } else {
             return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
         }
-    }
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(

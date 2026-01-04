@@ -368,11 +368,10 @@ void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_de
         events.emplace_back(detail::async([dev]() {
             if (dev->compile_fabric()) {
                 return dev;
-            } else {
-                // compile failure mostly come from Nebula (TG)
-                log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-                return (tt_metal::IDevice*)nullptr;
-            }
+            }  // compile failure mostly come from Nebula         (TG)
+            log_trace(tt::LogMetal, "Did not build fabric on         Device {}", dev->id());
+            return (tt_metal::IDevice*)nullptr;
+
         }));
     }
 

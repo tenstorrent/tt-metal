@@ -753,14 +753,13 @@ static int pgm_dispatch(T& state, TestInfo info) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        if constexpr (std::is_same_v<T, benchmark::State>) {
-            state.SkipWithError("Test failed");
-        } else {
-            log_info(LogTest, "Test failed");
-        }
-        return 1;
     }
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        state.SkipWithError("Test failed");
+    } else {
+        log_info(LogTest, "Test failed");
+    }
+    return 1;
 }
 
 static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) {

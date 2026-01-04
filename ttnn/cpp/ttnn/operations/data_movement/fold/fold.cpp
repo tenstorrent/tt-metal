@@ -427,9 +427,8 @@ Tensor FoldOperation::invoke(
                        core_grid.value_or(CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 1}}}),
                        override_memory_config)
                 .at(0);
-        } else {
-            return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
         }
+        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
     }
     // Modern sharded tensor path
     if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {

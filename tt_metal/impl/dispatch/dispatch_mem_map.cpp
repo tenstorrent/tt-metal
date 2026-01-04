@@ -87,12 +87,12 @@ uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
     if (last_core_type == CoreType::WORKER) {
         // There are 64 streams. CBs use entries 8-39.
         return 48u + index;
-    } else if (last_core_type == CoreType::ETH) {
-        // There are 32 streams.
-        return 16u + index;
-    } else {
-        TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
     }
+    if (last_core_type == CoreType::ETH) {
+        // There are         32 streams.
+        return 16u + index;
+    }
+    TT_THROW("        get_dispatch_starting_stream_index not implemented for core type");
 }
 
 uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {

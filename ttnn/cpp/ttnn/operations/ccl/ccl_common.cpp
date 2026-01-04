@@ -27,7 +27,8 @@ bool is_fabric_2d() {
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
     if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
         return tt::tt_fabric::Topology::Linear;
-    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
+    }
+    if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
         return tt::tt_fabric::Topology::Ring;
     }
     return topology;
@@ -52,13 +53,12 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
             device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
         if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
-        } else {
-            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
-    } else {
-        if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
-            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-        }
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    }
+    if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    }
         TT_FATAL(!device_coords.empty(), "device_coords is empty");
         for (int i = 0; i < device_coords.front().dims(); i++) {
             if (device_coords.front()[i] != 0) {
@@ -70,7 +70,7 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
                 return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
             }
         }
-    }
+
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
@@ -83,11 +83,11 @@ tt::tt_fabric::Topology get_usable_topology(
         auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
         if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
             return topology_;
-        } else if (topology_ == tt::tt_fabric::Topology::Torus) {
-            return tt::tt_fabric::Topology::Mesh;
-        } else {
-            return tt::tt_fabric::Topology::Linear;
         }
+        if (topology_ == tt::tt_fabric::Topology::Torus) {
+            return tt::tt_fabric::Topology::Mesh;
+        }
+        return tt::tt_fabric::Topology::Linear;
     }
     return topology_;
 }
@@ -110,10 +110,9 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
         TT_FATAL(ring_size > 0, "ring_size is 0");
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
-    } else {
-        log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
-        return device_coords.size();
     }
+    log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
+    return device_coords.size();
 }
 
 uint32_t get_linearized_index_from_physical_coord(
@@ -144,16 +143,15 @@ uint32_t get_linearized_index_from_physical_coord(
             physical_coord,
             physical_coord[cluster_axis.value()] - min_value);
         return physical_coord[cluster_axis.value()] - min_value;
-    } else {
-        auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
-        TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
-        log_debug(
-            tt::LogOp,
-            "Physical linearized index for physical_coord: {} is {}",
-            physical_coord,
-            static_cast<uint32_t>(std::distance(device_coords.begin(), it)));
-        return static_cast<uint32_t>(std::distance(device_coords.begin(), it));
     }
+    auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
+    TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
+    log_debug(
+        tt::LogOp,
+        "Physical linearized index for physical_coord: {} is {}",
+        physical_coord,
+        static_cast<uint32_t>(std::distance(device_coords.begin(), it)));
+    return static_cast<uint32_t>(std::distance(device_coords.begin(), it));
 }
 
 std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
@@ -188,31 +186,28 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
                 physical_coord,
                 potential_neighbor);
             return potential_neighbor;
-        } else {
-            log_debug(
-                tt::LogOp,
-                "Physical coord {} Potential neighbor {} is not found in device_coords",
-                physical_coord,
-                potential_neighbor);
-            return std::nullopt;
         }
-    } else {
-        uint32_t physical_linearized_index =
-            get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);
-        int potential_neighbor_idx = (int)physical_linearized_index + offset;
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
-            potential_neighbor_idx = (potential_neighbor_idx + device_coords.size()) % device_coords.size();
-        } else if (potential_neighbor_idx < 0 || potential_neighbor_idx >= static_cast<int>(device_coords.size())) {
-            log_debug(
-                tt::LogOp,
-                "Potential neighbor idx {} is out of range for device_coords size {}",
-                potential_neighbor_idx,
-                device_coords.size());
-            return std::nullopt;
-        }
+        log_debug(
+            tt::LogOp,
+            "Physical coord {} Potential neighbor {} is not found in device_coords",
+            physical_coord,
+            potential_neighbor);
+        return std::nullopt;
+    }
+    uint32_t physical_linearized_index = get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);
+    int potential_neighbor_idx = (int)physical_linearized_index + offset;
+    if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        potential_neighbor_idx = (potential_neighbor_idx + device_coords.size()) % device_coords.size();
+    } else if (potential_neighbor_idx < 0 || potential_neighbor_idx >= static_cast<int>(device_coords.size())) {
+        log_debug(
+            tt::LogOp,
+            "Potential neighbor idx {} is out of range for device_coords size {}",
+            potential_neighbor_idx,
+            device_coords.size());
+        return std::nullopt;
+    }
         log_debug(tt::LogOp, "Potential neighbor idx {} is found in device_coords", potential_neighbor_idx);
         return device_coords.at(potential_neighbor_idx);
-    }
 }
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
@@ -226,18 +221,16 @@ LineTopology::LineTopology(size_t line_size, size_t line_index) : _line_size(lin
 bool LineTopology::is_first_device_in_line(ttnn::ccl::LineDirection direction) const {
     if (direction == ttnn::ccl::LineDirection::FORWARD) {
         return _line_index == 0;
-    } else {
-        TT_ASSERT(direction == ttnn::ccl::LineDirection::BACKWARD);
-        return _line_index == _line_size - 1;
     }
+    TT_ASSERT(direction == ttnn::ccl::LineDirection::BACKWARD);
+    return _line_index == _line_size - 1;
 }
 bool LineTopology::is_last_device_in_line(ttnn::ccl::LineDirection direction) const {
     if (direction == ttnn::ccl::LineDirection::BACKWARD) {
         return _line_index == 0;
-    } else {
-        TT_ASSERT(direction == ttnn::ccl::LineDirection::FORWARD);
-        return _line_index == _line_size - 1;
     }
+    TT_ASSERT(direction == ttnn::ccl::LineDirection::FORWARD);
+    return _line_index == _line_size - 1;
 }
 
 bool LineTopology::is_at_end_of_line() const { return _line_index == 0 || _line_index == _line_size - 1; }
@@ -249,9 +242,8 @@ size_t LineTopology::line_index() const { return _line_index; }
 size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const {
     if (direction == ttnn::ccl::LineDirection::FORWARD) {
         return (_line_size - _line_index) - 1;
-    } else {
-        return _line_index;
     }
+    return _line_index;
 }
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
@@ -536,9 +528,8 @@ const tt::tt_metal::ShardSpec& CclOpShardedTensorConfig::get_shard_spec() const 
 std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_config(Tensor const& tensor) {
     if (tensor.is_sharded()) {
         return std::make_unique<CclOpShardedTensorConfig>(tensor);
-    } else {
-        return std::make_unique<CclOpInterleavedTensorConfig>(tensor);
     }
+    return std::make_unique<CclOpInterleavedTensorConfig>(tensor);
 }
 
 void generate_edm_kernels_for_ring_or_linear_topology(

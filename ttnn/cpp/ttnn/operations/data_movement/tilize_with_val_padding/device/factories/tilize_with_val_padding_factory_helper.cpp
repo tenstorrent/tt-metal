@@ -20,7 +20,8 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 if (tensor.dtype() == DataType::BFLOAT16) {
                     bfloat16 bfloat_pad_value = bfloat16((pad_value));
                     return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
-                } else if (tensor.dtype() == DataType::UINT16) {
+                }
+                if (tensor.dtype() == DataType::UINT16) {
                     uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
                     return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
                 } else {
@@ -34,7 +35,8 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 if (tensor.dtype() == DataType::BFLOAT16) {
                     bfloat16 bfloat_pad_value = bfloat16((float)(pad_value));
                     return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
-                } else if (tensor.dtype() == DataType::UINT16) {
+                }
+                if (tensor.dtype() == DataType::UINT16) {
                     uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
                     return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
                 } else {

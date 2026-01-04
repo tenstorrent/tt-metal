@@ -358,8 +358,7 @@ TopologyMappingResult map_mesh_to_physical(
                     used[pj] = false;
                 }
                 return false;
-            } else {
-                // Next must be an unused neighbor of prev_phys
+            }  // Next must be an unused neighbor of prev_phys
                 size_t remain = n_log - idx_in_path;
                 for (size_t pj : phys_adj_idx[prev_phys]) {
                     if (used[pj]) {
@@ -395,7 +394,7 @@ TopologyMappingResult map_mesh_to_physical(
                     used[pj] = false;
                 }
                 return false;
-            }
+
         };
 
         bool ok = place(0, n_phys);

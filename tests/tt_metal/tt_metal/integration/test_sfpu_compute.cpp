@@ -64,7 +64,8 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
         return bfloat16(fmaxf(static_cast<float>(input), 0.0f));
-    } else if (op_name == "exponential") {
+    }
+    if (op_name == "exponential") {
         return bfloat16(std::exp(static_cast<float>(input)));
     } else if (op_name == "reciprocal") {
         return bfloat16(1 / static_cast<float>(input));
@@ -92,7 +93,8 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
     if ((op_name == "sqrt") or (op_name == "log")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
-    } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
+    }
+    if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     } else {
@@ -105,10 +107,12 @@ bool is_close_packed_sfpu_output(
     if (op_name == "tanh") {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
-    } else if ((op_name == "gelu") or (op_name == "relu")) {
+    }
+    if ((op_name == "gelu") or (op_name == "relu")) {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.15f); });
-    } else if ((op_name == "exponential")) {
+    }
+    if ((op_name == "exponential")) {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
     } else {

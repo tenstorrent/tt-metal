@@ -318,8 +318,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         return {
             std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
 
-    } else {
-        // compute index info
+    }  // compute index info
 
         IndexInfo index_info[5] = {{false}};
 
@@ -536,7 +535,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         return {
             std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
-    }
 }
 
 void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_arguments(

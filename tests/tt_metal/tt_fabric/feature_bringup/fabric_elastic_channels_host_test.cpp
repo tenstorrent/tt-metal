@@ -818,8 +818,7 @@ int main(int argc, char** argv) {
         log_info(tt::LogAlways, "Pipe mode finished: {}/{} test cases successful", successful_tests, test_count);
         return (successful_tests == test_count && test_count > 0) ? 0 : -1;
 
-    } else {
-        // Traditional CLI mode: single test from command line arguments
+    }  // Traditional CLI mode: single test from command line arguments
         TestConfig config{};
         try {
             config = parse_cli_config(argc, argv);
@@ -841,5 +840,4 @@ int main(int argc, char** argv) {
         // Run single test case
         int result = run_test_case(config, test_fixture);
         return result;
-    }
 }

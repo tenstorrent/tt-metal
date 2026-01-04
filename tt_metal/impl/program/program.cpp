@@ -100,9 +100,8 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
         return device->allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-    } else {
-        return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     }
+    return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
@@ -1265,9 +1264,10 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
             auto [sub_device_ids, _] =
                 sub_device_ids_map.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
             return sub_device_ids->second;
-        } else {
-            std::unordered_set<SubDeviceId> used_sub_device_ids;
-            auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
+        }
+        std::unordered_set<SubDeviceId> used_sub_device_ids;
+        auto find_sub_device_ids =
+            [&](HalProgrammableCoreType core_type) {
                 auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
                 if (core_type_index == -1) {
                     return;
@@ -1293,13 +1293,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                     "Kernel group cores do not match sub device cores for programmable core type {}",
                     enchantum::to_string(core_type));
             };
-            find_sub_device_ids(HalProgrammableCoreType::TENSIX);
-            find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
-            auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
-                sub_device_manager_id,
-                std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
-            return sub_device_ids->second;
-        }
+        find_sub_device_ids(HalProgrammableCoreType::TENSIX);
+        find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
+        auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
+            sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
+        return sub_device_ids->second;
     }
     return sub_device_ids->second;
 }

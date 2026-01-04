@@ -54,7 +54,8 @@ Tensor MorehNorm::invoke(
             ttnn::prim::moreh_norm(input, p, dims.front(), keepdim, std::nullopt, memory_config, compute_kernel_config);
         dims.erase(dims.begin());
         return ttnn::moreh_sum(tmp_output, dims, keepdim, output, memory_config, compute_kernel_config);
-    } else if (p == INF || p == -INF) {
+    }
+    if (p == INF || p == -INF) {
         auto tmp_output =
             ttnn::prim::moreh_norm(input, p, dims.front(), keepdim, std::nullopt, memory_config, compute_kernel_config);
         using idx_t = decltype(dims.size());

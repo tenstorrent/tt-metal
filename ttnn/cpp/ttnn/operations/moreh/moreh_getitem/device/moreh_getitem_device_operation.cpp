@@ -71,9 +71,8 @@ MorehGetItemOperation::program_factory_t MorehGetItemOperation::select_program_f
     auto input_layout = input_tensor.layout();
     if (input_layout == Layout::ROW_MAJOR) {
         return MorehGetItemRmFactory();
-    } else {
-        return MorehGetItemTilizedFactory();
     }
+    return MorehGetItemTilizedFactory();
 }
 
 void MorehGetItemOperation::validate_on_program_cache_miss(

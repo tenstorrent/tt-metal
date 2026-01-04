@@ -73,11 +73,11 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
     const auto input_rank = shape.rank();
     if (input_rank == n) {
         return shape;
-    } else if (input_rank < n) {
-        return unsqueeze_shape_to_ND(shape, n);
-    } else {
-        return squeeze_shape_to_ND(shape, n);
     }
+    if (input_rank < n) {
+        return unsqueeze_shape_to_ND(shape, n);
+    }
+    return squeeze_shape_to_ND(shape, n);
 }
 
 enum DatumIndex { WormholeIndex = 0, BlackholeIndex = 1 };
@@ -105,9 +105,8 @@ float get_transaction_noc_bw(
 
     if (transaction_size - lower_pow2 < upper_pow2 - transaction_size) {
         return lower_bw;
-    } else {
-        return upper_bw;
     }
+    return upper_bw;
 }
 
 uint32_t get_effective_l1_cores(
@@ -746,10 +745,9 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
         return tt::div_up(tensor.padded_shape().volume(), tensor.padded_shape()[-1]);
-    } else {
-        const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
-        return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
     }
+    const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
 }
 
 }  // namespace ttnn::operations::data_movement

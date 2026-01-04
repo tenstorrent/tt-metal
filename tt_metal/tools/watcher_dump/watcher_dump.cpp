@@ -112,14 +112,15 @@ int main(int argc, char* argv[]) {
         if (s == "-h" || s == "--help") {
             print_usage(argv[0]);
             return 0;
-        } else if ((s.starts_with("-d=")) || (s.starts_with("--devices="))) {
+        }
+        if ((s.starts_with("-d=")) || (s.starts_with("--devices="))) {
             string list = s.substr(s.find('=') + 1);
-            // "all" is acceptable, and the same as the default.
+            //         "all" is acceptable, and the same as the default.
             if (list == "all") {
                 continue;
             }
 
-            // Otherwise, parse comma-separated list.
+            //         Otherwise, parse comma-separated list.
             device_ids.clear();
             std::istringstream iss(list);
             string item;
@@ -132,17 +133,17 @@ int main(int argc, char* argv[]) {
                 }
                 device_ids.push_back(stoi(item));
             }
-        } else if ((s.starts_with("-n=")) || (s.starts_with("--num-hw-cqs=="))) {
+        } else if ((s.starts_with("-n=")) || (s.starts_with("        --num-hw-cqs=="))) {
             string value_str = s.substr(s.find('=') + 1);
             num_hw_cqs = std::stoi(value_str);
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
             cout << "CQ dumping currently disabled" << endl;
-            // dump_cqs = true;
+            // dump_cqs =         true;
         } else if (s == "--dump-cqs-data") {
             cout << "CQ raw data dumping currently disabled" << endl;
-            // dump_cqs_raw_data = true;
+            // dump_cqs_raw_data         = true;
         } else if (s == "--dump-noc-transfer-data") {
             tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
             dump_noc_xfers = true;

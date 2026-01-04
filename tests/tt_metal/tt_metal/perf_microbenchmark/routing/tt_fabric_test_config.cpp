@@ -47,7 +47,8 @@ DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& nod
     if (node.IsScalar()) {
         ChipId chip_id = parse_scalar<ChipId>(node);
         return chip_id;
-    } else if (node.IsSequence() && node.size() == 2) {
+    }
+    if (node.IsSequence() && node.size() == 2) {
         MeshId mesh_id = parse_mesh_id(node[0]);
         if (node[1].IsScalar()) {
             // Format: [mesh_id, chip_id]
@@ -407,7 +408,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
     if (filter_type.has_value()) {
         if (filter_type.value() == "name" || filter_type.value() == "Name") {
             return test_config.name == filter_value;
-        } else if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
+        }
+        if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
             auto topo = tt::tt_fabric::Topology::Linear;  // Default value
             if (filter_value == "Ring") {
                 topo = tt::tt_fabric::Topology::Ring;

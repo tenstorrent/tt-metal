@@ -125,10 +125,9 @@ bool check_connection_requested(
     if (!requested_intermesh_ports.empty()) {
         return requested_intermesh_ports.contains(*my_mesh_id) &&
                requested_intermesh_ports.at(*my_mesh_id).contains(*neighbor_mesh_id);
-    } else {
-        return requested_intermesh_connections.contains(*my_mesh_id) &&
-               requested_intermesh_connections.at(*my_mesh_id).contains(*neighbor_mesh_id);
     }
+    return requested_intermesh_connections.contains(*my_mesh_id) &&
+           requested_intermesh_connections.at(*my_mesh_id).contains(*neighbor_mesh_id);
 }
 
 [[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
@@ -2906,7 +2905,8 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                     if (strict_binding &&
                         num_ports_assigned_at_exit_node[node] >= num_ports_requested_at_exit_node[node]) {
                         continue;
-                    } else if (num_connections_assigned >= connected_eth_chans.size()) {
+                    }
+                    if (num_connections_assigned >= connected_eth_chans.size()) {
                         break;
                     }
                     // Skip if this port doesn't match our node and direction constraints
