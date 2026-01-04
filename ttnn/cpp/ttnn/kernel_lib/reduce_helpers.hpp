@@ -23,7 +23,7 @@
  * - reduce_init/reduce_uninit initialization
  * - Circular buffer manipulation (cb_wait_front, cb_pop_front, cb_reserve_back, cb_push_back)
  * - pack_tile for writing results to output CB
- * - Auto-batched STREAMING mode for optimal performance (waits/pops tiles in bulk)
+ * - Multiple input modes: STREAMING (one-at-a-time), STREAMING_BATCHED (bulk), PRELOADED, PERSISTENT
  *
  * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
@@ -37,21 +37,24 @@
  *
  *   compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
  *
- *   // STREAMING mode (default) - auto-batched for efficiency:
- *   // Library automatically waits for all tiles, processes them, and pops them.
- *   // No manual CB management needed!
+ *   // STREAMING mode (default) - one-at-a-time for safety:
+ *   // Library waits/pops each tile individually. No manual CB management needed!
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  *   // Using defines for reduce type/dim (REDUCE_OP and REDUCE_DIM must be defined)
- *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  */
 
 namespace compute_kernel_lib {
@@ -146,24 +149,29 @@ struct NoOp {
  * this function. The function will wait for it automatically when init=true.
  *
  * IMPORTANT - REDUCE_COL DATA LAYOUT:
- * - STREAMING mode: Tiles are batched per chunk. Library waits for all Ht*chunk_size tiles
- *   per chunk, processes via indexed access, then pops all. Host can specify row_chunk
- *   for custom chunk sizes (default: 0 = use auto-detected DEST limit).
- * - PRELOADED mode: Tiles in standard row-major order (batch_offset + ht*stride + wt).
+ * - STREAMING mode: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
+ * - STREAMING_BATCHED mode: Tiles batched per chunk (Ht*chunk_size tiles), indexed access.
+ * - PRELOADED/PERSISTENT mode: Tiles in standard row-major order (batch_offset + ht*stride + wt).
+ * - Chunk size is auto-detected from DEST register capacity (DEST_AUTO_LIMIT).
  *
  * INPUT MODES:
  * - STREAMING (default): One-at-a-time mode. Library waits/pops each tile individually.
  *                        Safe for numerical precision, compatible with any CB size.
  * - STREAMING_BATCHED: Batched mode. Library waits for all tiles per row/batch/chunk,
  *                      processes them via indexed access, then pops all. Most efficient when
- *                      tiles are pre-loaded in CB.
- * - PRELOADED: All tiles already present in CB, accessed via indexing. Caller manages wait/pop.
- *              Use when tiles must persist in CB after reduction. Use input_stride
- *              to specify the stride between rows (for non-contiguous layouts).
+ *                      tiles are pre-loaded in CB and wait/pop are symmetric with TileShape.
+ * - PRELOADED: Caller manages CB lifecycle (wait before, pop after). Accessed via indexing.
+ *              Use for asymmetric wait/pop (e.g., padding handling where you wait/pop more
+ *              tiles than TileShape specifies). Library handles output CB reserve/push internally.
+ * - PERSISTENT: Wait for all tiles upfront (handled internally), indexed access, NO pop.
+ *               Tiles persist in CB for reuse. Ideal for softmax patterns where the same
+ *               input tiles are used in subsequent operations (e.g., sub_exp, mul_bcast).
+ *
+ * @note post_reduce_op is only invoked for REDUCE_ROW dimension.
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - defaults to REDUCE_OP define
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - defaults to REDUCE_DIM define
- * @tparam input_mode Input handling mode (STREAMING or PRELOADED) - defaults to STREAMING
+ * @tparam input_mode Input handling mode (STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT) - defaults to STREAMING
  * @tparam init If true, calls reduce_init before processing (default: true)
  * @tparam uninit If true, calls reduce_uninit after processing (default: true)
  *
@@ -180,49 +188,51 @@ struct NoOp {
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // Using defines for reduce type/dim with single tile
- *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out, TileShape::single());
+ *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::single());
  *
  * @example
- *   // PRELOADED mode: tiles already in CB, with custom stride between rows
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC),
- *       TileLayout::with_row_stride(input_stride));
+ *   // PRELOADED mode: caller manages wait/pop, with custom stride between rows
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+ *       cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::grid(Ht, Wt, NC),
+ *       compute_kernel_lib::TileLayout::with_row_stride(input_stride));
  *
  * @example
- *   // PRELOADED mode for REDUCE_COL: tiles in row-major order
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   // PERSISTENT mode: tiles persist for reuse (ideal for softmax pattern)
+ *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
+ *   compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW,
+ *                              compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+ *       cb_values, cb_scaler, cb_max, compute_kernel_lib::TileShape::grid(Ht, Wt));
+ *   // cb_values tiles still available for sub_exp_block_bcast_cols_inplace()
  *
  * @example
- *   // PRELOADED mode for REDUCE_SCALAR: all tiles pre-loaded
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
- *
- * @example
- *   // STREAMING_BATCHED mode (optimal for pre-loaded tiles)
+ *   // STREAMING_BATCHED mode (optimal when tiles already in CB, symmetric wait/pop)
  *   // Library waits for all Wt tiles per row, processes them, then pops all Wt tiles
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::STREAMING_BATCHED>(
- *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+ *       cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
  *   // Set uninit=false since lambda calls reduce_uninit() before recip
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED,
  *       true, false>(
- *       cb_exps, cb_scaler, cb_out, TileShape::row(Wt),
- *       TileLayout::contiguous(),
+ *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(Wt),
+ *       compute_kernel_lib::TileLayout::contiguous(),
  *       []() {
  *           reduce_uninit();
  *           recip_tile_init();
@@ -453,7 +463,6 @@ ALWI void reduce(
                 }
 
                 tile_regs_acquire();
-                uint32_t tiles_processed = 0;
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
                     uint32_t dst_idx = 0;
                     for (uint32_t i = wt; i < chunk_end; ++i) {
@@ -474,7 +483,6 @@ ALWI void reduce(
                                 icb, icb_scaler, tile_idx, 0, dst_idx);
                         }
                         ++dst_idx;
-                        ++tiles_processed;
                     }
                 }
                 tile_regs_commit();

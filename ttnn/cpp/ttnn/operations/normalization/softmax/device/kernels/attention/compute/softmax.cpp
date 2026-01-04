@@ -11,7 +11,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/softmax.h"
-#include "compute_kernel_api/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 // for scale+mask+softmax:
