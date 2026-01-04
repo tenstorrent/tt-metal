@@ -13,7 +13,7 @@ from models.demos.unet_3d.demo.config import load_config
 from models.demos.unet_3d.runner.performant_runner import UNet3DRunner
 
 
-def run_segformer_trace_2cqs_inference(
+def run_unet3d_trace_2cqs_inference(
     device,
 ):
     config = load_config()
@@ -43,8 +43,8 @@ def run_segformer_trace_2cqs_inference(
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 8192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
 )
-def test_segformer_e2e(device):
-    run_segformer_trace_2cqs_inference(device)
+def test_unet3d_e2e(device):
+    run_unet3d_trace_2cqs_inference(device)
 
 
 @pytest.mark.models_performance_bare_metal
@@ -52,5 +52,5 @@ def test_segformer_e2e(device):
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 8192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
 )
-def test_segformer_e2e_dp(mesh_device):
-    run_segformer_trace_2cqs_inference(mesh_device)
+def test_unet3d_e2e_dp(mesh_device):
+    run_unet3d_trace_2cqs_inference(mesh_device)
