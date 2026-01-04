@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -302,7 +302,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         if constexpr (!is_large_kernel) {
             if (reader_id == 0 || !return_indices) {
                 noc_async_read_barrier();
+#if IS_DEPTHWISE
                 cb_push_back(in_cb_id, MAX_EFFECTIVE_TILES);
+#else
+                cb_push_back(in_cb_id, 1);
+#endif
             }
             if constexpr (reader_id == 1 && return_indices) {
                 constexpr uint32_t num_faces_in_output_tile = 2;
@@ -429,12 +433,20 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
-    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(46);
 
-    // Bias-related compile-time args (positions 49-51, after weight TensorAccessorArgs at 48)
+    // Depthwise-specific compile-time args (only read when IS_DEPTHWISE=1)
+#if IS_DEPTHWISE
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(46);
     constexpr bool has_bias = (bool)get_compile_time_arg_val(49);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(50);
     constexpr uint32_t bias_ntiles = get_compile_time_arg_val(51);
+#else
+    // Pool ops don't use these, but we need placeholders for constexpr
+    constexpr uint32_t weight_cb_id = 0;
+    constexpr bool has_bias = false;
+    constexpr uint32_t bias_cb_id = 0;
+    constexpr uint32_t bias_ntiles = 0;
+#endif
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
@@ -461,7 +473,7 @@ void kernel_main() {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (true) {
+    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
         if constexpr (reader_id == 0) {
             fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             cb_push_back(clear_value_cb_id, 1);
@@ -495,6 +507,9 @@ void kernel_main() {
             down_left_wrap_inc_cb_id,
             up_left_wrap_inc_cb_id>();
     }
+
+#if IS_DEPTHWISE
+    // Depthwise convolution: Read weights and bias from DRAM
     if constexpr (reader_id == 0) {
         // Calculate in_ntiles_c (number of channel tiles) from in_c
         constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
@@ -688,6 +703,7 @@ void kernel_main() {
             cb_push_back(bias_cb_id, bias_ntiles);
         }
     }
+#endif  // IS_DEPTHWISE
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {

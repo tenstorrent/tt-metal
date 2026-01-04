@@ -311,7 +311,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
-    uint32_t effective_tiles = (kernel_h * kernel_w * params.in_ntiles_c * 32 + 1023) / 1024;
 
     const uint32_t in_c_per_shard_ceil = in_c % shard_width != 0 && num_shards_c > 1
                                              ? (in_c - (in_c % shard_width)) / (num_shards_c - 1)
@@ -404,8 +403,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // reader output == input to tilize
     const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_id_1 = 32;                     // input rows for "multiple (out_nelems)" output pixels
-    const uint32_t in_cb_pagesize = tt::tile_size(params.data_format);
-    const uint32_t in_cb_npages = params.multi_buffering_factor * std::min(effective_tiles, 3u);
+    const uint32_t in_cb_page_padded = tt::round_up(
+        in_cb_sz,
+        tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
+    const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
+    const uint32_t in_cb_npages = params.multi_buffering_factor;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -457,19 +459,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         up_left_wrap_inc =
             (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
     }
-    // Add CBs for depthwise convolution support (mul_cb and weight_cb)
-    const uint32_t mul_cb_id = next_cb_index++;
-    const uint32_t mul_cb_pagesize = tile_size(params.data_format);
-    const uint32_t mul_cb_npages =
-        std::min(effective_tiles, 3u) * params.multi_buffering_factor;  // Max 8 tiles per width (because of dest)
-    tt::tt_metal::create_cb(mul_cb_id, program, all_cores, mul_cb_pagesize, mul_cb_npages, params.data_format);
-    log_debug(tt::LogOp, "CB {} (mul_cb) :: PS = {}, NP = {}", mul_cb_id, mul_cb_pagesize, mul_cb_npages);
 
-    const uint32_t weight_cb_id = next_cb_index++;
-    const uint32_t weight_cb_pagesize = tile_size(params.data_format);
-    const uint32_t weight_cb_npages = std::min(params.in_ntiles_c, 8u);  // Max 8 tiles per width (because of dest)
-    tt::tt_metal::create_cb(weight_cb_id, program, all_cores, weight_cb_pagesize, weight_cb_npages, params.data_format);
-    log_debug(tt::LogOp, "CB {} (weight_cb) :: PS = {}, NP = {}", weight_cb_id, weight_cb_pagesize, weight_cb_npages);
+    // Dummy CB IDs for depthwise convolution - not used in pool, but passed to kernels for interface compatibility
+    const uint32_t mul_cb_id = 0;
+    const uint32_t weight_cb_id = 0;
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
@@ -644,16 +637,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
         "reader_pool_2d.cpp";
 
+    // Add IS_DEPTHWISE=0 define for pool reader kernels
+    std::map<std::string, std::string> reader_defines = {{"IS_DEPTHWISE", "0"}};
+
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_0_default,
-        .compile_args = reader0_ct_args};
+        .compile_args = reader0_ct_args,
+        .defines = reader_defines};
     auto reader0_kernel = CreateKernel(program, reader_kernel_fname, all_cores, reader0_config);
 
     auto reader1_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
-        .compile_args = reader1_ct_args};
+        .compile_args = reader1_ct_args,
+        .defines = reader_defines};
     auto reader1_kernel =
         params.split_reader ? CreateKernel(program, reader_kernel_fname, all_cores, reader1_config) : 0;
 
@@ -711,12 +709,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         false                                          // dst_full_sync_en
     );
 
+    // Get pool defines and add IS_DEPTHWISE=0 for pool operations
+    auto compute_defines = get_defines(pool_type);
+    compute_defines["IS_DEPTHWISE"] = "0";
+
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = get_math_fidelity(device_compute_kernel_config),
         .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
-        .defines = get_defines(pool_type)};
+        .defines = compute_defines};
 
     std::string compute_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
@@ -757,41 +759,41 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
-    // auto temporary_size = calculate_total_cb_size(program);
+    auto temporary_size = calculate_total_cb_size(program);
 
-    // uint32_t post_allocate_size =
-    //     input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    // uint32_t l1_usage = calculate_L1_usage(
-    //     input.dtype(),
-    //     in_c,
-    //     pad_h,
-    //     pad_w,
-    //     ceil_pad_h,
-    //     ceil_pad_w,
-    //     ceil_mode,
-    //     return_indices,
-    //     kernel_h,
-    //     kernel_w,
-    //     out_h,
-    //     out_w,
-    //     input.memory_config(),
-    //     outputs[0].memory_config(),
-    //     pool_type,
-    //     count_include_pad,
-    //     divisor_override,
-    //     output_layout,
-    //     outputs[0].dtype());
+    uint32_t post_allocate_size =
+        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    uint32_t l1_usage = calculate_L1_usage(
+        input.dtype(),
+        in_c,
+        pad_h,
+        pad_w,
+        ceil_pad_h,
+        ceil_pad_w,
+        ceil_mode,
+        return_indices,
+        kernel_h,
+        kernel_w,
+        out_h,
+        out_w,
+        input.memory_config(),
+        outputs[0].memory_config(),
+        pool_type,
+        count_include_pad,
+        divisor_override,
+        output_layout,
+        outputs[0].dtype());
 
-    // uint32_t output_cb_size = post_allocate_size - memory_used;
+    uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
-    // bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
-    // TT_FATAL(
-    //     temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
-    //     "Calculated CB size {} does not match with the actual CB size {}  ",
-    //     temporary_size + output_cb_size,
-    //     l1_usage);
+    bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
+    TT_FATAL(
+        temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
+        "Calculated CB size {} does not match with the actual CB size {}  ",
+        temporary_size + output_cb_size,
+        l1_usage);
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);

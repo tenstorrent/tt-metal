@@ -513,10 +513,14 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // Create reader kernels using pool reader kernel path (same pattern as pool factory)
     std::string reader_kernel_path = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/reader_pool_2d.cpp";
 
+    // Add IS_DEPTHWISE=1 define for depthwise reader kernels
+    std::map<std::string, std::string> reader_defines = {{"IS_DEPTHWISE", "1"}};
+
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_0_default,
-        .compile_args = reader0_ct_args};
+        .compile_args = reader0_ct_args,
+        .defines = reader_defines};
     auto reader0_kernel = CreateKernel(program, reader_kernel_path, parallel_config.grid, reader0_config);
 
     // ============================================================
@@ -651,7 +655,8 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     auto reader1_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
-        .compile_args = reader1_ct_args};
+        .compile_args = reader1_ct_args,
+        .defines = reader_defines};
     // CRITICAL: Only create reader1_kernel when split_reader is true (same as pool factory)
     auto reader1_kernel =
         params.split_reader ? CreateKernel(program, reader_kernel_path, parallel_config.grid, reader1_config) : 0;
@@ -668,6 +673,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     // Let the kernel compilation system handle MATH_FIDELITY and DST_ACCUM_MODE automatically
     // based on the ComputeConfig settings. Only set TILE_C_DIM manually.
     compute_defines["TILE_C_DIM"] = std::to_string(tt::constants::TILE_WIDTH);
+    compute_defines["IS_DEPTHWISE"] = "1";  // Enable depthwise convolution path
 
     // Merge activation defines into compute defines so they get passed to the kernel
     if (fused_activation.has_value()) {
