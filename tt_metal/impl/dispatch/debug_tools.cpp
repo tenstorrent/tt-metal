@@ -58,7 +58,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
             continue;
         }
         if (line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
-            line.find("        CB") != std::string::npos) {
+            line.find("CB") != std::string::npos) {
             type = line;
         } else {
             std::vector<std::string> host_data = {line};
