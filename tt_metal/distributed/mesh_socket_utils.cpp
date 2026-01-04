@@ -188,7 +188,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         config_buffer_size =
             sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
     } else {
-        config_buffer_size = sizeof(receiver_socket_md);
+        config_buffer_size = sizeof(receiver_socket_md_2);
     }
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
@@ -301,9 +301,9 @@ void write_socket_configs(
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
+                config_data[md_offset++] = 0;                                         // bytes_sent
                 config_data[md_offset++] = connections.size();                        // num_downstreams
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;       // write_ptr
-                config_data[md_offset++] = 0;                                         // bytes_sent
                 config_data[md_offset++] = peer_config_buf_addr;                      // downstream_bytes_sent_addr
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;       // downstream_fifo_addr
                 config_data[md_offset++] = config.socket_mem_config.fifo_size;        // downstream_fifo_total_size
@@ -337,8 +337,8 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
-        std::vector<receiver_socket_md> config_data(
-            config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
+        std::vector<receiver_socket_md_2> config_data(
+            config_buffer->size() / sizeof(receiver_socket_md_2), receiver_socket_md_2());
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
             for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
@@ -356,18 +356,18 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
-                md.bytes_sent = 0;
-                md.bytes_acked = 0;
-                md.read_ptr = local_descriptor.data_buffer_address;
-                md.fifo_addr = local_descriptor.data_buffer_address;
-                md.fifo_total_size = config.socket_mem_config.fifo_size;
-                md.upstream_mesh_id = *upstream_mesh_id;
-                md.upstream_chip_id = upstream_chip_id;
-                md.upstream_noc_y = sender_virtual_core.y;
-                md.upstream_noc_x = sender_virtual_core.x;
-                md.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
-                                               sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
-                md.is_sender = is_sender;
+                md.base.bytes_sent = 0;
+                md.base.bytes_acked = 0;
+                md.base.read_ptr = local_descriptor.data_buffer_address;
+                md.base.fifo_addr = local_descriptor.data_buffer_address;
+                md.base.fifo_total_size = config.socket_mem_config.fifo_size;
+                md.base.is_h2d = 0;
+                md.c2c.upstream_mesh_id = *upstream_mesh_id;
+                md.c2c.upstream_chip_id = upstream_chip_id;
+                md.c2c.upstream_noc_y = sender_virtual_core.y;
+                md.c2c.upstream_noc_x = sender_virtual_core.x;
+                md.c2c.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
+                                                   sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }

@@ -40,13 +40,13 @@ void kernel_main() {
 
     constexpr uint32_t num_pages = data_size / page_size;
     // Better optimize to not init the receiver socket interface
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
+    SocketReceiverInterface2 receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
 
     // Loop can be optimized to not be page based, and read larger chunks/more in parallel at once.
     for (uint32_t i = 0; i < num_pages; ++i) {
         noc_semaphore_wait(curr_credits_sem_addr, 1);
-        uint64_t read_addr = remote_data_noc_addr | receiver_socket.read_ptr;
+        uint64_t read_addr = remote_data_noc_addr | receiver_socket.base.read_ptr;
         cb_reserve_back(worker_local_data_cb_id, 1);
         uint32_t write_addr = get_write_ptr(worker_local_data_cb_id);
         noc_async_read(read_addr, write_addr, page_size);

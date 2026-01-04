@@ -256,7 +256,8 @@ void test_single_connection_single_device_socket(
                     static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
                     static_cast<uint32_t>(recv_data_buffer->address()),
                     static_cast<uint32_t>(page_size),
-                    static_cast<uint32_t>(data_size)}});
+                    static_cast<uint32_t>(data_size),
+                    1}});
     }
 
     auto mesh_workload = MeshWorkload();
@@ -293,7 +294,7 @@ void test_h2d_socket(
         .bottom_up = false,
     };
     auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
-
+    const uint32_t num_iterations = 1;
     // Create Recv MeshWorkload
     auto recv_program = CreateProgram();
     CreateKernel(
@@ -308,6 +309,7 @@ void test_h2d_socket(
                 static_cast<uint32_t>(recv_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(num_iterations),
             }});
 
     auto mesh_workload = MeshWorkload();
@@ -323,23 +325,35 @@ void test_h2d_socket(
     auto recv_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
     uint32_t page_size_words = page_size / sizeof(uint32_t);
 
-    auto& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    // auto& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
     // Write a single page at a time
-    for (uint32_t i = 0; i < num_writes; i++) {
-        input_socket.reserve_pages(1);
-        // Write data to input socket at write ptr
-        DeviceMemoryAddress core_addr = {MeshCoordinate(0, 0), recv_core, input_socket.get_write_ptr()};
-        mesh_cq.enqueue_write_shard_to_core(
-            core_addr, src_vec.data() + i * page_size_words, page_size, false, {}, false);
+    const auto& cluster = MetalContext::instance().get_cluster();
+    for (int i = 0; i < num_iterations; i++) {
+        for (uint32_t j = 0; j < num_writes; j++) {
+            input_socket.reserve_pages(1);
+            // Write data to input socket at write ptr
+            DeviceMemoryAddress core_addr = {MeshCoordinate(0, 0), recv_core, input_socket.get_write_ptr()};
+            cluster.write_core(
+                src_vec.data() + j * page_size_words,
+                page_size,
+                tt_cxy_pair(mesh_device->get_device(MeshCoordinate(0, 0))->id(), recv_core),
+                input_socket.get_write_ptr());
+            // mesh_cq.enqueue_write_shard_to_core(
+            //     core_addr, src_vec.data() + j * page_size_words, page_size, false, {}, false);
 
-        input_socket.push_pages(1);
-        input_socket.notify_receiver();
+            input_socket.push_pages(1);
+            input_socket.notify_receiver();
+        }
+        input_socket.barrier();
+        std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
+        cluster.read_core(
+            recv_data_readback.data(),
+            data_size,
+            tt_cxy_pair(mesh_device->get_device(MeshCoordinate(0, 0))->id(), recv_core),
+            recv_data_buffer->address());
+        // ReadShard(mesh_device->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
+        EXPECT_EQ(src_vec, recv_data_readback);
     }
-    input_socket.barrier();
-
-    std::vector<uint32_t> recv_data_readback = {};
-    ReadShard(mesh_device->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
-    EXPECT_EQ(src_vec, recv_data_readback);
 }
 
 void test_d2h_socket(

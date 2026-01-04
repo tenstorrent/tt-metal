@@ -19,7 +19,7 @@ void MAIN {
     constexpr uint32_t num_tiles_per_page = get_compile_time_arg_val(5);
     constexpr uint32_t num_pages = data_size / page_size;
 
-    SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
+    SocketReceiverInterface2 socket = create_receiver_socket_interface_2(socket_config_addr);
     set_receiver_socket_page_size(socket, page_size);
     assign_local_cb_to_socket(socket, input_cb_index);
 
