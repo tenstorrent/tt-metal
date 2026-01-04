@@ -13,7 +13,7 @@ prediction pipeline for confocal boundary data.
 - Installed: [TT-Metalium / TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 - Installing demo dependencies:
   ```bash
-  pip install safetensors h5py tqdm
+  pip install safetensors h5py tqdm scikit-image
   ```
 
 ## Assets
@@ -51,12 +51,12 @@ prediction pipeline for confocal boundary data.
 ### Performant Model with Trace+2CQ
 #### Single Device
 ```bash
-pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_segformer_e2e
+pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_unet3d_e2e
 ```
 
 #### 2-Device Mesh
 ```bash
-pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_segformer_e2e_dp
+pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_unet3d_e2e_dp
 ```
 
 ## Demo: HDF5 Validation
