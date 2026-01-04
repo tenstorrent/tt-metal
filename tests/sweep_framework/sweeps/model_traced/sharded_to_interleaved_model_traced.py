@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -37,6 +38,26 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors where input_a_memory_config is not sharded.
+    sharded_to_interleaved requires the input to be sharded.
+    """
+    input_a_memory_config = test_vector.get("input_a_memory_config")
+
+    # Check if memory config is provided and is sharded
+    if input_a_memory_config is not None:
+        # Check if it's a valid sharded config
+        # The config should have is_sharded method or be a known sharded type
+        config_str = str(input_a_memory_config)
+        if "INTERLEAVED" in config_str or "DRAM" in config_str or "L1" in config_str:
+            # These are not sharded configs
+            if "SHARDED" not in config_str:
+                return True, "input_a_memory_config must be sharded for sharded_to_interleaved operation"
+
+    return False, None
 
 
 def mesh_device_fixture():

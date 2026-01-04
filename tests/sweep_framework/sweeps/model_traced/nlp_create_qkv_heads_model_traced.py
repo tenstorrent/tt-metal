@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -38,6 +39,32 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors that violate the C++ constraint:
+    input_tensor_q.padded_shape()[3] % (num_q_heads + 2 * num_kv_heads) == 0
+
+    This ensures hidden_dim is evenly divisible by (num_q_heads + 2 * num_kv_heads).
+    """
+    input_shape = test_vector.get("input_shape")
+    num_q_heads = test_vector.get("num_q_heads")
+    num_kv_heads = test_vector.get("num_kv_heads")
+
+    if input_shape is None or num_q_heads is None or num_kv_heads is None:
+        return True, "Missing required parameters"
+
+    # Extract hidden_dim (last dimension)
+    if isinstance(input_shape, (tuple, list)) and len(input_shape) >= 4:
+        hidden_dim = input_shape[3]
+
+        # Check the C++ constraint
+        total_heads = num_q_heads + 2 * num_kv_heads
+        if hidden_dim % total_heads != 0:
+            return True, f"hidden_dim {hidden_dim} not divisible by (num_q_heads + 2*num_kv_heads) = {total_heads}"
+
+    return False, None
 
 
 def run(

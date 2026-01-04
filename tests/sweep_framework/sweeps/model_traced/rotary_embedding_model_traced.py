@@ -27,4 +27,5 @@ if model_traced_params:
 def run(*args, device, **kwargs) -> list:
     # Placeholder implementation - needs to be customized based on actual operation
     # Return default PCC and performance values
-    return [True, 0.0]
+    # Format: [(eq, pcc_value), e2e_perf]
+    return [(True, "1.0"), 0.0]

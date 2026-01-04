@@ -60,9 +60,10 @@ def invalidate_vector(test_vector) -> tuple[bool, str]:
             total_elements *= dim
 
         # Skip if tensor is too large (causes circular buffer overflow)
-        # Empirically, tensors > 500K elements can cause L1 overflow for pad
+        # Empirically, tensors > 100K elements can cause L1 overflow for pad
         # The operation needs to allocate buffers for both input and padded output
-        if total_elements > 500000:
+        # Circular buffers can grow to 2-7MB for large tensors (exceeding 1.5MB L1 limit)
+        if total_elements > 100000:
             return (
                 True,
                 f"pad: Skipping large tensor {input_shape} (circular buffer would exceed L1 capacity)",

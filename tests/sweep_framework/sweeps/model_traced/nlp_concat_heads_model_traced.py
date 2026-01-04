@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -33,6 +34,26 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors that might cause bad optional access.
+    This can happen with None memory configs or invalid shapes.
+    """
+    output_memory_config = test_vector.get("output_memory_config")
+    input_shape = test_vector.get("input_shape")
+
+    # Check for None memory config
+    if output_memory_config is None:
+        return True, "output_memory_config is None"
+
+    # Check for invalid shape (must be 4D)
+    if input_shape is not None:
+        if isinstance(input_shape, (tuple, list)) and len(input_shape) != 4:
+            return True, "Input shape must be 4D"
+
+    return False, None
 
 
 def run(

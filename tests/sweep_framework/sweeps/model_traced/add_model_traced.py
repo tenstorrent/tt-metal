@@ -8,6 +8,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -41,6 +42,25 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors with None shapes.
+    This can happen with certain traced configurations.
+    """
+    input_shape = test_vector.get("input_shape")
+
+    # Check if input_shape is None
+    if input_shape is None:
+        return True, "Input shape is None"
+
+    # Check if input_shape is a dict with None values
+    if isinstance(input_shape, dict):
+        if input_shape.get("self") is None or input_shape.get("other") is None:
+            return True, "Input shape contains None values"
+
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -70,13 +90,6 @@ def run(
         else:
             shape_a = input_shape
             shape_b = input_shape
-
-    # Validate shapes are not None
-    if shape_a is None or shape_b is None:
-        from loguru import logger
-
-        logger.error(f"Invalid shapes: shape_a={shape_a}, shape_b={shape_b}")
-        return [(False, "Invalid input shapes (None)"), 0.0]
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

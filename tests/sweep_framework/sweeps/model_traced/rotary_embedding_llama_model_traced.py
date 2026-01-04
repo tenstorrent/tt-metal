@@ -163,6 +163,6 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using placeholder reference for now
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)  # Lower tolerance for complex ops
+    pcc_result = check_with_pcc(torch_output_tensor, output_tensor, 0.99)  # Lower tolerance for complex ops
 
-    return [pcc, e2e_perf]
+    return [pcc_result, e2e_perf]
