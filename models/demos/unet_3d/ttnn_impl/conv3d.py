@@ -23,7 +23,7 @@ def pad_dimension_t(x: ttnn.Tensor, padding_z) -> ttnn.Tensor:
     )
 
 
-def get_conv3d_confignew(in_channels, out_channels, kernel_size, grid_size):
+def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
         (32, 32, 3): (32, 32, 1, 1, 16),
@@ -119,7 +119,7 @@ class Conv3D:
             packer_l1_acc=False,
         )
 
-        self.conv3d_config = get_conv3d_confignew(
+        self.conv3d_config = get_conv3d_config(
             self.in_channels + self.in_channels_padding,
             self.out_channels + self.out_channels_padding,
             kernel_size,
@@ -135,6 +135,8 @@ class Conv3D:
         if f"{module_prefix}.bias" in params_dict or (not module_prefix and "bias" in params_dict):
             bias_tensor = params_dict[f"{module_prefix}.bias"] if module_prefix else params_dict["bias"]
             bias_tensor = torch.nn.functional.pad(bias_tensor, (0, self.out_channels_padding), "constant", 0)
+        else:
+            bias_tensor = None
         self.weight, self.bias = prepare_conv3d_weights(
             mesh_device=device,
             weight=weight_tensor,
@@ -143,7 +145,6 @@ class Conv3D:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        N, D, H, W, C = x.shape
         x0 = pad_dimension_t(x, self.padding_z)
         x1 = ttnn.experimental.conv3d(
             input_tensor=x0,
@@ -161,6 +162,4 @@ class Conv3D:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(x0)
-
-        # self.check_torch(x, x4)
         return x1
