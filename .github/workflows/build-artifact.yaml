@@ -385,7 +385,11 @@ jobs:
       - name: 📦 Package
         run: |
           cmake --build build --target package
-          ls -1sh build/*.deb build/*.ddeb || true
+          if [[ "${{ inputs.distro }}" == "fedora" ]]; then
+            ls -1sh build/*.rpm || true
+          else
+            ls -1sh build/*.deb build/*.ddeb || true
+          fi
 
       - name: Publish ccache summary
         run: |
@@ -394,8 +398,8 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: ☁️ Upload packages
-        if: ${{ inputs.publish-package }}
+      - name: ☁️ Upload packages (DEB)
+        if: ${{ inputs.publish-package && inputs.distro != 'fedora' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -403,6 +407,17 @@ jobs:
           path: |
             /work/build/*.deb
             /work/build/*.ddeb
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: ☁️ Upload packages (RPM)
+        if: ${{ inputs.publish-package && inputs.distro == 'fedora' }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            /work/build/*.rpm
           compression-level: 0
           if-no-files-found: error
 
