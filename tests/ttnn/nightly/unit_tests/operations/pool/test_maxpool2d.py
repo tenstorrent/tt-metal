@@ -311,6 +311,7 @@ def test_run_max_pool_height_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -386,6 +387,7 @@ def test_run_max_pool_width_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -461,6 +463,7 @@ def test_run_max_pool_block_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -491,6 +494,7 @@ def test_run_max_pool_mem_config(
         tensor_map,
         ttnn.bfloat16,
         out_memory_config=out_memory_config,
+        config_tensor_in_dram=False,
     )
 
 
@@ -578,6 +582,7 @@ def test_run_max_pool_squeeze_net_model(
         tensor_map,
         in_dtype,
         ceil_mode=ceil_mode,
+        config_tensor_in_dram=False,
     )
 
 
@@ -650,6 +655,7 @@ def test_max_pool2d_output_formats_and_layouts(
         out_dtype=out_dtype,
         output_layout=output_layout,
         nightly_skips=False,
+        config_tensor_in_dram=False,
     )
 
 

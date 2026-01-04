@@ -153,7 +153,7 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
