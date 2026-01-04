@@ -63,6 +63,7 @@ RUN dnf install -y \
     wget2 \
     which \
     zstd \
+    rpm-build \
     && dnf clean all
 
 # Set up virtual environment using uv
