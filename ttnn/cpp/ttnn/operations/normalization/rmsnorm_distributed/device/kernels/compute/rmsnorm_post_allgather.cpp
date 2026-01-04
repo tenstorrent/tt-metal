@@ -88,7 +88,8 @@ void MAIN {
          * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(cb_stats, cb_reduce, cb_var, 1, stats_tiles_cols, 1);
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_stats, cb_reduce, cb_var, compute_kernel_lib::TileShape::row(stats_tiles_cols));
 
         /*
          * 1/sqrt(var + eps)

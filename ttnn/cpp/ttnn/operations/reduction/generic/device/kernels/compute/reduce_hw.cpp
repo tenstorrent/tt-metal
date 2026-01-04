@@ -19,8 +19,6 @@ void MAIN {
         tt::CBIndex::c_0,  // input CB
         tt::CBIndex::c_2,  // scaler CB
         tt::CBIndex::c_3,  // output CB
-        Ht,
-        Wt,
-        NC);
+        compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
 }
 }  // namespace NAMESPACE

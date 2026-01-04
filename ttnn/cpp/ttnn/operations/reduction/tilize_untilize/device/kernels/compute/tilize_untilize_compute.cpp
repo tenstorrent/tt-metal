@@ -89,12 +89,10 @@ void MAIN {
             // - reduce_tile loop
             // - pack_tile to output CB
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                cb_tiled,           // input: num_tiles_per_row tiled tiles
-                cb_scaler,          // scaler tile
-                cb_reduced,         // output: 1 reduced tile
-                1,                  // Ht = 1 (one tile row per block)
-                num_tiles_per_row,  // Wt
-                1);                 // NC = 1 (one batch per block)
+                cb_tiled,                                                // input: num_tiles_per_row tiled tiles
+                cb_scaler,                                               // scaler tile
+                cb_reduced,                                              // output: 1 reduced tile
+                compute_kernel_lib::TileShape::row(num_tiles_per_row));  // one tile row per block
         }
 
         // ========== Phase 3: Untilize ==========
