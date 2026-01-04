@@ -294,7 +294,20 @@ uint32_t calculate_L1_usage(
             params.index_nbytes;
         out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
     }
-
+    log_trace(
+        tt::LogOp,
+        "L1 Usage Breakdown: in_scalar_cb_size_0 = {}, in_scalar_cb_size_1 = {}, clear_value_cb_size = {}, "
+        "in_cb_config_0_size = {}, in_cb_config_1_size = {}, total_mpwi_cb_size = {}, pre_tilize_cb_size = {}, "
+        "out_cb_config_size = {}, out_idx_cb_config_size = {}",
+        in_scalar_cb_size_0,
+        in_scalar_cb_size_1,
+        clear_value_cb_size,
+        in_cb_config_0_size,
+        in_cb_config_1_size,
+        total_mpwi_cb_size,
+        pre_tilize_cb_size,
+        sliding_window::align_buffer(out_cb_config_size),
+        sliding_window::align_buffer(out_idx_cb_config_size));
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
            total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
            sliding_window::align_buffer(out_idx_cb_config_size);
