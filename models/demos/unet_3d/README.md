@@ -86,3 +86,7 @@ pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_segformer_e2
 - Torch model: `models/demos/unet_3d/torch_impl/model.py`
 - Runner entry point: `models/demos/unet_3d/runner/performant_runner.py`
 - Default config: `models/demos/unet_3d/configs/test_confocal_boundary.json`
+
+## References
+- [UNet3D Paper](https://arxiv.org/abs/1606.06650)
+- Reference implementation of torch model adapted from [here](https://github.com/wolny/pytorch-3dunet)
