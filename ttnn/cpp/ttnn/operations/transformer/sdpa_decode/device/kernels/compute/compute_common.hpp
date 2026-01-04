@@ -80,7 +80,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     constexpr uint32_t prev_max_dst_idx = 1;
 
     compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        in0_cb, scale_cb, out_cb, rows, cols, 1, 0, [&]() {
+        in0_cb, scale_cb, out_cb, rows, cols, 1, {}, [&]() {
             if (do_eltwise_max) {
                 // At this point, DST[0] contains the reduced value for the current row
                 copy_tile_to_dst_init_short(prev_cb);

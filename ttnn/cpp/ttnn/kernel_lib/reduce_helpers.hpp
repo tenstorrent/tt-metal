@@ -76,6 +76,22 @@ enum class ReduceInputMode {
 };
 
 /**
+ * @brief Tile memory layout specification for PRELOADED/PERSISTENT reduce modes
+ *
+ * Specifies the stride pattern for accessing tiles in non-contiguous memory layouts.
+ * Used only when input_mode is PRELOADED or PERSISTENT.
+ */
+struct TileLayout {
+    uint32_t row_stride = 0;    // 0 = auto-detect from Wt (contiguous row-major)
+    uint32_t batch_stride = 0;  // 0 = auto-detect from Ht * row_stride (reserved for future use)
+
+    // Factory methods for common patterns
+    static constexpr TileLayout contiguous() { return {}; }
+    static constexpr TileLayout with_row_stride(uint32_t s) { return {s, 0}; }
+    static constexpr TileLayout with_strides(uint32_t row, uint32_t batch) { return {row, batch}; }
+};
+
+/**
  * @brief Default no-op functor for post_reduce_op parameter
  *
  * When no custom post-reduce operation is needed, this empty functor is used.
@@ -135,8 +151,9 @@ struct NoOp {
  * @param Ht Height in tiles (number of tile rows)
  * @param Wt Width in tiles (number of tile columns)
  * @param num_batches Number of batches to process (NC dimension)
- * @param input_stride Stride between row groups for PRELOADED mode (default: 0 = use Wt)
- *                     Only used when input_mode is PRELOADED.
+ * @param layout Tile memory layout specification for PRELOADED/PERSISTENT modes (default: contiguous)
+ *               Use TileLayout::with_row_stride(stride) for custom row spacing.
+ *               Only used when input_mode is PRELOADED or PERSISTENT.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
@@ -161,7 +178,8 @@ struct NoOp {
  * @example
  *   // PRELOADED mode: tiles already in CB, with custom stride between rows
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, Ht, Wt, NC, 0, input_stride);
+ *       cb_in, cb_scaler, cb_out, Ht, Wt, NC,
+ *       TileLayout::with_row_stride(input_stride));
  *
  * @example
  *   // PRELOADED mode for REDUCE_COL: tiles in row-major order
@@ -205,7 +223,7 @@ ALWI void reduce(
     uint32_t Ht,
     uint32_t Wt,
     uint32_t num_batches,
-    uint32_t input_stride = 0,
+    TileLayout layout = {},
     PostReduceOp post_reduce_op = {}) {
     // Auto-detect FP32 dest accumulation mode from compile-time define
     constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
@@ -223,7 +241,7 @@ ALWI void reduce(
         // =================================================================
         // REDUCE_SCALAR: HW reduction - all tiles -> 1 output tile per batch
         // =================================================================
-        const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
+        const uint32_t stride = (layout.row_stride > 0) ? layout.row_stride : Wt;
         const uint32_t tiles_per_batch = Ht * stride;
         const uint32_t total_tiles = tiles_per_batch * num_batches;
 
@@ -299,7 +317,7 @@ ALWI void reduce(
         // =================================================================
         // REDUCE_ROW: W reduction - each row -> 1 output tile (Ht outputs per batch)
         // =================================================================
-        const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
+        const uint32_t stride = (layout.row_stride > 0) ? layout.row_stride : Wt;
         const uint32_t total_outputs = Ht * num_batches;
         const uint32_t total_tiles = Ht * stride * num_batches;
 
@@ -384,7 +402,7 @@ ALWI void reduce(
         // Auto-detect chunk size from DEST register capacity
         // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
         constexpr uint32_t chunk_size = DEST_AUTO_LIMIT;
-        const uint32_t stride = (input_stride > 0) ? input_stride : Wt;
+        const uint32_t stride = (layout.row_stride > 0) ? layout.row_stride : Wt;
         const uint32_t tiles_per_batch = Ht * stride;
         const uint32_t total_outputs = Wt * num_batches;
         const uint32_t total_tiles = tiles_per_batch * num_batches;

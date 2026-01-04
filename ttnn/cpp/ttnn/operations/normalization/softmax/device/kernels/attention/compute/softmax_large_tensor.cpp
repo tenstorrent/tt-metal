@@ -440,7 +440,7 @@ void reduce_cb(
 
     // Single reduce call with lambda that conditionally accumulates
     compute_kernel_lib::reduce<reduce_type, REDUCE_DIM>(
-        cb_in, cb_scaler, cb_out, 1, cb_length_t, 1, 0,
+        cb_in, cb_scaler, cb_out, 1, cb_length_t, 1, {},
         // PostReduceOp: conditionally accumulate with previous result
         [cb_prev_out, use_prev_reduce]() {
             if (use_prev_reduce) {

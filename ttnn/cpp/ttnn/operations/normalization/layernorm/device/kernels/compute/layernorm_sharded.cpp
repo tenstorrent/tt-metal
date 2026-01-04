@@ -145,7 +145,13 @@ void MAIN {
 #ifndef RMSNORM
     // E[x],
     compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, block_w);
+        cb_in,
+        cb_scaler,
+        cb_ex_partial,
+        block_h,
+        num_reduce_tiles_per_block_h,  // Wt
+        1,                             // num_batches
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
