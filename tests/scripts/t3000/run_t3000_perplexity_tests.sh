@@ -206,7 +206,7 @@ run_t3000_qwen3_perplexity_tests() {
   qwen32b=Qwen/Qwen3-32B
   tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
-  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --max_seq_len 40960 --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
