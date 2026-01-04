@@ -176,9 +176,9 @@ def run_avg_pool2d(
     # 1x256x56x56 tensor with divisor_override=5 and 5x5 kernel resulting in rtol=0.015 for that element
     torch.manual_seed(1e3)
     torch_input = randomize_tensor(tensor_map, input_shape)
-    torch_input = (
-        torch.tensor(range(in_h * in_w), dtype=torch.bfloat16).reshape(1, 1, in_h, in_w).broadcast_to(input_shape)
-    )
+    # torch_input = (
+    #     torch.tensor(range(in_h * in_w), dtype=torch.bfloat16).reshape(1, 1, in_h, in_w).broadcast_to(input_shape)
+    # )
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C

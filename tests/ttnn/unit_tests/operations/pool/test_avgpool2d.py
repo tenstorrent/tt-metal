@@ -111,7 +111,7 @@ def test_avg_pool2d_post_commit(
         shard_scheme=shard_scheme,
         in_dtype=in_dtype,
         nightly_skips=False,
-        config_tensor_in_dram=False,
+        config_tensor_in_dram=True,
     )
 
 

@@ -144,9 +144,6 @@ static Tensor create_scalar_config_tensor(
     std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
     uint32_t num_iterations = 0;
 
-    if (config_tensor_in_dram) {
-        log_info(tt::LogOp, "Pool Op with Config Tensor in DRAM");
-    }
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED: num_iterations = num_cores; break;
         case TensorMemoryLayout::BLOCK_SHARDED: num_iterations = num_cores / num_shards_c; break;
@@ -372,7 +369,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const auto [raw_in_cb_id, raw_in_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, params.data_format, input.buffer());
 
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
+    log_debug(tt::LogOp, "Raw In CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
 
     // reader indices
     const uint32_t in_reader_indices_cb_id = next_cb_index++;
@@ -384,14 +381,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         program,
         all_cores,
-        in_reader_indices_cb_pagesize,
+        config_tensor_in_dram ? reader_indices_storage.get_buffer()->page_size() : in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages,
         tt::DataFormat::UInt16,
         config_tensor_in_dram ? nullptr : reader_indices_storage.get_buffer());
+    // reader_indices_storage.get_buffer());
 
     log_debug(
         tt::LogOp,
-        "CB {} :: PS = {}, NP = {}",
+        "In Reader Indices CB {} :: PS = {}, NP = {}",
         in_reader_indices_cb_id,
         in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages);
@@ -581,7 +579,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
         config_tensor =
             config_tensor.to_device(device, config_tensor_in_dram ? DRAM_MEMORY_CONFIG : l1_small_memory_config);
-        log_info(tt::LogOp, "Config tensor shape: {}", config_tensor);
 
         constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
         scalar_config_storage = config_tensor.device_storage();

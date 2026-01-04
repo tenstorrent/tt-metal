@@ -516,11 +516,22 @@ void kernel_main() {
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     if constexpr (config_in_dram) {
-        load_config_tensor_if_in_dram<
-            reader_dram_addr,
-            reader_page_size,
-            reader_tensor_args_index,
-            in_reader_indices_cb_id>(core_nhw_index);
+        // DPRINT << "Loading reader config from "<<reader_dram_addr<<" of size "<<reader_page_size<<ENDL();
+        if (reader_id == 0) {
+            load_config_tensor_if_in_dram<
+                reader_dram_addr,
+                reader_page_size,
+                reader_tensor_args_index,
+                in_reader_indices_cb_id>(core_nhw_index);
+
+        } else {
+            // volatile tt_l1_ptr uint16_t* reader_l1_ptr =
+            // reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(in_reader_indices_cb_id));
+            // for(uint32_t index = 0; index < reader_page_size /2; index++) {
+            //     DPRINT <<index<<": "<<reader_l1_ptr[index]<<ENDL();
+            // }
+            cb_wait_front(in_reader_indices_cb_id, 1);
+        }
     }
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
