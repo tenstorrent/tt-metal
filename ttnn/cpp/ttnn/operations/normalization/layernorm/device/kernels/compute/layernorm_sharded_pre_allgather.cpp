@@ -128,7 +128,7 @@ void MAIN {
         block_h,
         num_reduce_tiles_per_block_h,  // Wt
         1,                             // num_batches
-        block_w);                      // input_stride
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
     reconfig_data_format_srcb(cb_scaler, cb_in);
 #else
 #ifdef FUSE_PRE_ADD
@@ -177,7 +177,7 @@ void MAIN {
         block_h,
         num_reduce_tiles_per_block_h,  // Wt
         1,                             // num_batches
-        block_w);                      // input_stride
+        compute_kernel_lib::TileLayout::with_row_stride(block_w));
     cb_pop_front(cb_x2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
