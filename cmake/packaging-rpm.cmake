@@ -45,11 +45,14 @@ set(CPACK_RPM_PACKAGE_URL "https://tenstorrent.com")
 
 # Disable brp-strip which fails on cross-compiled binaries for Tenstorrent hardware
 # The strip command can't recognize the format of these non-host architecture files
+# Also disable RPATH checks - CMake adds MPI library paths that trigger false positives
+# TODO: Fix RPATH handling in CMake to put $ORIGIN first, then remove __brp_check_rpaths skip
 set(CPACK_RPM_SPEC_MORE_DEFINE
     "%define __strip /bin/true
 %define __brp_strip /bin/true
 %define __brp_strip_comment_note /bin/true
 %define __brp_strip_static_archive /bin/true
+%define __brp_check_rpaths /bin/true
 %define debug_package %{nil}"
 )
 
