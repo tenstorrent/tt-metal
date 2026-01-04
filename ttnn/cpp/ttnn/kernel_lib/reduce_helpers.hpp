@@ -71,12 +71,7 @@ namespace compute_kernel_lib {
  * PRELOADED: All tiles already present in CB, accessed via indexing (caller manages wait/pop)
  * PERSISTENT: Wait for all tiles upfront, indexed access, NO pop (tiles persist for reuse)
  */
-enum class ReduceInputMode {
-    STREAMING,          // One-at-a-time: wait/pop per tile
-    STREAMING_BATCHED,  // Batched: wait all, indexed access, pop all
-    PRELOADED,          // Caller manages CB lifecycle
-    PERSISTENT          // Wait upfront, no pop
-};
+enum class ReduceInputMode { STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT };
 
 /**
  * @brief Data format reconfiguration mode for reduce operations
@@ -89,12 +84,7 @@ enum class ReduceInputMode {
  * OUTPUT: Reconfig packer only (pack_reconfig_data_format)
  * BOTH: Reconfig both unpacker and packer (DEFAULT)
  */
-enum class ReduceDataFormatReconfig {
-    NONE = 0,    // No reconfig - use when reduce is first operation or formats already match
-    INPUT = 1,   // Reconfig unpacker only (reconfig_data_format)
-    OUTPUT = 2,  // Reconfig packer only (pack_reconfig_data_format)
-    BOTH = 3     // Reconfig both unpacker and packer (DEFAULT)
-};
+enum class ReduceDataFormatReconfig { NONE = 0, INPUT = 1, OUTPUT = 2, BOTH = 3 };
 
 /**
  * @brief Tile memory layout specification for PRELOADED/PERSISTENT reduce modes
@@ -172,18 +162,10 @@ struct NoOp {
  * - PRELOADED/PERSISTENT mode: Tiles in standard row-major order (batch_offset + ht*stride + wt).
  * - Chunk size is auto-detected from DEST register capacity (DEST_AUTO_LIMIT).
  *
- * INPUT MODES:
- * - STREAMING (default): One-at-a-time mode. Library waits/pops each tile individually.
- *                        Safe for numerical precision, compatible with any CB size.
- * - STREAMING_BATCHED: Batched mode. Library waits for all tiles per row/batch/chunk,
- *                      processes them via indexed access, then pops all. Most efficient when
- *                      tiles are pre-loaded in CB and wait/pop are symmetric with TileShape.
- * - PRELOADED: Caller manages CB lifecycle (wait before, pop after). Accessed via indexing.
- *              Use for asymmetric wait/pop (e.g., padding handling where you wait/pop more
- *              tiles than TileShape specifies). Library handles output CB reserve/push internally.
- * - PERSISTENT: Wait for all tiles upfront (handled internally), indexed access, NO pop.
- *               Tiles persist in CB for reuse. Ideal for softmax patterns where the same
- *               input tiles are used in subsequent operations (e.g., sub_exp, mul_bcast).
+ * INPUT MODES: See ReduceInputMode enum for detailed mode descriptions.
+ * - Use STREAMING_BATCHED for optimal performance when wait/pop are symmetric with TileShape.
+ * - Use PRELOADED for asymmetric wait/pop (e.g., padding where you wait/pop more than TileShape).
+ * - Use PERSISTENT for softmax patterns where tiles are reused in subsequent operations.
  *
  * @note post_reduce_op is only invoked for REDUCE_ROW dimension.
  *
