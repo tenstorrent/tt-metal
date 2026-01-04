@@ -253,12 +253,7 @@ void MAIN {
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
-                    1,   // Ht
-                    1,   // Wt
-                    1);  // num_batches
+                    cb_ex_external, cb_scaler_global, cb_ex_global, compute_kernel_lib::TileShape::single());
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }
@@ -363,12 +358,7 @@ void MAIN {
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_ex_external,
-                    cb_scaler_global,
-                    cb_ex_global,
-                    1,   // Ht
-                    1,   // Wt
-                    1);  // num_batches
+                    cb_ex_external, cb_scaler_global, cb_ex_global, compute_kernel_lib::TileShape::single());
                 cb_reserve_back(cb_ex, 1);
                 cb_push_back(cb_ex, 1);
             }

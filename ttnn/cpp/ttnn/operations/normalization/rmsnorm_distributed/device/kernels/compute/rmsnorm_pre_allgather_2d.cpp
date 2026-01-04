@@ -80,7 +80,7 @@ void MAIN {
         pack_reconfig_data_format(cb_out);
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
-            cb_x2, cb_reduce, cb_out, 1, Wt, 1);
+            cb_x2, cb_reduce, cb_out, compute_kernel_lib::TileShape::row(Wt));
         cb_pop_front(cb_inp, Wt);
         cb_pop_front(cb_reduce, 1);
     }

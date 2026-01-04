@@ -27,12 +27,7 @@ void calc_numeric_stable(
     // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
     reconfig_data_format(cb_in, cb_bcast_scaler);
     compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-        cb_in,
-        cb_bcast_scaler,
-        cb_max,
-        1,   // Ht (1 row)
-        Wt,  // Wt tiles per row
-        1);  // num_batches
+        cb_in, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -268,7 +263,7 @@ void MAIN {
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-                cb_exps, cb_bcast_scaler, cb_recipsumexps, 1, Wt, 1, {}, []() {
+                cb_exps, cb_bcast_scaler, cb_recipsumexps, compute_kernel_lib::TileShape::row(Wt), {}, []() {
                     recip_tile_init();
                     recip_tile(0);
                 });

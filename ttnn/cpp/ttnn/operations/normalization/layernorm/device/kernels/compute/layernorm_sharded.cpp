@@ -148,9 +148,7 @@ void MAIN {
         cb_in,
         cb_scaler,
         cb_ex_partial,
-        block_h,
-        num_reduce_tiles_per_block_h,  // Wt
-        1,                             // num_batches
+        compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
 
     reconfig_data_format_srca(cb_in, cb_ex_external);

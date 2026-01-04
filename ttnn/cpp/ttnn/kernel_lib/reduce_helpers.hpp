@@ -42,16 +42,16 @@
  *   // No manual CB management needed!
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  *   // Using defines for reduce type/dim (REDUCE_OP and REDUCE_DIM must be defined)
- *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  */
 
 namespace compute_kernel_lib {
@@ -89,6 +89,30 @@ struct TileLayout {
     static constexpr TileLayout contiguous() { return {}; }
     static constexpr TileLayout with_row_stride(uint32_t s) { return {s, 0}; }
     static constexpr TileLayout with_strides(uint32_t row, uint32_t batch) { return {row, batch}; }
+};
+
+/**
+ * @brief Tile shape specification for reduce operations
+ *
+ * Specifies the grid dimensions (rows x cols x batches) for tile-based reductions.
+ * Provides self-documenting factory methods for common patterns.
+ */
+struct TileShape {
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t batches;
+
+    // Full grid specification
+    static constexpr TileShape grid(uint32_t r, uint32_t c, uint32_t b = 1) { return {r, c, b}; }
+
+    // Single tile (1x1x1) - for scalar reductions on one tile
+    static constexpr TileShape single() { return {1, 1, 1}; }
+
+    // Single row of tiles (1 x cols x 1) - common for REDUCE_ROW
+    static constexpr TileShape row(uint32_t c, uint32_t b = 1) { return {1, c, b}; }
+
+    // Single column of tiles (rows x 1 x 1) - common for REDUCE_COL
+    static constexpr TileShape col(uint32_t r, uint32_t b = 1) { return {r, 1, b}; }
 };
 
 /**
@@ -148,61 +172,57 @@ struct NoOp {
  * @param icb Input circular buffer containing tiles to reduce
  * @param icb_scaler Circular buffer containing scaler tile
  * @param ocb Output circular buffer for reduced tiles
- * @param Ht Height in tiles (number of tile rows)
- * @param Wt Width in tiles (number of tile columns)
- * @param num_batches Number of batches to process (NC dimension)
+ * @param shape Tile grid dimensions (rows x cols x batches)
+ *              Use TileShape::grid(r, c, b), TileShape::row(c), TileShape::col(r), or TileShape::single()
  * @param layout Tile memory layout specification for PRELOADED/PERSISTENT modes (default: contiguous)
  *               Use TileLayout::with_row_stride(stride) for custom row spacing.
  *               Only used when input_mode is PRELOADED or PERSISTENT.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  * @example
- *   // Reduce each column (H dimension) - output has Wt tiles per batch, auto chunk size
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   // Reduce each column (H dimension) - output has Wt tiles per batch
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  * @example
- *   // Reduce each column with host-specified chunk size
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out, Ht, Wt, NC, row_chunk);
- *
- * @example
- *   // Using defines for reduce type/dim
- *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *   // Using defines for reduce type/dim with single tile
+ *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out, TileShape::single());
  *
  * @example
  *   // PRELOADED mode: tiles already in CB, with custom stride between rows
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, Ht, Wt, NC,
+ *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC),
  *       TileLayout::with_row_stride(input_stride));
  *
  * @example
  *   // PRELOADED mode for REDUCE_COL: tiles in row-major order
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // PRELOADED mode for REDUCE_SCALAR: all tiles pre-loaded
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, ReduceInputMode::PRELOADED>(
- *       cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // STREAMING_BATCHED mode (optimal for pre-loaded tiles)
  *   // Library waits for all Wt tiles per row, processes them, then pops all Wt tiles
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::STREAMING_BATCHED>(
- *       cb_in, cb_scaler, cb_out, Ht, Wt, NC);
+ *       cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
  *   // Set uninit=false since lambda calls reduce_uninit() before recip
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, ReduceInputMode::PRELOADED,
- *       true, false, ENABLE_FP32_DEST_ACC>(
- *       cb_exps, cb_scaler, cb_out, 1, Wt, 1, 0, 0,
+ *       true, false>(
+ *       cb_exps, cb_scaler, cb_out, TileShape::row(Wt),
+ *       TileLayout::contiguous(),
  *       []() {
  *           reduce_uninit();
  *           recip_tile_init();
@@ -220,11 +240,14 @@ ALWI void reduce(
     uint32_t icb,
     uint32_t icb_scaler,
     uint32_t ocb,
-    uint32_t Ht,
-    uint32_t Wt,
-    uint32_t num_batches,
+    TileShape shape,
     TileLayout layout = {},
     PostReduceOp post_reduce_op = {}) {
+    // Extract shape components
+    const uint32_t Ht = shape.rows;
+    const uint32_t Wt = shape.cols;
+    const uint32_t num_batches = shape.batches;
+
     // Auto-detect FP32 dest accumulation mode from compile-time define
     constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();
 

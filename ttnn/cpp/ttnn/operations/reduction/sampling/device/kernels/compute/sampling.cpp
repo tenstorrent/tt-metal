@@ -164,12 +164,8 @@ void reduce_c() {
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
     reconfig_data_format(in0_cb, scale_cb);
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(in0_cb, num_tiles);
-    // PRELOADED mode: tiles remain in CB per function postcondition
-    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PRELOADED>(
-        in0_cb, scale_cb, out_cb, rows, cols, 1);
-    // Note: in0_cb tiles NOT popped - they remain for reuse (postcondition)
+    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 

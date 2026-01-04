@@ -56,7 +56,7 @@ void MAIN {
                 transpose(input_cb_id, intermed_cb_id0);  // 32 x B
                 reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    intermed_cb_id0, scalar_cb_id, intermed_cb_id1, 1, 1, 1);  // 1 x B
+                    intermed_cb_id0, scalar_cb_id, intermed_cb_id1, compute_kernel_lib::TileShape::single());  // 1 x B
             }
             // Get full tile back from writer and transpose it
             pack_reconfig_data_format(intermed_cb_id0, output_cb_id);
