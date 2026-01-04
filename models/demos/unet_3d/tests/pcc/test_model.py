@@ -56,7 +56,6 @@ def test_model(
     torch_output = reference_model(torch_input)
     ttnn_output = ttnn_model(ttnn_input)
 
-    torch_output = torch_output
     ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
     ttnn_output = ttnn.to_torch(ttnn_output.cpu())
 

@@ -5,7 +5,6 @@
 import os
 
 import torch
-from safetensors.torch import load_file
 
 import ttnn
 from models.demos.unet_3d.demo.config import load_config
@@ -41,50 +40,12 @@ def get_device_from_config(config: dict) -> str:
     return torch.device(device_str)
 
 
-def dispatch_model_backend(config) -> UNet3D | UNet3DTch:
-    state_dict = load_file(config["model_path"])
-    if config["backend"] == "ttnn":
-        device = ttnn.open_device(
-            device_id=0,
-            dispatch_core_config=ttnn.device.DispatchCoreConfig(),
-            l1_small_size=8192 * 4,
-        )
-        model = UNet3D(
-            device,
-            in_channels=config["model"]["in_channels"],
-            out_channels=config["model"]["out_channels"],
-            base_channels=config["model"]["base_channels"],
-            num_levels=config["model"]["num_levels"],
-            num_groups=config["model"]["num_groups"],
-            scale_factor=config["model"]["scale_factor"],
-        )
-    elif config["backend"] == "torch":
-        device = get_device_from_config(config)
-        model = UNet3DTch(
-            device,
-            in_channels=config["model"]["in_channels"],
-            out_channels=config["model"]["out_channels"],
-            base_channels=config["model"]["base_channels"],
-            num_levels=config["model"]["num_levels"],
-            num_groups=config["model"]["num_groups"],
-            scale_factor=config["model"]["scale_factor"],
-        )
-        model.to(device)
-        model.eval()
-
-    else:
-        raise ValueError(f"Unknown backend: {config['backend']}")
-    model.load_state_dict(state_dict)
-
-    return model
-
-
 def get_predictor(model: UNet3D | UNet3DTch, cfg: dict) -> Predictor:
     """Create and return a predictor instance based on the configuration.
 
     Args:
         model: The trained model to use for prediction.
-        args: Parsed CLI arguments.
+        cfg (dict): Configuration dictionary for dataset, model, and predictor.
 
     Returns:
         A predictor instance.
@@ -116,10 +77,7 @@ def main():
     """
     config = load_config()
 
-    # model = dispatch_model_backend(config)
     model = UNet3DRunner()
-    # device = ttnn.open_device(
-    #     device_id=0,
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
         dispatch_core_config=ttnn.device.DispatchCoreConfig(),
