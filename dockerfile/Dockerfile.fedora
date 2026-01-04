@@ -37,7 +37,7 @@ RUN mkdir -p /tmp/cba \
 # libxml2, libxslt, patch, which for build requirements
 # Note: doxygen/graphviz installed with --setopt=install_weak_deps=False to avoid
 # pulling in openh264 dependency chain (openh264 requires cisco repo)
-RUN dnf install -y --setopt=install_weak_deps=False doxygen graphviz && \
+RUN dnf install -y --setopt=install_weak_deps=False doxygen && \
     dnf install -y \
     bc \
     ccache \
