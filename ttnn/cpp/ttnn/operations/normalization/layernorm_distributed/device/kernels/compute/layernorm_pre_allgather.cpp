@@ -63,8 +63,6 @@ void MAIN {
          * sum(x**2)
          */
 
-        reconfig_data_format(cb_x2, cb_reduce);
-        pack_reconfig_data_format(cb_out);
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         // Batched mode for optimal performance
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
@@ -73,8 +71,6 @@ void MAIN {
         /*
          * sum(x)
          */
-        reconfig_data_format(cb_inp, cb_reduce);
-        pack_reconfig_data_format(cb_out);
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         // Batched mode for optimal performance
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(

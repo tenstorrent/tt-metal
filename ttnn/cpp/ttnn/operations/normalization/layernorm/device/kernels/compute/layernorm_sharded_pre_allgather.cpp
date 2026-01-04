@@ -121,7 +121,11 @@ void MAIN {
     reconfig_data_format_srcb(cb_in, cb_scaler);
 #endif
     // E[x],
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+    compute_kernel_lib::reduce<
+        REDUCE_OP,
+        REDUCE_DIM,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         cb_in,
         cb_scaler,
         cb_ex_partial2,
@@ -159,9 +163,6 @@ void MAIN {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in, cb_x2);
-    reconfig_data_format_srcb(cb_in, cb_scaler);
-
     cb_wait_front(cb_x2, num_tiles_per_block);
 #ifdef RMSNORM
     cb_wait_front(cb_scaler, 1);

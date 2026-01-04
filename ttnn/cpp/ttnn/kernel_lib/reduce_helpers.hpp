@@ -79,6 +79,24 @@ enum class ReduceInputMode {
 };
 
 /**
+ * @brief Data format reconfiguration mode for reduce operations
+ *
+ * Controls whether the library automatically reconfigures the unpacker and packer
+ * data formats before executing the reduce operation.
+ *
+ * NONE: No reconfig - use when reduce is first operation or formats already match
+ * INPUT: Reconfig unpacker only (reconfig_data_format)
+ * OUTPUT: Reconfig packer only (pack_reconfig_data_format)
+ * BOTH: Reconfig both unpacker and packer (DEFAULT)
+ */
+enum class ReduceDataFormatReconfig {
+    NONE = 0,    // No reconfig - use when reduce is first operation or formats already match
+    INPUT = 1,   // Reconfig unpacker only (reconfig_data_format)
+    OUTPUT = 2,  // Reconfig packer only (pack_reconfig_data_format)
+    BOTH = 3     // Reconfig both unpacker and packer (DEFAULT)
+};
+
+/**
  * @brief Tile memory layout specification for PRELOADED/PERSISTENT reduce modes
  *
  * Specifies the stride pattern for accessing tiles in non-contiguous memory layouts.
@@ -172,6 +190,7 @@ struct NoOp {
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - defaults to REDUCE_OP define
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - defaults to REDUCE_DIM define
  * @tparam input_mode Input handling mode (STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT) - defaults to STREAMING
+ * @tparam reconfig Data format reconfiguration mode (NONE, INPUT, OUTPUT, BOTH) - defaults to BOTH
  * @tparam init If true, calls reduce_init before processing (default: true)
  * @tparam uninit If true, calls reduce_uninit after processing (default: true)
  *
@@ -243,6 +262,7 @@ template <
     PoolType reduce_type = REDUCE_OP,
     ReduceDim reduce_dim = REDUCE_DIM,
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
+    ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
     bool init = true,
     bool uninit = true,
     typename PostReduceOp = NoOp>
@@ -257,6 +277,14 @@ ALWI void reduce(
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
     const uint32_t num_batches = shape.batches;
+
+    // Apply reconfig based on mode
+    if constexpr (reconfig == ReduceDataFormatReconfig::INPUT || reconfig == ReduceDataFormatReconfig::BOTH) {
+        reconfig_data_format(icb, icb_scaler);
+    }
+    if constexpr (reconfig == ReduceDataFormatReconfig::OUTPUT || reconfig == ReduceDataFormatReconfig::BOTH) {
+        pack_reconfig_data_format(ocb);
+    }
 
     // Auto-detect FP32 dest accumulation mode from compile-time define
     constexpr bool enforce_fp32_accumulation = get_fp32_dest_acc_enabled();

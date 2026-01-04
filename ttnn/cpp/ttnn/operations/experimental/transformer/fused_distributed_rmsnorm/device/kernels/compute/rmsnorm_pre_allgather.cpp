@@ -78,8 +78,6 @@ void MAIN {
         /*
          * sum(x**2)
          */
-        reconfig_data_format(intermediate_cb, reduce_scalar_cb);
-        pack_reconfig_data_format(output_cb);
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             intermediate_cb, reduce_scalar_cb, output_cb, compute_kernel_lib::TileShape::single());
     }

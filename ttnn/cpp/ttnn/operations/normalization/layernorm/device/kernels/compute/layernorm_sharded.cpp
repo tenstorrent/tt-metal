@@ -144,7 +144,11 @@ void MAIN {
 
 #ifndef RMSNORM
     // E[x],
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+    compute_kernel_lib::reduce<
+        REDUCE_OP,
+        REDUCE_DIM,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         cb_in,
         cb_scaler,
         cb_ex_partial,

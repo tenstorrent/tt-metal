@@ -71,9 +71,6 @@ void MAIN {
         uint32_t rope_cos_tile_in_head = 0;
         uint32_t rope_sin_tile_in_head = 0;
 
-        reconfig_data_format(stats_cb, reduce_scalar_cb);
-        pack_reconfig_data_format(reduce_result_cb);
-
         /*
          * Reduce stats input.
          * cb_stats = [sum(x0**2), sum(x1**2), ...]

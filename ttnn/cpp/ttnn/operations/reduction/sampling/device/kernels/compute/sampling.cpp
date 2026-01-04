@@ -162,8 +162,11 @@ void reduce_c() {
     // Postcondition: in0_cb has rows*cols produced
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
-    reconfig_data_format(in0_cb, scale_cb);
-    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+    compute_kernel_lib::reduce<
+        pool_type,
+        reduce_dim,
+        compute_kernel_lib::ReduceInputMode::PERSISTENT,
+        compute_kernel_lib::ReduceDataFormatReconfig::INPUT>(
         in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }

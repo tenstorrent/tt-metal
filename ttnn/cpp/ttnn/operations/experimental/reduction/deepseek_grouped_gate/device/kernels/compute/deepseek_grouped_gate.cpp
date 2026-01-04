@@ -273,10 +273,6 @@ void normalize_scores(
     const uint32_t cb_reciprocal_sums,
     const uint32_t cb_epsilon_scalar,
     const uint32_t cb_normalized_scores) {
-    // Configure data formats for reduce operation
-    reconfig_data_format(cb_gathered_sigmoid, cb_reduce_ones_scalar);
-    pack_reconfig_data_format(cb_reduce_intermediate);
-
     // 1. Sum row (experts) to get row vector of sums [1, 32]
     // PERSISTENT mode: waits for tile internally, no pop (tile persists for broadcast multiply)
     compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
