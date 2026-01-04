@@ -168,13 +168,6 @@ class GroupNorm3D:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        ttnn.create_group_norm_input_mask(
-            num_channel=self.num_channels + self.channels_padding,
-            num_groups=self.num_groups + self.num_groups_padding,
-            num_cores_across_channel=1,
-            data_type=ttnn.bfloat8_b,
-        )
         # TODO: Negative mask seems buggy, disable for now
         # self.input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
@@ -217,6 +210,4 @@ class GroupNorm3D:
         )
         x3 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x2)
-
-        # self.check_torch(x, x7)
         return ttnn.reshape(x3, (N, D, H, W, C))

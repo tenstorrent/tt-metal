@@ -10,7 +10,7 @@ import ttnn
 
 
 class FinalConv:
-    "Final Conv in the for mof ttnn.matmul sincekernel size is 1"
+    "Final Conv in the form of ttnn.matmul since kernel size is 1"
 
     def __init__(self, in_channels: int, out_channels: int):
         self.in_channels = in_channels

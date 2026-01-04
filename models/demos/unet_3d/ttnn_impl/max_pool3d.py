@@ -52,5 +52,4 @@ def max_pool3d(x: ttnn.Tensor, kernel_size: int) -> ttnn.Tensor:
     )
     ttnn.deallocate(x1)
     y = ttnn.reshape(x2, (N, D_out, H_out, W_out, C))
-    # check_torch(x, y)
     return y

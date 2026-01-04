@@ -119,7 +119,7 @@ class Predictor:
         return np.zeros(output_shape, dtype="float32")
 
 
-def _get_output_file(dataset: object, suffix: str = "_predictions", output_dir: str | Path | None = None) -> Path:
+def _get_output_file(dataset: object, output_dir: str | Path | None = None) -> Path:
     """
     Get the output file path for the predictions. If `output_dir` is not None the output file will be saved in
     the original dataset directory.
@@ -131,7 +131,7 @@ def _get_output_file(dataset: object, suffix: str = "_predictions", output_dir: 
     else:
         output_dir = Path(output_dir)
 
-    output_filename = file_path.stem + suffix + ".h5"
+    output_filename = file_path.stem + "_predictions" + ".h5"
     return output_dir / output_filename
 
 
