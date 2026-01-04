@@ -16,6 +16,13 @@ COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh && \
     /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
+# Fedora installs OpenMPI to non-standard paths under /usr/lib64/openmpi/
+# Set environment variables so compilers and linkers can find it
+ENV PATH="/usr/lib64/openmpi/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/lib64/openmpi/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+ENV C_INCLUDE_PATH="/usr/lib64/openmpi/include${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+ENV CPLUS_INCLUDE_PATH="/usr/lib64/openmpi/include${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+
 #############################################################
 
 FROM base AS ci-build
@@ -127,6 +134,9 @@ RUN dnf install -y \
     vim \
     mesa-libGL \
     ipmitool \
+    bash-completion \
+    htop \
+    sqlite \
     && dnf clean all
 
 # Fedora has modern gdb by default, no need to build from source
