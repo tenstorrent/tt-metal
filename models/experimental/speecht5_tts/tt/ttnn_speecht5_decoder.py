@@ -182,21 +182,23 @@ class TTNNSpeechDecoderPrenet:
             hidden_states = ttnn.relu(hidden_states)
 
             # Apply HF's consistent dropout (L1 output)
-            # Use precomputed dropout mask for performance
-            mask = self.parameters["dropout_masks"][i]
-            # Slice mask to match current sequence length [seq_len, hidden_size]
-            seq_len = hidden_states.shape[1]
-            mask_sliced = mask[:seq_len, :]
-            # Expand mask to match batch dimension [batch, seq_len, hidden_size]
-            batch_size = hidden_states.shape[0]
-            mask_expanded = ttnn.unsqueeze(mask_sliced, 0)  # [1, seq_len, hidden_size]
-            mask_expanded = ttnn.repeat(mask_expanded, [batch_size, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-            # Apply mask: hidden_states = (mask == 1) * hidden_states * scale
-            hidden_states = ttnn.multiply(
-                ttnn.where(mask_expanded == 1, hidden_states, 0),
-                self.dropout_scale,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+            # Skip dropout if p=0.0 (dropout disabled for testing)
+            if self.config.speech_decoder_prenet_dropout > 0.0:
+                # Use precomputed dropout mask for performance
+                mask = self.parameters["dropout_masks"][i]
+                # Slice mask to match current sequence length [seq_len, hidden_size]
+                seq_len = hidden_states.shape[1]
+                mask_sliced = mask[:seq_len, :]
+                # Expand mask to match batch dimension [batch, seq_len, hidden_size]
+                batch_size = hidden_states.shape[0]
+                mask_expanded = ttnn.unsqueeze(mask_sliced, 0)  # [1, seq_len, hidden_size]
+                mask_expanded = ttnn.repeat(mask_expanded, [batch_size, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+                # Apply mask: hidden_states = (mask == 1) * hidden_states * scale
+                hidden_states = ttnn.multiply(
+                    ttnn.where(mask_expanded == 1, hidden_states, 0),
+                    self.dropout_scale,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
 
         # PHASE 3: Final projection (L1 output)
         hidden_states = ttnn.linear(

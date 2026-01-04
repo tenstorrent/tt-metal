@@ -12,6 +12,13 @@ Pipeline:
 2. Encoder: Same tokenized input → TTNN vs PyTorch encoder PCC
 3. Decoder: PyTorch encoder output → TTNN vs PyTorch decoder PCC
 4. Postnet: PyTorch decoder output → TTNN vs PyTorch postnet PCC
+
+Setup:
+    cd /home/ttuser/ssinghal/PR-fix/speecht5_tts_final/new/tt-metal
+    export TT_METAL_HOME=$(pwd) && export PYTHONPATH=$(pwd) && source python_env/bin/activate
+
+Usage:
+    python models/experimental/speecht5_tts/tests/test_end_to_end_pcc.py
 """
 
 import sys
@@ -83,13 +90,40 @@ def test_end_to_end_pcc():
     # Load HF model for reference
     hf_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
 
-    # Disable dropout in HF model for fair comparison
-    hf_model.speecht5.decoder.prenet.encode_positions.dropout.p = 0.0
+    # Disable ALL dropout in HF model for fair comparison
+    hf_model.speecht5.decoder.prenet.encode_positions.dropout.p = 0.0  # Positional dropout
+    hf_model.speecht5.decoder.prenet.config.speech_decoder_prenet_dropout = 0.0  # Prenet consistent dropout
+
+    # IMPORTANT: Monkey-patch HF's _consistent_dropout to actually skip dropout when p=0.0
+    # HF's implementation zeros out values with p=0.0 (where(mask==1, x, 0) with all-zero mask)
+    # but subsequent layer biases add back non-zero values, which is different from "no dropout"
+    original_consistent_dropout = hf_model.speecht5.decoder.prenet._consistent_dropout
+
+    def patched_consistent_dropout(inputs_embeds, p):
+        if p == 0.0:
+            return inputs_embeds  # Skip dropout entirely
+        return original_consistent_dropout(inputs_embeds, p)
+
+    hf_model.speecht5.decoder.prenet._consistent_dropout = patched_consistent_dropout
 
     # Load PyTorch reference models
     pytorch_encoder = load_encoder_ref()
     pytorch_decoder = load_decoder_from_huggingface()
     pytorch_postnet = load_postnet_ref()
+
+    # Disable dropout on pytorch_decoder too (it loads a fresh HF model with default settings)
+    pytorch_decoder.prenet.config.speech_decoder_prenet_dropout = 0.0  # Prenet consistent dropout
+    pytorch_decoder.prenet.encode_positions.dropout.p = 0.0  # Positional dropout
+
+    # Monkey-patch pytorch_decoder's _consistent_dropout too
+    original_pt_consistent_dropout = pytorch_decoder.prenet._consistent_dropout
+
+    def patched_pt_consistent_dropout(inputs_embeds, p):
+        if p == 0.0:
+            return inputs_embeds  # Skip dropout entirely
+        return original_pt_consistent_dropout(inputs_embeds, p)
+
+    pytorch_decoder.prenet._consistent_dropout = patched_pt_consistent_dropout
 
     # Setup TTNN device
     device = ttnn.open_device(device_id=0, l1_small_size=24576)
@@ -126,7 +160,7 @@ def test_end_to_end_pcc():
         reduction_factor=2,
         speech_decoder_prenet_units=256,
         speech_decoder_prenet_layers=2,
-        speech_decoder_prenet_dropout=0.5,
+        speech_decoder_prenet_dropout=0.0,  # Disabled for fair PCC comparison with HF
     )
     max_sequence_length = 384
 
@@ -199,11 +233,12 @@ def test_end_to_end_pcc():
     decoder_seq_len = 10  # Same as in other tests
 
     # Create mel input (random but deterministic)
-    torch.manual_seed(42)
+    torch.manual_seed(123)  # Use different seed to avoid interference with speaker_embeddings
     decoder_input = torch.randn(batch_size, decoder_seq_len, 80)  # mel bins
 
-    # Speaker embeddings (random but deterministic)
-    speaker_embeddings = torch.randn(batch_size, 512)
+    # IMPORTANT: Reuse the SAME speaker_embeddings that was used for TTNN preprocessing (line 135)
+    # The TTNN decoder precomputes normalized speaker embeddings, so we MUST use the same values
+    # speaker_embeddings is already defined above (line 135) with torch.manual_seed(42)
 
     print(f"Decoder input (mel) shape: {decoder_input.shape}")
     print(f"Speaker embeddings shape: {speaker_embeddings.shape}")
