@@ -434,9 +434,6 @@ void reduce_cb(
     uint32_t cb_out,
     bool use_prev_reduce,
     uint32_t cb_length_t) {
-    reconfig_data_format(cb_in, cb_scaler);
-    pack_reconfig_data_format(cb_out);
-
     // Single reduce call with lambda that conditionally accumulates
     compute_kernel_lib::reduce<reduce_type, REDUCE_DIM>(
         cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(cb_length_t), {},

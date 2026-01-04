@@ -17,7 +17,12 @@ void MAIN {
     // REDUCE_OP/DIM is expected to come from add_define
     // For REDUCE_COL: tiles arrive in N C W_skip H W_chunk order
     // Chunk size auto-detected via DEST_AUTO_LIMIT (matches reader via shared defines)
-    compute_kernel_lib::reduce(
+    // NONE: First operation after hw_startup, no reconfig needed
+    compute_kernel_lib::reduce<
+        REDUCE_OP,
+        REDUCE_DIM,
+        compute_kernel_lib::ReduceInputMode::STREAMING,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         tt::CBIndex::c_0,  // input CB
         tt::CBIndex::c_2,  // scaler CB
         tt::CBIndex::c_3,  // output CB

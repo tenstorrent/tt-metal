@@ -122,7 +122,8 @@ void MAIN {
 
     constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W =
+        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
@@ -288,7 +289,7 @@ void MAIN {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
-                        mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                            mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
 #else
                             mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
 #endif
@@ -313,7 +314,11 @@ void MAIN {
 
                 // Partial/E[x]
                 cb_wait_front(cb_x, out_block_hw_normal);
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_x, cb_scaler, cb_ex_partial, compute_kernel_lib::TileShape::grid(out_block_h_actual, block_w));
                 cb_pop_front(cb_x, out_block_hw_normal);
 
@@ -322,7 +327,11 @@ void MAIN {
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external,
                     cb_scaler_global,
                     cb_ex_global,
@@ -434,7 +443,11 @@ void MAIN {
 
                 // Partial-Var(x)
                 cb_wait_front(cb_xmm, out_block_hw_normal);
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::PRELOADED,
+                    compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_xmm,
                     cb_scaler,
                     cb_ex2_partial,
@@ -444,7 +457,11 @@ void MAIN {
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                compute_kernel_lib::reduce<
+                    REDUCE_OP,
+                    REDUCE_DIM,
+                    compute_kernel_lib::ReduceInputMode::STREAMING,
+                    compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external,
                     cb_scaler_global,
                     cb_ex2_global,

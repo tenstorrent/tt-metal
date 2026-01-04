@@ -16,9 +16,6 @@
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    reconfig_data_format(cb_in, cb_bcast_scaler);
-    pack_reconfig_data_format(cb_max);
-
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(

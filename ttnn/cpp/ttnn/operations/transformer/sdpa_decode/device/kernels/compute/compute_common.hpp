@@ -78,7 +78,11 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
-    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+    compute_kernel_lib::reduce<
+        pool_type,
+        reduce_dim,
+        compute_kernel_lib::ReduceInputMode::PRELOADED,
+        compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols), {}, [&]() {
             if (do_eltwise_max) {
                 // At this point, DST[0] contains the reduced value for the current row

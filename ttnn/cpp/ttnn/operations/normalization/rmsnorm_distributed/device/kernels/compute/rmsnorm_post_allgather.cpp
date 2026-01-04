@@ -78,9 +78,6 @@ void MAIN {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
-        reconfig_data_format(cb_stats, cb_reduce);
-        pack_reconfig_data_format(cb_var);
-
         /*
          * Reduce stats input.
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
