@@ -18,7 +18,7 @@ Tensor Randn::invoke(
     const Layout layout,
     const MemoryConfig& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    uint32_t seed) {
+    std::optional<uint32_t> seed) {
     auto tensor = ttnn::prim::randn(shape, dtype, layout, memory_config, device, compute_kernel_config, seed);
     if (layout != Layout::TILE) {
         tensor = ttnn::to_layout(tensor, layout);

@@ -67,7 +67,7 @@ RandnDeviceOperation::invoke(
     const MemoryConfig& memory_config,
     MeshDevice& device,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    const uint32_t seed) {
+    const std::optional<uint32_t> seed) {
     return {
         operation_attributes_t{
             shape,
@@ -83,3 +83,26 @@ RandnDeviceOperation::invoke(
 }
 
 }  // namespace ttnn::operations::randn
+
+namespace ttnn::prim {
+ttnn::operations::randn::RandnDeviceOperation::tensor_return_value_t randn(
+    const ttnn::Shape& shape,
+    DataType dtype,
+    Layout layout,
+    const MemoryConfig& memory_config,
+    MeshDevice& device,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<uint32_t> seed) {
+    using OperationType = ttnn::operations::randn::RandnDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            shape,
+            dtype,
+            layout,
+            memory_config,
+            std::addressof(device),
+            init_device_compute_kernel_config(device.arch(), compute_kernel_config, MathFidelity::HiFi4),
+            seed},
+        OperationType::tensor_args_t{});
+}
+}  // namespace ttnn::prim

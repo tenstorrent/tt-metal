@@ -15,7 +15,7 @@ struct Randn {
         Layout layout = Layout::TILE,
         const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-        uint32_t seed = 0);
+        std::optional<uint32_t> seed = 0);
 };
 }  // namespace ttnn::operations::randn
 

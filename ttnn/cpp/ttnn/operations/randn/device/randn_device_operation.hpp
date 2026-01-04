@@ -17,7 +17,7 @@ struct RandnDeviceOperation {
         const MemoryConfig memory_config;
         MeshDevice* device;
         const DeviceComputeKernelConfig compute_kernel_config;
-        uint32_t seed;
+        std::optional<uint32_t> seed;
     };
 
     struct tensor_args_t {};
@@ -63,11 +63,18 @@ struct RandnDeviceOperation {
         const MemoryConfig& memory_config,
         MeshDevice& device,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-        uint32_t seed);
+        std::optional<uint32_t> seed);
 };
 
 }  // namespace ttnn::operations::randn
 
 namespace ttnn::prim {
-constexpr auto randn = ttnn::register_operation<"ttnn::prim::randn", ttnn::operations::randn::RandnDeviceOperation>();
+ttnn::operations::randn::RandnDeviceOperation::tensor_return_value_t randn(
+    const ttnn::Shape& shape,
+    DataType dtype,
+    Layout layout,
+    const MemoryConfig& memory_config,
+    MeshDevice& device,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<uint32_t> seed);
 }  // namespace ttnn::prim

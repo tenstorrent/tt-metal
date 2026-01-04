@@ -14,10 +14,9 @@ namespace ttnn::operations::randn {
 using namespace tt;
 using namespace tt::tt_metal;
 
-std::mt19937 rng(std::time(nullptr));
 std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
 
-auto get_random_seed() -> uint32_t { return distribution(rng); }
+auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }
 
 RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -39,6 +38,7 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
+    const uint32_t tmp_rand_tile_size = tile_size(out_data_format);
 
     constexpr uint32_t in_out_num_tiles = 2;
 
@@ -48,11 +48,19 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
             .set_page_size(dst_cb_id, dtype_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    const uint32_t tmp_rand_num_tiles = std::max(units_per_core_group_1, units_per_core_group_2) + 1;
+
+    constexpr uint32_t tmp_rand_cb_id = CBIndex::c_1;
+    CircularBufferConfig cb_tmp_rand_config =
+        CircularBufferConfig(tmp_rand_num_tiles * tmp_rand_tile_size, {{tmp_rand_cb_id, out_data_format}})
+            .set_page_size(tmp_rand_cb_id, tmp_rand_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_rand_config);
+
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/randn/device/kernels/";
     std::vector<uint32_t> writer_compile_time_args{dst_cb_id};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_standard_normal.cpp";
-    const std::vector<uint32_t> compute_compile_time_args{dst_cb_id};
+    const std::vector<uint32_t> compute_compile_time_args{dst_cb_id, tmp_rand_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_standard_normal.cpp";
 
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
@@ -73,11 +81,15 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
         ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
+                                       // generated number out of range [from, to)
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_defines,
         });
+
+    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
+                                                             : std::mt19937(std::time(nullptr));
 
     uint32_t tile_offset = 0;
     for (int i = 0; i < cores.size(); ++i) {
@@ -91,10 +103,9 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
             TT_THROW("Core not in specified core ranges");
         }
 
-        // Each core has its own seed to increase the number of generated random numbers
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        uint32_t seed = get_random_seed(rng);
 
-        std::vector<uint32_t> compute_runtime_args = {seed, tile_offset, units_per_core};
+        std::vector<uint32_t> compute_runtime_args = {seed, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
@@ -120,10 +131,13 @@ void RandnDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const uint32_t output_addr = output.buffer()->address();
 
+    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
+                                                             : std::mt19937(std::time(nullptr));
+
     for (int i = 0; i < cores.size(); ++i) {
         {
             auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
-            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+            runtime_args[0] = get_random_seed(rng);
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);

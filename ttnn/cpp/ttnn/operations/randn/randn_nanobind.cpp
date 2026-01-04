@@ -2,13 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "randn_pybind.hpp"
+#include "randn_nanobind.hpp"
 
-#include "ttnn-pybind/decorators.hpp"
+#include <cstdint>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+
+#include "ttnn-nanobind/decorators.hpp"
 #include "randn.hpp"
 
 namespace ttnn::operations::randn {
-void bind_randn_operation(py::module& pymodule) {
+void bind_randn_operation(nb::module_& mod) {
     std::string doc =
         R"doc(
         Generates a tensor with the given shape, filled with random values from a standard normal distribution.
@@ -28,7 +33,7 @@ void bind_randn_operation(py::module& pymodule) {
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to ttnn.bfloat16.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
-            seed (int, optional): An optional seed to initialize the random number generator for reproducible results. Defaults to 0.
+            seed (int, optional): An optional seed to initialize the random number generator for reproducible results. Defaults to None.
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
@@ -36,10 +41,10 @@ void bind_randn_operation(py::module& pymodule) {
 
     using OperationType = decltype(ttnn::randn);
     bind_registered_operation(
-        pymodule,
+        mod,
         ttnn::randn,
         doc,
-        ttnn::pybind_overload_t{
+        ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const ttnn::Shape& shape,
                MeshDevice& device,
@@ -47,16 +52,16 @@ void bind_randn_operation(py::module& pymodule) {
                const Layout layout,
                const MemoryConfig& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-               uint32_t seed) {
+               std::optional<uint32_t> seed) {
                 return self(shape, device, dtype, layout, memory_config, compute_kernel_config, seed);
             },
-            py::arg("shape"),
-            py::arg("device"),
-            py::kw_only(),
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("layout") = Layout::TILE,
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
-            py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("seed") = 0});
+            nb::arg("shape"),
+            nb::arg("device"),
+            nb::kw_only(),
+            nb::arg("dtype") = DataType::BFLOAT16,
+            nb::arg("layout") = Layout::TILE,
+            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+            nb::arg("compute_kernel_config") = std::nullopt,
+            nb::arg("seed") = std::nullopt});
 }
 }  // namespace ttnn::operations::randn

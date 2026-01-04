@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "ttnn-pybind/pybind_fwd.hpp"
-
-namespace py = pybind11;
+#include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace ttnn::operations::randn {
-void bind_randn_operation(py::module& pymodule);
+namespace nb = nanobind;
+void bind_randn_operation(nb::module_& mod);
 }  // namespace ttnn::operations::randn
