@@ -9,8 +9,7 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #else
 #include "api/dataflow/dataflow_api.h"
 
@@ -94,5 +93,4 @@ void kernel_main() {
 #endif
 }
 #if defined(COMPILE_FOR_TRISC)
-}  // namespace NAMESPACE
 #endif

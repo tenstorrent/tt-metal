@@ -30,8 +30,7 @@ void hacky_sync(uint32_t sync_num, uint32_t wait_cycles, uint32_t sync_addr) {
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #endif
     uint32_t sync_wait_cycles = get_arg_val<uint32_t>(0);
     uint32_t sync_address     = get_arg_val<uint32_t>(1);

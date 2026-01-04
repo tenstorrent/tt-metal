@@ -12,8 +12,7 @@
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #endif
 
     // Conditionally enable using defines for each trisc

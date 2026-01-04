@@ -13,8 +13,7 @@
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #endif
 
     uint32_t a = get_arg_val<uint32_t>(0);

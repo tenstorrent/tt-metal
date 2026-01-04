@@ -6,8 +6,7 @@
 
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
 #else
 void kernel_main() {
 #endif
