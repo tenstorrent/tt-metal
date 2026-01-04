@@ -112,7 +112,6 @@ Checks: >
   -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-convert-member-functions-to-static,
-  -readability-else-after-return,
   -readability-enum-initial-value,
   -readability-function-size,
   -readability-identifier-length,
@@ -190,6 +189,10 @@ CheckOptions:
     value: false
   - key: performance-unnecessary-copy-initialization.AllowedTypes
     value: "^MemoryPin$"
+  - key: readability-else-after-return.WarnOnUnfixable
+    value: false
+  - key: readability-else-after-return.WarnOnConditionVariables
+    value: false
 
 FormatStyle: 'file'
 
