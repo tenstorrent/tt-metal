@@ -525,11 +525,6 @@ void kernel_main() {
                 in_reader_indices_cb_id>(core_nhw_index);
 
         } else {
-            // volatile tt_l1_ptr uint16_t* reader_l1_ptr =
-            // reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(in_reader_indices_cb_id));
-            // for(uint32_t index = 0; index < reader_page_size /2; index++) {
-            //     DPRINT <<index<<": "<<reader_l1_ptr[index]<<ENDL();
-            // }
             cb_wait_front(in_reader_indices_cb_id, 1);
         }
     }
