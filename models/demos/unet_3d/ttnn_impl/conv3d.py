@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,81 +9,64 @@ import torch
 import ttnn
 
 
-def pad_dimension_t(x0: ttnn.Tensor) -> ttnn.Tensor:
-    """Pad the T (depth) dimension of a 5D tensor by 1 on each side.
-    THis is used to implement 'same' padding for 3D convolutions with kernel size 3.
-    This is needed since as of now, ttnn.conv3d does not support 'same' padding along T dimension.
-    """
-    x_old_shape = x0.shape
-    x0 = ttnn.reshape(x0, (x_old_shape[0], x_old_shape[1], x_old_shape[2] * x_old_shape[3], x_old_shape[4]))
-    x1 = ttnn.to_layout(x0, ttnn.ROW_MAJOR_LAYOUT)
-    x2 = ttnn.to_memory_config(x1, ttnn.DRAM_MEMORY_CONFIG)
-    x3 = ttnn.pad(x2, [(0, 0), (1, 1), (0, 0), (0, 0)], 0, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(x2)
-    x3 = ttnn.reshape(x3, (x_old_shape[0], x_old_shape[1] + 2, x_old_shape[2], x_old_shape[3], x_old_shape[4]))
-    return x3
+def pad_dimension_t(x: ttnn.Tensor, padding_z) -> ttnn.Tensor:
+    if padding_z == 0:
+        return x
+    x_old_shape = x.shape
+    x0 = ttnn.reshape(x, (x_old_shape[0], x_old_shape[1], x_old_shape[2] * x_old_shape[3], x_old_shape[4]))
+    x1 = ttnn.pad(
+        x0, [(0, 0), (padding_z, padding_z), (0, 0), (0, 0)], 0, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    ttnn.deallocate(x0)
+    return ttnn.reshape(
+        x1, (x_old_shape[0], x_old_shape[1] + 2 * padding_z, x_old_shape[2], x_old_shape[3], x_old_shape[4])
+    )
 
 
-def get_block_size_conv3d(C_in, C_out, K, T, H, W):
-    return T * H * W + (K**3) * (T + H + W) * C_in
+def get_conv3d_confignew(in_channels, out_channels, kernel_size, grid_size):
+    config_to_blocking = {
+        # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+        (32, 32, 3): (32, 32, 1, 1, 16),
+        (32, 64, 3): (32, 32, 2, 2, 16),
+        (64, 64, 3): (32, 32, 1, 1, 16),
+        (64, 128, 3): (32, 64, 1, 1, 16),
+        (128, 128, 3): (64, 64, 1, 1, 16),
+        (128, 256, 3): (64, 64, 1, 1, 8),
+        (384, 128, 3): (128, 64, 1, 1, 4),
+        (192, 64, 3): (64, 32, 4, 4, 8),
+        (96, 32, 3): (32, 32, 2, 2, 8),
+        (32, 32, 1): (32, 32, 4, 4, 16),
+        # does not occur in model run for testing
+        (64, 32, 3): (32, 32, 2, 8, 8),
+    }
 
-
-def get_conv3d_config(C_in, C_out, K, T, H, W, grid_size):
-    C_in_block = max((C_in + 31) // 32 * 32, 128)
-    C_in_block = min(C_in_block, C_in)
-    C_out_block = max((C_out + 31) // 32 * 32, 128)
-    C_out_block = min(C_out_block, C_out)
-
-    t_out_o = 32
-    h_out_o = 32
-    w_out_o = 32
-
-    L1_FREE = 0.01 * 1024 * 1024  # 1.3 MB
-    is_free = True
-    while is_free:
-        is_free = False
-        if get_block_size_conv3d(C_in_block, C_out_block, K, t_out_o * 2, h_out_o, w_out_o) < L1_FREE:
-            t_out_o *= 2
-            is_free = True
-        if get_block_size_conv3d(C_in_block, C_out_block, K, t_out_o, h_out_o * 2, w_out_o) < L1_FREE:
-            h_out_o *= 2
-            is_free = True
-        if get_block_size_conv3d(C_in_block, C_out_block, K, t_out_o, h_out_o, w_out_o * 2) < L1_FREE:
-            w_out_o *= 2
-            is_free = True
-
-    C_in_block = 32
-    C_out_block = 32
-    t_out_o = 1
-    h_out_o = 2
-    w_out_o = 16
+    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), (32, 32, 1, 1, 1))
+    # default blocking if not found
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     return ttnn.Conv3dConfig(
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        T_out_block=t_out_o,
-        W_out_block=w_out_o,
-        H_out_block=h_out_o,
+        T_out_block=T_out_block,
+        W_out_block=W_out_block,
+        H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
         compute_with_storage_grid_size=grid_size,
     )
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, ALIGNMENT=16):
+def prepare_conv3d_weights(mesh_device, weight, bias, C_in_block, ALIGNMENT=32):
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
     w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    ALIGN_PAD = ALIGNMENT - C_in % ALIGNMENT
+    ALIGN_PAD = (ALIGNMENT - C_in % ALIGNMENT) % ALIGNMENT
     if C_in % ALIGNMENT != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
+        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD), "constant", 0)
 
     # Reshape weights so that num_C_in_blocks is the first dimension
     kD, kH, kW, C_in_aligned, out_channels = w.shape
-
-    C_in_block = 32
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
+    assert C_in_aligned % C_in_block == 0
     num_C_in_blocks = C_in_aligned // C_in_block
-    assert num_C_in_blocks * C_in_block == C_in_aligned
 
     # Kernel expects num_C_in_blocks to be the first dimension to stride over it
     w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
@@ -117,16 +100,14 @@ def prepare_conv3d_weights(mesh_device, weight, bias, ALIGNMENT=16):
 
 class Conv3D:
     def __init__(self, device, in_channels: int, out_channels: int, kernel_size: int = 3):
+        assert kernel_size % 2 == 1, "Only odd kernel sizes are supported"
         self.in_channels = in_channels
+        self.in_channels_padding = (32 - in_channels % 32) % 32
         self.out_channels = out_channels
-        self.groups = 1
-        # self.padding = [0, 1, 1]
-        if kernel_size == 3:
-            self.padding = [0, 1, 1]
-        elif kernel_size == 1:
-            self.padding = [0, 0, 0]
-        else:
-            raise ValueError("Unsupported kernel size")
+        self.out_channels_padding = (32 - out_channels % 32) % 32
+        padding = (kernel_size - 1) // 2
+        self.padding = [0, padding, padding]
+        self.padding_z = padding
         self.grid_size = device.compute_with_storage_grid_size()
         self.kernel_size = [kernel_size, kernel_size, kernel_size]
 
@@ -138,47 +119,48 @@ class Conv3D:
             packer_l1_acc=False,
         )
 
-    def init_params(self, device, params_dict: dict[str, torch.Tensor], module_prefix: Optional[str] = None):
+        self.conv3d_config = get_conv3d_confignew(
+            self.in_channels + self.in_channels_padding,
+            self.out_channels + self.out_channels_padding,
+            kernel_size,
+            self.grid_size,
+        )
+
+    def load_state_dict(self, device, params_dict: dict[str, torch.Tensor], module_prefix: Optional[str] = None):
         weight_tensor = params_dict[f"{module_prefix}.weight"] if module_prefix else params_dict["weight"]
-        bias_tensor = None
+        weight_tensor = torch.nn.functional.pad(
+            weight_tensor, (0, 0, 0, 0, 0, 0, 0, 0, 0, self.out_channels_padding), "constant", 0
+        )
 
         if f"{module_prefix}.bias" in params_dict or (not module_prefix and "bias" in params_dict):
             bias_tensor = params_dict[f"{module_prefix}.bias"] if module_prefix else params_dict["bias"]
+            bias_tensor = torch.nn.functional.pad(bias_tensor, (0, self.out_channels_padding), "constant", 0)
         self.weight, self.bias = prepare_conv3d_weights(
             mesh_device=device,
             weight=weight_tensor,
             bias=bias_tensor,
-            # conv_config=self.conv_config,
+            C_in_block=self.conv3d_config.C_in_block,
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # format N, D, H, W, C
-        conv_config = get_conv3d_config(
-            self.in_channels,
-            self.out_channels,
-            self.kernel_size[0],
-            x.shape[1],
-            x.shape[2],
-            x.shape[3],
-            self.grid_size,
-        )
-
-        if self.kernel_size[0] == 3:
-            x = pad_dimension_t(x)
-        out = ttnn.experimental.conv3d(
-            input_tensor=x,
+        N, D, H, W, C = x.shape
+        x0 = pad_dimension_t(x, self.padding_z)
+        x1 = ttnn.experimental.conv3d(
+            input_tensor=x0,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             kernel_size=self.kernel_size,
-            output_channels=self.out_channels,
+            output_channels=self.out_channels + self.out_channels_padding,
             stride=[1, 1, 1],
             dilation=[1, 1, 1],
             dtype=ttnn.bfloat16,
-            # output_layout=ttnn.ROW_MAJOR_LAYOUT,
             compute_kernel_config=self.compute_kernel_config,
-            groups=self.groups,
+            groups=1,
             padding=self.padding,
-            config=conv_config,
-            memory_config=None,
+            config=self.conv3d_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        return out
+        ttnn.deallocate(x0)
+
+        # self.check_torch(x, x4)
+        return x1

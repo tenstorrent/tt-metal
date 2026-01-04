@@ -1,61 +1,56 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 
 
-def max_pool3d(x: ttnn.Tensor, kernel_size: int, stride: int, padding: int) -> ttnn.Tensor:
-    """
-    3D max pooling implemented using two 2D max pooling operations.
-    It is done by first reshaping to combine the depth and batch dimensions,
-    then performing 2D max pooling on height and width, reshaping back,
-    and finally performing 2D max pooling on depth and the combined height-width dimension.
-    """
+def max_pool3d(x: ttnn.Tensor, kernel_size: int) -> ttnn.Tensor:
     N, D, H, W, C = x.shape
-    x = ttnn.reshape(x, (N * D, H, W, C))
-    x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-    output_reshaped = ttnn.max_pool2d(
-        input_tensor=x,
+    H_out = H // kernel_size
+    W_out = W // kernel_size
+    D_out = D // kernel_size
+    x0 = ttnn.reshape(x, (1, 1, N * D * H * W, C))
+    deallocate_input = x0.buffer_address() != x.buffer_address()
+    x1 = ttnn.max_pool2d(
+        input_tensor=x0,
         batch_size=N * D,
         input_h=H,
         input_w=W,
         channels=C,
         kernel_size=[kernel_size, kernel_size],
-        stride=[stride, stride],
-        padding=[padding, padding],
+        stride=[kernel_size, kernel_size],
+        padding=[0, 0],
         dilation=[1, 1],
         ceil_mode=False,
-        memory_config=None,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        deallocate_input=False,
+        deallocate_input=deallocate_input,
         reallocate_halo_output=True,
         dtype=x.dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    H_out = (H + 2 * padding - kernel_size) // stride + 1
-    W_out = (W + 2 * padding - kernel_size) // stride + 1
-    output_reshaped = ttnn.reshape(output_reshaped, (N, D, H_out * W_out, C))
-    out = ttnn.to_layout(output_reshaped, ttnn.ROW_MAJOR_LAYOUT)
-    out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-    out = ttnn.max_pool2d(
-        input_tensor=out,
+    if deallocate_input:
+        ttnn.deallocate(x0)
+
+    x2 = ttnn.max_pool2d(
+        input_tensor=x1,
         batch_size=N,
         input_h=D,
         input_w=H_out * W_out,
         channels=C,
         kernel_size=[kernel_size, 1],
-        stride=[stride, 1],
-        padding=[padding, 0],
+        stride=[kernel_size, 1],
+        padding=[0, 0],
         dilation=[1, 1],
         ceil_mode=False,
-        memory_config=None,
-        # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         deallocate_input=True,
         reallocate_halo_output=True,
         dtype=x.dtype,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    D_out = (D + 2 * padding - kernel_size) // stride + 1
-    out = ttnn.reshape(out, (N, D_out, H_out, W_out, C))
-    return out
+    ttnn.deallocate(x1)
+    y = ttnn.reshape(x2, (N, D_out, H_out, W_out, C))
+    # check_torch(x, y)
+    return y
