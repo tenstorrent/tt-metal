@@ -135,8 +135,8 @@ FactoryParameters get_factory_parameters(
         kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
     // For TILE_LAYOUT output, we need to align to TILE_WIDTH instead of FACE_WIDTH
-    uint32_t effective_tile_width_for_output =
-        (output_layout == Layout::TILE) ? tt::constants::TILE_WIDTH : tt::constants::FACE_WIDTH;
+    uint32_t effective_tile_width_for_output = tt::constants::TILE_WIDTH;
+    // (output_layout == Layout::TILE) ? tt::constants::TILE_WIDTH : tt::constants::FACE_WIDTH;
     uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / effective_tile_width_for_output);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
@@ -231,20 +231,21 @@ uint32_t calculate_L1_usage(
 
     uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
 
-    uint32_t in_cb_sz = 0;
-    if (return_indices) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-    } else {
-        if (params.is_wide_reduction) {
-            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        } else {
-            in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        }
-    }
+    // uint32_t in_cb_sz = 0;
+    // if (return_indices) {
+    //     in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+    // } else {
+    //     if (params.is_wide_reduction) {
+    //         in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+    //     } else {
+    //         in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+    //     }
+    // }
 
-    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
-    uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = params.multi_buffering_factor;
+    uint32_t num_pages_to_8 = 1;
+
+    uint32_t in_cb_pagesize = tt::tile_size(params.data_format);
+    uint32_t in_cb_npages = params.multi_buffering_factor * params.in_ntiles_c * num_pages_to_8;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
     uint32_t in_cb_config_1_size = 0;
 
@@ -295,9 +296,21 @@ uint32_t calculate_L1_usage(
         out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
     }
 
+    const uint32_t mul_cb_pagesize = tile_size(params.data_format);
+    const uint32_t mul_cb_npages =
+        std::min(params.in_ntiles_c * num_pages_to_8, 8u);  // Max 8 tiles per width (because of dest)
+    const uint32_t mul_cb_size = mul_cb_pagesize * mul_cb_npages;
+
+    const uint32_t weight_cb_pagesize = tile_size(params.data_format);
+    const uint32_t weight_cb_npages =
+        std::min(params.in_ntiles_c * num_pages_to_8, 8u);  // Max 8 tiles per width (because of dest)
+    const uint32_t weight_cb_size = weight_cb_pagesize * weight_cb_npages;
+
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
            total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
-           sliding_window::align_buffer(out_idx_cb_config_size);
+           sliding_window::align_buffer(out_idx_cb_config_size) + pre_tilize_cb_size +
+           sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size) +
+           mul_cb_size + weight_cb_size;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

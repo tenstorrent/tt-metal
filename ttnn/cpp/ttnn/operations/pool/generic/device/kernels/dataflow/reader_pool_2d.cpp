@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -211,6 +211,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
+    uint32_t MAX_EFFECTIVE_TILES = (kernel_h * kernel_w * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
+    if (MAX_EFFECTIVE_TILES > 3) {
+        MAX_EFFECTIVE_TILES = 3;
+    }
+    constexpr uint32_t effective_tiles = (kernel_h * kernel_w * in_ntiles_c * 32 + 1023) / 1024;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
         max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
@@ -297,7 +302,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         if constexpr (!is_large_kernel) {
             if (reader_id == 0 || !return_indices) {
                 noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
+                cb_push_back(in_cb_id, MAX_EFFECTIVE_TILES);
             }
             if constexpr (reader_id == 1 && return_indices) {
                 constexpr uint32_t num_faces_in_output_tile = 2;
@@ -424,6 +429,12 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(46);
+
+    // Bias-related compile-time args (positions 49-51, after weight TensorAccessorArgs at 48)
+    constexpr bool has_bias = (bool)get_compile_time_arg_val(49);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(50);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(51);
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
@@ -450,7 +461,7 @@ void kernel_main() {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    if constexpr (true) {
         if constexpr (reader_id == 0) {
             fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             cb_push_back(clear_value_cb_id, 1);
@@ -484,12 +495,205 @@ void kernel_main() {
             down_left_wrap_inc_cb_id,
             up_left_wrap_inc_cb_id>();
     }
+    if constexpr (reader_id == 0) {
+        // Calculate in_ntiles_c (number of channel tiles) from in_c
+        constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
+
+        // Get num_shards_c from compile-time arg 47 (number of channel shards/cores)
+        constexpr uint32_t num_shards_c = get_compile_time_arg_val(47);
+        constexpr uint32_t total_tile_cols = num_shards_c * in_ntiles_c;
+
+        // Calculate weight_ntiles matching prepare_conv2d_weights face-based layout
+        // rows_per_stick = ceil(channels_per_core / FACE_SIZE)
+        // total_rows = kernel_h * kernel_w * rows_per_stick
+        // padded_rows = round_up(total_rows, TILE_HEIGHT)
+        // weight_ntiles = (padded_rows / TILE_HEIGHT) * in_ntiles_c
+        constexpr uint32_t weight_rows_per_stick = (in_ntiles_c * TILE_WIDTH + FACE_WIDTH - 1) / FACE_WIDTH;
+        constexpr uint32_t weight_total_rows = kernel_h * kernel_w * weight_rows_per_stick;
+        constexpr uint32_t weight_padded_rows = ((weight_total_rows + TILE_HEIGHT - 1) / TILE_HEIGHT) * TILE_HEIGHT;
+        constexpr uint32_t weight_ntiles_height = weight_padded_rows / TILE_HEIGHT;
+        constexpr uint32_t weight_ntiles = weight_ntiles_height * in_ntiles_c;
+
+        const uint32_t weight_tile_nbytes = get_tile_size(weight_cb_id);
+
+        // Get common runtime args
+        uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(0);
+        bool is_sender = get_arg_val<uint32_t>(1) != 0;
+
+        if (is_sender) {
+            // ============================================================
+            // SENDER PATH - Read from DRAM and multicast to receivers
+            // ============================================================
+
+            // Get sender-specific runtime args
+            uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
+            uint32_t weights_mcast_dest_noc_start_y = get_arg_val<uint32_t>(3);
+            uint32_t weights_mcast_dest_noc_end_x = get_arg_val<uint32_t>(4);
+            uint32_t weights_mcast_dest_noc_end_y = get_arg_val<uint32_t>(5);
+            uint32_t weights_mcast_num_dests = get_arg_val<uint32_t>(6);
+            uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(7);
+            uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(8));
+            uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(9));
+
+            // Get starting column tile_id from arg 10 (always provided by all sharding modes)
+            // - HEIGHT_SHARDED: start_col_tile_id = 0 (all cores use same weights)
+            // - WIDTH_SHARDED: start_col_tile_id = core_idx * in_ntiles_c (each core different channels)
+            // - BLOCK_SHARDED: start_col_tile_id = col_idx * in_ntiles_c (each column different channels)
+            uint32_t start_col_tile_id = get_arg_val<uint32_t>(10);
+
+            // Set up semaphore pointers
+            volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
+            noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+
+            volatile tt_l1_ptr uint32_t* weights_mcast_sender_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_sender_semaphore_addr);
+
+            uint64_t weights_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+                weights_mcast_dest_noc_start_x,
+                weights_mcast_dest_noc_start_y,
+                weights_mcast_dest_noc_end_x,
+                weights_mcast_dest_noc_end_y,
+                weights_mcast_receiver_semaphore_addr);
+
+            // Set up TensorAccessor and reserve CB
+            // TensorAccessorArgs starts at 48 (after num_shards_c at 47)
+            constexpr auto s_weight_args = TensorAccessorArgs<48>();
+            const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+
+            cb_reserve_back(weight_cb_id, weight_ntiles);
+            uint32_t weight_l1_addr = get_write_ptr(weight_cb_id);
+            uint32_t weights_start_address = weight_l1_addr;
+
+            // Read all weight tiles from DRAM using 2D tile iteration
+            // Weight tensor is laid out as [padded_rows, padded_cols] where tiles are stored row-major
+            // Each core reads in_ntiles_c columns and weight_ntiles_height rows
+            for (uint32_t row = 0; row < weight_ntiles_height; row++) {
+                for (uint32_t col = 0; col < in_ntiles_c; col++) {
+                    // Calculate global tile ID for this (row, col) position
+                    // Tiles are stored row-major: tile_id = row * total_cols + col
+                    uint32_t global_tile_id = row * total_tile_cols + start_col_tile_id + col;
+
+                    noc_async_read_tile(global_tile_id, s_weight, weight_l1_addr);
+                    weight_l1_addr += weight_tile_nbytes;
+                }
+            }
+            noc_async_read_barrier();
+
+            // Calculate total size for multicast
+            uint32_t weights_block_size_bytes = weight_ntiles * weight_tile_nbytes;
+
+            // Only do multicast if there are receivers
+            if (weights_mcast_num_dests > 0) {
+                // Wait for all receivers to signal ready
+                noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
+                noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
+
+                // Multicast weights to all receivers
+                uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
+                    weights_mcast_dest_noc_start_x,
+                    weights_mcast_dest_noc_start_y,
+                    weights_mcast_dest_noc_end_x,
+                    weights_mcast_dest_noc_end_y,
+                    weights_start_address);
+
+                noc_async_write_multicast(
+                    weights_start_address,
+                    weights_multicast_data_addr,
+                    weights_block_size_bytes,
+                    weights_mcast_num_cores,
+                    true);
+
+#ifdef ARCH_BLACKHOLE
+                noc_async_writes_flushed();
+#endif
+
+                // Signal receivers that data is ready
+                noc_semaphore_set_multicast(
+                    weights_mcast_receiver_semaphore_addr,
+                    weights_mcast_receiver_semaphore_noc_addr,
+                    weights_mcast_num_cores,
+                    false);
+            }
+
+            cb_push_back(weight_cb_id, weight_ntiles);
+
+        } else {
+            // ============================================================
+            // RECEIVER PATH - Wait for multicast from sender
+            // ============================================================
+
+            // Get receiver-specific runtime args
+            uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(2);
+            uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(3);
+            uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(4));
+            uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(5));
+
+            // Set up semaphore pointers
+            volatile tt_l1_ptr uint32_t* weights_mcast_receiver_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_receiver_semaphore_addr);
+
+            uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(
+                weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
+
+            // Reserve space in CB (data will be written by multicast)
+            cb_reserve_back(weight_cb_id, weight_ntiles);
+
+            // Set receiver semaphore to INVALID (waiting state)
+            noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+            // Atomically increment sender's semaphore (signal "I'm ready")
+            noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+
+            // Wait for sender to multicast data and set semaphore to VALID
+            noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+
+            // Push to CB (data is now in CB from multicast)
+            cb_push_back(weight_cb_id, weight_ntiles);
+        }
+
+        // ============================================================
+        // BIAS READING (after weight reading, for depthwise conv with bias)
+        // ============================================================
+        // Bias is read once per core, tiles are reused for all output positions
+        // Uses same channel sharding as weights - start_col_tile_id determines offset
+        if constexpr (has_bias) {
+            // Bias TensorAccessorArgs starts at compile-time arg 52
+            constexpr auto s_bias_args = TensorAccessorArgs<52>();
+            const uint32_t bias_tile_nbytes = get_tile_size(bias_cb_id);
+
+            // Get bias base address from runtime arg 0 (same location as weight address)
+            // Note: For bias, we use a separate runtime arg or derive from weight pattern
+            // For now, bias address is passed after weight args - at position 11
+            uint32_t bias_addr_dram_base = get_arg_val<uint32_t>(11);
+
+            const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_tile_nbytes);
+
+            // Get start_col_tile_id from runtime args (same as weight) - position 10 for senders
+            // For receivers, they should read from the same column offset
+            uint32_t bias_start_tile_id = get_arg_val<uint32_t>(10);
+
+            // Reserve space in bias CB
+            cb_reserve_back(bias_cb_id, bias_ntiles);
+            uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+
+            // Read all bias tiles for this core's channel shard
+            for (uint32_t tile_idx = 0; tile_idx < bias_ntiles; ++tile_idx) {
+                uint32_t global_tile_id = bias_start_tile_id + tile_idx;
+                noc_async_read_tile(global_tile_id, s_bias, bias_l1_addr);
+                bias_l1_addr += bias_tile_nbytes;
+            }
+            noc_async_read_barrier();
+
+            cb_push_back(bias_cb_id, bias_ntiles);
+        }
+    }
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
-        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
-        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
-        // between the first and second face.
+        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the
+        // values for the remaining faces will be reused from the first one. This is safe here because there’s no
+        // difference between the first and second face.
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }

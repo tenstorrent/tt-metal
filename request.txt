@@ -1,0 +1,16 @@
+Hey Claude, I want to implement depthwise conv2d op.
+- You can read https://github.com/tenstorrent/tt-metal/issues/25523 for some details (note that issue is relatively old and not everything is written, use it just as idea)
+- Idea is to use pool kernels and approach to have more performant depthwise conv2d (currently it fallbacks on regular conv2d)
+- I made some tests in tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py::test_groups_vs_pool2 from models (Mobilenetv2 and Yolov10x)
+- I have some PoC on skrstic/depthwise-opt - not that branch is quite old and pool kernels are changed a lot from then - use it just like idea
+- I want detailed plan how to make this work - at the end I want to call ttnn.conv2d and have performant approach which will use pool kernels, but in some steps you can use ttnn.avgpool2d (because it uses sum)
+- At the end I also want to work with weights, but for smaller steps, you can assume that weights are just 1s
+- I want to have this step by step, and for each step I want to know what is the goal of step, how it will be achieved, what needs to be changed, how it would be tested and in what status will be whole feature after this. Also, at the beggining of the document, I want some progress bar / status to know where are we now, to be able to grab a context
+- Take as much time you need, to make super plan
+
+feedback1:
+
+phase 1 step 1: for testing, you can run python -m tracy -r -m -p "pytest tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py::test_groups_vs_pool2”, and look at column DEVICE KERNEL DURATION on optimizedconvnew for getting baseline numbers
+phase 1 step 2: maybe you can reuse pool kernels, with conditions for depthwiseconv2d
+phase 1 step 3: don’t do this, not necessary
+phase 2 step 4: reuse pool kernel (please look at branch I gave you, you have idea there)

@@ -60,6 +60,14 @@ bool is_1d_depthwise_conv(
     uint32_t image_height,
     bool has_bias);
 
+bool is_2d_depthwise_conv(
+    uint32_t groups,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_height,
+    uint32_t kernel_width,
+    uint32_t image_width);
+
 struct SkipMcast {
     bool skip_activation_mcast;
     bool skip_weights_mcast;
@@ -80,7 +88,8 @@ sliding_window::ParallelConfig determine_parallel_config(
     bool enable_channels_padding,
     bool is_shard_height_tile_multiple = true,
     bool is_shard_width_tile_multiple = true,
-    uint32_t act_block_h_override = 0);
+    uint32_t act_block_h_override = 0,
+    uint32_t groups = 1);
 
 sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
@@ -170,9 +179,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     BufferType input_tensor_buffer_type,
     const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
     std::optional<uint32_t> act_block_h_override = std::nullopt,
-    bool enable_channels_padding = true,
-    bool is_shard_height_tile_multiple = true,
-    bool is_shard_width_tile_multiple = true);
+    uint32_t groups = 1);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype);
@@ -247,7 +254,8 @@ shard_or_reshard_tensor_if_required(
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    uint32_t groups = 1);
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,

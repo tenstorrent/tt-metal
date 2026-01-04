@@ -33,6 +33,38 @@ except ImportError:
         pass
 
 
+def convert_activation_to_unary_with_param(activation):
+    """
+    Convert activation string to ttnn.UnaryWithParam if needed.
+    Returns the activation as-is if it's already a UnaryWithParam or None.
+    """
+    if activation is None or hasattr(activation, "op_type"):
+        return activation
+
+    if isinstance(activation, str):
+        activation_map = {
+            "relu": ttnn.UnaryOpType.RELU,
+            "relu6": ttnn.UnaryOpType.RELU6,
+            "silu": ttnn.UnaryOpType.SILU,
+            "abs": ttnn.UnaryOpType.ABS,
+            "sigmoid": ttnn.UnaryOpType.SIGMOID,
+            "tanh": ttnn.UnaryOpType.TANH,
+            "gelu": ttnn.UnaryOpType.GELU,
+            "sqrt": ttnn.UnaryOpType.SQRT,
+            "mish": ttnn.UnaryOpType.MISH,
+            "hardsigmoid": ttnn.UnaryOpType.HARDSIGMOID,
+            "softplus": ttnn.UnaryOpType.SOFTPLUS,
+            "log": ttnn.UnaryOpType.LOG,
+        }
+
+        if activation.lower() in activation_map:
+            return ttnn.UnaryWithParam(activation_map[activation.lower()])
+        else:
+            raise ValueError(f"Unsupported activation string: {activation}")
+
+    return activation
+
+
 def torch_fast_pcc(golden, calculated, pcc=0.99):
     golden = torch.Tensor(golden).flatten()
     calculated = torch.Tensor(calculated).flatten()
@@ -5223,3 +5255,201 @@ def test_conv_fp32_accum_auto_default(device,torch_tensor_map):
     assert not torch.equal(tt_output_auto_torch, tt_output_explicit_false_torch), \
         "Auto-default output matches explicit fp32_dest_acc_en=False. " \
         "This suggests FP32 accumulation was NOT enabled (unexpected)."
+
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
+    (
+        # HEIGHT_SHARDED test
+        (1, 64, 64, 4, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, None, False, False),
+        # WIDTH_SHARDED test
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
+        # BLOCK_SHARDED test
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
+        # BLOCK_SHARDED with bfp8 weights
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, False, False),
+        # BLOCK_SHARDED with bfp4 weights
+        # (1, 64, 64, 8, 8, 64, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat16, None, False, False),
+        # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True),
+
+        # (10, 32, 32, 40, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", False, True), # mobilenetv2 - 1.
+        # (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 2.
+        # (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 3.
+        # (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # mobilenetv2 - 4.
+
+        # (1, 320, 320, 32, 32, 320, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "silu", False, False), # yolov10x - 1.
+        # (1, 640, 640, 40, 40, 640, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "silu", True, True), # yolov10x - 2. - fails with memory issue
+
+        # # EfficientNet-B0 Depthwise Convolution Configurations
+        # # All configurations have in_channels=out_channels=groups (depthwise characteristic)
+        # (1, 32, 32, 112, 112, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 1.
+        # (1, 96, 96, 112, 112, 96, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 2.
+        # (1, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 3.
+        # (1, 144, 144, 56, 56, 144, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 4. - fails with memory issue
+        # (1, 240, 240, 28, 28, 240, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 5. - fails with memory issue
+        # (1, 240, 240, 28, 28, 240, (3, 3), (2, 2), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 6. - fails with memory issue
+        # (1, 480, 480, 14, 14, 480, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 7. - fails with memory issue
+        # (1, 480, 480, 14, 14, 480, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 8. - fails with memory issue
+        # (1, 672, 672, 14, 14, 672, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 9.
+        # (1, 672, 672, 14, 14, 672, (5, 5), (2, 2), (2, 2), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, True), # EfficientNet-B0 - 10.
+        # (1, 1152, 1152, 7, 7, 1152, (5, 5), (1, 1), (2, 2), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 11.
+        # (1, 1152, 1152, 7, 7, 1152, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, None, True, False), # EfficientNet-B0 - 12.
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer):
+
+    num = 32
+    input_channels = num
+    output_channels = num
+    groups = num
+
+    torch.manual_seed(0)
+    conv_input_shape = (batch, input_channels, input_height, input_width)
+    conv_weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
+
+
+    torch_input_tensor_nchw = randomize_torch_tensor(
+        torch_tensor_map, conv_input_shape, False,
+    )
+
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    # DEBUG: Use integer weights for easier debugging - each kernel position gets stick_id
+    # for out_ch in range(conv_weight_shape[0]):
+    #     for in_ch in range(conv_weight_shape[1]):
+    #         for kh in range(conv_weight_shape[2]):
+    #             for kw in range(conv_weight_shape[3]):
+    #                 stick_id = kh * kernel[1] + kw + 1  # +1 to avoid zero values
+    #                 torch_weight_tensor[out_ch, in_ch, kh, kw] = stick_id
+
+    conv_bias_shape = (1, 1, 1, output_channels)
+
+    # Create bias tensor before reference computation
+    torch_bias_tensor = (
+        randomize_torch_tensor(torch_tensor_map, conv_bias_shape)
+    ) * 10
+
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    torch_padded_input = torch.nn.functional.pad(
+        torch_input_tensor_nchw,
+        (padding[0], padding[0], padding[1], padding[1]),
+        mode="constant",
+        value=0,
+    )
+    ref = torch.nn.functional.conv2d(
+        torch_padded_input,
+        torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1),
+        stride=(stride[0], stride[1]),
+        padding=(0, 0),
+        dilation=(dilation[0], dilation[1]),
+        groups=groups,
+    )
+
+    # Apply activation function to reference if specified
+    act_func = get_golden_function_for_activation(activation)
+    if act_func:
+        ref = act_func(ref)
+
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=dtype,
+        mesh_mapper=None,
+        layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
+        device=device if dtype == ttnn.bfloat8_b else None,
+    )
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor,
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        mesh_mapper=None,
+    )
+    tt_bias_tensor = None
+
+    tt_bias_tensor = ttnn.from_torch(
+        torch_bias_tensor,
+        bias_dtype,  # Use the actual bias_dtype parameter
+        mesh_mapper=None,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=dtype,
+        mesh_mapper=None,
+        layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else None,
+        device=device
+    )
+
+    # Convert activation string to UnaryWithParam using helper function
+    activation = convert_activation_to_unary_with_param(activation)
+
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=shard_layout,
+        deallocate_activation=False,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weight_double_buffer,
+        output_layout=ttnn.TILE_LAYOUT,
+        activation=activation,
+        transpose_shards=False,
+        enable_kernel_stride_folding=False,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    out = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(kernel[0], kernel[1]),
+        stride=(stride[0], stride[1]),
+        padding=(padding[0], padding[1]),
+        dilation=(dilation[0], dilation[1]),
+        batch_size=batch,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=groups,
+        return_weights_and_bias=False,
+        return_output_dim=False,
+        dtype=dtype,
+    )
+
+    torch.set_printoptions(threshold=float('inf'), linewidth=200, precision=4, sci_mode=False)
+
+    torch_output = ttnn.to_torch(out)
+
+    out_h = (input_height + 2 * padding[0] - kernel[0]) // stride[0] + 1
+    out_w = (input_width + 2 * padding[1] - kernel[1]) // stride[1] + 1
+
+    # Reshape from [1, 1, batch * out_h * out_w, channels] to [batch, out_h, out_w, channels]
+    torch_output_reshaped = torch_output.reshape(batch, out_h, out_w, input_channels)
+
+    # Permute from NHWC to NCHW format: [batch, out_h, out_w, channels] -> [batch, channels, out_h, out_w]
+    torch_output_final = torch_output_reshaped.permute(0, 3, 1, 2)
+
+    # print("ttnn output:")
+    # print(torch_output_final)
+    # print("reference output:")
+    # print(ref)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_final, ref, pcc=0.99)
+    logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
+
+    if not passing:
+        print("PCC comparison failed!")
+
+    assert passing, f"PCC check failed: {pcc_msg}"

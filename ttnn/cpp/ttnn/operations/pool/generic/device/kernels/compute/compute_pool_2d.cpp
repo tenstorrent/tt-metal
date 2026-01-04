@@ -9,10 +9,16 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/bcast.h"
+#include "tt-metalium/constants.hpp"
+// #include "tt-metalium/tt_backend_api_types.hpp"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -67,6 +73,14 @@ void MAIN {
     constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
     constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
     constexpr uint32_t pad_l = get_compile_time_arg_val(30);
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(31);
+    constexpr uint32_t mul_cb_id = get_compile_time_arg_val(32);
+
+    // Bias-related compile-time args for depthwise conv
+    constexpr bool has_bias = (bool)get_compile_time_arg_val(33);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(34);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(35);
+    constexpr uint32_t bias_temp_cb_id = get_compile_time_arg_val(36);  // Intermediate buffer for tilization
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 
@@ -116,6 +130,11 @@ void MAIN {
         max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
     }
 
+    // Initialize SFPU for activation functions if present
+#ifdef SFPU_OP_INIT_ACTIVATION
+    SFPU_OP_INIT_ACTIVATION
+#endif
+
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
@@ -141,6 +160,18 @@ void MAIN {
         cb_push_back(in_idx_cb_id, 1);
     }
 
+    // Calculate weight_ntiles using effective tiles formula (matches reader kernel)
+    // This accounts for packing of kernel positions and channels
+    constexpr uint32_t weight_ntiles = (window_size_hw * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
+
+    // Wait for all weight tiles to be available before starting computation
+    cb_wait_front(weight_cb_id, weight_ntiles);
+
+    // Wait for bias tiles to be available (read by reader kernel)
+    if constexpr (has_bias) {
+        cb_wait_front(bias_cb_id, bias_ntiles);
+    }
+
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
@@ -150,28 +181,47 @@ void MAIN {
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-    for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
-        const bool reader0 = !(use_split_reader && (n & 0x1));
-        const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-        const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
+    uint32_t sticks_left = num_out_sticks_this_core;
+    uint32_t n = 0;
+    uint32_t curr_in_cb_id = in_cb_id_0;
+    uint32_t MAX_EFFECTIVE_TILES = (window_size_hw * in_ntiles_c * TILE_WIDTH + 1023) / 1024;
+    if (MAX_EFFECTIVE_TILES > 3) {
+        MAX_EFFECTIVE_TILES = 3;
+    }
+
+    while (sticks_left) {
+        const bool reader0 = !(split_reader && (n & 0x1));
+        const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         if (is_output_tiled && !tilize_stick_counter) {
-            cb_reserve_back(out_cb_id, in_ntiles_c);
+            // When has_bias=true, tilize into bias_temp_cb first, then add bias and pack to out_cb
+            // This avoids CB ordering issues when there are multiple tile rows
+            if constexpr (has_bias) {
+                cb_reserve_back(bias_temp_cb_id, in_ntiles_c);
+            } else {
+                cb_reserve_back(out_cb_id, in_ntiles_c);
+            }
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
             const bool first_c_block = c_i == 0;
             const uint32_t tiles_to_reduce =
                 tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
+            uint32_t num_pages_to_8 = 8 / tiles_to_reduce;
+            if (in_nblocks_c > 1) {
+                num_pages_to_8 = 1;
+            }
+            num_pages_to_8 = 1;
+            const uint32_t effective_tiles = (window_size_hw * tiles_to_reduce * 32 + 1023) / 1024;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t output_faces =
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
             if constexpr (!is_output_tiled && !return_indices) {
-                cb_reserve_back(out_cb_id, output_faces);
+                cb_reserve_back(out_cb_id, (output_faces + 1) / 2);
             }
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
@@ -228,19 +278,117 @@ void MAIN {
                     max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
                         data_dst_idx, index_dst_idx);
                 } else {
-                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        curr_in_cb_id,
-                        curr_scalar_cb_id,
-                        tiles_to_reduce,
-                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                        num_faces_in_input_tile,
-                        face_r_dim);
-                    for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                    UNPACK((llk_unpack_tilize_uninit(curr_in_cb_id)));
+                    // UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(curr_in_cb_id, weight_cb_id)));
+                    PACK((pack_untilize_uninit(mul_cb_id)));
+                    reconfig_data_format(mul_cb_id, curr_in_cb_id, curr_scalar_cb_id, weight_cb_id);
+                    mul_tiles_init(curr_in_cb_id, weight_cb_id);
+
+                    tile_regs_acquire();
+
+                    while (num_pages_to_8 > sticks_left) {
+                        num_pages_to_8--;
+                    }
+
+                    for (uint32_t j = 0; j < num_pages_to_8; j++) {
+                        cb_wait_front(curr_in_cb_id, MAX_EFFECTIVE_TILES);
+                        // UNPACK((tt::compute::common::print_full_tile(weight_cb_id, 0)));
+                        for (uint32_t i = 0; i < effective_tiles; ++i) {
+                            // Calculate weight tile index based on current channel block
+                            // For depthwise conv, each channel tile (c_i * max_tiles_per_iter + i)
+                            // corresponds to its weight tile at the same index
+                            uint32_t weight_tile_idx = c_i * max_tiles_per_iter + i;
+                            mul_tiles(curr_in_cb_id, weight_cb_id, i, weight_tile_idx, j * tiles_to_reduce + i);
+                        }
+                        cb_pop_front(curr_in_cb_id, MAX_EFFECTIVE_TILES);
+
+                        if (last_c_block) {
+                            curr_in_cb_id = (curr_in_cb_id == in_cb_id_0) ? in_cb_id_1 : in_cb_id_0;
+                        }
+                    }
+                    if (last_c_block) {
+                        sticks_left -= num_pages_to_8;
+                    }
+
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    for (uint32_t j = 0; j < num_pages_to_8; j++) {
+                        cb_reserve_back(mul_cb_id, MAX_EFFECTIVE_TILES);
+                        for (uint32_t i = 0; i < effective_tiles; ++i) {
+                            pack_tile(j * tiles_to_reduce + i, mul_cb_id, i);
+                        }
+                        cb_push_back(mul_cb_id, MAX_EFFECTIVE_TILES);
+                    }
+
+                    tile_regs_release();
+
+                    {
+                        reconfig_data_format(curr_in_cb_id, mul_cb_id, weight_cb_id, curr_scalar_cb_id);
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            mul_cb_id, curr_scalar_cb_id, tiles_to_reduce, num_faces_in_output_tile, face_r_dim, 1)));
+                        MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+                        if constexpr (tilize_reconfig) {
+                            if (last_c_block) {
+                                PACK((llk_pack_untilize_init<
+                                      partial_iter_output_tiles,
+                                      partial_iter_output_tiles,
+                                      false,
+                                      false,
+                                      TILE_C_DIM>(out_cb_id, 1, num_faces_in_output_tile)));
+                            } else {
+                                PACK((llk_pack_untilize_init<
+                                      max_tiles_per_iter,
+                                      max_tiles_per_iter,
+                                      false,
+                                      false,
+                                      TILE_C_DIM>(out_cb_id, 1, num_faces_in_output_tile)));
+                            }
+                        } else {
+                            PACK((llk_pack_untilize_init<
+                                  max_tiles_per_iter,
+                                  max_tiles_per_iter,
+                                  false,
+                                  false,
+                                  TILE_C_DIM>(out_cb_id, 1, num_faces_in_output_tile)));
+                        }
+                    }
+
+                    tile_regs_acquire();
+                    for (uint32_t j = 0; j < num_pages_to_8; j++) {
+                        cb_wait_front(mul_cb_id, MAX_EFFECTIVE_TILES);
+                        unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            mul_cb_id,
+                            curr_scalar_cb_id,
+                            tiles_to_reduce,
+                            0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                            num_faces_in_input_tile,
+                            face_r_dim);
+                        for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                            reduce_tile_math(j * tiles_to_reduce + math_tile_idx, num_faces_in_input_tile);
+                        }
+                        cb_pop_front(mul_cb_id, MAX_EFFECTIVE_TILES);
                     }
                 }
-                cb_pop_front(curr_in_cb_id, 1);
             }
+            // dprint_tensix_dest_reg<true>(0);
+            // dprint_tensix_dest_reg<true>(1);
+
+// Apply activation here ONLY if no bias - otherwise it's applied after bias addition (post-tilization)
+#ifdef SFPU_OP_FUNC_ACTIVATION
+            if constexpr (!has_bias) {
+                if (last_c_block) {
+                    for (uint32_t i = 0; i < partial_iter_output_tiles; ++i) {
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+                } else {
+                    for (uint32_t i = 0; i < max_tiles_per_iter; ++i) {
+                        SFPU_OP_FUNC_ACTIVATION
+                    }
+                }
+            }
+#endif
+            // dprint_tensix_dest_reg<true>(1);
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
@@ -276,13 +424,73 @@ void MAIN {
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         unpack_tilizeA_B_uninit(curr_in_cb_id);
-                        pack_reconfig_data_format(out_cb_id);
 
-                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        // ============ BIAS + ACTIVATION (post-tilization) ============
+                        // When has_bias=true, tilize into bias_temp_cb, then add bias and pack to out_cb
+                        // This avoids CB ordering issues when there are multiple tile rows
+                        if constexpr (has_bias) {
+                            // Tilize into bias_temp_cb (intermediate buffer)
+                            pack_reconfig_data_format(bias_temp_cb_id);
+                            fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, bias_temp_cb_id);
+                            fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, bias_temp_cb_id);
+                            fast_tilize_uninit(pre_tilize_cb_id, bias_temp_cb_id);
 
-                        cb_push_back(out_cb_id, in_ntiles_c);
+                            // Push tilized data to make it available for reading
+                            cb_push_back(bias_temp_cb_id, in_ntiles_c);
+
+                            // Wait for tilized data in bias_temp_cb
+                            cb_wait_front(bias_temp_cb_id, in_ntiles_c);
+
+                            tile_regs_acquire();
+
+                            // Reconfigure data format for bias addition (critical for mixed precision)
+                            reconfig_data_format(bias_temp_cb_id, bias_cb_id);
+
+                            // Initialize for bias broadcast addition
+                            add_bcast_rows_init_short(bias_temp_cb_id, bias_cb_id);
+
+                            // Load tiles from bias_temp_cb and add bias using row broadcast
+                            for (uint32_t i = 0; i < in_ntiles_c; ++i) {
+                                add_tiles_bcast_rows(bias_temp_cb_id, bias_cb_id, i, i, i);
+                            }
+
+                            // Apply activation function after bias addition
+#ifdef SFPU_OP_FUNC_ACTIVATION
+                            for (uint32_t i = 0; i < in_ntiles_c; ++i) {
+                                SFPU_OP_FUNC_ACTIVATION
+                            }
+#endif
+
+                            tile_regs_commit();
+
+                            // Pop front to consume tilized data from bias_temp_cb (reuse for next iteration)
+                            cb_pop_front(bias_temp_cb_id, in_ntiles_c);
+
+                            // Reserve space and pack bias-added tiles to out_cb (final output)
+                            // CRITICAL: Reconfigure packer for out_cb format (may be bfloat8_b)
+                            // bias_temp_cb is bfloat16 but out_cb may be bfloat8_b
+                            tile_regs_wait();
+                            pack_reconfig_data_format(out_cb_id);
+                            cb_reserve_back(out_cb_id, in_ntiles_c);
+                            for (uint32_t i = 0; i < in_ntiles_c; ++i) {
+                                pack_tile(i, out_cb_id);
+                            }
+                            tile_regs_release();
+
+                            // Push the bias-added tiles to out_cb
+                            cb_push_back(out_cb_id, in_ntiles_c);
+                        } else {
+                            // No bias - tilize directly into out_cb
+                            pack_reconfig_data_format(out_cb_id);
+                            fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                            fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+
+                            // Push the tilized output directly
+                            cb_push_back(out_cb_id, in_ntiles_c);
+                        }
+                        // ============ END BIAS + ACTIVATION ============
+
                         cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
@@ -306,13 +514,17 @@ void MAIN {
                 } else {
                     // ROW_MAJOR output: pack directly to output CB
                     if (last_c_block) {
-                        pack_untilize_dest<partial_iter_output_tiles>(
-                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        for (uint32_t i = 0; i < num_pages_to_8; i++) {
+                            pack_untilize_dest<partial_iter_output_tiles>(
+                                out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile, i * tiles_to_reduce);
+                            cb_push_back(out_cb_id, (output_faces + 1) / 2);
+                        }
                     } else {
                         pack_untilize_dest<max_tiles_per_iter>(
                             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(out_cb_id, (output_faces + 1) / 2);
                     }
-                    cb_push_back(out_cb_id, output_faces);
+                    // cb_push_back(out_cb_id, num_faces_in_output_tile * num_pages_to_8);
                     tile_regs_release();
                 }
             } else {
@@ -337,6 +549,7 @@ void MAIN {
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
+        n++;
     }
 }
 

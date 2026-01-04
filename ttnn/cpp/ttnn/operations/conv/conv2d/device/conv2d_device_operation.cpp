@@ -28,8 +28,21 @@
 
 namespace ttnn::operations::conv::conv2d {
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Check if this is a depthwise convolution
+    const auto& input_shape = args.input_tensor_shape;
+    bool is_depthwise = is_2d_depthwise_conv(
+        args.groups,
+        input_shape[3],  // input_channels
+        args.output_channels,
+        args.sliding_window_config.window_hw.first,   // kernel_height
+        args.sliding_window_config.window_hw.second,  // kernel_width
+        input_shape[2]);                              // image_width
+
+    if (is_depthwise) {
+        // Use depthwise implementation
+        return program::Conv2dDepthwiseProgramFactory{};
+    } else if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
         return program::Conv2dWidthShardedProgramFactory{};
     }  // Use regular sharded implementation

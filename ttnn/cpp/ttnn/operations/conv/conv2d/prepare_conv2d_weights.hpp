@@ -77,6 +77,14 @@ Tensor convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
+// Converts 2D depthwise convolution weights to sharded layout
+// Works for all sharding schemes:
+// - HEIGHT_SHARDED: num_channel_shards=1 (all cores use same weights)
+// - WIDTH_SHARDED: num_channel_shards=total_cores (each core gets different channels)
+// - BLOCK_SHARDED: num_channel_shards=num_cores_c (each column gets different channels)
+Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype);
+
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
