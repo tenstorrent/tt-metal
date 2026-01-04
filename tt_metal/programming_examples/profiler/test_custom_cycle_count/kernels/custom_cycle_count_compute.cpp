@@ -20,8 +20,7 @@
  * https://github.com/tenstorrent/tt-metal/issues/515#issuecomment-1548434301
  */
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     for (int i = 0; i < LOOP_COUNT; i++) {
 // Max unroll size
 #pragma GCC unroll 65534
@@ -30,4 +29,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE
