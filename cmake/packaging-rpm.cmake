@@ -43,5 +43,18 @@ set(CPACK_RPM_PACKAGE_LICENSE "Apache-2.0")
 set(CPACK_RPM_PACKAGE_VENDOR "Tenstorrent")
 set(CPACK_RPM_PACKAGE_URL "https://tenstorrent.com")
 
+# Disable brp-strip which fails on cross-compiled binaries for Tenstorrent hardware
+# The strip command can't recognize the format of these non-host architecture files
+set(CPACK_RPM_SPEC_MORE_DEFINE
+    "%define __strip /bin/true
+%define __brp_strip /bin/true
+%define __brp_strip_comment_note /bin/true
+%define __brp_strip_static_archive /bin/true
+%define debug_package %{nil}"
+)
+
 # Exclude build-id files to avoid conflicts
-set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION /usr/lib/.build-id)
+set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+    /usr/lib/.build-id
+    /usr/lib64/.build-id
+)
