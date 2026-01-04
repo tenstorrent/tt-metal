@@ -35,11 +35,13 @@ RUN mkdir -p /tmp/cba \
 # Install CI requirements - Fedora packages
 # ccache, doxygen, mold available as dnf packages
 # libxml2, libxslt, patch, which for build requirements
-RUN dnf install -y \
+# Note: doxygen/graphviz installed with --setopt=install_weak_deps=False to avoid
+# pulling in openh264 dependency chain (openh264 requires cisco repo)
+RUN dnf install -y --setopt=install_weak_deps=False doxygen graphviz && \
+    dnf install -y \
     bc \
     ccache \
     compiler-rt \
-    doxygen \
     gtest-devel \
     jq \
     libxml2 \
