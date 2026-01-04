@@ -1,9 +1,88 @@
-make sure that reshape and layout does not cause unnecesary new alocaitons
+# UNet3D
 
-rehspae: make surethe last dim stays the same
+## Platforms
+- Wormhole (single device and 2-device mesh)
 
+## Introduction
+UNet3D is a volumetric segmentation model for 3D data. This demo runs a TTNN implementation
+and includes a Torch reference, a downloadable checkpoint converted to safetensors, and an HDF5
+prediction pipeline for confocal boundary data.
 
-Use the combinat of 2d ops to implement 3d ops, e.g. maxpool and up sample
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium / TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- Installing demo dependencies:
+  ```bash
+  pip install safetensors h5py tqdm
+  ```
 
-maxpool uses 2x the mory of input so memory is bottleneck for this op, if therei s inplace version thta
-does not equire new allocation, would be make larger inputs possible to do in one pass.
+## Assets
+- Download the checkpoint and convert to safetensors:
+  ```bash
+  python models/demos/unet_3d/demo/download_models.py
+  ```
+
+- Download the validation dataset used by the default config:
+  ```bash
+  python models/demos/unet_3d/demo/download_datasets.py
+  ```
+
+  Available dataset names: `cell_boundary`, `confocal_boundary`
+  Available dataset types: `validation`, `test`
+
+## How to Run
+### PCC Tests
+- Full model PCC:
+  ```bash
+  pytest models/demos/unet_3d/tests/pcc/test_model.py
+  ```
+
+- Component PCCs:
+  ```bash
+  pytest models/demos/unet_3d/tests/pcc/test_conv3d.py
+  pytest models/demos/unet_3d/tests/pcc/test_conv_block.py
+  pytest models/demos/unet_3d/tests/pcc/test_encoder.py
+  pytest models/demos/unet_3d/tests/pcc/test_decoder.py
+  pytest models/demos/unet_3d/tests/pcc/test_group_norm3d.py
+  pytest models/demos/unet_3d/tests/pcc/test_max_pool3d.py
+  pytest models/demos/unet_3d/tests/pcc/test_upsample3d.py
+  ```
+
+### Performant Model with Trace+2CQ
+#### Single Device
+```bash
+pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_segformer_e2e
+```
+
+#### 2-Device Mesh
+```bash
+pytest models/demos/unet_3d/tests/perf/test_e2e_performant.py::test_segformer_e2e_dp
+```
+
+## Demo: HDF5 Validation
+- Run the validation pipeline (uses `configs/test_confocal_boundary.json`):
+  ```bash
+  python models/demos/unet_3d/demo/validate.py
+  ```
+
+  The default config expects:
+  - Model weights at `models/demos/unet_3d/data/models/confocal_boundary.safetensors`
+  - Validation dataset at `models/demos/unet_3d/data/datasets/confocal_boundary/validation/N_420_ds2x.h5`
+  - Output H5 files in `models/demos/unet_3d/data/predictions/confocal_boundary/validation`
+
+  Update `models/demos/unet_3d/configs/test_confocal_boundary.json` to point at custom HDF5 files or to
+  change patch/stride settings.
+
+  Validation logs IoU and Dice coefficient metrics.
+
+## Demo: Tracy Perf Capture
+- Run the Tracy-enabled demo to extract a CSV perf sheet:
+  ```bash
+  python -m tracy -r -n unet3d -m pytest models/demos/unet_3d/demo/demo.py
+  ```
+
+## Details
+- TTNN model: `models/demos/unet_3d/ttnn_impl/model.py`
+- Torch model: `models/demos/unet_3d/torch_impl/model.py`
+- Runner entry point: `models/demos/unet_3d/runner/performant_runner.py`
+- Default config: `models/demos/unet_3d/configs/test_confocal_boundary.json`
