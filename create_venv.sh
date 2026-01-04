@@ -14,8 +14,23 @@ if ! command -v $PYTHON_CMD &>/dev/null; then
     exit 1
 fi
 
-echo "Getting uv and python 3.12"
-${PYTHON_CMD} -m pip install uv
+# Install uv if not already available
+if ! command -v uv &>/dev/null; then
+    echo "Installing uv..."
+    ${PYTHON_CMD} -m pip install uv
+    # Add pip's bin directory to PATH for the current session
+    USER_BIN="${HOME}/.local/bin"
+    if [[ -d "$USER_BIN" ]] && [[ ":$PATH:" != *":$USER_BIN:"* ]]; then
+        export PATH="$USER_BIN:$PATH"
+    fi
+fi
+
+# Verify uv is available
+if ! command -v uv &>/dev/null; then
+    echo "Error: uv not found in PATH after installation"
+    echo "Please ensure ~/.local/bin is in your PATH and try again"
+    exit 1
+fi
 
 # Set Python environment directory
 if [ -z "$PYTHON_ENV_DIR" ]; then
@@ -23,7 +38,8 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
 fi
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
-# Create and activate virtual environment
+# Install Python 3.12 via uv and create virtual environment
+echo "Installing Python 3.12 via uv..."
 uv python install 3.12
 uv venv $PYTHON_ENV_DIR --python 3.12
 source $PYTHON_ENV_DIR/bin/activate
@@ -32,19 +48,20 @@ source $PYTHON_ENV_DIR/bin/activate
 . ./install_dependencies.sh --source-only
 detect_os
 
+# PyTorch CPU index URL for all uv pip commands
+PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    uv pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-    uv pip install setuptools wheel==0.45.1
+    uv pip install --extra-index-url "$PYTORCH_INDEX" setuptools wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
     uv pip install --upgrade wheel setuptools
 fi
 
 echo "Installing dev dependencies"
-# need the index strategy to fallback to specified torch version buried in reqs
-uv pip install --index-strategy unsafe-best-match -r $(pwd)/tt_metal/python_env/requirements-dev.txt
+# Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
+uv pip install --extra-index-url "$PYTORCH_INDEX" --index-strategy unsafe-best-match -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 
 echo "Installing tt-metal"
 uv pip install -e .

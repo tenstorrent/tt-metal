@@ -113,8 +113,9 @@ RUN umask 000 && \
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-# Note: Debugger installation may need adaptation for Fedora
-# Skipping debugger for now as it's Ubuntu-specific
+# Install the debugger (tt-exalens) - works on Fedora as it uses pip/wheel
+RUN chmod +x ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
+    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 
 #############################################################
 

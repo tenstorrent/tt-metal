@@ -302,6 +302,18 @@ jobs:
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true
+      - name: Build and push CI Test image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: ci-test
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
       - name: Build and push Dev image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6

@@ -24,7 +24,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
+        OS_CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
@@ -299,7 +299,34 @@ prep_ubuntu_system() {
 
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
-    # TODO: Implement Red Hat family system preparation
+
+    # Fedora has modern toolchains (Clang 21, GCC 14+, CMake 3.28+) in default repos
+    # No additional repositories needed for Fedora 43+
+    if [[ "$OS_ID" == "fedora" ]]; then
+        echo "[INFO] Fedora detected - using default repositories (modern toolchains available)"
+        dnf makecache
+        return
+    fi
+
+    # For RHEL/CentOS/Rocky/Alma, we may need EPEL and additional repos
+    echo "[INFO] Enterprise Linux detected - checking for EPEL..."
+
+    # Install EPEL if not present (provides additional packages)
+    if ! rpm -q epel-release &>/dev/null; then
+        echo "[INFO] Installing EPEL repository..."
+        dnf install -y epel-release
+    fi
+
+    # For RHEL 8/9, we may need to enable CodeReady/CRB repos for development packages
+    if [[ "$OS_ID" == "rhel" ]] || [[ "$OS_ID" == "rocky" ]] || [[ "$OS_ID" == "almalinux" ]]; then
+        echo "[INFO] Enabling CodeReady Builder / CRB repository..."
+        # RHEL 8/9 uses different repo names
+        dnf config-manager --set-enabled crb 2>/dev/null || \
+        dnf config-manager --set-enabled codeready-builder-for-rhel-*-rpms 2>/dev/null || \
+        echo "[WARNING] Could not enable CRB repository - some packages may not be available"
+    fi
+
+    dnf makecache
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI

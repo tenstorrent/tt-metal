@@ -45,8 +45,13 @@ set(CPACK_RPM_PACKAGE_URL "https://tenstorrent.com")
 
 # Disable brp-strip which fails on cross-compiled binaries for Tenstorrent hardware
 # The strip command can't recognize the format of these non-host architecture files
-# Also disable RPATH checks - CMake adds MPI library paths that trigger false positives
-# TODO: Fix RPATH handling in CMake to put $ORIGIN first, then remove __brp_check_rpaths skip
+#
+# RPATH handling: tt_metal/CMakeLists.txt now correctly sets INSTALL_RPATH with $ORIGIN first,
+# followed by the ULFM MPI path (/opt/openmpi-v5.0.7-ulfm/lib) when ULFM is enabled.
+# However, __brp_check_rpaths is still skipped because:
+#   1. The ULFM path may not exist on the build host (only on target systems)
+#   2. System MPI paths added by find_package() may vary between build and target hosts
+# Once Fedora builds use only system MPI (no ULFM), the __brp_check_rpaths skip can be removed.
 set(CPACK_RPM_SPEC_MORE_DEFINE
     "%define __strip /bin/true
 %define __brp_strip /bin/true
