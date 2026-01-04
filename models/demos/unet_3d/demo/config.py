@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 
 import torch
 
@@ -21,9 +22,9 @@ def get_default_device_name() -> str:
 
 
 def load_config() -> dict:
-    with open("/root/bounty/tt-metal/models/demos/unet_3d/configs/test_confocal_boundary.json", "r") as f:
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "test_confocal_boundary.json"
+    with open(config_path, "r") as f:
         config = json.load(f)
-
     if "output_dataset" not in config:
         config["output_dataset"] = "predictions"
 
