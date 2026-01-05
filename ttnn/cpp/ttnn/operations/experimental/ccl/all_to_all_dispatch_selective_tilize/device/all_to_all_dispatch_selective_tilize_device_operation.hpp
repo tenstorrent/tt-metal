@@ -16,6 +16,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <vector>
 
 namespace ttnn::operations::experimental::ccl {
@@ -26,9 +27,24 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const uint32_t tokens_per_chunk;
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("axis", "num_links", "topology", "tokens_per_chunk");
-        auto attribute_values() const { return std::forward_as_tuple(axis, num_links, topology, tokens_per_chunk); };
+        const std::optional<CoreRangeSet> all_to_all_dispatch_core_range_set;
+        const std::optional<CoreRangeSet> selective_tilize_core_range_set;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "axis",
+            "num_links",
+            "topology",
+            "tokens_per_chunk",
+            "all_to_all_dispatch_core_range_set",
+            "selective_tilize_core_range_set");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                axis,
+                num_links,
+                topology,
+                tokens_per_chunk,
+                all_to_all_dispatch_core_range_set,
+                selective_tilize_core_range_set);
+        };
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -105,7 +121,9 @@ struct AllToAllDispatchSelectiveTilizeDeviceOperation {
         std::optional<uint32_t> axis,
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
-        uint32_t tokens_per_chunk);
+        uint32_t tokens_per_chunk,
+        const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
+        const std::optional<CoreRangeSet>& selective_tilize_core_range_set);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

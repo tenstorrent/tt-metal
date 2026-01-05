@@ -164,8 +164,16 @@ void kernel_main() {
     constexpr uint32_t sender_mcast_start_y = get_named_compile_time_arg_val("sender_mcast_start_y");
     constexpr uint32_t sender_mcast_end_x = get_named_compile_time_arg_val("sender_mcast_end_x");
     constexpr uint32_t sender_mcast_end_y = get_named_compile_time_arg_val("sender_mcast_end_y");
+    // Multicast coordinates for signaling tilizer cores that E-D table computation is complete
+    constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
+    constexpr uint32_t tilizer_mcast_start_y = get_named_compile_time_arg_val("tilizer_mcast_start_y");
+    constexpr uint32_t tilizer_mcast_end_x = get_named_compile_time_arg_val("tilizer_mcast_end_x");
+    constexpr uint32_t tilizer_mcast_end_y = get_named_compile_time_arg_val("tilizer_mcast_end_y");
+    constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
     constexpr uint32_t num_sender_cores = get_named_compile_time_arg_val("num_sender_cores");
     constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
+    constexpr uint32_t ed_table_computed_semaphore_id =
+        get_named_compile_time_arg_val("ed_table_computed_semaphore_id");
 
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
@@ -221,7 +229,6 @@ void kernel_main() {
         uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
         volatile tt_l1_ptr uint32_t* ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
 
-        DPRINT << "linearized_mesh_coord: " << linearized_mesh_coord << ENDL();
         for (uint32_t device_id = 0; device_id < dispatch_devices; device_id++) {
             uint32_t tokens_processed = 0;
             uint32_t indices_page = 0;
@@ -250,5 +257,44 @@ void kernel_main() {
                 indices_page++;
             }
         }
+
+        // Multicast the E-D table data to all tilizer cores
+        uint32_t ed_table_size = experts_per_device * dispatch_devices * l1_alignment;
+
+        // Only multicast if there are other tilizer cores to send to
+        // When num_tilizer_cores == 1 (only drain core), loopback_src will hang
+        if constexpr (num_tilizer_cores > 1) {
+            uint64_t tilizer_mcast_noc_addr = get_safe_multicast_noc_addr(
+                tilizer_mcast_start_x,
+                tilizer_mcast_start_y,
+                tilizer_mcast_end_x,
+                tilizer_mcast_end_y,
+                base_ed_table_offset);
+            noc_async_write_multicast_loopback_src(
+                base_ed_table_offset, tilizer_mcast_noc_addr, ed_table_size, num_tilizer_cores);
+            noc_async_write_barrier();
+
+            // Set local semaphore and multicast to signal E-D table computation is complete
+            uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
+            volatile tt_l1_ptr uint32_t* ed_computed_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ed_computed_sem_addr);
+            noc_semaphore_set(ed_computed_sem_ptr, 1);
+
+            uint64_t sem_mcast_addr = get_safe_multicast_noc_addr(
+                tilizer_mcast_start_x,
+                tilizer_mcast_start_y,
+                tilizer_mcast_end_x,
+                tilizer_mcast_end_y,
+                ed_computed_sem_addr);
+            noc_semaphore_set_multicast_loopback_src(ed_computed_sem_addr, sem_mcast_addr, num_tilizer_cores);
+            noc_async_write_barrier();
+        }
+        // When num_tilizer_cores == 1, data is already local, no multicast needed
+
+    } else {
+        // Non-drain tilizer cores wait for the E-D table computation to be complete
+        uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
+        noc_semaphore_wait((uint32_t*)ed_computed_sem_addr, 1);
+        DPRINT << "E-D table computation is complete" << ENDL();
     }
 }

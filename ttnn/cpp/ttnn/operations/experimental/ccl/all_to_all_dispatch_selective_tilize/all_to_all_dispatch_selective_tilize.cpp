@@ -22,7 +22,9 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
     std::optional<uint32_t> axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    uint32_t tokens_per_chunk) {
+    uint32_t tokens_per_chunk,
+    const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
+    const std::optional<CoreRangeSet>& selective_tilize_core_range_set) {
     auto* mesh_device = input_tensor.device();
 
     uint32_t num_links_ = num_links.value_or(::ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
@@ -37,7 +39,9 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchSelectiveTilize::invoke(
         axis,
         num_links_,
         topology_,
-        tokens_per_chunk);
+        tokens_per_chunk,
+        all_to_all_dispatch_core_range_set,
+        selective_tilize_core_range_set);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

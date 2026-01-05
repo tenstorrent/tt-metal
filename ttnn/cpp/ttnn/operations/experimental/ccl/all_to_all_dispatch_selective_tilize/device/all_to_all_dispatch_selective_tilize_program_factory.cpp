@@ -230,9 +230,11 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
 
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    // Default worker core range - single core for now
-    CoreRangeSet worker_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    CoreRangeSet selective_tilize_core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 1), CoreCoord(0, 1)));
+    // Use core ranges from operation attributes, or defaults if not provided
+    CoreRangeSet worker_core_range_set = operation_attributes.all_to_all_dispatch_core_range_set.value_or(
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))));
+    CoreRangeSet selective_tilize_core_range_set = operation_attributes.selective_tilize_core_range_set.value_or(
+        CoreRangeSet(CoreRange(CoreCoord(0, 1), CoreCoord(0, 1))));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     uint32_t num_cores = worker_core_range_set.num_cores();
@@ -275,6 +277,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // Create semaphores for synchronizing the tilizer and fabric kernels
     // tilizer needs to finish zero-buffering the E-D buffer before the fabric kernels can send their init semaphores
     auto ed_buffer_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, full_grid, INVALID);
+    // Semaphore for drain tilizer to signal non-drain tilizers that E-D table computation is complete
+    auto ed_table_computed_semaphore_id = tt::tt_metal::CreateSemaphore(program, selective_tilize_core_range_set, 0);
 
     auto sender_cores = corerange_to_cores(sender_core_grid);
     auto selective_tilize_cores = corerange_to_cores(selective_tilize_core_range_set);
@@ -287,12 +291,20 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     CoreCoord sender_mcast_start_logical = sender_bbox.start_coord;
     CoreCoord sender_mcast_end_logical = sender_bbox.end_coord;
 
+    // Get the bounding box of tilizer cores for multicast from drain tilizer to non-drain tilizers
+    // Used for E-D table computed signal
+    auto tilizer_bbox = selective_tilize_core_range_set.bounding_box();
+    CoreCoord tilizer_mcast_start_logical = tilizer_bbox.start_coord;
+    CoreCoord tilizer_mcast_end_logical = tilizer_bbox.end_coord;
+
     // Get device for this mesh coordinate to convert logical to physical coordinates
     auto* device = mesh_device->get_device(mesh_coordinate);
 
     // Convert to physical NOC coordinates
     auto sender_mcast_start_physical = device->worker_core_from_logical_core(sender_mcast_start_logical);
     auto sender_mcast_end_physical = device->worker_core_from_logical_core(sender_mcast_end_logical);
+    auto tilizer_mcast_start_physical = device->worker_core_from_logical_core(tilizer_mcast_start_logical);
+    auto tilizer_mcast_end_physical = device->worker_core_from_logical_core(tilizer_mcast_end_logical);
 
     // For NOC 0: start = (min_x, min_y), end = (max_x, max_y)
     // For NOC 1: coordinates are swapped
@@ -426,9 +438,15 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"sender_mcast_start_y", (uint32_t)sender_mcast_start_physical.y},
         {"sender_mcast_end_x", (uint32_t)sender_mcast_end_physical.x},
         {"sender_mcast_end_y", (uint32_t)sender_mcast_end_physical.y},
+        // Multicast coordinates for drain tilizer to non-drain tilizer synchronization
+        {"tilizer_mcast_start_x", (uint32_t)tilizer_mcast_start_physical.x},
+        {"tilizer_mcast_start_y", (uint32_t)tilizer_mcast_start_physical.y},
+        {"tilizer_mcast_end_x", (uint32_t)tilizer_mcast_end_physical.x},
+        {"tilizer_mcast_end_y", (uint32_t)tilizer_mcast_end_physical.y},
         {"num_tilizer_cores", num_tilizer_cores},
         {"num_sender_cores", num_sender_cores},
         {"ed_buffer_ready_semaphore_id", ed_buffer_ready_semaphore_id},
+        {"ed_table_computed_semaphore_id", ed_table_computed_semaphore_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};

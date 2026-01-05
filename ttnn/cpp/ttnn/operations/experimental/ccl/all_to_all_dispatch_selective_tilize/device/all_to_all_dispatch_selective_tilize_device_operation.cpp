@@ -117,13 +117,17 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::invoke(
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    uint32_t tokens_per_chunk) {
+    uint32_t tokens_per_chunk,
+    const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
+    const std::optional<CoreRangeSet>& selective_tilize_core_range_set) {
     return {
         operation_attributes_t{
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
             .tokens_per_chunk = tokens_per_chunk,
+            .all_to_all_dispatch_core_range_set = all_to_all_dispatch_core_range_set,
+            .selective_tilize_core_range_set = selective_tilize_core_range_set,
         },
         tensor_args_t{
             .input_tensor = input_tensor,

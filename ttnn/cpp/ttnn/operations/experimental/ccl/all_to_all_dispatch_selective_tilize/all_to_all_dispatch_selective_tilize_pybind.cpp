@@ -14,6 +14,7 @@
 #include "all_to_all_dispatch_selective_tilize.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -41,6 +42,8 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
             tokens_per_chunk (int, optional): the number of tokens to process per chunk. Defaults to `32`.
+            all_to_all_dispatch_core_range_set (ttnn.CoreRangeSet, optional): the core range set for all-to-all dispatch/fabric writer cores. Defaults to `None`, which uses a default single core at (0,0).
+            selective_tilize_core_range_set (ttnn.CoreRangeSet, optional): the core range set for selective tilize cores. Defaults to `None`, which uses a default single core at (0,1).
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
@@ -73,7 +76,9 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                const std::optional<uint32_t> cluster_axis,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology,
-               uint32_t tokens_per_chunk) {
+               uint32_t tokens_per_chunk,
+               const std::optional<CoreRangeSet>& all_to_all_dispatch_core_range_set,
+               const std::optional<CoreRangeSet>& selective_tilize_core_range_set) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
@@ -82,7 +87,9 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
                     cluster_axis,
                     num_links,
                     topology,
-                    tokens_per_chunk);
+                    tokens_per_chunk,
+                    all_to_all_dispatch_core_range_set,
+                    selective_tilize_core_range_set);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
@@ -92,7 +99,9 @@ void py_bind_all_to_all_dispatch_selective_tilize(py::module& module) {
             py::arg("cluster_axis") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("topology").noconvert() = std::nullopt,
-            py::arg("tokens_per_chunk") = 32});
+            py::arg("tokens_per_chunk") = 32,
+            py::arg("all_to_all_dispatch_core_range_set") = std::nullopt,
+            py::arg("selective_tilize_core_range_set") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::ccl
