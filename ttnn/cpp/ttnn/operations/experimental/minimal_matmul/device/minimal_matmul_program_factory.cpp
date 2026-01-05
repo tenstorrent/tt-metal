@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::minimal_matmul::program {
 
 namespace {
 
-inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
     (void)K;  // K not used for determining defaults currently
     uint32_t M_block_tiles = 8;
@@ -42,7 +42,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_de
 }
 
 // Build a linear order of cores along one axis for data movement, plus index of the current core
-inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
+std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
     const CoreCoord& core,
     bool transpose_core_grid,
     uint32_t axis_length,
@@ -75,17 +75,17 @@ inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
     return {order, index_of_current};
 }
 
-inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32_t index) {
+CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32_t index) {
     return order.at(index == 0 ? 0 : index - 1);
 }
 
-inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
+CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
     const uint32_t last = static_cast<uint32_t>(order.size() - 1);
     return order.at(index >= last ? last : index + 1);
 }
 
 // Append tensor accessors in a consistent order
-inline void append_accessors(
+void append_accessors(
     std::vector<uint32_t>& args,
     const Tensor& main_tensor,
     const Tensor& output_tensor,
