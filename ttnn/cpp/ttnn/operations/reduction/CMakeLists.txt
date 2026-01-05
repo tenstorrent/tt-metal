@@ -75,6 +75,9 @@ target_sources(
         manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp
         manual_seed/device/manual_seed_program_factory.cpp
+        reduce_avg_w_rm/device/reduce_avg_w_rm_device_operation.cpp
+        reduce_avg_w_rm/device/reduce_avg_w_rm_program_factory.cpp
+        reduce_avg_w_rm/reduce_avg_w_rm.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
