@@ -2,6 +2,8 @@ name: "Validate Test Count"
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ "kkabilar-APC-limit" ]
   pull_request:
     paths:
       - 'tests/ttnn/unit_tests/operations/eltwise/**'
