@@ -38,9 +38,12 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32
 }
 
 void synchronize_gradients(const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim) {
+    // If dp_dim not provided, query from ParallelizationContext
+    auto dp_axis = dp_dim.has_value() ? dp_dim : autograd::ctx().get_parallelization_context().get_dp_axis();
+
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_dim));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_axis));
         }
     }
 }

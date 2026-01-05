@@ -18,6 +18,44 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
+class ParallelizationContext {
+public:
+    // Configure from device config flags
+    // For TP+DP: dp_axis=0, tp_axis=1
+    // For TP only: tp_axis=0
+    // For DP only: dp_axis=0
+    void configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp);
+
+    // Mesh device access
+    [[nodiscard]] ttnn::distributed::MeshDevice* get_mesh_device() const {
+        return m_mesh_device;
+    }
+
+    // Axis queries
+    [[nodiscard]] std::optional<uint32_t> get_dp_axis() const {
+        return m_dp_axis;
+    }
+    [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
+        return m_tp_axis;
+    }
+
+    // Size queries (computed from mesh_device->shape())
+    [[nodiscard]] uint32_t get_dp_size() const;
+    [[nodiscard]] uint32_t get_tp_size() const;
+
+    [[nodiscard]] bool is_tp_enabled() const {
+        return m_tp_axis.has_value();
+    }
+    [[nodiscard]] bool is_dp_enabled() const {
+        return m_dp_axis.has_value();
+    }
+
+private:
+    ttnn::distributed::MeshDevice* m_mesh_device = nullptr;
+    std::optional<uint32_t> m_dp_axis = std::nullopt;
+    std::optional<uint32_t> m_tp_axis = std::nullopt;
+};
+
 class AutoContext {
 public:
     // Delete copy constructor and assignment operator to prevent copying
@@ -69,6 +107,8 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
+    [[nodiscard]] ParallelizationContext& get_parallelization_context();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -86,6 +126,8 @@ private:
     std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
+
+    ParallelizationContext m_parallelization_context;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

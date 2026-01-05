@@ -177,7 +177,7 @@ struct DeviceConfig {
     tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
     std::vector<int> device_ids{};
 
-    bool enable_ddp = false;
+    bool enable_dp = false;
     bool enable_tp = false;
 };
 
@@ -188,22 +188,18 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
         return config;
     }
 
-    config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
+    // Support both old "enable_dp" and new "enable_dp" naming
+    config.enable_dp = device_node["enable_dp"].as<bool>(device_node["enable_ddp"].as<bool>(false));
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
 
-    if (config.enable_ddp && config.enable_tp) {
-        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
-    }
-
     auto mesh_shape_node = device_node["mesh_shape"];
-    bool multidevice = config.enable_ddp || config.enable_tp;
+    bool multidevice = config.enable_dp || config.enable_tp;
     if (multidevice && !mesh_shape_node) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
     if (mesh_shape_node) {
-        assert(mesh_shape_node.size() == 2);
-        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
-        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
+        const std::vector<uint32_t> mesh_shape = mesh_shape_node.as<std::vector<uint32_t>>();
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape);
     }
 
     auto device_ids_node = device_node["device_ids"];
@@ -296,7 +292,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
+        std::filesystem::current_path().string() + "/configs/training_configs/training_llama8b_tp_dp_galaxy.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -339,10 +335,10 @@ int main(int argc, char **argv) {
         fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
     }
 
-    if (device_config.enable_ddp || device_config.enable_tp) {
+    if (device_config.enable_dp || device_config.enable_tp) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
-        fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
+        fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_dp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
     }
@@ -428,12 +424,16 @@ int main(int argc, char **argv) {
 
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
     // enable fabric config for 3-tier architecture, tp, ddp
-    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
+    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_dp) {
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();
+
+    // Configure parallelization context from device config
+    ttml::autograd::ctx().get_parallelization_context().configure(
+        device, device_config.enable_dp, device_config.enable_tp);
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -452,7 +452,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -472,8 +472,12 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                if (device_config.enable_ddp) {
-                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+                auto &pctx = ttml::autograd::ctx().get_parallelization_context();
+
+                if (pctx.is_dp_enabled()) {
+                    // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
+                    const auto mapper =
+                        ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/0, pctx.get_dp_axis());
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -641,7 +645,7 @@ int main(int argc, char **argv) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
 
-    if (device_config.enable_ddp) {
+    if (device_config.enable_dp) {
         auto num_devices = static_cast<uint32_t>(device->num_devices());
         if (training_config.batch_size % num_devices != 0) {
             throw std::logic_error(fmt::format(
@@ -711,14 +715,14 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
-                    ttml::core::distributed::synchronize_gradients(parameters);
+                if (device_config.enable_dp && !is_three_tier_training(multihost_config)) {
+                    ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
                 if (training_config.use_clip_grad_norm) {
-                    if (device_config.enable_tp) {
-                        throw std::logic_error("Clip grad norm is not supported with TP");
-                    }
+                    // if (device_config.enable_tp) {
+                    //     throw std::logic_error("Clip grad norm is not supported with TP");
+                    // }
                     ttml::core::clip_grad_norm(parameters, training_config.clip_grad_norm_max_norm);
                 }
                 optimizer->step();
