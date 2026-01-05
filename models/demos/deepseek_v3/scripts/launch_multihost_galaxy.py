@@ -57,8 +57,11 @@ class HostConfig:
 # Mapping from config type to MESH_DEVICE value
 MESH_DEVICE_MAP = {"2x": "DUAL", "4x": "QUAD"}
 
-# Special command that resets the Galaxy (kills python, resets devices, clears shm)
-RESET_COMMAND = "sudo pkill -9 python; tt-smi -glx_reset --snapshot_no_tty; sudo rm -rf /dev/shm/*"
+# Special alias commands that bypass normal job setup
+COMMAND_ALIASES: dict[str, str] = {
+    "reset": "tt-smi -glx_reset --snapshot_no_tty; sudo rm -rf /dev/shm/*",
+    "nuke": "sudo pkill -9 python; tt-smi -glx_reset --snapshot_no_tty; sudo rm -rf /dev/shm/*",
+}
 
 # Common environment variables for all hosts
 COMMON_ENV: tuple[tuple[str, str], ...] = (
@@ -165,7 +168,6 @@ def build_inner_command(
     config_type: str,
     host_cfg: HostConfig,
     tt_metal_home: str,
-    is_reset: bool = False,
 ) -> str:
     """
     Build the inner bash command that will be executed via tt-run.
@@ -175,16 +177,11 @@ def build_inner_command(
         config_type: "2x" or "4x"
         host_cfg: Host configuration
         tt_metal_home: Path to TT_METAL_HOME
-        is_reset: Whether this is the special reset command
 
     Returns:
         The inner bash command string
     """
     venv_path = os.path.join(tt_metal_home, "python_env", "bin", "activate")
-
-    if is_reset:
-        return f"source {shlex.quote(venv_path)} && {RESET_COMMAND}"
-
     cmd_str = shlex.join(command)
     mesh_device = MESH_DEVICE_MAP[config_type]
 
@@ -207,7 +204,8 @@ def build_tt_run_command(
     Build the full tt-run command.
 
     Args:
-        command: List of command arguments (or ["reset"] for reset)
+        command: List of command arguments (single-word commands in COMMAND_ALIASES
+                 are expanded to their shell equivalents)
         config_type: "2x" or "4x"
         hostname: Override hostname
         tt_metal_home: Override TT_METAL_HOME
@@ -233,10 +231,14 @@ def build_tt_run_command(
 
     assert os.path.exists(rank_binding_path), f"Rank binding file not found: {rank_binding_path}"
 
-    is_reset = command == ["reset"]
-
     mpi_args = build_mpi_args(cfg)
-    inner_bash_cmd = build_inner_command(command, config_type, host_cfg, tt_metal_home, is_reset)
+
+    # Check for alias commands (e.g., "reset", "nuke")
+    if len(command) == 1 and command[0] in COMMAND_ALIASES:
+        venv_path = os.path.join(tt_metal_home, "python_env", "bin", "activate")
+        inner_bash_cmd = f"source {shlex.quote(venv_path)} && {COMMAND_ALIASES[command[0]]}"
+    else:
+        inner_bash_cmd = build_inner_command(command, config_type, host_cfg, tt_metal_home)
 
     tt_run_cmd = ["tt-run", "--rank-binding", rank_binding_path, "--mpi-args", mpi_args, "bash", "-c", inner_bash_cmd]
 
@@ -306,7 +308,8 @@ def run_galaxy_command(
     Run a command on the Galaxy cluster.
 
     Args:
-        command: List of command arguments (or ["reset"] for reset)
+        command: List of command arguments (single-word commands in COMMAND_ALIASES
+                 are expanded to their shell equivalents)
         config_type: "2x" or "4x"
         dryrun: If True, only print the command without executing
         hostname: Override hostname
@@ -317,6 +320,13 @@ def run_galaxy_command(
     """
     if tt_metal_home is None:
         tt_metal_home = os.environ.get("TT_METAL_HOME", os.getcwd())
+
+    # Warn about nuke killing all Python processes
+    if command == ["nuke"]:
+        print("\n" + "!" * 60)
+        print("  WARNING: 'nuke' will kill ALL Python processes on all hosts!")
+        print("  This may affect other users or unrelated work.")
+        print("!" * 60 + "\n")
 
     tt_run_cmd, cfg, host_cfg, hostname = build_tt_run_command(command, config_type, hostname, tt_metal_home)
 
@@ -361,6 +371,7 @@ def main(args: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Launch a job on multi-host Galaxy via tt-run.",
         usage="%(prog)s [-d] {2x,4x} -- command [args...]",
+        epilog="Special commands: 'reset' (reset devices), 'nuke' (reset + kill all python)",
     )
     parser.add_argument(
         "-d",
