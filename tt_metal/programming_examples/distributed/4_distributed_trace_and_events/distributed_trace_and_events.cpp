@@ -267,8 +267,8 @@ int main() {
 
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;
-    for (int i = 0; i < add_dst_vec.size(); i++) {
-        pass &= (static_cast<float>(add_dst_vec[i]) == workload_0_src0_val + workload_0_src1_val);
+    for (auto val : add_dst_vec) {
+        pass &= (static_cast<float>(val) == workload_0_src0_val + workload_0_src1_val);
     }
     for (int i = 0; i < mul_sub_dst_vec.size(); i++) {
         if (i < mul_sub_dst_vec.size() / 2) {

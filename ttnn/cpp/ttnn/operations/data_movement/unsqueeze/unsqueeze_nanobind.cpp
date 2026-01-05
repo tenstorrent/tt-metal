@@ -40,16 +40,13 @@ void bind_unsqueeze(nb::module_& mod) {
         Equivalent pytorch code:
 
         .. code-block:: python
+
             input_tensor = torch.rand((1,1,256), dtype=torch.bfloat16)
             output_tensor = torch.unsqueeze(input_tensor, 2) # tensor of shape (1,1,1,256), where at dimension 2 we added a new dim of size 1
-
-
 
         Args:
             * :attr:`input_tensor`: Input Tensor.
             * :attr:`dim`: Dim where we want to unsqueeze (add a new dimension of size 1)
-
-
         )doc");
 }
 

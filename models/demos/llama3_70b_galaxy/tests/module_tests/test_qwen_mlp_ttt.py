@@ -77,6 +77,7 @@ def test_qwen_mlp_ttt_inference(seq_len, batch_size, mesh_device, reset_seeds):
         mesh_device,
         n_tensors=3,
         n_layers=1,
+        is_qwen=True,
     )
     mesh_device.set_sub_device_stall_group(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]

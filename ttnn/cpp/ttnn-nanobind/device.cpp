@@ -17,6 +17,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -35,6 +36,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
@@ -351,6 +353,23 @@ void device_module(nb::module_& m_device) {
     )doc");
     m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
+    )doc");
+    m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
+        Clear the in-memory kernel compilation hash lookup cache.
+
+        Note:
+            This only clears the in-memory HashLookup cache.
+            The compiler rebuilds binaries when:
+            1. Kernel hash is NOT in HashLookup (cleared by this function), AND
+            2. Binaries do not exist on disk (or persistent cache is disabled)
+
+            To also clear disk-cached
+                kernel binaries, you must delete the files in:
+                ~/.cache/tt-metal-cache/<git_hash>/<build_id>/kernels/
+
+        Example:
+            >>> import ttnn
+            >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics

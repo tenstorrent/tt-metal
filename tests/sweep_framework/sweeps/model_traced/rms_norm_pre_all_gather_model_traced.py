@@ -66,12 +66,12 @@ def run(
     input_tensor = ttnn.from_torch(
         torch_input, dtype=input_a_dtype, layout=input_layout, device=device, memory_config=input_a_memory_config
     )
-    # Determine weight layout based on dtype - bfloat8_b and bfloat4_b require TILE layout
-    weight_layout = ttnn.TILE_LAYOUT if input_b_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
+    # Weight tensor should always be ROW_MAJOR layout and bfloat16 dtype
+    # This is required by rms_norm_post_all_gather operation
     weight_tensor = ttnn.from_torch(
         torch_weight_padded,
-        dtype=input_b_dtype or input_a_dtype,
-        layout=weight_layout,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=input_b_memory_config or input_a_memory_config,
     )

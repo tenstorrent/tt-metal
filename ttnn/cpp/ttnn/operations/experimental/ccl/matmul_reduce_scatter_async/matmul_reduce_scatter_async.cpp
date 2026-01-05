@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
+
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -21,7 +22,7 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     const bool transpose_a,
     const bool transpose_b,
@@ -30,8 +31,8 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
-    return ttnn::operations::experimental::ccl::matmul_reduce_scatter_async(
+    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+    auto output_tensors = ttnn::prim::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
         persistent_intermediate_buffer,
@@ -44,8 +45,8 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
         num_links,
         memory_config_rs,
         intermediate_memory_config_rs,
-        topology_,
-        subdevice_id,
+        usable_topology,
+        sub_device_id,
         memory_config_mm,
         transpose_a,
         transpose_b,
@@ -54,6 +55,7 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
         activation,
         compute_kernel_config,
         core_grid);
+    return {output_tensors.mm, output_tensors.reduce_scatter};
 }
 
 }  // namespace ttnn::operations::experimental::ccl

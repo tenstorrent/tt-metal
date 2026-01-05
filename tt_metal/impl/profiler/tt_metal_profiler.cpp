@@ -456,9 +456,9 @@ void setSyncInfo(
     ZoneScoped;
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
-    if (profiler_state_manager->sync_set_devices.find(device_id) == profiler_state_manager->sync_set_devices.end()) {
+    if (!profiler_state_manager->sync_set_devices.contains(device_id)) {
         profiler_state_manager->sync_set_devices.insert(device_id);
-        if (deviceDeviceSyncInfo.find(device_id) != deviceDeviceSyncInfo.end()) {
+        if (deviceDeviceSyncInfo.contains(device_id)) {
             std::string parentInfoNew =
                 parentInfo + fmt::format("->{}: ({},{})", device_id, syncInfo.second, syncInfo.first);
             for (auto child_device : deviceDeviceSyncInfo.at(device_id)) {
@@ -477,8 +477,7 @@ void syncAllDevices(ChipId host_connected_device) {
     // Check if profiler on host connected device is initilized
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
-    if (profiler_state_manager->device_profiler_map.find(host_connected_device) ==
-        profiler_state_manager->device_profiler_map.end()) {
+    if (!profiler_state_manager->device_profiler_map.contains(host_connected_device)) {
         return;
     }
 
@@ -626,7 +625,7 @@ void ProfilerSync(ProfilerSyncState state) {
                     std::tie(receiver_device_id, receiver_eth_core) =
                         sender_device->get_connected_ethernet_core(sender_eth_core);
 
-                    if (visited.find(receiver_device_id) != visited.end() && !visited[receiver_device_id]) {
+                    if (visited.contains(receiver_device_id) && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
                         num_connected_devices[*root_device]++;
                         device_queue.push(receiver_device_id);
@@ -689,8 +688,7 @@ void InitDeviceProfiler(IDevice* device) {
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
-    if (profiler_state_manager->device_profiler_map.find(device_id) ==
-        profiler_state_manager->device_profiler_map.end()) {
+    if (!profiler_state_manager->device_profiler_map.contains(device_id)) {
         if (firstInit.exchange(false)) {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, true);
         } else {
@@ -1060,6 +1058,13 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
 
+    if (profiler_state_manager == nullptr) {
+        log_warning(
+            tt::LogMetal,
+            "Profiler state manager is nullptr. Either enable profiling or open the device before calling this API.");
+        return {};
+    }
+
     for (const auto& [device_id, device_programs_perf_analyses] :
          profiler_state_manager->device_programs_perf_analyses_map) {
         if (device_programs_perf_analyses.empty()) {
@@ -1084,6 +1089,13 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
+
+    if (profiler_state_manager == nullptr) {
+        log_warning(
+            tt::LogMetal,
+            "Profiler state manager is nullptr. Either enable profiling or open the device before calling this API.");
+        return {};
+    }
 
     for (const auto& [device_id, device_programs_perf_analyses] :
          profiler_state_manager->device_programs_perf_analyses_map) {

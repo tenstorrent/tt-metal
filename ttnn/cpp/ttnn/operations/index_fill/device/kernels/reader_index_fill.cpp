@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <algorithm>
 
 bool contains_element(uint32_t* arr, uint32_t size, uint32_t val) {
@@ -46,7 +46,7 @@ void kernel_main() {
 
     // Read input tensor pages
     for (uint32_t row_id = start_row; row_id < end_row; ++row_id) {
-        // Performance optimization: use pre-filled page instead of input page?
+        // Performance optimization: use pre-filled page instead of input page
         bool use_filled_page = false;
         if constexpr (!is_last_dim) {
             uint32_t dim_index = (row_id / num_rows_in_dim) % dim_size;

@@ -143,7 +143,7 @@ public:
 
     DispatchCoreConfig get_dispatch_core_config();
 
-    uint8_t get_num_hw_cqs() { return this->num_hw_cqs; }
+    uint8_t get_num_hw_cqs() const { return this->num_hw_cqs; }
 
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
     void add_dispatch_core_to_device(ChipId device_id, const CoreCoord& core);

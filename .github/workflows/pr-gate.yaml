@@ -76,7 +76,7 @@ jobs:
     secrets: inherit
     with:
       version: "22.04"
-      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: ${{ inputs.build-type || 'ASanCoverage' }}
       publish-artifact: false
       skip-tt-train: true

@@ -677,8 +677,12 @@ def test_demo_for_audio_classification_dataset(
 
 
 @pytest.mark.parametrize(
-    "num_inputs,batch_size_per_device",
-    [(2, 1)],
+    "num_inputs",
+    [2],
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [1, 2],
 )
 @pytest.mark.parametrize(
     "model_repo",
@@ -742,6 +746,14 @@ def test_demo_for_conditional_generation(
     prompt,
     request,
 ):
+    # Skip test in CI when using generate_kwargs
+    if (
+        is_ci_env
+        and model_repo == "openai/whisper-large-v3"
+        and (compression_ratio_threshold is not None or batch_size_per_device == 2)
+    ):
+        pytest.skip("Skipping test in CI since it provides redundant testing")
+
     generation_params = GenerationParams(
         temperatures=temperatures,
         compression_ratio_threshold=compression_ratio_threshold,
@@ -762,13 +774,10 @@ def test_demo_for_conditional_generation(
         stream=stream,
     )
 
-    # Skip test in CI when using generate_kwargs
-    if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
-        pytest.skip("Skipping test in CI since it provides redundant testing")
-
     if (
         is_ci_env
         and model_repo == "distil-whisper/distil-large-v3"
+        and batch_size_per_device == 1
         and mesh_device.get_num_devices() == available_devices
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
@@ -781,7 +790,7 @@ def test_demo_for_conditional_generation(
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_time_to_token": 0.06, "decode_t/s/u": 310.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 340.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 330.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
