@@ -65,6 +65,7 @@ void ProfilerStateManager::cleanup_device_profilers() {
     std::vector<std::thread> threads(this->device_profiler_map.size());
 
     uint32_t i = 0;
+    // NOLINTNEXTLINE(modernize-loop-convert)
     for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
         threads[i] = std::thread([it]() {
             DeviceProfiler& profiler = it->second;
@@ -96,25 +97,25 @@ uint32_t ProfilerStateManager::calculate_optimal_num_threads_for_device_profiler
 }
 
 void ProfilerStateManager::mark_trace_begin(ChipId device_id, uint32_t trace_id) {
-    TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+    TT_ASSERT(this->device_profiler_map.contains(device_id));
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.markTraceBegin(trace_id);
 }
 
 void ProfilerStateManager::mark_trace_end(ChipId device_id, uint32_t trace_id) {
-    TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+    TT_ASSERT(this->device_profiler_map.contains(device_id));
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.markTraceEnd(trace_id);
 }
 
 void ProfilerStateManager::mark_trace_replay(ChipId device_id, uint32_t trace_id) {
-    TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+    TT_ASSERT(this->device_profiler_map.contains(device_id));
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.markTraceReplay(trace_id);
 }
 
 void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id) {
-    TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+    TT_ASSERT(this->device_profiler_map.contains(device_id));
     DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
     device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
 }

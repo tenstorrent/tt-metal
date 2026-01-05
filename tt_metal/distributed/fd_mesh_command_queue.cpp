@@ -932,7 +932,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     for (auto& device : mesh_device_->get_devices()) {
-        if (chip_ids_in_workload.find(device->id()) == chip_ids_in_workload.end()) {
+        if (!chip_ids_in_workload.contains(device->id())) {
             write_go_signal(
                 id_,
                 mesh_device_,

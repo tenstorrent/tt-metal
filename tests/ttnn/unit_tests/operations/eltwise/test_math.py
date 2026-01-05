@@ -13,6 +13,8 @@ from models.common.utility_functions import torch_random
 
 from loguru import logger
 
+pytestmark = pytest.mark.use_module_device
+
 
 def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)

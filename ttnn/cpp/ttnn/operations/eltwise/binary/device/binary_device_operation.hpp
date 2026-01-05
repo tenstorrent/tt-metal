@@ -240,31 +240,30 @@ struct BinaryDeviceOperation {
         tensor_return_value_t& tensor_return_value);
 
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        BinaryOpType binary_op_type,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor,
-        std::optional<unary::EltwiseFusedActivations> activations,
-        std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a_arg,
-        float scalar,
-        BinaryOpType binary_op_type,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor,
-        std::optional<unary::EltwiseFusedActivations> activations,
-        std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation);
 };
 
 }  // namespace ttnn::operations::binary
 
 namespace ttnn::prim {
-constexpr auto binary =
-    ttnn::register_operation<"ttnn::prim::binary", ttnn::operations::binary::BinaryDeviceOperation>();
+
+ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    ttnn::operations::binary::BinaryOpType binary_op_type,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<Tensor> optional_output_tensor = std::nullopt,
+    std::optional<ttnn::operations::unary::EltwiseFusedActivations> activations = std::nullopt,
+    std::optional<ttnn::operations::unary::EltwiseUnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
+    const Tensor& input_tensor_a_arg,
+    float scalar,
+    ttnn::operations::binary::BinaryOpType binary_op_type,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<Tensor> optional_output_tensor = std::nullopt,
+    std::optional<ttnn::operations::unary::EltwiseFusedActivations> activations = std::nullopt,
+    std::optional<ttnn::operations::unary::EltwiseUnaryWithParam> input_tensor_a_activation = std::nullopt);
+
 }  // namespace ttnn::prim
