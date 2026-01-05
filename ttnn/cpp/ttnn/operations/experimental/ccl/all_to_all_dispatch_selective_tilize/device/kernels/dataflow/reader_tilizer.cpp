@@ -144,8 +144,17 @@ void kernel_main() {
     constexpr uint32_t sender_mcast_start_y = get_named_compile_time_arg_val("sender_mcast_start_y");
     constexpr uint32_t sender_mcast_end_x = get_named_compile_time_arg_val("sender_mcast_end_x");
     constexpr uint32_t sender_mcast_end_y = get_named_compile_time_arg_val("sender_mcast_end_y");
+    // Multicast coordinates for signaling tilizer cores
+    constexpr uint32_t tilizer_mcast_start_x = get_named_compile_time_arg_val("tilizer_mcast_start_x");
+    constexpr uint32_t tilizer_mcast_start_y = get_named_compile_time_arg_val("tilizer_mcast_start_y");
+    constexpr uint32_t tilizer_mcast_end_x = get_named_compile_time_arg_val("tilizer_mcast_end_x");
+    constexpr uint32_t tilizer_mcast_end_y = get_named_compile_time_arg_val("tilizer_mcast_end_y");
+    constexpr uint32_t num_tilizer_cores = get_named_compile_time_arg_val("num_tilizer_cores");
     constexpr uint32_t num_sender_cores = get_named_compile_time_arg_val("num_sender_cores");
     constexpr uint32_t ed_buffer_ready_semaphore_id = get_named_compile_time_arg_val("ed_buffer_ready_semaphore_id");
+    constexpr uint32_t ed_table_computed_semaphore_id =
+        get_named_compile_time_arg_val("ed_table_computed_semaphore_id");
+    constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
 
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
 
@@ -224,4 +233,83 @@ void kernel_main() {
     // DEBUG: Polling loop to verify E-D buffer semaphore increments are landing
     // poll_ed_table_loop<experts_per_device, dispatch_devices, entries_per_l1_alignment>(ed_table,
     // linearized_mesh_coord);
+
+    // Tilizer cores wait for the E-D table computation to be complete
+    uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
+    noc_semaphore_wait((uint32_t*)ed_computed_sem_addr, 1);
+
+    // All tilizer cores poll their ed_table against the ground truth (final_ed_table)
+    // - Drain tilizer core's ed_table is updated by remote devices (via all-to-all dispatch)
+    // - Non-drain tilizer cores' ed_tables are updated by the drain core (via multicast)
+    // When drain core sees a match, it multicasts a semaphore increment to non-drain cores
+    uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
+    volatile tt_l1_ptr uint32_t* final_ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
+
+    // Track which entries have already matched (to avoid re-printing/re-signaling)
+    // Use a bitmask approach - each bit represents one (expert, device) pair
+    // For simplicity, we'll use a simple array of booleans
+    constexpr uint32_t total_entries = experts_per_device * dispatch_devices;
+    bool entry_matched[total_entries];
+    for (uint32_t i = 0; i < total_entries; i++) {
+        entry_matched[i] = false;
+    }
+
+    uint32_t entries_matched = 0;
+
+    // Poll until all entries match
+    while (entries_matched < total_entries) {
+        // Invalidate L1 cache to see updates from remote writes
+        invalidate_l1_cache();
+
+        for (uint32_t local_expert = 0; local_expert < experts_per_device; local_expert++) {
+            for (uint32_t src_dev = 0; src_dev < dispatch_devices; src_dev++) {
+                uint32_t flat_idx = local_expert * dispatch_devices + src_dev;
+
+                // Skip if already matched
+                if (entry_matched[flat_idx]) {
+                    continue;
+                }
+
+                // Calculate L1 address of this ed_table entry
+                uint32_t ed_entry_l1_addr = ed_addr + flat_idx * l1_alignment;
+                uint32_t current_val = ed_table[flat_idx * entries_per_l1_alignment];
+                uint32_t expected_val = final_ed_table[flat_idx * entries_per_l1_alignment];
+
+                if (current_val == expected_val) {
+                    // Entry matched!
+                    entry_matched[flat_idx] = true;
+                    entries_matched++;
+
+                    // Drain core multicasts the ed_table entry value to non-drain cores
+                    // This directly updates the ed_table on non-drain cores since they
+                    // are not being incremented by remote devices
+                    if (is_drain_tilizer_core) {
+                        if constexpr (num_tilizer_cores > 1) {
+                            uint64_t ed_entry_mcast_addr = get_safe_multicast_noc_addr(
+                                tilizer_mcast_start_x,
+                                tilizer_mcast_start_y,
+                                tilizer_mcast_end_x,
+                                tilizer_mcast_end_y,
+                                ed_entry_l1_addr);
+                            // Write 4 bytes (the ed_table entry value) to all tilizer cores
+                            noc_semaphore_set_multicast_loopback_src(
+                                ed_entry_l1_addr, ed_entry_mcast_addr, num_tilizer_cores);
+                        }
+                    }
+
+                    // Print the matched value
+                    DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << current_val << ENDL();
+                }
+            }
+        }
+    }
+
+    // Final barrier to ensure all multicasts complete
+    if (is_drain_tilizer_core) {
+        if constexpr (num_tilizer_cores > 1) {
+            noc_async_write_barrier();
+        }
+    }
+
+    DPRINT << "=== All E-D entries matched! ===" << ENDL();
 }

@@ -447,6 +447,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"num_sender_cores", num_sender_cores},
         {"ed_buffer_ready_semaphore_id", ed_buffer_ready_semaphore_id},
         {"ed_table_computed_semaphore_id", ed_table_computed_semaphore_id},
+        {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
     };
 
     std::vector<uint32_t> compile_time_args = {};
