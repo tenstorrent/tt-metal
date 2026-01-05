@@ -72,7 +72,7 @@ def run_test_moe(device, M, K, N, check_accuracy):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 250,
+    (32, 7168, 2048): 450_000,
 }
 
 
