@@ -34,6 +34,10 @@ jobs:
         id: pr-count
         run: |
           # Count tests in locked directories
+          echo "=== Eltwise Tests ==="
+          pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>/dev/null || true
+          echo ""
+          
           ELTWISE_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
           CONV_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/conv/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
           MATMUL_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/matmul/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
