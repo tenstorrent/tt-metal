@@ -11,6 +11,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
+#include <nanobind/make_iterator.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
@@ -23,6 +24,7 @@
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -600,6 +602,121 @@ void py_module_types(nb::module_& mod) {
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+
+    nb::class_<tt::tt_metal::experimental::MeshProgramDescriptor>(mod, "MeshProgramDescriptor", R"pbdoc(
+        Descriptor for a mesh program.
+
+        A mesh program is a collection of ProgramDescriptors, one for each device in the mesh.
+        This behaves like a dict mapping MeshCoordinateRange to ProgramDescriptor.
+
+        Example:
+            desc = ttnn.MeshProgramDescriptor()
+            desc[range] = program_descriptor
+            # or initialize with a dict:
+            desc = ttnn.MeshProgramDescriptor({range1: prog1, range2: prog2})
+    )pbdoc")
+        .def(nb::init<>(), R"pbdoc(
+            Default constructor. Creates an empty MeshProgramDescriptor.
+        )pbdoc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::experimental::MeshProgramDescriptor* self, const nb::dict& mesh_programs) {
+                new (self) tt::tt_metal::experimental::MeshProgramDescriptor();
+                for (const auto& [key_obj, value_obj] : mesh_programs) {
+                    auto key = nb::cast<tt::tt_metal::distributed::MeshCoordinateRange>(key_obj);
+                    auto value = nb::cast<tt::tt_metal::ProgramDescriptor>(value_obj);
+                    self->mesh_programs[key] = value;
+                }
+            },
+            nb::arg("mesh_programs"),
+            R"pbdoc(
+            Constructor that initializes from a Python dict.
+
+            Args:
+                mesh_programs: Dictionary mapping MeshCoordinateRange to ProgramDescriptor
+
+            Example:
+                # Positional argument:
+                desc = ttnn.MeshProgramDescriptor({range1: prog1, range2: prog2})
+                # Keyword argument:
+                desc = ttnn.MeshProgramDescriptor(mesh_programs={range1: prog1, range2: prog2})
+        )pbdoc")
+        .def(
+            "__getitem__",
+            [](const tt::tt_metal::experimental::MeshProgramDescriptor& self,
+               const tt::tt_metal::distributed::MeshCoordinateRange& key) {
+                auto it = self.mesh_programs.find(key);
+                if (it == self.mesh_programs.end()) {
+                    throw std::runtime_error("MeshCoordinateRange not found in MeshProgramDescriptor");
+                }
+                return it->second;
+            },
+            nb::arg("key"),
+            R"pbdoc(
+                Get the ProgramDescriptor for a given MeshCoordinateRange.
+
+                Args:
+                    key: MeshCoordinateRange to look up
+
+                Returns:
+                    ProgramDescriptor for the given range
+
+                Raises:
+                    RuntimeError: If the key is not found
+            )pbdoc")
+        .def(
+            "__setitem__",
+            [](tt::tt_metal::experimental::MeshProgramDescriptor& self,
+               const tt::tt_metal::distributed::MeshCoordinateRange& key,
+               const tt::tt_metal::ProgramDescriptor& value) { self.mesh_programs[key] = value; },
+            nb::arg("key"),
+            nb::arg("value"),
+            R"pbdoc(
+                Set the ProgramDescriptor for a given MeshCoordinateRange.
+
+                Args:
+                    key: MeshCoordinateRange
+                    value: ProgramDescriptor to associate with the range
+            )pbdoc")
+        .def(
+            "__len__",
+            [](const tt::tt_metal::experimental::MeshProgramDescriptor& self) { return self.mesh_programs.size(); },
+            R"pbdoc(
+                Get the number of entries in the MeshProgramDescriptor.
+
+                Returns:
+                    Number of MeshCoordinateRange -> ProgramDescriptor mappings
+            )pbdoc")
+        .def(
+            "__contains__",
+            [](const tt::tt_metal::experimental::MeshProgramDescriptor& self,
+               const tt::tt_metal::distributed::MeshCoordinateRange& key) { return self.mesh_programs.contains(key); },
+            nb::arg("key"),
+            R"pbdoc(
+                Check if a MeshCoordinateRange exists in the MeshProgramDescriptor.
+
+                Args:
+                    key: MeshCoordinateRange to check
+
+                Returns:
+                    True if the key exists, False otherwise
+            )pbdoc")
+        .def(
+            "__iter__",
+            [](const tt::tt_metal::experimental::MeshProgramDescriptor& self) {
+                return nb::make_iterator<nb::rv_policy::reference_internal>(
+                    nb::type<tt::tt_metal::experimental::MeshProgramDescriptor>(),
+                    "iterator",
+                    self.mesh_programs.begin(),
+                    self.mesh_programs.end());
+            },
+            nb::keep_alive<0, 1>(),
+            R"pbdoc(
+                Iterate over the MeshCoordinateRange keys in the MeshProgramDescriptor.
+
+                Returns:
+                    Iterator over MeshCoordinateRange keys
+            )pbdoc");
 
     // TODO_NANOBIND: AFFECTS BEHAVIOR
     [[maybe_unused]]

@@ -184,8 +184,7 @@ void append_fabric_connection_rt_args(
     uint32_t worker_flow_control_semaphore_id;
 
     if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
-        auto teardown_sem_id_opt =
-            tt::tt_metal::find_available_semaphore_id(worker_program_or_desc, worker_core, core_type);
+        auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
         worker_teardown_semaphore_id = teardown_sem_id_opt.value();
         worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
@@ -194,8 +193,7 @@ void append_fabric_connection_rt_args(
             .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
             .initial_value = 0});
 
-        auto buffer_index_sem_id_opt =
-            tt::tt_metal::find_available_semaphore_id(worker_program_or_desc, worker_core, core_type);
+        auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
         worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
         worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
@@ -245,8 +243,7 @@ void append_fabric_connection_rt_args(
             .edm_direction = router_direction};
 
         if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
-            auto flow_control_sem_id_opt =
-                tt::tt_metal::find_available_semaphore_id(worker_program_or_desc, worker_core, core_type);
+            auto flow_control_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
             TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
             worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
 
