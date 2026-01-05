@@ -24,7 +24,6 @@ def max_pool3d(x: ttnn.Tensor, kernel_size: int) -> ttnn.Tensor:
         dilation=[1, 1],
         ceil_mode=False,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         deallocate_input=deallocate_input,
         reallocate_halo_output=True,
         dtype=x.dtype,

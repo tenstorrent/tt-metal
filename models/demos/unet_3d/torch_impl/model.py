@@ -12,7 +12,6 @@ from .encoder import EncoderTch
 class UNet3DTch(nn.Module):
     def __init__(
         self,
-        # device,
         in_channels,
         out_channels,
         base_channels=32,
