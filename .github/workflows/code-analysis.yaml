@@ -231,6 +231,11 @@ jobs:
       - name: 🔧 CMake configure
         run: cmake --preset clang-static-analyzer
 
+      - name: Setup clang symlinks for CodeChecker
+        run: |
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
+
       - name: 🔬 Analyze with CodeChecker
         uses: whisperity/codechecker-analysis-action@v1.0.4
         id: codechecker
