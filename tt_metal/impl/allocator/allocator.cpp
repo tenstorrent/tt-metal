@@ -57,7 +57,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
     trace_buffer_manager_ = std::make_unique<BankManager>(
         BufferType::TRACE,
         bank_offsets,
-        config_->trace_region_size,
+        config_->trace_region_size / config_->num_dram_channels,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,
         config_->disable_interleaved);
