@@ -214,6 +214,7 @@ jobs:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions # HACK: make actions available inside container
       options: --tmpfs /tmp
     defaults:
       run:
