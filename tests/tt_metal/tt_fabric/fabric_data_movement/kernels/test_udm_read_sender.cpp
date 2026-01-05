@@ -93,9 +93,6 @@ void kernel_main() {
         local_read_addr += packet_payload_size_bytes;
     }
 
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
-
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     noc_async_write_barrier();

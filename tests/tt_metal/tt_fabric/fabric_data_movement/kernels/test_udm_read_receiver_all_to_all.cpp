@@ -96,8 +96,6 @@ void kernel_main() {
             req_notification_size_bytes);
     }
 
-    tt::tt_fabric::udm::close_fabric_connection();
-
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_filled;
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_filled >> 32;

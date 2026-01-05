@@ -122,8 +122,6 @@ void kernel_main() {
         total_bytes_read += packet_payload_size_bytes * num_packets;
     }
 
-    tt::tt_fabric::udm::close_fabric_connection();
-
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     noc_async_write_barrier();

@@ -261,7 +261,7 @@ FORCE_INLINE void fabric_fast_write(
     connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
-    noc_async_writes_flushed();
+    noc_async_write_barrier();
 }
 
 /**
@@ -313,6 +313,8 @@ FORCE_INLINE void fabric_fast_write_any_len(
     if (!posted) {
         fabric_nonposted_writes_acked += num_dests;
     }
+
+    release_fabric_connection();
 }
 
 /**
@@ -363,6 +365,8 @@ FORCE_INLINE void fabric_fast_write_dw_inline(
     }
 
     noc_async_writes_flushed();
+
+    release_fabric_connection();
 }
 
 /**
@@ -405,6 +409,8 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     }
 
     noc_async_writes_flushed();
+
+    release_fabric_connection();
 }
 
 // Map downstream direction to mux array index [0-2], excluding my_direction
@@ -604,6 +610,8 @@ FORCE_INLINE void fabric_fast_read_any_len(
 
     fabric_reads_num_acked++;
     noc_async_writes_flushed();
+
+    release_fabric_connection();
 }
 
 /**

@@ -14,8 +14,36 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dev_mem_map.h"
 #include <type_traits>
+#ifndef ARCH_WORMHOLE
+#include <atomic>
+#endif
 
 namespace tt::tt_fabric::udm {
+
+// Verify that connection object fits in reserved L1 storage
+static_assert(
+    sizeof(tt::tt_fabric::WorkerToFabricEdmSender) <= tt::tt_fabric::FABRIC_CONNECTION_OBJECT_SIZE,
+    "WorkerToFabricEdmSender is too large for reserved L1 storage");
+
+// Acquire lock using atomic exchange - spin until we get it
+// On Wormhole, this is a no-op
+FORCE_INLINE void acquire_lock(volatile uint32_t* lock) {
+#ifndef ARCH_WORMHOLE
+    auto* atomic_lock = reinterpret_cast<volatile std::atomic<uint32_t>*>(lock);
+    while (std::atomic_exchange(atomic_lock, uint32_t(1)) != 0) {
+        // Spin waiting for lock to become available
+    }
+#endif  // ARCH_WORMHOLE
+}
+
+// Release lock using atomic exchange
+// On Wormhole, this is a no-op
+FORCE_INLINE void release_lock(volatile uint32_t* lock) {
+#ifndef ARCH_WORMHOLE
+    auto* atomic_lock = reinterpret_cast<volatile std::atomic<uint32_t>*>(lock);
+    std::atomic_exchange(atomic_lock, uint32_t(0));
+#endif  // ARCH_WORMHOLE
+}
 
 /**
  * @brief Enum for UDM control fields
@@ -358,31 +386,50 @@ WorkerToFabricEdmSender build_from_reserved_l1_info() {
 }
 
 /**
+ * @brief Get the sync region for fabric connection state
+ *
+ * Uses dedicated MEM_FABRIC_CONNECTION_LOCK_BASE address in L1.
+ * The region contains a spinlock and initialized flag.
+ *
+ * @return Pointer to the sync region in L1
+ */
+FORCE_INLINE volatile tt::tt_fabric::fabric_connection_sync_t* get_fabric_connection_sync() {
+    return reinterpret_cast<volatile tt::tt_fabric::fabric_connection_sync_t*>(MEM_FABRIC_CONNECTION_LOCK_BASE);
+}
+
+/**
  * @brief Get or create a singleton fabric connection for the current worker
  *
  * This function manages a static connection instance that persists across calls.
  * The connection is initialized on first use and reused for subsequent operations.
+ * On non-Wormhole, uses atomic spinlock to synchronize initialization across BRISC and NCRISC.
+ * The lock is acquired on first initialization and held until release_fabric_connection() is called.
+ * The initialized flag is stored in L1 (shared across RISCs on multi-RISC architectures).
  *
  * @return Reference to the fabric connection and initialized flag
  */
 FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
-    static tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
-    static bool initialized = false;
+    // Get sync region pointer (just address calculation, no memory read)
+    auto* sync = get_fabric_connection_sync();
 
-    if (!initialized) {
-        // Build connection from runtime args on first use
-        // This assumes the runtime args are set up properly by the host
-        // TODO: instead of using rt args, use the reserved L1 region for get the correct ETH channel, and semaphore
-        // addresses.
-        size_t rt_args_idx = 0;
-        static tt::tt_fabric::WorkerToFabricEdmSender conn;
-        conn = build_from_reserved_l1_info();
-        conn.open();
-        connection = &conn;
-        initialized = true;
+#ifndef ARCH_WORMHOLE
+    // Lock must be acquired BEFORE checking initialized to ensure mutual exclusion
+    acquire_lock(&sync->lock);
+#endif
+
+    // Get connection pointer from L1 storage (at fixed offset after sync struct)
+    auto* connection = reinterpret_cast<tt::tt_fabric::WorkerToFabricEdmSender*>(
+        MEM_FABRIC_CONNECTION_LOCK_BASE + tt::tt_fabric::FABRIC_CONNECTION_OBJECT_OFFSET);
+
+    if (!sync->initialized) {
+        // Build connection in L1 storage using placement new
+        auto temp_conn = build_from_reserved_l1_info();
+        new (connection) tt::tt_fabric::WorkerToFabricEdmSender(temp_conn);
+        connection->open();
+        sync->initialized = 1;
     }
 
-    return {*connection, initialized};
+    return {*connection, sync->initialized != 0};
 }
 
 /**
@@ -393,6 +440,20 @@ FORCE_INLINE void close_fabric_connection() {
     if (initialized) {
         connection.close();
     }
+}
+
+/**
+ * @brief Release the fabric connection lock
+ *
+ * This should be called when the caller is done using the fabric connection.
+ * It releases the spinlock that was acquired in get_or_open_fabric_connection().
+ * On Wormhole, this is a no-op.
+ */
+FORCE_INLINE void release_fabric_connection() {
+#ifndef ARCH_WORMHOLE
+    auto* sync = get_fabric_connection_sync();
+    release_lock(&sync->lock);
+#endif
 }
 
 /**

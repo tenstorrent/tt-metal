@@ -69,9 +69,6 @@ void kernel_main() {
         time_seed_init,
         req_notification_size_bytes);
 
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
-
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
