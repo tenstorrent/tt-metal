@@ -29,16 +29,15 @@ struct SiLUBackwardDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& dL_dout_tensor,
-        const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::silu_bw::device
 
 namespace ttnn::prim {
-constexpr auto ttml_silu_bw = ttnn::
-    register_operation<"ttnn::prim::ttml_silu_bw", ttml::metal::ops::silu_bw::device::SiLUBackwardDeviceOperation>();
-}
+
+ttml::metal::ops::silu_bw::device::SiLUBackwardDeviceOperation::tensor_return_value_t ttml_silu_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& dL_dout_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt);
+
+}  // namespace ttnn::prim

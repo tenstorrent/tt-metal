@@ -24,8 +24,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-UntilizeMultiCoreProgramFactory::cached_program_t
-UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
+UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactory::create(
     const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
     const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
     const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& output) {
@@ -65,45 +64,6 @@ UntilizeMultiCoreProgramFactory::UntilizeMultiCoreProgramFactory::create(
          cliff_compute_core_range,
          num_rows_per_full_core,
          num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
-
-    constexpr uint32_t threshold_row_block = 32;
-    if (!input_is_sharded and !output_is_sharded) {
-        if (num_tiles_per_row > threshold_row_block) {
-            if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
-
-                auto
-                    [ncores_block,
-                     all_cores_block,
-                     core_range_block,
-                     cliff_row_core_range,
-                     cliff_col_core_range,
-                     cliff_col_row_core_range,
-                     nblocks_per_core_block,
-                     single_block_size,
-                     single_block_size_cliff_row,
-                     single_block_size_cliff_col,
-                     has_cliff_row,
-                     has_cliff_col,
-                     full_cores_per_row,
-                     full_cores_per_col] =
-                        ttnn::split_blocks_for_tilize_wh(
-                            grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-                if (num_compute_cores < ncores_block) {
-                    return UntilizeMultiCoreBlockProgramFactory::create(operation_attributes, tensor_args, output);
-                }
-            }
-        }
-    }
-
-    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
-    // Need to debug this to work on wide tensors that are higher than a single tile
-    auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, a);
-    if (pf_option == 0) {
-        return UntilizeMultiCoreParallelizeColumnProgramFactory::create(operation_attributes, tensor_args, output);
-    } else if (pf_option == 1) {
-        return UntilizeSingleCoreProgramFactory::create(operation_attributes, tensor_args, output);
-    }
 
     // Default values are for interleaved input.
     // Cliff core applicable interleaved input only, it is the only core not processing the

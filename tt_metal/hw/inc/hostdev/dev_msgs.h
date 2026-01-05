@@ -193,16 +193,9 @@ struct launch_msg_t {  // must be cacheline aligned
 } __attribute__((packed));
 
 struct subordinate_sync_msg_t {
+#if defined(ARCH_QUASAR)
+    // Quasar: expanded structure for multiple DM cores
     union {
-        // this is for WH/BH
-        volatile uint32_t all;
-        struct {
-            volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
-            volatile uint8_t trisc0;
-            volatile uint8_t trisc1;
-            volatile uint8_t trisc2;
-        };
-        // QSR starts here
         struct {
             volatile uint64_t allDMs;
             volatile uint32_t allNeo0;
@@ -211,7 +204,7 @@ struct subordinate_sync_msg_t {
             volatile uint32_t allNeo3;
         };
         struct {
-            volatile uint8_t dm1Q;
+            volatile uint8_t dm1;  // Keep dm1 name for compatibility
             volatile uint8_t dm2;
             volatile uint8_t dm3;
             volatile uint8_t dm4;
@@ -238,7 +231,19 @@ struct subordinate_sync_msg_t {
             uint8_t pad[12];
         };
     } __attribute__((packed));
-} __attribute__((packed));
+#else
+    // WH/BH: original compact structure for single DM core + triscs
+    union {
+        volatile uint32_t all;
+        struct {
+            volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
+            volatile uint8_t trisc0;
+            volatile uint8_t trisc1;
+            volatile uint8_t trisc2;
+        };
+    };
+#endif
+};
 
 constexpr int num_waypoint_bytes_per_riscv = 4;
 struct debug_waypoint_msg_t {

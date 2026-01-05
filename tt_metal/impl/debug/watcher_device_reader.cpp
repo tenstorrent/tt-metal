@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <ctype.h>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <string>

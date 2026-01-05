@@ -5,8 +5,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
-#include <stddef.h>
-#include <string.h>
+#include <cstddef>
+#include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
@@ -2667,8 +2667,7 @@ void set_core_go_message_mapping_on_device(
         MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
-    for (size_t i = 0; i < core_go_message_mapping.size(); ++i) {
-        const auto& [core_range_set, go_msg_offset] = core_go_message_mapping[i];
+    for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
         for (const auto& core_range : core_range_set.ranges()) {
             CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
             CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
