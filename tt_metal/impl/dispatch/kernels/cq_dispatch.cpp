@@ -1315,12 +1315,12 @@ void kernel_main() {
     }
     bool done = false;
     uint32_t heartbeat = 0;
+    uint32_t dispatch_progress = 0;            // Track number of commands processed for progress updates
     uint64_t next_progress_update_cycles = 0;  // Track when to send next progress update
 
     // Initialize next update time and progress counter if progress tracking is enabled
     if constexpr (dispatch_progress_update_cycles > 0 && is_h_variant) {
-        volatile tt_l1_ptr uint32_t* dispatch_progress = get_dispatch_progress_ptr();
-        *dispatch_progress = 0;
+        *get_dispatch_progress_ptr() = dispatch_progress;
         next_progress_update_cycles = get_timestamp() + dispatch_progress_update_cycles;
     }
 
@@ -1334,8 +1334,8 @@ void kernel_main() {
 
         // Increment dispatch progress counter and send update if enough time has passed
         if constexpr (dispatch_progress_update_cycles > 0 && is_h_variant) {
-            volatile tt_l1_ptr uint32_t* dispatch_progress = get_dispatch_progress_ptr();
-            (*dispatch_progress)++;
+            dispatch_progress++;
+            *get_dispatch_progress_ptr() = dispatch_progress;
             uint64_t current_cycles = get_timestamp();
             if (current_cycles >= next_progress_update_cycles) {
                 notify_host_of_dispatch_progress();
