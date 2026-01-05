@@ -132,7 +132,7 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
         slice_type,
     ) = input_spec
     [in_dtype, output_layout] = in_specs
-    dram_slice_config = ttnn.Op2DSliceConfig(num_slices=num_slices, slice_type=slice_type)
+    dram_slice_config = ttnn.Op2dSliceConfig(num_slices=num_slices, slice_type=slice_type)
     torch_tensor_map = {}
     run_max_pool2d(
         [in_n, in_c, in_h, in_w],

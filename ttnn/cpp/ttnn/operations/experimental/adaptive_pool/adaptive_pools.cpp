@@ -18,7 +18,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config,
+    const std::optional<op_slicing::Op2dSliceConfig>& dram_slice_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool deallocate_input,
@@ -59,7 +59,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config,
+    const std::optional<op_slicing::Op2dSliceConfig>& dram_slice_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool deallocate_input,
     bool reallocate_output) {
