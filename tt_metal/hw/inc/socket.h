@@ -35,6 +35,8 @@ struct sender_socket_md {
 struct h2d_socket_md {
     uint32_t bytes_acked_addr_lo;
     uint32_t bytes_acked_addr_hi;
+    uint32_t data_addr_lo;
+    uint32_t data_addr_hi;
     uint32_t pcie_xy_enc;
 };
 
@@ -62,6 +64,8 @@ struct receiver_socket_md {
 struct H2DSocketInterface {
     uint32_t bytes_acked_addr_lo;
     uint32_t bytes_acked_addr_hi;
+    uint32_t data_addr_lo;
+    uint32_t data_addr_hi;
     uint32_t pcie_xy_enc;
 };
 

@@ -332,12 +332,13 @@ void test_h2d_socket(
         for (uint32_t j = 0; j < num_writes; j++) {
             input_socket.reserve_pages(1);
             // Write data to input socket at write ptr
-            DeviceMemoryAddress core_addr = {MeshCoordinate(0, 0), recv_core, input_socket.get_write_ptr()};
-            cluster.write_core(
-                src_vec.data() + j * page_size_words,
-                page_size,
-                tt_cxy_pair(mesh_device->get_device(MeshCoordinate(0, 0))->id(), recv_core),
-                input_socket.get_write_ptr());
+            // DeviceMemoryAddress core_addr = {MeshCoordinate(0, 0), recv_core, input_socket.get_write_ptr()};
+            std::memcpy(input_socket.get_write_ptr(), src_vec.data() + j * page_size_words, page_size);
+            // cluster.write_core(
+            //     src_vec.data() + j * page_size_words,
+            //     page_size,
+            //     tt_cxy_pair(mesh_device->get_device(MeshCoordinate(0, 0))->id(), recv_core),
+            //     input_socket.get_write_ptr());
             // mesh_cq.enqueue_write_shard_to_core(
             //     core_addr, src_vec.data() + j * page_size_words, page_size, false, {}, false);
 
@@ -2338,7 +2339,7 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
 
 // ========= Single Device Data Movement Tests =========
 
-TEST_F(MeshSocketTest, H2DSocket) {
+TEST_F(MeshDevice1x2Fixture, H2DSocket) {
     // No wrap
     test_h2d_socket(mesh_device_, 1024, 64, 1024);
     // Even wrap

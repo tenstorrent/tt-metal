@@ -210,6 +210,8 @@ SocketReceiverInterface create_receiver_socket_interface_2(uint32_t config_addr)
     if (socket.is_h2d) {
         socket.h2d.bytes_acked_addr_lo = socket_config->h2d.bytes_acked_addr_lo;
         socket.h2d.bytes_acked_addr_hi = socket_config->h2d.bytes_acked_addr_hi;
+        socket.h2d.data_addr_lo = socket_config->h2d.data_addr_lo;
+        socket.h2d.data_addr_hi = socket_config->h2d.data_addr_hi;
         socket.h2d.pcie_xy_enc = socket_config->h2d.pcie_xy_enc;
     } else {
         socket.c2c.upstream_mesh_id = socket_config->c2c.upstream_mesh_id;

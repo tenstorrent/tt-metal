@@ -149,28 +149,49 @@ H2DSocket::H2DSocket(
     const std::vector<MeshCoreCoord>& recv_cores,
     BufferType buffer_type,
     uint32_t fifo_size) :
-    recv_cores_(recv_cores), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(0), pinned_memory_(nullptr) {
+    recv_cores_(recv_cores),
+    buffer_type_(buffer_type),
+    fifo_size_(fifo_size),
+    page_size_(0),
+    bytes_acked_pinned_memory_(nullptr),
+    data_pinned_memory_(nullptr) {
     // Allocate memory for the config buffer
     MeshCoordinateRangeSet recv_device_range_set;
     for (const auto& recv_core : recv_cores_) {
         recv_device_range_set.merge(MeshCoordinateRange(recv_core.device_coord));
     }
     bytes_acked_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(4, 0);
+    host_data_buffer_ = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, 64>>>(
+        fifo_size_ / sizeof(uint32_t), 0);
 
-    tt::tt_metal::HostBuffer host_buffer_view(
+    tt::tt_metal::HostBuffer bytes_acked_buffer_view(
         tt::stl::Span<uint32_t>(bytes_acked_buffer_->data(), bytes_acked_buffer_->size()),
         tt::tt_metal::MemoryPin(bytes_acked_buffer_));
+    tt::tt_metal::HostBuffer host_data_buffer_view(
+        tt::stl::Span<uint32_t>(host_data_buffer_->data(), host_data_buffer_->size()),
+        tt::tt_metal::MemoryPin(host_data_buffer_));
 
-    pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, recv_device_range_set, host_buffer_view, true);
-    const auto& host_noc_addr =
-        pinned_memory_->get_noc_addr(mesh_device->get_device(recv_cores_[0].device_coord)->id());
-    TT_FATAL(host_noc_addr.has_value(), "Failed to get NOC address for pinned memory.");
+    bytes_acked_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device, recv_device_range_set, bytes_acked_buffer_view, true);
+    data_pinned_memory_ = tt::tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device, recv_device_range_set, host_data_buffer_view, true);
+    const auto& bytes_acked_noc_addr =
+        bytes_acked_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_cores_[0].device_coord)->id());
+    const auto& data_noc_addr =
+        data_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_cores_[0].device_coord)->id());
+    TT_FATAL(bytes_acked_noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
+    TT_FATAL(data_noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
 
-    uint32_t host_addr_lo = static_cast<uint32_t>(host_noc_addr.value().addr & 0xFFFFFFFFull);
-    uint32_t host_addr_hi = static_cast<uint32_t>(host_noc_addr.value().addr >> 32);
-    uint32_t pcie_xy_enc = host_noc_addr.value().pcie_xy_enc;
+    uint32_t bytes_acked_pcie_xy_enc = bytes_acked_noc_addr.value().pcie_xy_enc;
+    uint32_t data_pcie_xy_enc = data_noc_addr.value().pcie_xy_enc;
+    TT_FATAL(
+        bytes_acked_pcie_xy_enc == data_pcie_xy_enc,
+        "Bytes_acked and data pinned memory must be mapped to the same PCIe core.");
 
+    uint32_t bytes_acked_addr_lo = static_cast<uint32_t>(bytes_acked_noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t bytes_acked_addr_hi = static_cast<uint32_t>(bytes_acked_noc_addr.value().addr >> 32);
+    uint32_t data_addr_lo = static_cast<uint32_t>(data_noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t data_addr_hi = static_cast<uint32_t>(data_noc_addr.value().addr >> 32);
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
@@ -221,8 +242,8 @@ H2DSocket::H2DSocket(
         .size = total_data_buffer_size,
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
-    write_ptr_ = data_buffer_->address();
-
+    std::cout << "Data buffer address: " << data_buffer_->address() << std::endl;
+    write_ptr_ = 0;  // data_buffer_->address();
     const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     std::vector<receiver_socket_md> config_data(
@@ -240,9 +261,11 @@ H2DSocket::H2DSocket(
             md.fifo_addr = data_buffer_->address();
             md.fifo_total_size = fifo_size_;
             md.is_h2d = 1;
-            md.h2d.bytes_acked_addr_lo = host_addr_lo;
-            md.h2d.bytes_acked_addr_hi = host_addr_hi;
-            md.h2d.pcie_xy_enc = pcie_xy_enc;
+            md.h2d.bytes_acked_addr_lo = bytes_acked_addr_lo;
+            md.h2d.bytes_acked_addr_hi = bytes_acked_addr_hi;
+            md.h2d.data_addr_lo = data_addr_lo;
+            md.h2d.data_addr_hi = data_addr_hi;
+            md.h2d.pcie_xy_enc = bytes_acked_pcie_xy_enc;
         }
         distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer_, config_data, device_coord, true);
     }
@@ -269,7 +292,7 @@ void H2DSocket::push_pages(uint32_t num_pages) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot push more pages than the socket FIFO size.");
 
-    if (write_ptr_ + num_bytes >= data_buffer_->address() + fifo_curr_size_) {
+    if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
         bytes_sent_ += num_bytes + fifo_size_ - fifo_curr_size_;
     } else {
@@ -294,13 +317,13 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     const auto pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     TT_FATAL(page_size % pcie_alignment == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
-    uint32_t fifo_start_addr = data_buffer_->address();
-    uint32_t next_fifo_wr_ptr = fifo_start_addr + align(write_ptr_ - fifo_start_addr, page_size);
+
+    uint32_t next_fifo_wr_ptr = align(write_ptr_, page_size);
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
-    uint32_t fifo_page_aligned_limit = fifo_start_addr + fifo_page_aligned_size;
-    if (next_fifo_wr_ptr >= fifo_page_aligned_limit) {
-        bytes_sent_ += fifo_start_addr + fifo_size_ - next_fifo_wr_ptr;
-        next_fifo_wr_ptr = fifo_start_addr;
+
+    if (next_fifo_wr_ptr >= fifo_page_aligned_size) {
+        bytes_sent_ += fifo_size_ - next_fifo_wr_ptr;
+        next_fifo_wr_ptr = 0;
     }
     write_ptr_ = next_fifo_wr_ptr;
     page_size_ = page_size;

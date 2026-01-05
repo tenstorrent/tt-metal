@@ -49,7 +49,7 @@ public:
     void push_pages(uint32_t num_pages);
     void notify_receiver();
     uint32_t get_page_size() const { return page_size_; }
-    uint32_t get_write_ptr() const { return write_ptr_; }
+    uint32_t* get_write_ptr() const { return host_data_buffer_->data() + (write_ptr_ / sizeof(uint32_t)); }
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
     void set_page_size(uint32_t page_size);
     void barrier();
@@ -68,8 +68,10 @@ private:
     std::unordered_map<MeshCoreCoord, uint32_t> bytes_acked_ = {};
     uint32_t write_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
-    std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
+    std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> bytes_acked_pinned_memory_ = nullptr;
+    std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> data_pinned_memory_ = nullptr;
     std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_acked_buffer_ = nullptr;
+    std::shared_ptr<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, 64>>> host_data_buffer_ = nullptr;
 };
 
 class D2HSocket {
