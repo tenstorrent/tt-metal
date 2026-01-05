@@ -158,7 +158,7 @@ ttnn::operations::data_movement::sort::SortDeviceOperation::tensor_return_value_
     const MemoryConfig& output_memory_config,
     const std::vector<std::optional<Tensor>>& output_tensors) {
     using OperationType = ttnn::operations::data_movement::sort::SortDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, descending, stable, output_memory_config},
         OperationType::tensor_args_t{input_tensor, output_tensors});
 }

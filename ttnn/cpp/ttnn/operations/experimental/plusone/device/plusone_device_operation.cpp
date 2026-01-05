@@ -69,7 +69,7 @@ ttnn::operations::experimental::plusone::tensor_return_value_t plus_one(
         .sub_core_grids = sub_core_grids, .skip_negative_entries = skip_negative_entries};
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

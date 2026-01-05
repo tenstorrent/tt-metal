@@ -329,7 +329,7 @@ ttnn::Tensor grid_sample(
     bool batch_output_channels,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::pool::grid_sample::GridSampleOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .mode = mode,
             .padding_mode = padding_mode,

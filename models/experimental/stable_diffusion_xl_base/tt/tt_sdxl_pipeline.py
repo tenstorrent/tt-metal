@@ -18,6 +18,7 @@ from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs impor
     ModelOptimisations,
     RefinerModelOptimisations,
 )
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     create_tt_clip_text_encoders,
@@ -629,7 +630,7 @@ class TtSDXLPipeline(LightweightModule):
                 if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
                 else RefinerModelOptimisations()
             )
-            self.tt_vae_model_config = ModelOptimisations()
+            self.tt_vae_model_config = VAEModelOptimisations()
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),

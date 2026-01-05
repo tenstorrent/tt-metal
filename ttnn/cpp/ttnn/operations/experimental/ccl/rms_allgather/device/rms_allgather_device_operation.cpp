@@ -317,7 +317,7 @@ ttnn::operations::fused::normalization::RMSAllGatherDeviceOperation::tensor_retu
         .stats = stats,
         .preallocated_output = persistent_output_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

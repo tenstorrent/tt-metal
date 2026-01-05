@@ -159,6 +159,6 @@ ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t m
         exp_avg_sq_in,
         max_exp_avg_sq_in,
         {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out}};
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

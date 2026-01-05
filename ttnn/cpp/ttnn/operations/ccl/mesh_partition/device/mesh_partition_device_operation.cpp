@@ -108,7 +108,7 @@ ttnn::Tensor mesh_partition(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     using OperationType = ttnn::operations::ccl::MeshPartitionDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cluster_axis = cluster_axis,
