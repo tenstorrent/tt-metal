@@ -103,23 +103,29 @@ jobs:
       matrix:
         config:
           - version: "22.04"
+            image-key: "ubuntu-2204"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Debug"
           - version: "22.04"
+            image-key: "ubuntu-2204"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Release"
           - version: "22.04"
+            image-key: "ubuntu-2204"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
           - version: "24.04"
+            image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true
           - version: "24.04"
+            image-key: "ubuntu-2404"
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
           - distro: "fedora"
             version: "43"
+            image-key: "fedora-43"
             toolchain: "cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake"
             build-type: "Release"
             enable-lto: true
@@ -133,7 +139,15 @@ jobs:
       publish-package: false
       skip-tt-train: true
       tracy: false
-      # Pass pre-built docker image tags based on distro/version
-      ci-build-docker-image: ${{ matrix.config.distro == 'fedora' && inputs.fedora-43-ci-build-tag || (matrix.config.version == '24.04' && inputs.ubuntu-2404-ci-build-tag || inputs.ubuntu-2204-ci-build-tag) }}
-      dev-docker-image: ${{ matrix.config.distro == 'fedora' && inputs.fedora-43-dev-tag || (matrix.config.version == '24.04' && inputs.ubuntu-2404-dev-tag || inputs.ubuntu-2204-dev-tag) }}
-      manylinux-docker-image: ${{ matrix.config.version == '24.04' && inputs.ubuntu-2404-manylinux-tag || inputs.ubuntu-2204-manylinux-tag }}
+      # Pass pre-built docker image tags based on image-key
+      ci-build-docker-image: ${{
+        (matrix.config.image-key == 'fedora-43' && inputs.fedora-43-ci-build-tag) ||
+        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-ci-build-tag) ||
+        inputs.ubuntu-2204-ci-build-tag }}
+      dev-docker-image: ${{
+        (matrix.config.image-key == 'fedora-43' && inputs.fedora-43-dev-tag) ||
+        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-dev-tag) ||
+        inputs.ubuntu-2204-dev-tag }}
+      manylinux-docker-image: ${{
+        (matrix.config.image-key == 'ubuntu-2404' && inputs.ubuntu-2404-manylinux-tag) ||
+        inputs.ubuntu-2204-manylinux-tag }}
