@@ -14,11 +14,13 @@ from models.experimental.SSD512.demo.processing import (
     draw_detections,
     filter_top_detections,
     load_image,
-    run_ssd_inference,
+    process_model_outputs,
 )
 from models.experimental.SSD512.reference.config import voc
 from models.experimental.SSD512.reference.prior_box import PriorBox
+from models.experimental.SSD512.tests.perf.performant_infra import SSD512PerformantTestInfra
 from models.experimental.SSD512.tt.tt_ssd import TtSSD
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
 
 def main():
@@ -41,9 +43,16 @@ def main():
 
     # Initialize model
     torch_model = load_torch_model(phase="test", size=512, num_classes=SSD512_NUM_CLASSES)
-    device = ttnn.open_device(device_id=0, l1_small_size=SSD512_L1_SMALL_SIZE)
+    device = ttnn.open_device(
+        device_id=0,
+        l1_small_size=SSD512_L1_SMALL_SIZE,
+        trace_region_size=10000000,
+        num_command_queues=2,
+    )
+
     torch_input = torch.randn(1, 3, 512, 512)
     ttnn_model = TtSSD(torch_model, torch_input, device, batch_size=1)
+    ttnn.synchronize_device(device)
 
     # Generate prior boxes
     prior_box = PriorBox(voc["SSD512"])
@@ -56,15 +65,33 @@ def main():
 
     image_tensor, original_img = load_image(str(img_path))
 
-    # Run inference
-    output_tensor = run_ssd_inference(
-        ttnn_model,
-        image_tensor,
-        priors_torch,
-        device,
-        conf_thresh=args.conf_thresh,
-        nms_thresh=args.nms_thresh,
-        top_k=args.top_k,
+    infra = SSD512PerformantTestInfra(device, ttnn_model, dtype=ttnn.bfloat16)
+    pipeline_model = infra
+
+    ttnn_input_tensor, l1_input_memory_config, dram_input_memory_config = infra.create_pipeline_memory_configs(
+        image_tensor
+    )
+
+    assert ttnn_input_tensor.storage_type() == ttnn.StorageType.HOST, "Input tensor must be on host"
+
+    pipeline = create_pipeline_from_config(
+        config=PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False),
+        model=pipeline_model,
+        device=device,
+        dram_input_memory_config=dram_input_memory_config,
+        l1_input_memory_config=l1_input_memory_config,
+    )
+
+    ttnn.synchronize_device(device)
+    pipeline.compile(ttnn_input_tensor)
+
+    outputs = pipeline.enqueue([ttnn_input_tensor]).pop_all()
+    loc, conf = outputs[0]
+
+    pipeline.cleanup()
+
+    output_tensor = process_model_outputs(
+        loc, conf, priors_torch, device, args.conf_thresh, args.nms_thresh, args.top_k
     )
 
     # Filter and convert to Dict format for drawing

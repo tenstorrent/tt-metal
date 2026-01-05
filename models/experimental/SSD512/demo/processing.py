@@ -8,7 +8,7 @@ import torch
 import ttnn
 from PIL import Image, ImageDraw, ImageFont
 
-from models.experimental.SSD512.common import SSD512_NUM_CLASSES, reshape_prediction_tensors
+from models.experimental.SSD512.common import SSD512_NUM_CLASSES
 from models.experimental.SSD512.reference.voc0712 import VOC_CLASSES
 from models.experimental.SSD512.reference.detection import Detect
 
@@ -149,24 +149,16 @@ def draw_detections(image, detections, output_path, model_name):
     image.save(output_path)
 
 
-def run_ssd_inference(model, image_tensor, priors, device, conf_thresh=0.01, nms_thresh=0.45, top_k=200):
-    """Run SSD512 model forward pass and detection on TTNN device."""
-    ttnn.synchronize_device(device)
-
-    image_tensor_permuted = image_tensor.permute(0, 2, 3, 1)
-    ttnn_input = ttnn.from_torch(
-        image_tensor_permuted, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-    )
-    ttnn_input = ttnn.to_layout(ttnn_input, ttnn.TILE_LAYOUT)
-
-    tt_loc_preds, tt_conf_preds = model(device, ttnn_input)
-
+def process_model_outputs(loc, conf, priors, device, conf_thresh=0.01, nms_thresh=0.45, top_k=200):
+    """Process model outputs (loc, conf) through softmax and detection."""
     memory_config = ttnn.DRAM_MEMORY_CONFIG
-    loc = reshape_prediction_tensors(tt_loc_preds, memory_config)
-    conf = reshape_prediction_tensors(tt_conf_preds, memory_config)
-
     batch_size = 1
     num_priors = loc.shape[1] // 4
+
+    if loc.storage_type() == ttnn.StorageType.HOST:
+        loc = ttnn.to_device(loc, device, memory_config=memory_config)
+    if conf.storage_type() == ttnn.StorageType.HOST:
+        conf = ttnn.to_device(conf, device, memory_config=memory_config)
 
     loc = ttnn.experimental.view(loc, (batch_size, num_priors, 4))
     conf = ttnn.experimental.view(conf, (batch_size, num_priors, SSD512_NUM_CLASSES))
@@ -193,6 +185,5 @@ def run_ssd_inference(model, image_tensor, priors, device, conf_thresh=0.01, nms
 
     ttnn.deallocate(loc)
     ttnn.deallocate(conf)
-    ttnn.synchronize_device(device)
 
     return output_tensor
