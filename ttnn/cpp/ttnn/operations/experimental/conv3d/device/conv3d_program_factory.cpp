@@ -280,6 +280,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         cb_matmul_result_rm_id,
         cb_reduction_tiled_id,
         cb_worker_ack_back_id,
+        N,
         num_patches,
         matmul_M_t,
         matmul_K_t,
