@@ -67,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: ${{ startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/') && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
 
