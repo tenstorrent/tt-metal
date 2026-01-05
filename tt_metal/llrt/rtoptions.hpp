@@ -290,6 +290,9 @@ class RunTimeOptions {
     // Disable XIP dump
     bool disable_xip_dump = false;
 
+    // Dump JIT build commands to stdout for debugging
+    bool dump_build_commands = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -638,6 +641,8 @@ public:
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
+
+    bool get_dump_build_commands() const { return dump_build_commands; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
