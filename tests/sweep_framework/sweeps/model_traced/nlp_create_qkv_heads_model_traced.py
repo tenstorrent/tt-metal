@@ -5,11 +5,11 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -41,6 +41,32 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors that violate the C++ constraint:
+    input_tensor_q.padded_shape()[3] % (num_q_heads + 2 * num_kv_heads) == 0
+
+    This ensures hidden_dim is evenly divisible by (num_q_heads + 2 * num_kv_heads).
+    """
+    input_shape = test_vector.get("input_shape")
+    num_q_heads = test_vector.get("num_q_heads")
+    num_kv_heads = test_vector.get("num_kv_heads")
+
+    if input_shape is None or num_q_heads is None or num_kv_heads is None:
+        return True, "Missing required parameters"
+
+    # Extract hidden_dim (last dimension)
+    if isinstance(input_shape, (tuple, list)) and len(input_shape) >= 4:
+        hidden_dim = input_shape[3]
+
+        # Check the C++ constraint
+        total_heads = num_q_heads + 2 * num_kv_heads
+        if hidden_dim % total_heads != 0:
+            return True, f"hidden_dim {hidden_dim} not divisible by (num_q_heads + 2*num_kv_heads) = {total_heads}"
+
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -52,6 +78,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -89,15 +116,29 @@ def run(
     # So head_dim = hidden_dim / (num_q_heads + 2 * num_kv_heads)
     head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)
 
+    # Calculate actual split sizes that sum to hidden_dim
+    q_size = num_q_heads * head_dim
+    kv_size = num_kv_heads * head_dim
+
+    # Verify the split sizes sum to hidden_dim
+    if q_size + 2 * kv_size != hidden_dim:
+        from loguru import logger
+
+        logger.warning(
+            f"Split sizes don't match: q_size={q_size}, kv_size={kv_size}, sum={q_size + 2*kv_size}, hidden_dim={hidden_dim}"
+        )
+        # Adjust the last split size to make it exact
+        v_size = hidden_dim - q_size - kv_size
+    else:
+        v_size = kv_size
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
     # Compute proper torch reference (from test_nlp_create_qkv_heads.py)
     # Split input into Q, K, V components
-    (ref_q, _, _) = torch.split(
-        torch_input_tensor_a, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
-    )
+    (ref_q, _, _) = torch.split(torch_input_tensor_a, [q_size, kv_size, v_size], dim=-1)
 
     # Reshape and transpose to get proper head dimensions
     # [B, 1, S, heads*head_dim] -> [B, S, heads, head_dim] -> [B, heads, S, head_dim]
@@ -116,9 +157,10 @@ def run(
     }
 
     # Only add device and memory_config if not HOST storage
+    # Always use DRAM to avoid potential sharding issues
     if not is_host:
         from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
+        from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 

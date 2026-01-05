@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -40,6 +39,44 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector):
+    """
+    Validate that the output memory config is sharded.
+    interleaved_to_sharded requires a sharded output memory config.
+    """
+    output_memory_config = test_vector.get("output_memory_config")
+
+    # Check if output is sharded
+    is_output_sharded = False
+
+    # Handle dict memory configs (from JSON deserialization in pipeline)
+    if isinstance(output_memory_config, dict):
+        # Check dict structure for memory_layout
+        mem_layout = output_memory_config.get("memory_layout") or output_memory_config.get("data", {}).get(
+            "memory_layout"
+        )
+        if mem_layout and "INTERLEAVED" in str(mem_layout):
+            return True, "Output memory config must be sharded for interleaved_to_sharded operation"
+        # If it's a dict with SHARDED layout, consider it valid
+        if mem_layout and "SHARDED" in str(mem_layout):
+            is_output_sharded = True
+    else:
+        # Handle proper ttnn MemoryConfig objects
+        if hasattr(output_memory_config, "is_sharded") and callable(getattr(output_memory_config, "is_sharded", None)):
+            is_output_sharded = output_memory_config.is_sharded()
+        elif hasattr(output_memory_config, "memory_layout"):
+            is_output_sharded = output_memory_config.memory_layout in [
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ]
+
+    if not is_output_sharded:
+        return True, "Output memory config must be sharded for interleaved_to_sharded operation"
+
+    return False, None
+
+
 def mesh_device_fixture():
     """
     Override default device fixture for interleaved_to_sharded operation.
@@ -61,6 +98,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 
