@@ -1,0 +1,135 @@
+name: "Validate Test Count"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tests/ttnn/unit_tests/operations/eltwise/**'
+      - 'tests/ttnn/unit_tests/operations/conv/**'
+      - 'tests/ttnn/unit_tests/operations/matmul/**'
+      - 'tests/ttnn/unit_tests/operations/pool/**'
+      - 'tests/ttnn/unit_tests/operations/fused/**'
+
+jobs:
+  check-test-count:
+    runs-on: ubuntu-latest
+    name: "Ensure no new tests added to locked directories"
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history to compare
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Count tests in PR branch
+        id: pr-count
+        run: |
+          # Count tests in locked directories
+          ELTWISE_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          CONV_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/conv/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          MATMUL_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/matmul/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          
+          echo "pr_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
+          echo "pr_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
+          echo "pr_matmul=$MATMUL_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "PR branch test counts:"
+          echo "  Eltwise: $ELTWISE_COUNT"
+          echo "  Conv: $CONV_COUNT"
+          echo "  Matmul: $MATMUL_COUNT"
+
+      - name: Checkout base branch
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          git checkout origin/${{ github.base_ref }}
+
+      - name: Count tests in base branch
+        id: base-count
+        run: |
+          # Count tests in locked directories on base branch
+          ELTWISE_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          CONV_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/conv/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          MATMUL_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/matmul/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          
+          echo "base_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
+          echo "base_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
+          echo "base_matmul=$MATMUL_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "Base branch test counts:"
+          echo "  Eltwise: $ELTWISE_COUNT"
+          echo "  Conv: $CONV_COUNT"
+          echo "  Matmul: $MATMUL_COUNT"
+
+      - name: Compare test counts
+        run: |
+          PR_ELTWISE=${{ steps.pr-count.outputs.pr_eltwise }}
+          BASE_ELTWISE=${{ steps.base-count.outputs.base_eltwise }}
+          PR_CONV=${{ steps.pr-count.outputs.pr_conv }}
+          BASE_CONV=${{ steps.base-count.outputs.base_conv }}
+          PR_MATMUL=${{ steps.pr-count.outputs.pr_matmul }}
+          BASE_MATMUL=${{ steps.base-count.outputs.base_matmul }}
+          
+          FAILED=0
+          
+          echo "## Test Count Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Directory | Base | PR | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Check eltwise
+          if [ "$PR_ELTWISE" -gt "$BASE_ELTWISE" ]; then
+            echo "| eltwise | $BASE_ELTWISE | $PR_ELTWISE | ❌ New tests added (+$((PR_ELTWISE - BASE_ELTWISE))) |" >> $GITHUB_STEP_SUMMARY
+            echo "::error::New tests detected in tests/ttnn/unit_tests/operations/eltwise/ ($BASE_ELTWISE → $PR_ELTWISE)"
+            FAILED=1
+          else
+            echo "| eltwise | $BASE_ELTWISE | $PR_ELTWISE | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check conv
+          if [ "$PR_CONV" -gt "$BASE_CONV" ]; then
+            echo "| conv | $BASE_CONV | $PR_CONV | ❌ New tests added (+$((PR_CONV - BASE_CONV))) |" >> $GITHUB_STEP_SUMMARY
+            echo "::error::New tests detected in tests/ttnn/unit_tests/operations/conv/ ($BASE_CONV → $PR_CONV)"
+            FAILED=1
+          else
+            echo "| conv | $BASE_CONV | $PR_CONV | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check matmul
+          if [ "$PR_MATMUL" -gt "$BASE_MATMUL" ]; then
+            echo "| matmul | $BASE_MATMUL | $PR_MATMUL | ❌ New tests added (+$((PR_MATMUL - BASE_MATMUL))) |" >> $GITHUB_STEP_SUMMARY
+            echo "::error::New tests detected in tests/ttnn/unit_tests/operations/matmul/ ($BASE_MATMUL → $PR_MATMUL)"
+            FAILED=1
+          else
+            echo "| matmul | $BASE_MATMUL | $PR_MATMUL | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$FAILED" -eq 1 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **This PR adds new tests to locked directories.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "These test directories are locked to maintain stable CI runtime." >> $GITHUB_STEP_SUMMARY
+            echo "Please contact @tenstorrent/metalium-developers-infra for approval to add new tests." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **No new tests added - validation passed**" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR if validation fails
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Test Count Validation Failed**\n\nThis PR adds new tests to locked test directories. These directories have a fixed test count to maintain stable CI runtime.\n\nIf you need to add new tests, please:\n1. Contact @tenstorrent/metalium-developers-infra\n2. Explain why the new tests are necessary\n3. Consider adding tests to a different directory\n\nSee the workflow summary for details.'
+            })
