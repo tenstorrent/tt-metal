@@ -78,6 +78,11 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    # Handle None dims - default to reversing all dimensions (transpose-like behavior)
+    if dims is None:
+        ndim = len(shape)
+        dims = tuple(range(ndim - 1, -1, -1))
+
     torch_output_tensor = torch.permute(torch_input_tensor_a, dims)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

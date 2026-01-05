@@ -40,6 +40,34 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Invalidate test vectors where memory configs don't make sense for sharded_to_interleaved.
+    For sharded_to_interleaved: input should be SHARDED, output should be INTERLEAVED.
+
+    The traced JSON (config_65) has an INTERLEAVED input tensor, which is invalid.
+    This happens when the tracer captures the tensor state BEFORE it was sharded,
+    not the actual input to sharded_to_interleaved.
+    """
+    input_mem_config = test_vector.get("input_a_memory_config")
+    output_mem_config = test_vector.get("output_memory_config")
+
+    # Check if input memory config is interleaved (should be sharded)
+    if input_mem_config and hasattr(input_mem_config, "memory_layout"):
+        if input_mem_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+            return (
+                True,
+                "sharded_to_interleaved requires SHARDED input, but traced config has INTERLEAVED input (tracer captured pre-sharding state)",
+            )
+
+    # Check if output memory config is sharded (should be interleaved)
+    if output_mem_config and hasattr(output_mem_config, "memory_layout"):
+        if output_mem_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            return (True, "sharded_to_interleaved requires INTERLEAVED output, but output_memory_config is SHARDED")
+
+    return (False, None)
+
+
 def mesh_device_fixture():
     """
     Override default device fixture for sharded_to_interleaved operation.

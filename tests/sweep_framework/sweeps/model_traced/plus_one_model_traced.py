@@ -62,12 +62,21 @@ def run(
     else:
         shape = input_shape
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    # Generate tensor with correct dtype for plus_one (INT32/UINT32 required)
+    # Check if dtype is int32 or uint32
+    dtype_str = str(input_a_dtype).lower()
+    if "int32" in dtype_str:
+        torch_input_tensor_a = torch.randint(-100, 100, shape, dtype=torch.int32)
+    elif "uint32" in dtype_str:
+        torch_input_tensor_a = torch.randint(0, 200, shape, dtype=torch.int32)  # Will convert to uint32 in ttnn
+    else:
+        # Fallback for other dtypes (shouldn't happen with traced configs)
+        torch_input_tensor_a = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(shape)
 
     # Plus one operation: x + 1
-    torch_output_tensor = torch_input_tensor_a + 1.0
+    torch_output_tensor = torch_input_tensor_a + 1
 
     # Force ROW_MAJOR layout as required by plus_one operation
     # Check if storage_type is HOST - if so, don't pass device to from_torch

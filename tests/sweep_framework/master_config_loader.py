@@ -306,12 +306,16 @@ class MasterConfigLoader:
                     if isinstance(shard_shape_data, list) and len(shard_shape_data) >= 2:
                         shard_shape = shard_shape_data[:2]
                 elif "shape" in shard_spec:
-                    # Regular shard_spec format: "shape": "{224, 224}"
+                    # Regular shard_spec format: can be "shape": "{224, 224}" or "shape": "[224, 224]"
                     shard_shape_str = shard_spec["shape"]
                     if isinstance(shard_shape_str, str):
+                        # Extract all numbers from the string (works for both {} and [] formats)
                         numbers = re.findall(r"\d+", shard_shape_str)
                         if len(numbers) >= 2:
                             shard_shape = [int(numbers[0]), int(numbers[1])]
+                    elif isinstance(shard_shape_str, list) and len(shard_shape_str) >= 2:
+                        # Shape is already a list
+                        shard_shape = shard_shape_str[:2]
 
                 # Use shard shape directly from traced config - no validation or adjustment
                 # Traced configs come from real model runs that worked, so use them as-is
@@ -761,6 +765,11 @@ class MasterConfigLoader:
                                     output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
                                 else:
                                     output_mem_config = parsed_mem_config
+                            elif self._matches_operation(operation_name, "nlp_concat_heads"):
+                                # nlp_concat_heads changes output shape: [B,H,S,D] -> [B,1,S,H*D]
+                                # If input is sharded but output has nullopt shard_spec (incomplete config),
+                                # use INTERLEAVED as safe default since shard dimensions would differ
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
                             else:
                                 # For most unary ops, output matches input
                                 output_mem_config = parsed_mem_config
