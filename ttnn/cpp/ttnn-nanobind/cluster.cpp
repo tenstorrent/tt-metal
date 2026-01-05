@@ -52,6 +52,28 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
                 >>> print(f"Cluster descriptor saved to: {descriptor_path}")
         )doc");
+
+    mod.def(
+        "get_mesh_shape",
+        &ttnn::cluster::get_mesh_shape,
+        R"doc(
+            Get the default mesh shape from the mesh graph descriptor for the current cluster type.
+
+            This returns the shape defined in the default textproto:
+            - Galaxy: 8x4 (32 chips)
+            - T3K: 2x4 (8 chips)
+            - P300: 1x2 (2 chips)
+
+            This API can be called before open_mesh_device() as it reads from the static mesh graph descriptor.
+
+            Returns:
+                ttnn.MeshShape: The default mesh shape for the cluster.
+
+            Example:
+                >>> import ttnn
+                >>> mesh_shape = ttnn.cluster.get_mesh_shape()
+                >>> print(f"Mesh shape: {mesh_shape.x}x{mesh_shape.y}")
+        )doc");
 }
 
 }  // namespace
