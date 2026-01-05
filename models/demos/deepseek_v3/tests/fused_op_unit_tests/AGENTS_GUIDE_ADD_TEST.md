@@ -5,7 +5,7 @@ The following should be provided by the user in order to complete this task succ
 - The sequence of ops that comprise the new fused op
 - The test command for the containing module of the sequence of ops
 
-Before you start, please read the example test in models/demos/deepseek_v3/tests/fused_op_unit_tests/test_ds_fused_wqkva.py carefully. The new test should be similar to the example test, just for a different fused op.
+Before you start, please read the example test in models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_fused_wqkva.py carefully. The new test should be similar to the example test, just for a different fused op.
 Example test command for test_mla.py:
 ```
 source ../setup_metal.sh
@@ -37,7 +37,7 @@ Follow these steps to add a new fused op unit test:
 9. *Verify* that the fused op unit test as well as the sequence of ops within the module *use the exact same configuration including input shapes, dtype, memory_config, and buffer type*. Add the result of this including a log file in the final summary of work. Update the test configurations if there are any mismatches, do not change the sequence in the module, consider this the ground truth.
     1. Run the device perf test of the fused op unit test for prefill (shortest seqlen in fused op unit test) and decode, copy the generated csv files into a newly created folder.
     2. Run the module test with 1 iteration, both for prefill (same seqlen as in fused op unit test csv) and decode, copy the generated csv files into the same folder as in the last step.
-    3. Compare for each op that all properties are identical, i.e. fused op unit test and module test match in terms of op input/output properties both for prefill and for decode. Take a look at compare_fused_wqkva_configs.py to see how that was done for an example fused op unit test.
+    3. Compare for each op that all properties are identical, i.e. fused op unit test and module test match in terms of op input/output properties both for prefill and for decode. Take a look at example_compare_fused_wqkva_configs.py to see how that was done for an example fused op unit test.
 10. Print the summary for all verification steps clearly representing the results and the links to logs for all successful verification steps.
 11. List anything that was unexpected and/or any workarouds you needed to make the fused op unit test work.
 
