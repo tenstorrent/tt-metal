@@ -22,7 +22,8 @@ namespace tt::stl {
  *
  * On x86_64, this calls _mm_pause() which hints to the processor that the
  * code is in a spin-wait loop. On ARM64, this calls __yield() which provides
- * similar functionality.
+ * similar functionality. On RISC-V, this calls __builtin_riscv_pause() which
+ * provides similar functionality.
  *
  * This helps reduce power consumption and improve performance of other
  * threads sharing the same core during busy-wait loops.
@@ -32,6 +33,8 @@ __attribute__((always_inline)) inline void TT_PAUSE() {
     _mm_pause();
 #elif defined(__aarch64__) || defined(_M_ARM64)
     __yield();
+#elif defined(__riscv) || defined(__riscv_xlen)
+    __builtin_riscv_pause();
 #else
     // Fallback for other architectures - do nothing
 #endif
@@ -55,12 +58,13 @@ __attribute__((flatten)) inline void TT_NICE_SPIN_UNTIL(auto predicate, Ts&&... 
     uint32_t sleep_us = 1;
     while (!predicate(std::forward<Ts>(args)...)) {
         ++counter;
-        if (counter >= N_SPINS) {
+        if (counter < N_SPINS) {
+            TT_PAUSE();
+        } else {
             counter = 0;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
             sleep_us = std::min(sleep_us * 2, MAX_WAIT_US);
         }
-        TT_PAUSE();
     }
 }
 
