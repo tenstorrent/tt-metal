@@ -41,6 +41,14 @@ struct BlockSplitWH {
     uint32_t full_cores_per_col = 0;
 };
 
+struct NcoresWH {
+    uint32_t ncores = 0;
+    uint32_t nblocks_per_core = 0;
+    uint32_t total_blocks_width = 0;
+    uint32_t total_blocks_height = 0;
+    uint32_t single_block_size = 0;
+};
+
 inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int height, int ref) {
     if (ref <= 0) {
         return {1, 1};
@@ -71,23 +79,29 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
     return {1, 1};
 }
 
+inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    // Compute grid area and initial blocks-per-core using integer math.
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+
+    // Adjust nblocks_per_core and determine the optimal block size.
+    auto [adjusted_nblocks_per_core, single_block_size] =
+        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
+    nblocks_per_core = adjusted_nblocks_per_core;
+
+    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
+    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    return NcoresWH{ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size};
+}
+
 inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreRangeSet& grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
-    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
-
-    // Find the closest square larger than nblocks_per_core
-    auto [adjusted_nblocks_per_core, single_block_size] =
-        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
-    nblocks_per_core = adjusted_nblocks_per_core;
-
-    // Helper lambda for ceiling division.
-    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
-    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
+        compute_ncores_wh(grid_area, nblocks, width_tiles, height_tiles);
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;
@@ -145,18 +159,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid_size.x * grid_size.y;
-    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
-
-    // Adjust nblocks_per_core and determine the optimal block size.
-    auto [adjusted_nblocks_per_core, single_block_size] =
-        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
-    nblocks_per_core = adjusted_nblocks_per_core;
-
-    // Helper lambda for ceiling division.
-    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
-    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
+        compute_ncores_wh(grid_area, nblocks, width_tiles, height_tiles);
     // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;
@@ -216,11 +220,16 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         full_cores_per_col};
 }
 
+inline std::tuple<uint32_t, uint32_t> compute_ncores(size_t grid_area, uint32_t nblocks) {
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    return {ncores, nblocks_per_core};
+}
+
 inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nblocks) {
     size_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
-    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
-    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_no_cliff = nblocks_per_core_cliff == 0 ? ncores : ncores - 1;
 
@@ -251,8 +260,7 @@ inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nbl
 
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
     size_t grid_area = grid_size.x * grid_size.y;
-    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
-    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
     const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
