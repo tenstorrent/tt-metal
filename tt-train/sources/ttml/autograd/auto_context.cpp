@@ -129,4 +129,37 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
     return *m_socket_manager;
 }
 
+[[nodiscard]] ParallelizationContext& AutoContext::get_parallelization_context() {
+    return m_parallelization_context;
+}
+
+void ParallelizationContext::configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp) {
+    m_mesh_device = mesh_device;
+
+    uint32_t axis = 0;
+    if (enable_dp) {
+        m_dp_axis = axis++;
+    }
+    if (enable_tp) {
+        m_tp_axis = axis++;
+    }
+}
+
+uint32_t ParallelizationContext::get_dp_size() const {
+    if (!m_dp_axis.has_value() || m_mesh_device == nullptr) {
+        return 1U;
+    }
+    return m_mesh_device->shape()[m_dp_axis.value()];
+}
+
+uint32_t ParallelizationContext::get_tp_size() const {
+    if (m_mesh_device == nullptr) {
+        return 1U;
+    }
+    if (!m_tp_axis.has_value()) {
+        return static_cast<uint32_t>(m_mesh_device->num_devices());
+    }
+    return m_mesh_device->shape()[m_tp_axis.value()];
+}
+
 }  // namespace ttml::autograd
