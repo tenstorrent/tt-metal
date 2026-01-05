@@ -308,8 +308,11 @@ class DistributedLayerNorm(Module):
                 self.weight is None and self.bias is None
             ), "weight and bias must be None when dynamic_weight and dynamic_bias are provided"
 
-        weight = dynamic_weight or self.weight.data
-        bias = dynamic_bias or self.bias.data
+            weight = dynamic_weight
+            bias = dynamic_bias
+        else:
+            weight = self.weight.data if self.weight is not None else None
+            bias = self.bias.data if self.bias is not None else None
 
         stats = ttnn.layer_norm_pre_all_gather(
             x,
