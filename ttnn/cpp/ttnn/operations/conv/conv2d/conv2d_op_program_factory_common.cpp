@@ -468,12 +468,14 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         float peak_rate_gbps;  // Maximum achievable transfer rate
     };
 
+    // NOLINTBEGIN(modernize-use-std-numbers)
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
     }
+    // NOLINTEND(modernize-use-std-numbers)
 
     // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
