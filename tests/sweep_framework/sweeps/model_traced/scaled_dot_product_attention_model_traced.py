@@ -5,6 +5,7 @@
 
 import torch
 import ttnn
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -14,8 +15,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-# Increased to 300 (5 minutes) to handle very large sequence lengths (e.g., 61440)
-TIMEOUT = 300
+TIMEOUT = 60
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -37,8 +37,6 @@ parameters = {
         "input_c_layout": [ttnn.TILE_LAYOUT],
         "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "is_causal": [True],
-        "scale": [0.125],  # 1/sqrt(64)
         "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
@@ -60,12 +58,9 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
-    is_causal=False,
-    scale=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -142,10 +137,6 @@ def run(
     _, num_heads_k, _, _ = shape_k
     _, num_heads_v, _, _ = shape_v
 
-    # Calculate scale if not provided (standard attention scaling)
-    if scale is None:
-        scale = 1.0 / (head_dim**0.5)
-
     # Create Q, K, V tensors
     torch_q = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_q)(shape_q)
     torch_k = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_k)(shape_k)
@@ -177,9 +168,9 @@ def run(
         ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
     )
 
-    # PyTorch reference - use the is_causal parameter from traced config
+    # PyTorch reference
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=is_causal, scale=scale
+        torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=False
     )
 
     # TTNN execution
@@ -189,7 +180,7 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.transformer.scaled_dot_product_attention(
-        q_tensor, k_tensor, v_tensor, is_causal=is_causal, scale=scale, memory_config=output_mem_config
+        q_tensor, k_tensor, v_tensor, is_causal=False, memory_config=output_mem_config
     )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
@@ -201,9 +192,7 @@ def run(
         )
     )
 
-    # Check with PCC - use lower threshold for BFLOAT8_B due to lower precision
-    # BFLOAT8_B has significantly reduced precision compared to BFLOAT16
-    pcc_threshold = 0.95 if dtype_q == ttnn.bfloat8_b else 0.99
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, pcc_threshold)
+    # Check with PCC (threshold 0.99 for low-precision dtypes)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

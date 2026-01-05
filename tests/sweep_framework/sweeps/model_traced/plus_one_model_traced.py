@@ -5,7 +5,7 @@
 
 import torch
 import ttnn
-from typing import Tuple, Optional
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -43,21 +43,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Validate test vector and skip if invalid.
-    plus_one requires INT32 or INT64 dtype.
-    Returns: (should_skip: bool, skip_reason: str or None)
-    """
-    input_a_dtype = test_vector.get("input_a_dtype")
-
-    # plus_one only supports INT32 and INT64 dtypes
-    if input_a_dtype not in [ttnn.int32, ttnn.uint32]:
-        return True, f"plus_one requires INT32/UINT32 dtype, got {input_a_dtype}"
-
-    return False, None
-
-
 def run(
     input_shape,
     input_a_dtype,
@@ -67,7 +52,6 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -77,17 +61,12 @@ def run(
     else:
         shape = input_shape
 
-    # Generate appropriate torch tensor based on dtype
-    if input_a_dtype in [ttnn.int32, ttnn.uint32]:
-        # For integer dtypes, use torch.int32
-        torch_input_tensor_a = torch.randint(-100, 100, shape, dtype=torch.int32)
-    else:
-        torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-        )(shape)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(shape)
 
     # Plus one operation: x + 1
-    torch_output_tensor = torch_input_tensor_a + 1
+    torch_output_tensor = torch_input_tensor_a + 1.0
 
     # Force ROW_MAJOR layout as required by plus_one operation
     # Check if storage_type is HOST - if so, don't pass device to from_torch

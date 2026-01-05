@@ -5,6 +5,7 @@
 
 import torch
 import ttnn
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -41,41 +42,6 @@ if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() 
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> tuple[bool, str]:
-    """
-    Invalidate test vectors with corrupted or invalid permute dimensions.
-    Skip vectors where the number of dims doesn't match the input tensor rank.
-    """
-    input_shape = test_vector.get("input_shape")
-    dims = test_vector.get("dims")
-
-    if dims is None:
-        return (True, "dims parameter is None - corrupted trace data")
-
-    # Get input rank
-    if isinstance(input_shape, (list, tuple)):
-        input_rank = len(input_shape)
-    else:
-        # Can't determine rank, skip validation
-        return (False, None)
-
-    # Get dims length
-    if isinstance(dims, (list, tuple)):
-        dims_length = len(dims)
-    else:
-        # Can't determine dims length, skip validation
-        return (False, None)
-
-    # Check if dims length matches input rank
-    if dims_length != input_rank:
-        return (
-            True,
-            f"Dimension mismatch: input has {input_rank}D but dims specifies {dims_length}D permutation - corrupted trace data",
-        )
-
-    return (False, None)
-
-
 def mesh_device_fixture():
     """
     Override default device fixture for permute operation.
@@ -98,7 +64,6 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 

@@ -5,6 +5,7 @@
 
 import torch
 import ttnn
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -48,15 +49,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Skip all rotary_embedding_llama tests until we have a proper golden function.
-    The current implementation uses input.clone() as fallback which doesn't match
-    the actual rotary embedding computation, causing all tests to fail with low PCC.
-    """
-    return True, "No valid golden function available for rotary_embedding_llama"
-
-
 def run(
     input_shape,
     input_a_dtype,
@@ -75,7 +67,6 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -172,6 +163,6 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using placeholder reference for now
-    pcc_result = check_with_pcc(torch_output_tensor, output_tensor, 0.99)  # Lower tolerance for complex ops
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)  # Lower tolerance for complex ops
 
-    return [pcc_result, e2e_perf]
+    return [pcc, e2e_perf]
