@@ -80,7 +80,35 @@ You MUST produce a structured Kernel Design Document saved to:
 
 ### Prerequisites
 - [ ] Requires `compute_kernel_hw_startup()`: {yes/no}
-- [ ] Required defines: {list any REDUCE_OP, REDUCE_DIM, etc.}
+- [ ] Template parameters for reduce helper (if applicable):
+  - `PoolType`: SUM, AVG, or MAX
+  - `ReduceDim`: REDUCE_ROW, REDUCE_COL, or REDUCE_SCALAR
+  - `ReduceInputMode`: STREAMING (default), STREAMING_BATCHED, PRELOADED, or PERSISTENT
+  - `ReduceDataFormatReconfig`: NONE, INPUT, OUTPUT, or BOTH (default)
+
+**Note**: `REDUCE_OP` and `REDUCE_DIM` macros are **deprecated**. Always specify template parameters explicitly.
+
+### Reduce Helper API Reference
+
+The `reduce()` helper uses `TileShape` and `TileLayout` structs:
+
+**IMPORTANT**: "Tile" in `TileShape` refers to the **block dimensions being processed** (rows × cols × batches of 32×32 tiles), NOT the 32×32 hardware tile itself.
+
+```cpp
+// TileShape factory methods:
+TileShape::grid(Ht, Wt, NC)  // Full grid: Ht rows × Wt cols × NC batches
+TileShape::row(Wt, NC)       // Single row: 1 × Wt × NC
+TileShape::col(Ht, NC)       // Single column: Ht × 1 × NC
+TileShape::single()          // Single tile: 1 × 1 × 1
+
+// TileLayout factory methods (for PRELOADED/PERSISTENT modes):
+TileLayout::contiguous()              // Default row-major
+TileLayout::with_row_stride(stride)   // Custom stride between rows
+
+// Full signature:
+compute_kernel_lib::reduce<PoolType, ReduceDim, ReduceInputMode, ReduceDataFormatReconfig>(
+    cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC), TileLayout::contiguous());
+```
 
 ### Phase 1: {phase_name}
 - **Description**: {what this phase does}
