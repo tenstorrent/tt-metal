@@ -73,10 +73,10 @@ public:
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
     void ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    void recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    void recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const override;
 
     [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const override;
 
     /* ---------------- collectives ---------------------- */
     void broadcast(tt::stl::Span<std::byte> buf, Rank root) const override;

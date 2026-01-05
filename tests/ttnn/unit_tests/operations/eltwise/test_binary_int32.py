@@ -8,6 +8,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
+pytestmark = pytest.mark.use_module_device
+
 
 def create_full_range_tensor(input_shape, dtype, value_ranges):
     num_elements = torch.prod(torch.tensor(input_shape)).item()

@@ -4,7 +4,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "../scatter_common.hpp"
-#include "api/debug/dprint.h"
 
 #include <array>
 
@@ -149,7 +148,6 @@ void kernel_main() {
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
-                // DPRINT << "INSIDE " << index_stick_id << ENDL();
                 // second phase: load index and source data chunk-by-chunk and scatter
                 for (uint32_t index_offset = 0, source_offset = 0; index_offset < ctas.index_stick_size;
                      index_offset += index_chunk_size, source_offset += source_chunk_size) {
