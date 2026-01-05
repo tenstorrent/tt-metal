@@ -1798,6 +1798,10 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
 // This test verifies that atomic exchange (amoswap) works correctly between
 // two RISC cores on the same Tensix core, implementing a spinlock
 TEST_F(NightlyFabric2DUDMModeFixture, TestAtomicExchangeSpinlock) {
+    if (arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Test only supported on Blackhole";
+    }
+
     const auto& devices = get_devices();
     if (devices.empty()) {
         GTEST_SKIP() << "No devices available";
