@@ -27,14 +27,12 @@ void kernel_main() {
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(19);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -47,7 +45,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<20>();
+    constexpr auto in0_args = TensorAccessorArgs<19>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
