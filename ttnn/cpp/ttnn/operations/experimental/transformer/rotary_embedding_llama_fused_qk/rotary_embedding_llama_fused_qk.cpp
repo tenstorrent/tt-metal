@@ -21,8 +21,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
-    tt::tt_metal::MemoryConfig q_output_memory_config = q_input_tensor.memory_config();
-    tt::tt_metal::MemoryConfig k_output_memory_config = k_input_tensor.memory_config();
+    const tt::tt_metal::MemoryConfig& q_output_memory_config = q_input_tensor.memory_config();
+    const tt::tt_metal::MemoryConfig& k_output_memory_config = k_input_tensor.memory_config();
     bool row_major_QK = q_input_tensor.layout() == Layout::ROW_MAJOR && k_input_tensor.layout() == Layout::ROW_MAJOR;
 
     return ttnn::prim::rotary_embedding_llama_fused_qk(

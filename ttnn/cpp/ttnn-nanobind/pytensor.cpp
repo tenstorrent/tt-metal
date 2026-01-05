@@ -1666,10 +1666,7 @@ void pytensor_module(nb::module_& mod) {
 
                     topology = tt_tensor.tensor_topology()
             )doc")
-        .def_prop_rw(
-            "tensor_id",
-            [](const Tensor& self) { return self.tensor_id; },
-            [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
+        .def_prop_ro("tensor_id", [](const Tensor& self) { return self.get_id(); });
 }
 
 }  // namespace ttnn::tensor
