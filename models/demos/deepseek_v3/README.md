@@ -15,25 +15,25 @@ This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deep
 
 ## Running on Multi-Host Galaxy (2x or 4x)
 
-DeepSeek-V3 requires a multi-host Galaxy setup. Use the `launch_multihost_galaxy` script to run commands across all hosts:
+DeepSeek-V3 requires a multi-host Galaxy setup. Use the `launch_multihost_galaxy.py` script to run commands across all hosts:
 
 ### Quick Start
 
 ```bash
 # Run tests on 2x Galaxy (2 hosts)
-./launch_multihost_galaxy 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
 
 # Run tests on 4x Galaxy (4 hosts)
-./launch_multihost_galaxy 4x -- pytest models/demos/deepseek_v3/tests/test_model.py
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- pytest models/demos/deepseek_v3/tests/test_model.py
 
 # Run the demo
-./launch_multihost_galaxy 2x -- python models/demos/deepseek_v3/demo/demo.py \
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
   --cache-dir \$DEEPSEEK_V3_CACHE \
   "Your prompt here!"
 
 # Dry run (print command without executing)
-./launch_multihost_galaxy -d 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py -d 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
 ```
 
 ### Configuration
@@ -49,7 +49,7 @@ The script automatically:
 
 ```bash
 # Reset the Galaxy cluster (kills python processes, resets devices, clears shared memory)
-./launch_multihost_galaxy 2x -- reset
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- reset
 ```
 
 ### Supported Hosts
@@ -90,14 +90,14 @@ Running the demo on Galaxy (2x or 4x):
 
 ```bash
 # On 2x Galaxy
-./launch_multihost_galaxy 2x -- python models/demos/deepseek_v3/demo/demo.py \
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
   --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \
   "Write a haiku about autumnal days by the sea"
 
 # On 4x Galaxy
-./launch_multihost_galaxy 4x -- python models/demos/deepseek_v3/demo/demo.py \
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 4x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
   --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \
@@ -107,7 +107,7 @@ Running the demo on Galaxy (2x or 4x):
 The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` and `DEEPSEEK_V3_CACHE` environment variables. You can reference them directly:
 
 ```bash
-./launch_multihost_galaxy 2x -- python models/demos/deepseek_v3/demo/demo.py \
+./models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py 2x -- python models/demos/deepseek_v3/demo/demo.py \
   --model-path \$DEEPSEEK_V3_HF_MODEL \
   --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \

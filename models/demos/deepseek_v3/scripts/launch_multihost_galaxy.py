@@ -1,7 +1,6 @@
+#!/usr/bin/env python
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
-
-#!/usr/bin/env python3
 
 """
 Launch script for multi-host Galaxy jobs via tt-run.
