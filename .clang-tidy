@@ -182,7 +182,7 @@ CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
   - key: readability-function-cognitive-complexity.Threshold
-    value: 339
+    value: 308
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch
