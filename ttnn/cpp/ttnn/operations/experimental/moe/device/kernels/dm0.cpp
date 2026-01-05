@@ -15,6 +15,7 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
+    const auto core_id = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_addr = get_arg_val<uint32_t>(argidx++);
     const auto w1_addr = get_arg_val<uint32_t>(argidx++);
@@ -47,4 +48,28 @@ void kernel_main() {
     const auto w1_accessor = TensorAccessor(w1_args, w1_addr, w1_tile_size);
     const auto w2_accessor = TensorAccessor(w2_args, w2_addr, w2_tile_size);
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_tile_size);
+
+    // Constants for MoE
+    constexpr uint32_t num_w0_tiles = 224;
+    constexpr uint32_t num_w1_tiles = 224;
+    constexpr uint32_t num_w2_tiles = 224;
+
+    constexpr uint32_t w0_stride = 64;
+    constexpr uint32_t w1_stride = 64;
+    constexpr uint32_t w2_stride = 64;
+
+    const uint32_t w0_tile_id_start = core_id;
+    const uint32_t w1_tile_id_start = core_id;
+    const uint32_t w2_tile_id_start = core_id;
+
+    // Read W0 from DRAM into CB
+    uint32_t w0_tile_id = w0_tile_id_start;
+    for (uint32_t i = 0; i < num_w0_tiles; ++i) {
+        cb_reserve_back(cb_r2c_w0, 1);
+        uint32_t cb_r2c_w0_addr = get_write_ptr(cb_r2c_w0);
+        noc_async_read_tile(w0_tile_id, w0_accessor, cb_r2c_w0_addr);
+        noc_async_read_barrier();
+        cb_push_back(cb_r2c_w0, 1);
+        w0_tile_id += w0_stride;
+    }
 }
