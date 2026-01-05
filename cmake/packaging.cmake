@@ -144,7 +144,8 @@ list(
     ttml
     Unspecified # TODO: audit if there's anything we need to ship here
     # Empty placeholder components - these are group "header" components with no install targets.
-    # Files are installed to sub-components (e.g., metalium-runtime, not metalium).
+    # Files are installed to sub-components (e.g., metalium-runtime instead of metalium,
+    # ttnn-dev instead of nn-dev).
     #
     # DEB vs RPM behavior difference:
     # - CPack DEB: tolerant of empty components, silently creates empty packages or skips them
@@ -152,11 +153,10 @@ list(
     #
     # Removing these is a no-op for DEB (already works) but required for RPM. Empty packages
     # serve no purpose in either format, so we exclude them unconditionally for simplicity.
+    #
+    # Note: metalium-dev, metalium-examples, metalium-validation have install targets and are NOT empty.
     metalium-jit
     metalium
-    metalium-dev
-    metalium-examples
-    metalium-validation
     nn
     nn-dev
     nn-examples

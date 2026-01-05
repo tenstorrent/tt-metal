@@ -302,6 +302,12 @@ if(NOT TT_USE_SYSTEM_SFPI)
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
         USE_SOURCE_PERMISSIONS
         COMPONENT jit-build
+        # Exclude libtool archive files (.la) - they are build-time metadata not needed at runtime,
+        # and often contain symlinks that break when staged, causing RPM packaging to fail with
+        # "file not found" errors.
+        PATTERN
+        "*.la"
+            EXCLUDE
     )
 endif()
 
