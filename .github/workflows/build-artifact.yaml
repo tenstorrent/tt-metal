@@ -204,14 +204,35 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # Parse platform dropdown to extract distro/version/toolchain
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+      toolchain: ${{ steps.parse.outputs.toolchain }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+          distro: ${{ inputs.distro }}
+          version: ${{ inputs.version }}
+
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ inputs.ci-build-docker-image == '' }}
+    needs: parse-platform
+    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      distro: ${{ inputs.distro || 'ubuntu' }}
-      version: ${{ inputs.version || '22.04' }}
+      # Use parsed platform values for workflow_dispatch, otherwise use direct inputs
+      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
       architecture: ${{ inputs.architecture }}
 
   download-artifacts:
@@ -264,14 +285,19 @@ jobs:
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
-    name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
-    needs: build-docker-image
+    name: "🛠️ Build ${{ inputs.build-type }} ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }} ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}"
+    needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+    env:
+      # Resolved platform values (from parse-platform for workflow_dispatch, or direct inputs for workflow_call)
+      DISTRO: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      VERSION: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
+      TOOLCHAIN: ${{ needs.parse-platform.outputs.toolchain || inputs.toolchain }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
@@ -313,13 +339,12 @@ jobs:
       - name: Set artifact name
         id: set-artifact-name
         run: |
-          TOOLCHAIN="${{ inputs.toolchain }}"
-          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
           # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
+          ARTIFACT_NAME="packages-${{ env.DISTRO }}-${{ env.VERSION }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -349,7 +374,7 @@ jobs:
 
           args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
           echo "Args: ${args_fixme}"
-          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only"
+          build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ env.TOOLCHAIN }} ${args_fixme} --enable-ccache --configure-only"
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "false" ]; then
             build_command="$build_command --disable-profiler"
@@ -385,7 +410,7 @@ jobs:
       - name: 📦 Package
         run: |
           cmake --build build --target package
-          if [[ "${{ inputs.distro }}" == "fedora" ]]; then
+          if [[ "${{ env.DISTRO }}" == "fedora" ]]; then
             ls -1sh build/*.rpm || true
           else
             ls -1sh build/*.deb build/*.ddeb || true
@@ -399,7 +424,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: ☁️ Upload packages (DEB)
-        if: ${{ inputs.publish-package && inputs.distro != 'fedora' }}
+        if: ${{ inputs.publish-package && (needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu') != 'fedora' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -411,7 +436,7 @@ jobs:
           if-no-files-found: error
 
       - name: ☁️ Upload packages (RPM)
-        if: ${{ inputs.publish-package && inputs.distro == 'fedora' }}
+        if: ${{ inputs.publish-package && (needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu') == 'fedora' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -433,12 +458,12 @@ jobs:
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
           # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ env.VERSION }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -455,12 +480,12 @@ jobs:
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
+    name: 🐍 Build wheel (Python ${{ (needs.parse-platform.outputs.version || inputs.version || '22.04') == '22.04' && '3.10' || '3.12' }})
     uses: ./.github/workflows/wheels.yaml
-    needs: build-docker-image
+    needs: [parse-platform, build-docker-image]
     secrets: inherit
     with:
-      python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
+      python-version: ${{ (needs.parse-platform.outputs.version || inputs.version || '22.04') == '22.04' && '3.10' || '3.12' }}
       docker-image: ${{ inputs.manylinux-docker-image || needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}

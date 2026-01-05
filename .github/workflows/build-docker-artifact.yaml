@@ -71,38 +71,24 @@ jobs:
       distro: ${{ steps.platform.outputs.distro }}
       version: ${{ steps.platform.outputs.version }}
     steps:
-      - name: Set environment variables
-        id: platform
-        run: |
-          # Parse platform dropdown if set (direct workflow_dispatch), otherwise use distro/version inputs
-          if [ -n "${{ inputs.platform }}" ]; then
-            case "${{ inputs.platform }}" in
-              "Ubuntu 22.04")
-                DISTRO="ubuntu"
-                VERSION="22.04"
-                ;;
-              "Ubuntu 24.04")
-                DISTRO="ubuntu"
-                VERSION="24.04"
-                ;;
-              "Fedora 43")
-                DISTRO="fedora"
-                VERSION="43"
-                ;;
-              *)
-                DISTRO="ubuntu"
-                VERSION="22.04"
-                ;;
-            esac
-          else
-            DISTRO="${{ inputs.distro || 'ubuntu' }}"
-            VERSION="${{ inputs.version || '22.04' }}"
-          fi
-          ARCH="${{ inputs.architecture || 'amd64' }}"
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-          # Output for use by other jobs
-          echo "distro=${DISTRO}" >> $GITHUB_OUTPUT
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      - name: Parse platform
+        id: platform
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+          distro: ${{ inputs.distro }}
+          version: ${{ inputs.version }}
+
+      - name: Set environment variables
+        run: |
+          DISTRO="${{ steps.platform.outputs.distro }}"
+          VERSION="${{ steps.platform.outputs.version }}"
+          ARCH="${{ inputs.architecture || 'amd64' }}"
 
           echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
           echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
@@ -110,11 +96,6 @@ jobs:
           echo "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> $GITHUB_ENV
           echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
           echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
-
-      - name: Checkout repo
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
 
       # Helper function to compute hash from Dockerfile + its COPY sources + extra files
       - name: Define hash function

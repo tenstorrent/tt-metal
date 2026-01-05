@@ -45,6 +45,25 @@ on:
         default: "amd64"
 
 jobs:
+  # Parse platform dropdown to extract distro/version
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+          distro: ${{ inputs.distro }}
+          version: ${{ inputs.version }}
+          default-version: '24.04'  # code-analysis defaults to 24.04
+
   determine-scan-type:
     runs-on: ubuntu-latest
     outputs:
@@ -66,19 +85,20 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ inputs.ci-build-docker-image == '' }}
+    needs: parse-platform
+    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      distro: ${{ inputs.distro || 'ubuntu' }}
-      version: ${{ inputs.version || '24.04' }}
+      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || inputs.version || '24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
   clang-tidy:
     name: 🤖 Clang Tidy
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [ parse-platform, build-docker-image, determine-scan-type ]
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && needs.determine-scan-type.outputs.do-scan == 'true' }}
     runs-on: tt-ubuntu-2204-xlarge-stable
