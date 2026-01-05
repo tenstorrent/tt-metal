@@ -1337,7 +1337,7 @@ struct from_json_t<T> {
         if (json_object.is_null()) {
             return nullptr;
         }
-        throw std::runtime_error("Cannot load pointer         from JSON");
+        throw std::runtime_error("Cannot load pointer from JSON");
     }
 };
 

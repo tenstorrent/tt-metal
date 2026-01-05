@@ -43,7 +43,7 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
         return program::UpsampleMultiCoreInterleavedProgramFactory{};
 
     } else {
-        TT_THROW("Unsupported mode: only supported         modes are nearest and bilinear");
+        TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
     }
 }
 

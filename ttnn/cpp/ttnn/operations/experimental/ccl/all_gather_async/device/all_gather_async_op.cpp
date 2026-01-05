@@ -161,7 +161,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
     }
-    TT_FATAL(this->semaphore.size() == 2, "Default implementation         requires 2 semaphores");
+    TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
     return AllGatherAsyncVersion::MINIMAL_DEFAULT;
 }
 

@@ -162,7 +162,7 @@ struct OpPerformanceModelGeneral {
             }
             if (t.memory_config().is_l1()) {
                 return 1.0f;  // TODO: figure out better modelling scheme for L1->L1 Transfers
-                              // return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024         * 1000 * 1000 *
+                              // return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 *
                               // 1000;
             }
             return 0.0f;

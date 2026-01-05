@@ -19,7 +19,7 @@ uint32_t compute_weight_count_offset(
     if (cluster_axis == 1) {
         return mesh_coordinate[1] * non_zero_per_device;
     }
-    TT_THROW("Unsupported cluster         axis");
+    TT_THROW("Unsupported cluster axis");
     return 0;
 }
 }  // unnamed namespace

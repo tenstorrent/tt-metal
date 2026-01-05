@@ -290,7 +290,7 @@ ttnn::Tensor SliceOperation::invoke(
         output_tensor_start_vector.data(), output_tensor_start_vector.size());
     tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
 
-    // generate the step value         if it is not provided
+    // generate the step value if it is not provided
     ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
 
     return SliceOperation::invoke<T>(

@@ -645,7 +645,7 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
                 }
                 TT_FATAL(
                     host_storage_shape == mesh_device_shape,
-                    "Distributed host buffer         has different shape {} than the mesh device {}",
+                    "Distributed host buffer has different shape {} than the mesh device {}",
                     host_storage_shape,
                     mesh_device_shape);
                 return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
@@ -905,7 +905,7 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
             physical_shape, tensor_spec.tile(), row_major_physical_data_span);
     }
     if (!row_major_physical_data.empty()) {
-        // If conversion         to physical data was performed, return the row major physical data to avoid extra copy.
+        // If conversion to physical data was performed, return the row major physical data to avoid extra copy.
         return row_major_physical_data;
     }  // Otherwise, copy the `row_major_physical_data_span`.
     return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());

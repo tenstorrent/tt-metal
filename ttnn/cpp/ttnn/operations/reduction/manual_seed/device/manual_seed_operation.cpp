@@ -30,12 +30,12 @@ ManualSeedDeviceOperation::program_factory_t ManualSeedDeviceOperation::select_p
         !tensor_args.seeds.has_value() && !tensor_args.user_ids.has_value()) {
         return program::ManualSeedSingleSeedSingleCoreProgramFactory{};
     }
-    // Case 3: seed=uint32_t, user_ids=Tensor - set seeds to cores         in user_ids tensor
+    // Case 3: seed=uint32_t, user_ids=Tensor - set seeds to cores in user_ids tensor
     if (operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && tensor_args.user_ids.has_value()) {
         return program::ManualSeedSingleSeedSetCoresProgramFactory{};
     }
-    // Case 4: seed=Tensor, user_ids=Tensor - set mapping seeds to         cores based on tensors
+    // Case 4: seed=Tensor, user_ids=Tensor - set mapping seeds to cores based on tensors
     else if (
         !operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         tensor_args.seeds.has_value() && tensor_args.user_ids.has_value()) {

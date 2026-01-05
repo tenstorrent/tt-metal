@@ -39,7 +39,7 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
             // row major must have shard_spec[0] be the same on both input and output
             return input_tensor.memory_config().shard_spec().value().shape[0] ==
                    out_mem_config.shard_spec().value().shape[0];
-        }  // row major must have shard_spec[1] be the same         on both input and output
+        }  // row major must have shard_spec[1] be the same on both input and output
         return input_tensor.memory_config().shard_spec().value().shape[1] ==
                out_mem_config.shard_spec().value().shape[1];
     }

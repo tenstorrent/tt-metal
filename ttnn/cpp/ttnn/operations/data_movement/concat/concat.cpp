@@ -190,7 +190,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
                 return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
             }
             TT_THROW(
-                "ttnn.concat:         expected a tensor with device storage, but got a tensor with storage type        "
+                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
                 " {}",
                 tensor.storage_type());
 

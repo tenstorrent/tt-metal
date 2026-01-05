@@ -49,7 +49,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
         memory_config.value_or(input_tensor.memory_config()),
         kernel_config_val,
         dtype,
-        std::nullopt,  // use_2d_core_grid - LayerNorm         doesn't expose this parameter
+        std::nullopt,  // use_2d_core_grid - LayerNorm doesn't expose this parameter
         program_config.value_or(LayerNormDefaultProgramConfig{}));
 }
 

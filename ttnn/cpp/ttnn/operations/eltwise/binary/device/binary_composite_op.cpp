@@ -310,7 +310,7 @@ Tensor ExecuteDiv::invoke(
         }  // round_mode = None
         TT_FATAL(
             (output_dtype == std::nullopt || output_dtype == DataType::FLOAT32),
-            "Incorrect output_dtype value for Integer Division(round_mode=None)         ; valid input values are "
+            "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are "
             "None or "
             "ttnn.float32");
         return BinaryOperation<BinaryOpType::DIV>::invoke(

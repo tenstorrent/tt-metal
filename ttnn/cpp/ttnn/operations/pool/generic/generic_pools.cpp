@@ -337,7 +337,7 @@ static std::vector<Tensor> pool2d_L1(
             output_tensors.size());
         return output_tensors;
     }
-    TT_FATAL(output_tensors.size() == 1, "Expected a         single output tensor when return_indices is false.");
+    TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
     return output_tensors;
 }
 

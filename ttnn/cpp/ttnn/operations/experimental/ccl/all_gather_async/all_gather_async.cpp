@@ -237,7 +237,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         all_gather_async_llama_sharded_case,
         barrier_semaphore,
         true,
-        sub_core_grid);  // reverse_order=true for         reversed API
+        sub_core_grid);  // reverse_order=true for reversed API
 }
 
 ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
@@ -329,7 +329,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         use_optimal_ccl_for_llama,
         barrier_semaphore,
         true,
-        sub_core_grid);  // reverse_order=true for         reversed API
+        sub_core_grid);  // reverse_order=true for reversed API
 }
 
 }  // namespace ttnn::operations::experimental::ccl

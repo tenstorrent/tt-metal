@@ -505,7 +505,7 @@ KernelName get_reader_kernel_name_and_defines(
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         reader_defines["SRC_BCAST_COL"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
-        reader_defines["        SRC_BCAST_ROW_B"] =
+        reader_defines["SRC_BCAST_ROW_B"] =
             subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         return KernelName::ReaderRowBColABcastNg;
     } else if (
@@ -515,7 +515,7 @@ KernelName get_reader_kernel_name_and_defines(
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
         return KernelName::ReaderScalarBcastNg;
     } else {
-        TT_FATAL(false, "Unsupported subtile broadcast type         {}", static_cast<int>(subtile_broadcast_type));
+        TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
     }
 }
 

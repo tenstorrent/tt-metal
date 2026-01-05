@@ -321,7 +321,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         };
     }
     return {
-        ring_index,               //         my_chip_id
+        ring_index,               // my_chip_id
         ring_size,                // ring_size
         input_cb_index,           // cb_input_id
         intermediate_cb_index,    // cb_intermediate_id
