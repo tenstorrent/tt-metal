@@ -90,14 +90,33 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = dm_compile_args});
 
+    [[maybe_unused]] auto compute_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
+        cores,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .bfp8_pack_precise = true,
+            .math_approx_mode = false,
+            .compile_args = dm_compile_args});
+
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
+    runtime_args.push_back(0);  // Core ID placeholder
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
     }
 
-    tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, cores, runtime_args);
-    tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, cores, runtime_args);
+    uint32_t core_id = 0;
+    for (const auto& core : cores.ranges()) {
+        for (const auto& core : core) {
+            runtime_args[0] = core_id++;
+            tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
+        }
+    }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
 }
