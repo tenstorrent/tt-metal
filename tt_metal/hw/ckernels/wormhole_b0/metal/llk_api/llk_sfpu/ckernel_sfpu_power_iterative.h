@@ -41,7 +41,7 @@ namespace sfpu {
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
 template <bool IS_POSITIVE_EXPONENT>
-sfpi_inline sfpi::vFloat _sfpu_unary_power(sfpi::vFloat base, sfpi::vFloat pow) {
+sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
     // 2) Compute base**pow = 2**(pow * log2(base))
@@ -153,7 +153,25 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power(sfpi::vFloat base, sfpi::vFloat pow) 
     return y;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_POSITIVE_EXPONENT>
+sfpi_inline sfpi::vFloat _sfpu_unary_power_f32_accurate_(sfpi::vFloat base, sfpi::vFloat pow) {
+    vFloat y = 32.3f;
+    if constexpr (!IS_POSITIVE_EXPONENT) {
+        y = -y;
+    }
+    return y;
+}
+
+template <bool IS_POSITIVE_EXPONENT, bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_unary_power(sfpi::vFloat base, sfpi::vFloat pow) {
+    if constexpr (is_fp32_dest_acc_en) {
+        return _sfpu_unary_power_f32_accurate_<IS_POSITIVE_EXPONENT>(base, pow);
+    } else {
+        return _sfpu_unary_power_21f_<IS_POSITIVE_EXPONENT>(base, pow);
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_power_iterative(const uint32_t exponent) {
     // exponent contains IEEE 754 float bits (converted by compute_kernel_api.h)
     const float pow_scalar = Converter::as_float(exponent);
@@ -189,14 +207,14 @@ inline void calculate_power_iterative(const uint32_t exponent) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power<true>(base, pow);
+            sfpi::dst_reg[0] = _sfpu_unary_power<true, is_fp32_dest_acc_en>(base, pow);
             sfpi::dst_reg++;
         }
     } else {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_unary_power<false>(base, pow);
+            sfpi::dst_reg[0] = _sfpu_unary_power<false, is_fp32_dest_acc_en>(base, pow);
             sfpi::dst_reg++;
         }
     }

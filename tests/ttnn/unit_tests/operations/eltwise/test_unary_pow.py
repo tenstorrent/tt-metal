@@ -61,3 +61,25 @@ def test_pow_arange_masking(exponent, device):
     golden = flush_subnormal_values(golden)
 
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize("exponent", [12.0, -0.6484])
+def test_pow_arange_masking_fp32(exponent, device):
+    tt_input = generate_clean_bf16_tensor(torch.float32)
+
+    tt_in = ttnn.from_torch(
+        tt_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    golden = golden_function(tt_input, exponent, device=device)
+
+    tt_result = ttnn.pow(tt_in, exponent)
+    result = ttnn.to_torch(tt_result)
+    print(result)
+
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
