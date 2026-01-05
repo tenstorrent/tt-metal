@@ -237,7 +237,7 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
         BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
         BfpFormat == tt::DataFormat::Bfp8_b);
 
-    constexpr uint32_t MANTISSA_BFP_WIDTH = []() constexpr {
+    constexpr uint32_t MANTISSA_BFP_WIDTH = []() {
         if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
             return 1;
         } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
