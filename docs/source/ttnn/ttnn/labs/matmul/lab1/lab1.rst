@@ -54,7 +54,7 @@ Using row-major layout, this matrix is stored in memory as::
 
 When accessing element ``A[i][j]`` in a matrix with ``N`` columns, the memory address is calculated as::
 
-   ``address = base_address + (i * N + j) * sizeof(element)``
+   address = base_address + (i * N + j) * sizeof(element)
 
 Cache-Friendly Access Patterns
 ------------------------------
