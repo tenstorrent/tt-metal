@@ -30,7 +30,7 @@ on:
           - gemma3
           - wan22
           - mochi
-          - gpt_oss
+          - gpt-oss
       extra-tag:
         required: true
         type: string

@@ -621,6 +621,31 @@ run_t3000_tt_dit_tests() {
 
 }
 
+run_t3000_gpt_oss_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_gpt_oss_unit_tests"
+
+  # GPT-OSS weights
+  gpt_oss_20b=openai/gpt-oss-20b
+  gpt_oss_120b=openai/gpt-oss-120b
+  tt_cache_gpt_oss_20b=$TT_CACHE_HOME/$gpt_oss_20b
+  tt_cache_gpt_oss_120b=$TT_CACHE_HOME/$gpt_oss_120b
+
+  HF_MODEL=$gpt_oss_20b TT_CACHE_PATH=$tt_cache_gpt_oss_20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+  HF_MODEL=$gpt_oss_120b TT_CACHE_PATH=$tt_cache_gpt_oss_120b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gpt_oss_unit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
@@ -672,6 +697,9 @@ run_t3000_tests() {
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests
+
+  # Run gpt-oss unit tests
+  run_t3000_gpt_oss_unit_tests
 }
 
 fail=0

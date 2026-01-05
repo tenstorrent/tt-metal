@@ -198,7 +198,7 @@ jobs:
             },
             {
               "name": "t3k_gpt_oss_tests",
-              "model": "gpt_oss",
+              "model": "gpt-oss",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_gpt_oss_tests",
               "timeout": 30,
