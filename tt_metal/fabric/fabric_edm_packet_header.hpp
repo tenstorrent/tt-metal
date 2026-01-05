@@ -854,9 +854,6 @@ struct LowLatencyMeshRoutingFields {
     };
 };
 
-// WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
-#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 32
-
 // TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 // Primary template for 2D routing headers with variable route buffer size
 template <int RouteBufferSize = 32>
