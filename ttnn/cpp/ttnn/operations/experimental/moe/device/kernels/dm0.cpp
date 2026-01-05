@@ -50,26 +50,52 @@ void kernel_main() {
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_tile_size);
 
     // Constants for MoE
-    constexpr uint32_t num_w0_tiles = 224;
-    constexpr uint32_t num_w1_tiles = 224;
-    constexpr uint32_t num_w2_tiles = 224;
+    constexpr uint32_t num_w0_w1_tiles = 224;
+    constexpr uint32_t num_w2_tiles_h = 64;
+    const uint32_t num_w2_tiles_w = core_id < 32 ? 4 : 3;
+    const uint32_t num_mm2_tiles = core_id < 32 ? 4 : 3;
 
-    constexpr uint32_t w0_stride = 64;
-    constexpr uint32_t w1_stride = 64;
-    constexpr uint32_t w2_stride = 64;
+    constexpr uint32_t num_elt_tiles = 1;
+
+    constexpr uint32_t w0_w1_stride = 64;
+    constexpr uint32_t w2_stride_w = 1;
+    constexpr uint32_t w2_stride_h = 224;
 
     const uint32_t w0_tile_id_start = core_id;
     const uint32_t w1_tile_id_start = core_id;
-    const uint32_t w2_tile_id_start = core_id;
+    const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
 
-    // Read W0 from DRAM into CB
+    // Read W0 and W1 from DRAM into CB
     uint32_t w0_tile_id = w0_tile_id_start;
-    for (uint32_t i = 0; i < num_w0_tiles; ++i) {
+    uint32_t w1_tile_id = w1_tile_id_start;
+    for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_reserve_back(cb_r2c_w0, 1);
         uint32_t cb_r2c_w0_addr = get_write_ptr(cb_r2c_w0);
         noc_async_read_tile(w0_tile_id, w0_accessor, cb_r2c_w0_addr);
         noc_async_read_barrier();
         cb_push_back(cb_r2c_w0, 1);
-        w0_tile_id += w0_stride;
+        w0_tile_id += w0_w1_stride;
+
+        cb_reserve_back(cb_r2c_w1, 1);
+        uint32_t cb_r2c_w1_addr = get_write_ptr(cb_r2c_w1);
+        noc_async_read_tile(w1_tile_id, w1_accessor, cb_r2c_w1_addr);
+        noc_async_read_barrier();
+        cb_push_back(cb_r2c_w1, 1);
+        w1_tile_id += w0_w1_stride;
+    }
+
+    // Read W2 from DRAM into CB
+    uint32_t w2_tile_id_h_start = w2_tile_id_start;
+    for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
+        uint32_t w2_tile_id = w2_tile_id_h_start;
+        for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
+            cb_reserve_back(cb_r2c_w2, 1);
+            uint32_t cb_r2c_w2_addr = get_write_ptr(cb_r2c_w2);
+            noc_async_read_tile(w2_tile_id, w2_accessor, cb_r2c_w2_addr);
+            noc_async_read_barrier();
+            cb_push_back(cb_r2c_w2, 1);
+            w2_tile_id += w2_stride_w;
+        }
+        w2_tile_id_h_start += w2_stride_h;
     }
 }
