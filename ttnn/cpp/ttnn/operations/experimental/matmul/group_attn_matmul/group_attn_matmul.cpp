@@ -5,7 +5,7 @@
 #include "device/group_attn_matmul_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "group_attn_matmul.hpp"
-
+#include "ttnn/device.hpp"
 #include <utility>
 
 namespace ttnn::operations::experimental::matmul {
@@ -31,9 +31,8 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         }
     }
 
-    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE
-                    ? input_tensor_a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch()
+                                                                     : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
 
     // Need to cache on out_subblock_w because it must be a compile time arg for optimal use of templated pack_untilize

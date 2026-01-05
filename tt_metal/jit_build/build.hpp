@@ -12,9 +12,10 @@
 #include <string>
 #include <vector>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
@@ -92,6 +93,7 @@ protected:
 
     bool is_fw_;
     bool process_defines_at_compile_{};
+    bool firmware_is_kernel_object_{};
     uint32_t dispatch_message_addr_;
 
     std::string out_path_;
@@ -118,16 +120,16 @@ protected:
     std::string default_linker_opt_level_;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    size_t compile(const std::string& out_path, const JitBuildSettings* settings) const;
+    size_t compile(const std::string& out_dir, const JitBuildSettings* settings) const;
     void compile_one(
-        const std::string& out_path,
+        const std::string& out_dir,
         const JitBuildSettings* settings,
         const std::string& src,
         const std::string& obj) const;
     bool need_link(const std::string& out_dir) const;
-    void link(const std::string& out_path, const JitBuildSettings* settings) const;
-    void weaken(const std::string& out_path) const;
-    std::string weakened_firmeware_elf_name() const;
+    void link(const std::string& out_dir, const JitBuildSettings* settings) const;
+    void weaken(const std::string& out_dir) const;
+    std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
@@ -147,7 +149,7 @@ public:
 using JitBuildStateSubset = std::span<const JitBuildState>;
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
-void jit_build_subset(JitBuildStateSubset builds, const JitBuildSettings* settings);
+void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings);
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);

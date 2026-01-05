@@ -97,6 +97,24 @@ Tests:
     patterns:
       - type: full_ring
 
+  - name: "FullRingUnicastDeadlockQuick"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 1000000
+
+    patterns:
+      - type: full_ring
+
   - name: "HalfRingMulticast"
     fabric_setup:
       topology: Ring
@@ -225,6 +243,25 @@ Tests:
       ftype: mcast
       size: 1024
       num_packets: 100
+
+    patterns:
+      - type: full_ring
+
+  - name: "FabricMuxFullRingMulticastDeadlockCheckQuick"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+      fabric_tensix_config: Mux
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 1000000
 
     patterns:
       - type: full_ring

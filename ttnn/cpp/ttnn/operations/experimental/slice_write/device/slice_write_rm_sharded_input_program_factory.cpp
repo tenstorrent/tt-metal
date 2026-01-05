@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -15,9 +14,8 @@
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::slice_write::program {
@@ -31,7 +29,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores,
     uint32_t max_read_size) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < input_shape.rank(); i++) {
         input_shape[i] = output_tensor_end[i] - output_tensor_start[i];
@@ -61,7 +59,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
-    std::vector<uint32_t> size_till_end(num_dims);
+    std::vector<int> size_till_end(num_dims);
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
     std::vector<uint32_t> accumulated_input_total_per_dim(num_dims);
@@ -158,9 +156,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         id_per_dim[0] = num_sticks_read % num_input_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_read / num_input_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
-        uint32_t max_num_sticks_this_core = 0;
+        int max_num_sticks_this_core = 0;
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_sticks_per_dim[j];
+            if (j == num_dims - 1 && unpadded_written == num_input_sticks_per_dim[j]) {
+                // Handle edge case where last dimension is completely written
+                id_per_dim[j] = num_input_sticks_per_dim[j];
+            }
             unpadded_written = unpadded_written / num_input_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
             size_till_end[j] = output_tensor_end[-1 - j] - output_tensor_start[-1 - j] - id_per_dim[j] - 1;
@@ -172,7 +174,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         writer_kernel_args[0] += width_offset;
         writer_kernel_args[2] = this_input_row_size_bytes;
 
-        uint32_t num_sticks_this_core = std::min(num_sticks_per_core, max_num_sticks_this_core + 1);
+        uint32_t num_sticks_this_core =
+            std::min<uint32_t>(num_sticks_per_core, std::max<int>(max_num_sticks_this_core + 1, 0));
 
         log_trace(
             tt::LogOp,

@@ -5,8 +5,8 @@
 #pragma once
 
 #include <array>
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -339,9 +339,11 @@ struct NocUnicastScatterWriteFields {
     template <bool IS_SOURCE>
     static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
         uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t chunk_count = get_local_arg_val<uint32_t>(arg_idx++);
+        ASSERT(chunk_count == MAX_CHUNKS, "scatter chunk_count must be equal to 2 for tt_fabric perf microbenchmarks");
 
-        std::array<uint32_t, MAX_CHUNKS> dst_addresses;
-        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+        std::array<uint32_t, MAX_CHUNKS> dst_addresses{};
+        for (uint32_t i = 0; i < chunk_count; i++) {
             dst_addresses[i] = get_local_arg_val<uint32_t>(arg_idx++);
         }
 
@@ -350,25 +352,29 @@ struct NocUnicastScatterWriteFields {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
 
-        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
-        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
-            chunk_sizes[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes{};
+        for (uint32_t i = 0; i < (chunk_count - 1); i++) {
+            chunk_sizes[i] = static_cast<uint16_t>(get_local_arg_val<uint32_t>(arg_idx++));
         }
 
-        return NocUnicastScatterWriteFields(payload_size_bytes, dst_addresses, chunk_sizes, dst_noc_encoding);
+        return NocUnicastScatterWriteFields(
+            payload_size_bytes, static_cast<uint8_t>(chunk_count), dst_addresses, chunk_sizes, dst_noc_encoding);
     }
 
     NocUnicastScatterWriteFields(
         uint32_t payload_size_bytes,
+        uint8_t chunk_count,
         const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
         const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
         uint32_t dst_noc_encoding) :
         payload_size_bytes(payload_size_bytes),
+        chunk_count(chunk_count),
         dst_addresses(dst_addresses),
         chunk_sizes(chunk_sizes),
         dst_noc_encoding(dst_noc_encoding) {}
 
     uint32_t payload_size_bytes;
+    uint8_t chunk_count;
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     uint32_t dst_noc_encoding;
@@ -718,10 +724,10 @@ struct LineSyncConfig {
         }
     }
 
-    template <bool IS_2D_FABRIC>
+    template <bool IS_2D_FABRIC, ChipSendType CHIP_SEND_TYPE>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
         // setup header fields. 2 rt args for 1D
-        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC>::parse_and_setup(
+        ChipSendTypeHandler<CHIP_SEND_TYPE, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
         // set up noc fields, 4 rt args
@@ -1195,14 +1201,13 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
 inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
     auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
 
-    // Build the scatter command header
-    NocUnicastScatterCommandHeader scatter_header;
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
-        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[i]);
-    }
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
-    }
+    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
+    const auto scatter_header = NocUnicastScatterCommandHeader(
+        {
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0]),
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1]),
+        },
+        {fields.chunk_sizes[0]});
 
     config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
     config->noc_fields_.scatter_write_fields = fields;
@@ -1212,17 +1217,14 @@ inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTr
 inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
     const auto& fields = config->noc_fields_.scatter_write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
+    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
 
-    // Build the scatter command header with updated addresses
-    NocUnicastScatterCommandHeader scatter_header;
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
-        uint32_t dest_address = fields.dst_addresses[i] + buffer_offset;
-        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
-    }
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
-    }
-
+    const auto scatter_header = NocUnicastScatterCommandHeader(
+        {
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0] + buffer_offset),
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1] + buffer_offset),
+        },
+        {fields.chunk_sizes[0]});
     config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
 }
 
@@ -2126,7 +2128,11 @@ private:
 /* ********************
  * SyncKernelConfig   *
  **********************/
-template <uint8_t NUM_SYNC_FABRIC_CONNECTIONS, bool IS_2D_FABRIC, uint8_t NUM_LOCAL_SYNC_CORES>
+template <
+    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
+    bool IS_2D_FABRIC,
+    uint8_t NUM_LOCAL_SYNC_CORES,
+    bool USE_UNICAST_SYNC_PACKETS>
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2200,7 +2206,10 @@ private:
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC>(local_args_idx, packet_header_address);
+            constexpr ChipSendType CHIP_SEND_TYPE =
+                USE_UNICAST_SYNC_PACKETS ? ChipSendType::CHIP_UNICAST : ChipSendType::CHIP_MULTICAST;
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, CHIP_SEND_TYPE>(
+                local_args_idx, packet_header_address);
         }
 
         // Initialize local sync config

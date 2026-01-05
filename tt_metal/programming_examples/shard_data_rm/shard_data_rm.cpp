@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
@@ -133,8 +132,8 @@ int main() {
     }
 
     fmt::print("Original tensor values: ");
-    for (uint32_t src_vec_idx = 0; src_vec_idx < src_vec.size(); src_vec_idx++) {
-        fmt::print("{:0.1f} ", static_cast<float>(src_vec[src_vec_idx]));
+    for (auto val : src_vec) {
+        fmt::print("{:0.1f} ", static_cast<float>(val));
     }
     fmt::print("\n");
 

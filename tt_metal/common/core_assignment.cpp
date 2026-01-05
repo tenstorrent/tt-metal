@@ -12,8 +12,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     const std::vector<uint32_t>& non_worker_rows,
@@ -136,11 +135,11 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     // Merge both groups based on original indices (maintain ordering by dram bank_id here)
     std::vector<CoreCoord> shifted_dram_interface_workers;
     shifted_dram_interface_workers.reserve(num_dram_banks);
-    for (int i = 0; i < indices_g1_realloc.size(); ++i) {
-        shifted_dram_interface_workers.push_back(dram_interface_workers_g1[indices_g1_realloc[i]]);
+    for (int i : indices_g1_realloc) {
+        shifted_dram_interface_workers.push_back(dram_interface_workers_g1[i]);
     }
-    for (int i = 0; i < indices_g2_realloc.size(); ++i) {
-        shifted_dram_interface_workers.push_back(dram_interface_workers_g2[indices_g2_realloc[i]]);
+    for (int i : indices_g2_realloc) {
+        shifted_dram_interface_workers.push_back(dram_interface_workers_g2[i]);
     }
     return shifted_dram_interface_workers;
 }
@@ -214,5 +213,4 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     TT_THROW("Invalid Arch Name specified");
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

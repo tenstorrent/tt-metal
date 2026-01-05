@@ -11,8 +11,8 @@
 //  - CQ_DISPATCH_CMD_WAIT: Wait for workers to complete and reset wait count
 //    and instead need a unicast for the go signal
 
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 
@@ -59,6 +59,9 @@ extern "C" {
 // These variables are used by triage to help report dispatcher state.
 volatile uint32_t last_wait_count = 0;
 volatile uint32_t last_wait_stream = 0;
+constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 }
 
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.

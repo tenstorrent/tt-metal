@@ -19,8 +19,6 @@ from transformers import SwinForImageClassification as HF_SwinForImageClassifica
 
 from models.common.utility_functions import (
     profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
@@ -43,7 +41,6 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
     ground_truth = []
     predicted_label = []
 
-    disable_persistent_kernel_cache()
     base_address = f"swin."
     with torch.no_grad():
         torch_model = model
@@ -71,7 +68,6 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
         profiler.end(first_key)
         del tt_output
 
-        enable_persistent_kernel_cache()
         profiler.start(second_key)
         tt_pixel_values = torch_to_tt_tensor_rm(input.pixel_values, device)
         tt_output = tt_model(tt_pixel_values)

@@ -18,10 +18,10 @@ on:
       build-artifact-name:
         required: false
         type: string
-      ttsim-ref:
+      ttsim-version:
         required: false
         type: string
-        default: "cf36a157613fadebe1f205bd065aa384a4ab2b30"
+        default: "v1.1.0"
       job-timeout:
         required: false
         type: number
@@ -83,28 +83,26 @@ jobs:
           apt update
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
 
-      - name: Install System Packages
+      - name: Compute ttsim asset name
+        id: ttsim-asset
         run: |
-          apt update
-          apt install -y git
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
-        run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
@@ -173,29 +171,37 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
+      - name: Compute ttsim asset name
+        id: ttsim-asset
+        run: |
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
-        run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
@@ -226,44 +232,44 @@ jobs:
             tests/nightly/t3000/ccl/test_send_recv_async.py \
             tests/nightly/t3000/ccl/test_moe_expert_token_remap.py \
             tests/nightly/t3000/ccl/test_apply_device_delay.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_abs.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_assign.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clip.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_concat.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_floor.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_frac.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_i0.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_max.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_min.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_neg.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_relu.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_round.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_sign.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_square.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
-            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_complex_tensor.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_abs.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_assign.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_clip.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_concat.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_fill.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_floor.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_frac.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_i0.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_max.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_min.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_neg.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_relu.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_round.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_sign.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_square.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/test_complex_tensor.py \
             tests/ttnn/unit_tests/operations/eltwise/test_eltwise_logical_and_.py \
             tests/ttnn/unit_tests/operations/eltwise/test_eltwise_softplus_inf.py \
             tests/ttnn/unit_tests/operations/eltwise/test_inplace.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_mul_bcast.py \
+            tests/ttnn/nightly/unit_tests/operations/eltwise/test_mul_bcast.py \
             tests/ttnn/unit_tests/operations/eltwise/test_signbit.py \
             tests/ttnn/unit_tests/operations/eltwise/test_sub.py \
             tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
@@ -298,9 +304,6 @@ jobs:
           - arch: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
-          - arch: quasar
-            build_suffix: release_qsr
-            soc_desc: quasar_1_arch.yaml
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -314,49 +317,57 @@ jobs:
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
+      - name: Compute ttsim asset name
+        id: ttsim-asset
+        run: |
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
-        run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
         timeout-minutes: 5
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            ./build/test/tt_metal/test_single_dm_l1_write
+            # ToDo: Re-enable this test once tt-sim supports NOC
+            # GH issue for tt-sim NOC support: https://github.com/tenstorrent/ttsim/issues/24
+            # ./build/test/tt_metal/test_single_dm_l1_write
+            :
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
             ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
-            # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
-            if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
-              # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
-              # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
-            fi
+            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
             ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
@@ -394,30 +405,38 @@ jobs:
       TT_METAL_SLOW_DISPATCH_MODE: 1
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Checkout ttsim
-        uses: actions/checkout@v4
+      - name: Compute ttsim asset name
+        id: ttsim-asset
+        run: |
+          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${asset_suffix#release_}"
+          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+
+      - name: Download ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
-          ref: ${{ inputs.ttsim-ref }}
-          path: docker-job/ttsim
-          token: ${{ secrets.TTSIM_TOKEN }}
-
-      - name: Build ttsim
-        run: |
-          cd /work/ttsim
-          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+          tag: ${{ inputs.ttsim-version }}
+          fileName: ${{ steps.ttsim-asset.outputs.asset_name }}
+          out-file-path: /tmp/ttsim
 
       - name: Install ttsim
         run: |
+          set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
-          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests

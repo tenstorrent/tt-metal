@@ -15,9 +15,7 @@
 #include <tt_stl/assert.hpp>
 #include "thread_pool.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 enum class AnalysisType { PROGRAM_FIRST_TO_LAST_MARKER };
 
@@ -95,6 +93,4 @@ void writeProgramsPerfResultsToCSV(
     const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

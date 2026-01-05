@@ -36,11 +36,8 @@ struct IntImgCTAs {
     const uint32_t cumsum_stage_2_cb;
     const uint32_t output_cb;
     const uint32_t axis_2_buffer_cb;    // covers entire propagation
-    const uint32_t axis_3_buffer_0_cb;  // each tile is spawned from broadcasting the last row of
-                                        // upper block across all rows of a given tile - for the time being, their
-                                        // spawning is forced to be done in the reader kernel.
-    const uint32_t axis_3_buffer_1_cb;  // dual channel communication with the writer kernel is comprehensive and
-                                        // properly synchronizes writer and compute kernels.
+    const uint32_t axis_3_buffer_cb;    // each tile is spawned from broadcasting the last row of
+                                        // upper block across all rows of a given tile
     const uint32_t tile_height;
     const uint32_t tile_width;
     const uint32_t block_depth;
@@ -55,7 +52,7 @@ struct IntImgCTAs {
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<19>();
+    constexpr auto input_args = TensorAccessorArgs<18>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     return IntImgCTAs<decltype(input_args), decltype(output_args)>{
         get_compile_time_arg_val(0),
@@ -76,7 +73,6 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
         get_compile_time_arg_val(17),
-        get_compile_time_arg_val(18),
         input_args,
         output_args,
     };

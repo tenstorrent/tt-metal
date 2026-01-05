@@ -72,7 +72,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+        const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
         if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
             std::vector<ttnn::Tensor> tensors;
             tensors.reserve(device_storage.coords.size());

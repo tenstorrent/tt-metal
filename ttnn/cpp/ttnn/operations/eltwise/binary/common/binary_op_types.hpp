@@ -25,6 +25,8 @@ enum class BinaryOpType {
     LDEXP,
     LOGADDEXP2,
     DIV,
+    DIV_FLOOR,
+    DIV_TRUNC,
     RSUB,
     POWER,
     BITWISE_XOR,

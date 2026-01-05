@@ -11,8 +11,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) {
     return {
@@ -156,12 +155,12 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, T
     std::vector<uint32_t> args;
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
     args.push_back(row_map.size());
-    for (uint32_t i = 0; i < row_map.size(); i++) {
-        args.push_back(row_map.at(i));
+    for (unsigned int row : row_map) {
+        args.push_back(row);
     }
     args.push_back(col_map.size());
-    for (uint32_t i = 0; i < col_map.size(); i++) {
-        args.push_back(col_map.at(i));
+    for (unsigned int col : col_map) {
+        args.push_back(col);
     }
 
     return args;
@@ -236,5 +235,4 @@ void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, s
     log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix, static_cast<uint32_t>(shard_grid_transposed));
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

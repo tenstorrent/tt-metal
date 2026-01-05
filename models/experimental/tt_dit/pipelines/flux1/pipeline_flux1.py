@@ -15,6 +15,7 @@ from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler, FluxTransf
 from diffusers.image_processor import VaeImageProcessor
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
 from ...encoders.t5.model_t5 import T5Config, T5Encoder
@@ -24,6 +25,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils.padding import PaddingConfig
 from ...utils import cache
+from models.common.utility_functions import is_blackhole
 import os
 
 
@@ -60,8 +62,6 @@ class Flux1Pipeline:
         topology: ttnn.Topology,
         num_links: int,
     ) -> None:
-        self.timing_collector = None
-
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
 
@@ -157,7 +157,7 @@ class Flux1Pipeline:
             model_name = os.path.basename(checkpoint_name)
             if not cache.initialize_from_cache(
                 tt_transformer,
-                torch_transformer,
+                torch_transformer.state_dict(),
                 model_name,
                 "transformer",
                 parallel_config,
@@ -238,7 +238,7 @@ class Flux1Pipeline:
 
                 if not cache.initialize_from_cache(
                     self._t5_text_encoder,
-                    torch_t5_text_encoder,
+                    torch_t5_text_encoder.state_dict(),
                     model_name,
                     "t5_text_encoder",
                     encoder_parallel_config,
@@ -279,12 +279,18 @@ class Flux1Pipeline:
         num_links=None,
         topology=ttnn.Topology.Linear,
     ):
-        default_config = {
+        wh_config = {
             (1, 4): {"sp": (1, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (2, 4): {"sp": (2, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (4, 4): {"sp": (4, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (4, 8): {"sp": (4, 0), "tp": (8, 1), "encoder_tp": (4, 0), "vae_tp": (4, 0), "num_links": 4},
         }
+        bh_config = {
+            (1, 2): {"sp": (1, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+            (2, 2): {"sp": (2, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+        }
+
+        default_config = bh_config if is_blackhole() else wh_config
         sp_factor, sp_axis = dit_sp or default_config[tuple(mesh_device.shape)]["sp"]
         tp_factor, tp_axis = dit_tp or default_config[tuple(mesh_device.shape)]["tp"]
         encoder_tp_factor, encoder_tp_axis = encoder_tp or default_config[tuple(mesh_device.shape)]["encoder_tp"]
@@ -328,6 +334,8 @@ class Flux1Pipeline:
         num_inference_steps: int,
         seed: int,
         traced: bool = True,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ):
         return self(
             width=width,
@@ -339,6 +347,8 @@ class Flux1Pipeline:
             num_inference_steps=num_inference_steps,
             seed=seed,
             traced=traced,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
     def __call__(
@@ -357,8 +367,9 @@ class Flux1Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> list[Image.Image]:
-        timer = self.timing_collector.reset() if self.timing_collector else None
         prompt_count = len(prompt_1)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -366,7 +377,7 @@ class Flux1Pipeline:
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
 
-        with timer.time_section("total") if timer else nullcontext():
+        with profiler("total", profiler_iteration) if profiler else nullcontext():
             assert height % (self._vae_scale_factor * self._patch_size) == 0
             assert width % (self._vae_scale_factor * self._patch_size) == 0
 
@@ -379,7 +390,7 @@ class Flux1Pipeline:
 
             logger.info("encoding prompts...")
 
-            with timer.time_section("total_encoding") if timer else nullcontext():
+            with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
@@ -388,6 +399,8 @@ class Flux1Pipeline:
                     num_images_per_prompt=num_images_per_prompt,
                     cfg_enabled=cfg_enabled,
                     clip_skip=clip_skip,
+                    profiler=profiler,
+                    profiler_iteration=profiler_iteration,
                 )
                 _, prompt_sequence_length, _ = prompt_embeds.shape
 
@@ -578,55 +591,56 @@ class Flux1Pipeline:
 
             logger.info("denoising...")
 
-            for i, t in enumerate(tqdm.tqdm(self._scheduler.timesteps)):
-                with timer.time_step("denoising_step") if timer else nullcontext():
-                    sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
+            with profiler("denoising", profiler_iteration) if profiler else nullcontext():
+                for i, t in enumerate(tqdm.tqdm(self._scheduler.timesteps)):
+                    with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
+                        sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
-                    tt_timestep_list = []
-                    tt_sigma_difference_list = []
-                    for submesh_device in self._submesh_devices:
-                        tt_timestep = ttnn.full(
-                            [1, 1],
-                            fill_value=t,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.float32,
-                            device=submesh_device if not traced else None,
+                        tt_timestep_list = []
+                        tt_sigma_difference_list = []
+                        for submesh_device in self._submesh_devices:
+                            tt_timestep = ttnn.full(
+                                [1, 1],
+                                fill_value=t,
+                                layout=ttnn.TILE_LAYOUT,
+                                dtype=ttnn.float32,
+                                device=submesh_device if not traced else None,
+                            )
+                            tt_timestep_list.append(tt_timestep)
+
+                            tt_sigma_difference = ttnn.full(
+                                # [1, 1],
+                                tt_initial_latents.shape,
+                                fill_value=sigma_difference,
+                                layout=ttnn.TILE_LAYOUT,
+                                dtype=ttnn.bfloat16,
+                                device=submesh_device
+                                if not traced
+                                else None,  # Not used in trace region, can be on device always.
+                            )
+                            tt_sigma_difference_list.append(tt_sigma_difference)
+
+                        tt_latents_step_list = self._step(
+                            timestep=tt_timestep_list,
+                            latents=tt_latents_step_list,
+                            cfg_enabled=cfg_enabled,
+                            prompt_embeds=tt_prompt_embeds_list,
+                            pooled_prompt_embeds=tt_pooled_prompt_embeds_list,
+                            cfg_scale=cfg_scale,
+                            sigma_difference=tt_sigma_difference_list,
+                            guidance=tt_guidance_list,
+                            spatial_rope_cos=tt_spatial_rope_cos_list,
+                            spatial_rope_sin=tt_spatial_rope_sin_list,
+                            prompt_rope_cos=tt_prompt_rope_cos_list,
+                            prompt_rope_sin=tt_prompt_rope_sin_list,
+                            spatial_sequence_length=spatial_sequence_length,
+                            prompt_sequence_length=prompt_sequence_length,
+                            traced=traced,
                         )
-                        tt_timestep_list.append(tt_timestep)
-
-                        tt_sigma_difference = ttnn.full(
-                            # [1, 1],
-                            tt_initial_latents.shape,
-                            fill_value=sigma_difference,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.bfloat16,
-                            device=submesh_device
-                            if not traced
-                            else None,  # Not used in trace region, can be on device always.
-                        )
-                        tt_sigma_difference_list.append(tt_sigma_difference)
-
-                    tt_latents_step_list = self._step(
-                        timestep=tt_timestep_list,
-                        latents=tt_latents_step_list,
-                        cfg_enabled=cfg_enabled,
-                        prompt_embeds=tt_prompt_embeds_list,
-                        pooled_prompt_embeds=tt_pooled_prompt_embeds_list,
-                        cfg_scale=cfg_scale,
-                        sigma_difference=tt_sigma_difference_list,
-                        guidance=tt_guidance_list,
-                        spatial_rope_cos=tt_spatial_rope_cos_list,
-                        spatial_rope_sin=tt_spatial_rope_sin_list,
-                        prompt_rope_cos=tt_prompt_rope_cos_list,
-                        prompt_rope_sin=tt_prompt_rope_sin_list,
-                        spatial_sequence_length=spatial_sequence_length,
-                        prompt_sequence_length=prompt_sequence_length,
-                        traced=traced,
-                    )
 
             logger.info("decoding image...")
 
-            with timer.time_section("vae_decoding") if timer else nullcontext():
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
@@ -845,12 +859,12 @@ class Flux1Pipeline:
         prompt_2: list[str],
         num_images_per_prompt: int,
         clip_skip: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        timer = self.timing_collector
-
         tokenizer_max_length = self._tokenizer_1.model_max_length
 
-        with timer.time_section("clip_encoding") if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             prompt_1_embeds, pooled_prompt_1_embeds = _get_clip_prompt_embeds(
                 prompts=prompt_1,
                 num_images_per_prompt=num_images_per_prompt,
@@ -861,7 +875,7 @@ class Flux1Pipeline:
                 clip_skip=clip_skip,
             )
 
-        with timer.time_section("t5_encoding") if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5_prompt_embeds = _get_t5_prompt_embeds(
                 prompts=prompt_2,
                 text_encoder=self._t5_text_encoder,
@@ -888,12 +902,16 @@ class Flux1Pipeline:
         num_images_per_prompt: int,
         cfg_enabled: bool,
         clip_skip: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         prompt_embeds, pooled_prompt_embeds = self._encode_prompts_partial(
             prompt_1=prompt_1,
             prompt_2=prompt_2,
             num_images_per_prompt=num_images_per_prompt,
             clip_skip=clip_skip,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
         if not cfg_enabled:
@@ -904,6 +922,8 @@ class Flux1Pipeline:
             prompt_2=negative_prompt_2,
             num_images_per_prompt=num_images_per_prompt,
             clip_skip=clip_skip,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        auto device = device_owner.get();
+        auto* device = device_owner.get();
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////

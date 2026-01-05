@@ -101,8 +101,6 @@ static size_t compare_tensors(
             fmt::print(
                 "  [{}] expected={}, actual={}, param={}, grad={}\n", m.idx, m.expected, m.actual, m.param, m.grad);
         }
-    } else {
-        fmt::print("Perfect match: all {} elements are exactly equal\n", actual.size());
     }
 
     return num_mismatches;

@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "autograd/tensor.hpp"
-#include "msgpack_file.hpp"
+#include "flatbuffer_file.hpp"
 
 namespace ttml::serialization {
 using NamedParameters = std::unordered_map<std::string, ttml::autograd::TensorPtr>;

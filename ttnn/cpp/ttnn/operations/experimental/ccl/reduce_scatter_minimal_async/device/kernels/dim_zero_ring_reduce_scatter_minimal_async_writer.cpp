@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -206,9 +206,7 @@ void kernel_main() {
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         pkt_scatter_hdr,
         static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        NocUnicastScatterCommandHeader{
-            {0, 0},  // ignore
-            static_cast<uint16_t>(page_size)},
+        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
         page_size * 2);
 
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -286,7 +284,7 @@ void kernel_main() {
                                     &mux_connection_handle,
                                     pkt_scatter_hdr,
                                     l1_read_addr,
-                                    NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                                    NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                                 l1_read_addr += page_size * 2;
                                 break;
                             }

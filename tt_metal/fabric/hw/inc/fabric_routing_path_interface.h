@@ -109,20 +109,21 @@ inline bool intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
 }
 
 inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
-    auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
-
+    auto route_ptr = reinterpret_cast<volatile uint64_t*>(out_route_buffer);
     if (hops >= intra_mesh_routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
         // invalid chip or Noop to self
         *route_ptr = 0;
-        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
+        ASSERT(false);  // caught only when watcher enabled. Otherwise behave consistently by returning false.
         return false;
     }
 
     // Forward for (hops - 1) steps, then write on the final hop
-    uint32_t routing_field_value = (intra_mesh_routing_path_t<1, true>::FWD_ONLY_FIELD &
-                                    ((1 << (hops - 1) * intra_mesh_routing_path_t<1, true>::FIELD_WIDTH) - 1)) |
-                                   (intra_mesh_routing_path_t<1, true>::WRITE_ONLY
-                                    << (hops - 1) * intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
+    const uint64_t shift_amount =
+        static_cast<uint64_t>(hops - 1) * static_cast<uint64_t>(intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
+    const uint64_t routing_field_value =
+        (intra_mesh_routing_path_t<1, true>::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
+        (static_cast<uint64_t>(intra_mesh_routing_path_t<1, true>::WRITE_ONLY) << shift_amount);
+
     *route_ptr = routing_field_value;
     return true;
 }

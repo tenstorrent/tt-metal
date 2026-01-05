@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -42,8 +42,9 @@ void kernel_main() {
 #define SRC_BCAST_CB1 (SRC_BCAST_B || SRC_BCAST_C)
 
     // Compile-time args layout for TTS: 2 CB ids, then 2 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<2>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto src0_args = TensorAccessorArgs<2, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
     const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(predicate_cb));
     const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(true_cb));

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fstream>
+
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -31,7 +33,9 @@ void to_json(nlohmann::json& j, const ProgramSingleAnalysisResult& program_singl
 void to_json(nlohmann::json& j, const ProgramAnalysisData& program_analysis_data) {
     j = nlohmann::json{
         {"program_execution_uid", program_analysis_data.program_execution_uid},
-        {"program_analyses_results", program_analysis_data.program_analyses_results}};
+        {"program_analyses_results", program_analysis_data.program_analyses_results},
+        {"core_count", program_analysis_data.core_count},
+        {"num_available_cores", program_analysis_data.num_available_cores}};
 }
 
 void to_json(nlohmann::json& j, const std::map<tt::ChipId, std::set<ProgramAnalysisData>>& programs_perf_data) {

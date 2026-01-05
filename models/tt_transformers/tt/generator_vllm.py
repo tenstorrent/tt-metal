@@ -374,7 +374,7 @@ class LlamaForCausalLM(Generator):
             and mesh_device.get_num_devices() == 1
             and is_wormhole_b0()
         ):
-            MAX_PROMPT_LEN = 65536
+            MAX_PROMPT_LEN = 32768
             if max_seq_len > MAX_PROMPT_LEN:
                 raise ValueError(
                     f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
@@ -655,7 +655,6 @@ class GptOssForCausalLM(Generator):
             # Use the existing create_tt_model function
             model_args_i, model_i, _, state_dict = create_tt_model(
                 mesh_device=submesh,
-                instruct=True,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
                 paged_attention_config=None,

@@ -13,7 +13,7 @@ from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
 MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
-MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
+MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class ResnetConvTest(OpTestBase):
@@ -110,13 +110,6 @@ class ResnetConvTest(OpTestBase):
             device=self.mesh_device,
             mesh_mapper=self.from_torch_mesh_mapper,
         )
-
-    def generate_tt_weights_from_torch(self, torch_tensor):
-        tt_weights = ttnn.Tensor(torch_tensor.flatten().tolist(), self.in1_shape, self.in1_dtype, ttnn.ROW_MAJOR_LAYOUT)
-        tt_weights_tiled_host = ttnn.convert_conv_weight_tensor_to_tiled_layout(
-            tt_weights, self.weights_block_h, self.weights_block_w, self.weights_df_on_device
-        )
-        return tt_weights_tiled_host.to(self.mesh_device, self.in1_mem_config)
 
     def convert_activations_to_memory_config(self, activations):
         return ttnn.to_memory_config(activations, self.in0_mem_config)

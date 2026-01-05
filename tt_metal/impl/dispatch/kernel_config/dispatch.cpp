@@ -6,7 +6,6 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <array>
 #include <map>
 #include <string>
 #include <variant>
@@ -22,14 +21,15 @@
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/debug/inspector/inspector.hpp"
-#include "rtoptions.hpp"
+#include "context/metal_context.hpp"
+#include "debug/inspector/inspector.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-#include "tt_metal/api/tt-metalium/device_pool.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include "device/device_manager.hpp"
+#include "fabric/fabric_context.hpp"
+#include <dispatch/dispatch_query_manager.hpp>
+#include <dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 
@@ -42,24 +42,23 @@ DispatchKernel::DispatchKernel(
     bool h_variant,
     bool d_variant) :
     FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-    auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
+    auto& core_manager = MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
     TT_FATAL(
-        noc_selection.downstream_noc == tt::tt_metal::k_dispatch_downstream_noc,
+        noc_selection.downstream_noc == tt_metal::k_dispatch_downstream_noc,
         "Invalid downstream NOC specified for Dispatcher kernel");
     TT_FATAL(
         noc_selection.upstream_noc != noc_selection.downstream_noc,
         "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
 
     DispatchWorkerType type = DISPATCH;
     if (h_variant && d_variant) {
         this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
         type = DISPATCH_HD;
     } else if (h_variant) {
-        channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id);
+        channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id);
         this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
         type = DISPATCH_H;
     } else if (d_variant) {
@@ -69,19 +68,18 @@ DispatchKernel::DispatchKernel(
     this->kernel_type_ = FDKernelType::DISPATCH;
     // Log dispatch core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
-    tt::tt_metal::Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
+    Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
 }
 
 void DispatchKernel::GenerateStaticConfigs() {
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
-    static_config_.fabric_header_rb_entries = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
+    static_config_.fabric_header_rb_entries = DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
@@ -97,8 +95,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
-        static_config_.my_dispatch_cb_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 
         static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = command_queue_start_addr;
@@ -135,8 +132,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else if (static_config_.is_h_variant.value()) {
         // DISPATCH_H services a remote chip, and so has a different channel
-        channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
+        channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
@@ -148,8 +144,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
-        static_config_.my_dispatch_cb_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 
         static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = command_queue_start_addr;
@@ -180,8 +175,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
-        static_config_.my_dispatch_cb_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 
         static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = 0;  // These are unused for DISPATCH_D
@@ -190,7 +184,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.split_dispatch_page_preamble_size = 0;
         static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
-        static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
+        static_config_.my_downstream_cb_sem_id = tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
 
         static_config_.packed_write_max_unicast_sub_cmds =
@@ -222,18 +216,31 @@ void DispatchKernel::GenerateStaticConfigs() {
 
     if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
-        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = MetalContext::instance().get_control_plane().get_fabric_context();
         static_config_.is_2d_fabric = fabric_context.is_2D_routing_enabled();
     } else {
         static_config_.is_2d_fabric = false;
     }
 }
 
+void DispatchKernel::InitializeRuntimeArgsValues() {
+    // Initialize runtime args offsets
+    int current_offset = 0;
+    static_config_.offsetof_my_dev_id = current_offset++;
+    static_config_.offsetof_to_dev_id = current_offset++;
+    static_config_.offsetof_router_direction = current_offset++;
+    // Initialize runtime args
+    runtime_args_.resize(current_offset);
+    runtime_args_[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
+}
+
 void DispatchKernel::GenerateDependentConfigs() {
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
+        auto* prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
         TT_ASSERT(prefetch_kernel);
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
         dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -246,7 +253,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
+            dependent_config_.prefetch_h_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -255,7 +262,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Downstream
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 1);
-            auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
+            auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
             TT_ASSERT(dispatch_s_kernel);
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
@@ -274,11 +281,11 @@ void DispatchKernel::GenerateDependentConfigs() {
         // May be overwritten below
         dependent_config_.num_hops = 0;
         TT_ASSERT(upstream_kernels_.size() == 1);
-        if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
+        if (auto* dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = dispatch_d->GetLogicalCore();
             dependent_config_.upstream_dispatch_cb_sem_id = dispatch_d->GetStaticConfig().my_downstream_cb_sem_id;
             dependent_config_.upstream_sync_sem = 0;  // Unused
-            dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
+            dependent_config_.num_hops = tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
             assemble_2d_fabric_packet_header_args(this->dependent_config_, GetDeviceId(), dispatch_d->GetDeviceId());
         } else {
             TT_FATAL(false, "Unimplemented path");
@@ -291,21 +298,21 @@ void DispatchKernel::GenerateDependentConfigs() {
         bool found_prefetch_h = false;
         bool found_relay_mux = false;
         for (FDKernel* ds_kernel : downstream_kernels_) {
-            if (auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
+            if (auto* prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
                 TT_ASSERT(prefetch_h_kernel && prefetch_h_kernel->GetStaticConfig().is_h_variant.value());
                 TT_ASSERT(!found_prefetch_h, "DISPATCH_H has multiple downstream PREFETCH_H kernels.");
                 found_prefetch_h = true;
-                dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
+                dependent_config_.prefetch_h_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
                     prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
                 dependent_config_.prefetch_h_local_downstream_sem_addr =
                     prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
-            } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
+            } else if (auto* relay_mux = dynamic_cast<RelayMux*>(ds_kernel)) {
                 TT_ASSERT(!found_relay_mux, "DISPATCH_H has multiple downstream RELAY_MUX kernels.");
                 found_relay_mux = true;
 
                 constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
                     tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
-                tt::tt_metal::assemble_fabric_mux_client_config_args(
+                tt_metal::assemble_fabric_mux_client_config_args(
                     node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
             } else {
                 TT_FATAL(false, "DISPATCH_H Downstream - Unimplemented path");
@@ -323,7 +330,7 @@ void DispatchKernel::GenerateDependentConfigs() {
     } else if (static_config_.is_d_variant.value()) {
         // Upstream, expect a PREFETCH_D
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
+        auto* prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
         TT_ASSERT(prefetch_kernel);
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
         dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -338,7 +345,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
+            dependent_config_.prefetch_h_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -352,28 +359,28 @@ void DispatchKernel::GenerateDependentConfigs() {
         bool found_dispatch_s = false;
         bool found_dispatch_h = false;
         bool found_relay_mux = false;  // fabric mux
-        for (auto ds_kernel : downstream_kernels_) {
-            if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(ds_kernel)) {
+        for (auto* ds_kernel : downstream_kernels_) {
+            if (auto* dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_s, "DISPATCH_D has multiple downstream DISPATCH_S kernels.");
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
                 found_dispatch_s = true;
-            } else if (auto dispatch_h_kernel = dynamic_cast<DispatchKernel*>(ds_kernel)) {
+            } else if (auto* dispatch_h_kernel = dynamic_cast<DispatchKernel*>(ds_kernel)) {
                 TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
                 dependent_config_.downstream_logical_core = dispatch_h_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_size = dispatch_h_kernel->GetDispatchBufferSize();
                 dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base;
                 dependent_config_.downstream_cb_sem_id = dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
-                dependent_config_.num_hops = tt::tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
+                dependent_config_.num_hops = tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
                 assemble_2d_fabric_packet_header_args(
                     this->dependent_config_, GetDeviceId(), dispatch_h_kernel->GetDeviceId());
                 found_dispatch_h = true;
-            } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
+            } else if (auto* relay_mux = dynamic_cast<RelayMux*>(ds_kernel)) {
                 TT_ASSERT(!found_relay_mux, "DISPATCH_D has multiple downstream RELAY_MUX kernels.");
                 found_relay_mux = true;
 
                 constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-                tt::tt_metal::assemble_fabric_mux_client_config_args(
+                tt_metal::assemble_fabric_mux_client_config_args(
                     node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
             } else {
                 TT_FATAL(false, "Unexpected downstream kernel for dispatch_d");
@@ -401,7 +408,8 @@ void DispatchKernel::CreateKernel() {
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    uint32_t num_virtual_active_eth_cores =
+        MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
             .get_control_plane()
@@ -508,11 +516,8 @@ void DispatchKernel::CreateKernel() {
         {"FABRIC_WORKER_TEARDOWN_SEM", std::to_string(edm_connection_attributes_.worker_teardown_sem)},
         {"FABRIC_WORKER_BUFFER_INDEX_SEM", std::to_string(edm_connection_attributes_.worker_buffer_index_sem)},
         {"NUM_HOPS", std::to_string(dependent_config_.num_hops.value())},
-        {"MY_DEV_ID", std::to_string(dependent_config_.my_dev_id.value_or(0))},
         {"EW_DIM", std::to_string(dependent_config_.ew_dim.value_or(0))},
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
-        {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
-        {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
@@ -525,6 +530,11 @@ void DispatchKernel::CreateKernel() {
             defines["FABRIC_2D"] = "1";
         }
     }
+    // Runtime args offsets
+    defines["OFFSETOF_MY_DEV_ID"] = std::to_string(static_config_.offsetof_my_dev_id.value_or(0));
+    defines["OFFSETOF_TO_DEV_ID"] = std::to_string(static_config_.offsetof_to_dev_id.value_or(0));
+    defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(static_config_.offsetof_router_direction.value_or(0));
+
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
@@ -534,7 +544,7 @@ void DispatchKernel::CreateKernel() {
 void DispatchKernel::ConfigureCore() {
     // For all dispatchers, need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {

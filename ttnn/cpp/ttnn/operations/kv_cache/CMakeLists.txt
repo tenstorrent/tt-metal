@@ -24,8 +24,9 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/update_cache_op.cpp
-        device/update_cache_op_multi_core.cpp
+        device/update_cache_device_operation.cpp
+        device/fill_cache_multi_core_program_factory.cpp
+        device/update_cache_multi_core_program_factory.cpp
         kv_cache.cpp
 )
 

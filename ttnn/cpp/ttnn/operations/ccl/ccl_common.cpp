@@ -11,13 +11,12 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 bool is_fabric_2d() {
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
@@ -337,7 +336,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.device();
+    auto* mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {
@@ -363,13 +362,17 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto available_cores = device->worker_cores(
+    auto available_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(sub_core_grid.value());
+    }
     if (available_cores.num_cores() < num_workers_preferred) {
         log_warning(
             tt::LogOp,
@@ -1148,8 +1151,10 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
 
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
-    std::size_t optim_worker_slice_len_tiles =
-        ceil(total_num_tiles / num_workers);  // Ceil so that the remainder worker will have a smaller slice
+    // Cast to double before division to ensure ceil() rounds up properly.
+    // Example: 10 tiles / 3 workers: was ceil(3)=3, now ceil(3.33)=4 tiles per worker.
+    std::size_t optim_worker_slice_len_tiles = static_cast<std::size_t>(
+        ceil(static_cast<double>(total_num_tiles) / num_workers));  // Ceil so that the remainder worker will have a smaller slice
 
     if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) {  // Each worker will have a full slice
         for (uint32_t w = 0; w < num_workers; ++w) {
@@ -1616,10 +1621,7 @@ Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_shape(
 }
 
 Shape4D<uint32_t> GenericWrappedTensorSlicerV2::calculate_tensor_slice_offset(
-    Shape4D<uint32_t> const& input_shape,
-    int slice_dim,
-    uint32_t partition_index) {
-
+    const Shape4D<uint32_t>& input_shape, int slice_dim, uint32_t partition_index) const {
     Shape4D<uint32_t> offset(0, 0, 0, 0);
 
     // Calculate the size of the slice along the given dimension
@@ -1882,5 +1884,4 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

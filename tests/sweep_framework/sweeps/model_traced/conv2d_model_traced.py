@@ -28,13 +28,16 @@ loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("conv2d", all_cases=False)
 
 parameters = {
-    "short_sweep_suite_conv2d": {
+    # Quick sample test with basic configurations for fast validation
+    "model_traced_sample": {
         "input_specs": [
             # Contains following params
             # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-            [1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False],
+            # Use tuple so it serializes as a string for proper deserialization
+            (1, 16, 8, 4, 4, 1, 1, 1, 1, 0, 0, 1, 1, 1, False),
         ],
         "is_conv1d": [False],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -50,6 +53,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_specs,
     is_conv1d=False,
+    compute_config=None,
+    dtype=None,
+    config_tensors_in_dram=False,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -58,7 +64,7 @@ def run(
     if is_conv1d:
         result = run_conv1d_short_sweep(input_specs, device)
     else:
-        result = run_conv2d_short_sweep(input_specs, device)
+        result = run_conv2d_short_sweep(input_specs, device, config_tensors_in_dram=config_tensors_in_dram)
 
     # Convert short_sweep format [pcc_bool, perf, timestamp, tensor1, tensor2]
     # to model_traced format [pcc_tuple, e2e_perf]

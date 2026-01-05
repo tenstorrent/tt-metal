@@ -147,7 +147,6 @@ def ttnn_layer_norm_sharded(
         ),
     )
 
-    output_ttnn = ttnn.to_layout(output_ttnn, ttnn.ROW_MAJOR_LAYOUT)
     output_ttnn = ttnn.from_device(output_ttnn)
     return ttnn.to_torch(output_ttnn)
 
@@ -185,7 +184,6 @@ def ttnn_rms_norm_sharded(device, tt_input_tensor, block_ht, block_wt, subblock_
         ),
     )
 
-    output_ttnn = ttnn.to_layout(output_ttnn, ttnn.ROW_MAJOR_LAYOUT)
     output_ttnn = ttnn.from_device(output_ttnn)
     return ttnn.to_torch(output_ttnn)
 
@@ -201,10 +199,11 @@ def torch_layer_norm(torch_input_tensor, residual=None, weight=None, bias=None):
     Returns:
         The output tensor as a torch tensor.
     """
-    if residual is not None:
-        torch_input_tensor += residual
     return torch.nn.functional.layer_norm(
-        torch_input_tensor, normalized_shape=[torch_input_tensor.shape[1]], weight=weight, bias=bias
+        torch_input_tensor if residual is None else torch_input_tensor + residual,
+        normalized_shape=[torch_input_tensor.shape[1]],
+        weight=weight,
+        bias=bias,
     )
 
 

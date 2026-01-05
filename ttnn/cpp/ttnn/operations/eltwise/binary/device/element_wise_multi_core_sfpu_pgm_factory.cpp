@@ -103,7 +103,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
         op_type, a_dtype, b_dtype, fused_activations, operation_attributes.input_tensor_a_activation);
 
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
+    if (eltwise_defines.contains("SFPU_OP_INIT_PRE_IN0_0")) {
         uint32_t interim0_single_tile_size = tt::tile_size(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
             tt_metal::CircularBufferConfig(
@@ -112,7 +112,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
         tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
+    if (eltwise_defines.contains("SFPU_OP_INIT_PRE_IN1_0")) {
         uint32_t interim1_single_tile_size = tt::tile_size(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
             tt_metal::CircularBufferConfig(

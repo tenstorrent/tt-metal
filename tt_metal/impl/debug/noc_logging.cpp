@@ -4,7 +4,7 @@
 
 #include "noc_logging.hpp"
 
-#include <stdint.h>
+#include <cstdint>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +18,8 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/soc_descriptor.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;
 
@@ -72,7 +74,7 @@ void DumpDeviceNocData(ChipId device_id, noc_data_t& noc_data, noc_data_t& dispa
     // Now go through all cores on the device, and dump noc data for them.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
     for (const umd::CoreDescriptor& logical_core : all_cores) {
-        if (dispatch_cores.count(logical_core)) {
+        if (dispatch_cores.contains(logical_core)) {
             DumpCoreNocData(device_id, logical_core, dispatch_noc_data);
         } else {
             DumpCoreNocData(device_id, logical_core, noc_data);

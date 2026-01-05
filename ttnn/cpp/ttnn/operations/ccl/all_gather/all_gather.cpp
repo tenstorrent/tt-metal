@@ -5,15 +5,13 @@
 #include "ttnn/common/queue_id.hpp"
 
 #include <algorithm>
-#include <tt-metalium/constants.hpp>
-
 #include "all_gather.hpp"
 #include "device/all_gather_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -27,7 +25,8 @@ ttnn::Tensor ExecuteAllGather::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -41,24 +40,31 @@ ttnn::Tensor ExecuteAllGather::invoke(
             for (auto it = mesh_view.rbegin(); it != mesh_view.rend(); ++it) {
                 auto axis = std::distance(mesh_view.begin(), it.base()) - 1;
                 tensor = ttnn::all_gather(
-                    tensor, dim, axis, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
+                    tensor,
+                    dim,
+                    axis,
+                    subdevice_id,
+                    memory_config,
+                    optional_output_tensor,
+                    num_links,
+                    topology,
+                    sub_core_grid);
             }
             return tensor;
         }
     }
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
-
     if (composite_common::use_composite_all_gather(input_tensor, dim, memory_config)) {
+        TT_FATAL(!sub_core_grid.has_value(), "Composite OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
     }
-
     return ttnn::prim::all_gather(
         input_tensor,
         normalized_dim,
@@ -67,7 +73,8 @@ ttnn::Tensor ExecuteAllGather::invoke(
         memory_config_,
         optional_output_tensor,
         num_links_,
-        topology_);
+        topology_,
+        sub_core_grid);
 }
 
 }  // namespace ttnn::operations::ccl

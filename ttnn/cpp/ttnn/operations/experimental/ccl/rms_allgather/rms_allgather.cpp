@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rms_allgather.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp"
 
-namespace ttnn {
-namespace operations::fused::normalization {
+#include <ttnn/device.hpp>
+
+namespace ttnn::operations::fused::normalization {
 
 ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
@@ -25,39 +27,24 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool use_noc1_only) {
-    auto arch = is_device_tensor(input_tensor)
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    const auto& mesh_view = mesh_device.get_view();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-
-    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
-    const std::vector<std::optional<const Tensor>> optional_input_tensors = {residual_input_tensor, weight, stats};
-
-    return tt::tt_metal::operation::run(
-               RMSAllGather(
-                   epsilon,
-                   memory_config.value_or(input_tensor.memory_config()),
-                   program_config,
-                   kernel_config_val,
-                   dtype,
-                   topology_,
-                   num_preferred_links.value_or(1),
-                   num_devices,
-                   semaphore,
-                   subdevice_id,
-                   cluster_axis,
-                   use_noc1_only),
-               {input_tensor},
-               optional_input_tensors,
-               optional_output_tensors)
-        .at(0);
+    return ttnn::prim::rms_allgather(
+        input_tensor,
+        program_config,
+        cluster_axis,
+        mesh_device,
+        semaphore,
+        persistent_output_tensor,
+        num_preferred_links,
+        topology,
+        subdevice_id,
+        dtype,
+        compute_kernel_config,
+        memory_config,
+        residual_input_tensor,
+        epsilon,
+        weight,
+        stats,
+        use_noc1_only);
 }
 
-}  // namespace operations::fused::normalization
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::fused::normalization

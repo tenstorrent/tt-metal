@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
     get_block_size,
 )
-from models.common.tt_sampling import format_sampling_params
+from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 
 
@@ -69,6 +69,8 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self.enable_split_sampling = True
+        self.model.enable_internal_trace = self.enable_split_sampling
 
     def warmup_prefill_traces(
         self,
@@ -177,7 +179,7 @@ class Generator:
             use_batched_prefill = True
 
         if return_logits:
-            tt_out_logits_all_users = torch.zeros(batch, 1, 131072)
+            tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -232,7 +234,7 @@ class Generator:
 
             # If PCC check enabled or return_logits is True (we save output logits)
             if tt_out_logits_all_users is not None or return_logits:
-                tt_out_logits_saved = torch.zeros(1, 131072)
+                tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:
@@ -403,6 +405,9 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        reset_batch=False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ):
         if sampling_params is None:
             return_logits = True
@@ -423,6 +428,7 @@ class Generator:
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True
+
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,
@@ -435,20 +441,26 @@ class Generator:
         if reset_inputs and sampling_params is not None:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
-            self.model.tt_sampling.reset_params(
-                k=sampling_params.top_k,
-                p=sampling_params.top_p,
-                temp=sampling_params.temperature,
-            )
+            sampling_module = self.model.sampling
+            sampling_module.reset_sampling_params(sampling_params)
+            if reset_batch:
+                sampling_module.reset_prompt_tokens(prompt_tokens)
+                sampling_module.reset_output_state(output_tokens)
+                sampling_module.reset_seed(sampling_params.seed)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
             tt_tok = self._decode_easy_trace_text(
-                **decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits
+                **decode_kwargs,
+                reset_inputs=reset_inputs,
+                return_logits=return_logits,
             )
         else:
-            tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
+            tt_tok = self._decode_forward_no_trace_text(
+                **decode_kwargs,
+                return_logits=return_logits,
+            )
 
         if read_from_device:
             tt_out = self.read_decode_output(tt_tok, async_read=async_read)
@@ -487,6 +499,7 @@ class Generator:
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
+            capture_sampling_trace=self.enable_split_sampling,
         )
         return tt_tok
 
@@ -531,11 +544,13 @@ class Generator:
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
+            capture_sampling_trace=self.enable_split_sampling,
         )
 
         # Try allocating our persistent tensors here and verifying it matches the address that trace captured
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
+
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
@@ -602,10 +617,19 @@ class Generator:
             page_table=page_table,
         )
 
+        if self.enable_split_sampling and not return_logits:
+            return self.model.sampling.sample(
+                logits=trace_tok_rm[0],
+                tt_out_tok=self.trace_inputs_decode[return_logits][0],
+            )
+
         return trace_tok_rm
 
     def read_decode_output(self, tt_out, async_read=True):
         if not async_read:
+            if isinstance(tt_out, tuple):
+                # Get logits and skip log-probs
+                tt_out = tt_out[0]
             return tt_out.cpu()
 
         logits, read_event = self.model.process_output_decode(tt_out)
@@ -684,6 +708,7 @@ class Generator:
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         page_table = page_table[:, :num_blocks]
@@ -699,6 +724,23 @@ class Generator:
         else:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+        # page_table gets padded properly in prefill_forward_text
+        # be sure to pad correctly for non traced sequences in future warmup calls
+        page_table = torch.zeros(1, 1, dtype=torch.int32)
+        # in case of multiple sampling parameters, we need to warmup for each one
+        for s in sampling_params:
+            self.warmup_prefill_traces(
+                tokens=None,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=None,
+                enable_trace=enable_trace,
+                sampling_params=s,
+                empty_slots=None,
+                tt_out_logits_all_users=None,
+            )
 
     ## Destructor (used to delete ttnn trace if exists)
 

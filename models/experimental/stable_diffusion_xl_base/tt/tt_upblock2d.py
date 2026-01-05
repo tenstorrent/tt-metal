@@ -9,9 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsa
 
 
 class TtUpBlock2D(LightweightModule):
-    def __init__(
-        self, device, state_dict, module_path, model_config, debug_mode=False, dram_groupnorm=False, has_upsample=False
-    ):
+    def __init__(self, device, state_dict, module_path, model_config, debug_mode=False, has_upsample=False):
         super().__init__()
 
         num_layers = 3
@@ -26,8 +24,6 @@ class TtUpBlock2D(LightweightModule):
                     model_config,
                     conv_shortcut=True,
                     debug_mode=debug_mode,
-                    use_negative_mask="up_blocks.0" not in module_path,
-                    dram_groupnorm=dram_groupnorm and i == 0,
                 )
             )
 
@@ -60,8 +56,8 @@ class TtUpBlock2D(LightweightModule):
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
 
         if self.upsamplers is not None:
-            hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
 
         return hidden_states, [C, H, W]

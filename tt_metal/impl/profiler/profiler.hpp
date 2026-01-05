@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <cstddef>
 #include <filesystem>
@@ -20,22 +19,18 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
-#include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+class ThreadPool;
+}  // namespace tt::tt_metal
 
 using RuntimeID = uint32_t;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 template <typename T1, typename T2>
 struct pair_hash {
@@ -77,6 +72,9 @@ private:
 
     // Device frequency
     int device_core_frequency{};
+
+    // Device max compute cores
+    uint32_t max_compute_cores;
 
     // Thread pool used for processing data when dumping results
     std::shared_ptr<ThreadPool> thread_pool;
@@ -146,10 +144,12 @@ private:
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
 
     // Read data from L1 data buffer using fast dispatch
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void issueFastDispatchReadFromL1DataBuffer(
         IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read data from L1 data buffer using slow dispatch
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void issueSlowDispatchReadFromL1DataBuffer(
         IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
@@ -197,6 +197,7 @@ private:
     void updateTracyContext(const std::pair<ChipId, CoreCoord>& device_core);
 
     // Iterate over all markers and update their data if needed
+    // NOLINTNEXTLINE(readability-make-member-function-const)
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
 
     // Get the trace id and trace id count
@@ -293,6 +294,4 @@ bool useFastDispatch(IDevice* device);
 
 void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -4,7 +4,6 @@
 
 #include "slice_write_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -16,8 +15,8 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     bool has_step = false;
-    for (uint32_t i = 0; i < operation_attributes.step.size(); i++) {
-        if (operation_attributes.step[i] != 1) {
+    for (unsigned int step_val : operation_attributes.step) {
+        if (step_val != 1) {
             has_step = true;
             break;
         }
@@ -45,7 +44,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_hit(
 
 void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
+
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_args.output;
     const auto output_padded_shape = output_tensor.padded_shape();
@@ -126,20 +125,26 @@ tensor_return_value_t SliceWriteDeviceOperation::create_output_tensors(
     return tensor_args.output;
 }
 
-std::tuple<SliceWriteDeviceOperation::operation_attributes_t, SliceWriteDeviceOperation::tensor_args_t>
-SliceWriteDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::slice_write
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_return_value_t slice_write(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step) {
-    return {
-        operation_attributes_t{
-            .slice_start = slice_start,
-            .slice_end = slice_end,
-            .step = step,
-        },
-        tensor_args_t{.input = input_tensor, .output = output_tensor}};
+    using OperationType = ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .slice_start = slice_start,
+        .slice_end = slice_end,
+        .step = step,
+    };
+    auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .output = output_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::prim
