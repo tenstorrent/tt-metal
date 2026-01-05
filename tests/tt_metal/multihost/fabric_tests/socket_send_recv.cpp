@@ -170,7 +170,7 @@ TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     std::vector<int> sender_node_ranks_ctx1 = {0, 2, 3};
     uint32_t recv_rank_ctx1 = 1;
 
-    auto distributed_ctx0 = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_ctx0 = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     std::unordered_map<uint32_t, tt_metal::distributed::MeshSocket> sockets_ctx0;
     std::unordered_map<uint32_t, tt_metal::distributed::MeshSocket> sockets_ctx1;

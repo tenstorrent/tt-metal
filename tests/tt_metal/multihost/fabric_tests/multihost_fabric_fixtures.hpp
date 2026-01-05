@@ -336,7 +336,7 @@ public:
         auto mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         uint32_t num_meshes = mesh_graph.get_mesh_ids().size();
         // TODO (AS): For now assume that all meshes have the same number of processes per mesh
-        auto host_ranks = mesh_graph.get_host_ranks(tt::tt_fabric::MeshId{0});
+        const auto& host_ranks = mesh_graph.get_host_ranks(tt::tt_fabric::MeshId{0});
         uint32_t num_procs_per_mesh = host_ranks.size();
         return num_user_procs == num_meshes * num_procs_per_mesh;
     }

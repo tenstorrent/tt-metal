@@ -18,8 +18,8 @@ struct MeshCoreCoord {
     CoreCoord core_coord = CoreCoord(0, 0);
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
-    MeshCoreCoord() {}
-    MeshCoreCoord(MeshCoordinate device_coord, CoreCoord core_coord) :
+    MeshCoreCoord() = default;
+    MeshCoreCoord(const MeshCoordinate& device_coord, const CoreCoord& core_coord) :
         device_coord(device_coord), core_coord(core_coord) {}
 
     bool operator==(const MeshCoreCoord& other) const {
@@ -34,12 +34,12 @@ struct MeshCoreCoord {
 // Used to determine which cores the socket config must be written to and the sender to receiver mapping.
 // Cannot reuse senders and receivers in a single socket context. Each socket connection is 1:1.
 struct SocketConnection {
-    MeshCoreCoord sender_core = {};
-    MeshCoreCoord receiver_core = {};
+    MeshCoreCoord sender_core;
+    MeshCoreCoord receiver_core;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
-    SocketConnection() {}
-    SocketConnection(MeshCoreCoord sender_core, MeshCoreCoord receiver_core) :
+    SocketConnection() = default;
+    SocketConnection(const MeshCoreCoord& sender_core, const MeshCoreCoord& receiver_core) :
         sender_core(sender_core), receiver_core(receiver_core) {}
 
     bool operator==(const SocketConnection& other) const {
@@ -62,7 +62,7 @@ struct SocketMemoryConfig {
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
-    SocketMemoryConfig() {}
+    SocketMemoryConfig() = default;
     SocketMemoryConfig(
         BufferType socket_storage_type,
         uint32_t fifo_size,
@@ -102,7 +102,7 @@ struct SocketConfig {
         const SocketMemoryConfig& socket_mem_config,
         std::optional<tt::tt_fabric::MeshId> sender_mesh_id = std::nullopt,
         std::optional<tt::tt_fabric::MeshId> receiver_mesh_id = std::nullopt,
-        std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr) :
+        const std::shared_ptr<multihost::DistributedContext>& distributed_context = nullptr) :
         socket_connection_config(socket_connection_config),
         socket_mem_config(socket_mem_config),
         sender_mesh_id(sender_mesh_id),
@@ -114,7 +114,7 @@ struct SocketConfig {
         const SocketMemoryConfig& socket_mem_config,
         multihost::Rank sender_rank,
         multihost::Rank receiver_rank,
-        std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr) :
+        const std::shared_ptr<multihost::DistributedContext>& distributed_context = nullptr) :
         socket_connection_config(socket_connection_config),
         socket_mem_config(socket_mem_config),
         sender_rank(sender_rank),
