@@ -15,6 +15,7 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
+    const auto core_id = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w0_addr = get_arg_val<uint32_t>(argidx++);
     const auto w1_addr = get_arg_val<uint32_t>(argidx++);
@@ -47,4 +48,39 @@ void kernel_main() {
     const auto w1_accessor = TensorAccessor(w1_args, w1_addr, w1_tile_size);
     const auto w2_accessor = TensorAccessor(w2_args, w2_addr, w2_tile_size);
     const auto out_accessor = TensorAccessor(out_args, out_addr, out_tile_size);
+
+    // Constants for MoE
+    constexpr uint32_t num_w0_w1_tiles = 224;
+    constexpr uint32_t num_w2_tiles_h = 64;
+    const uint32_t num_w2_tiles_w = core_id < 32 ? 4 : 3;
+    const uint32_t num_mm2_tiles = core_id < 32 ? 4 : 3;
+
+    constexpr uint32_t num_elt_tiles = 1;
+    constexpr uint32_t num_in2_tiles = 64;
+
+    constexpr uint32_t w0_w1_stride = 64;
+    constexpr uint32_t w2_stride_w = 1;
+    constexpr uint32_t w2_stride_h = 224;
+
+    const uint32_t w0_tile_id_start = core_id;
+    const uint32_t w1_tile_id_start = core_id;
+    const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
+
+    // Write from cb_c2w_elt
+    for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+        cb_wait_front(cb_c2w_elt, 1);
+        cb_pop_front(cb_c2w_elt, 1);
+    }
+
+    // Read to cb_r2c_in2
+    for (uint32_t i = 0; i < num_in2_tiles; ++i) {
+        cb_reserve_back(cb_r2c_in2, 1);
+        cb_push_back(cb_r2c_in2, 1);
+    }
+
+    // Write from cb_c2w_mm2
+    for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
+        cb_wait_front(cb_c2w_mm2, 1);
+        cb_pop_front(cb_c2w_mm2, 1);
+    }
 }
