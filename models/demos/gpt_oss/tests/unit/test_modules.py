@@ -56,7 +56,7 @@ def run_attention_component(
         hidden_states=hidden_states,
         position_embeddings=position_embeddings,
         attention_mask=mask,
-        use_cache=False,
+        use_cache=True,
     )
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
