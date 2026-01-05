@@ -249,7 +249,6 @@ class DistributedLayerNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
-        self.workaround = not (norm_elementwise_affine and bias)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -259,6 +258,12 @@ class DistributedLayerNorm(Module):
             packer_l1_acc=False,
         )
 
+        self.program_config = ttnn.LayerNormDefaultProgramConfig(
+            legacy_reduction=False,
+            legacy_rsqrt=False,
+            use_welford=True,
+        )
+
         n = self.TILE_SIZE * self.mesh_width
         shape = [embedding_dim // n, n]
 
@@ -266,32 +271,20 @@ class DistributedLayerNorm(Module):
 
         self.weight = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
-            if norm_elementwise_affine or self.workaround
+            if norm_elementwise_affine
             else None
         )
         self.bias = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
-            if (norm_elementwise_affine and bias) or self.workaround
+            if (norm_elementwise_affine and bias)
             else None
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
-
-        if self.workaround:
-            # TODO: make logging less noisy
-            # logger.debug(
-            #     "DistributedLayerNorm initialized with norm_elementwise_affine=False. Creating gamma and beta tensors to meet op requirements."
-            # )
-
-            assert self.norm_elementwise_affine == (weight is not None)
-            assert self.use_bias == (bias is not None)
-
-            if weight is None:
-                weight = torch.ones(self.embedding_dim)
-            if bias is None:
-                bias = torch.zeros(self.embedding_dim)
+        assert (weight is not None) == self.norm_elementwise_affine
+        assert (bias is not None) == (self.use_bias)
 
         if weight is not None:
             state["weight"] = (
@@ -307,11 +300,22 @@ class DistributedLayerNorm(Module):
                 .reshape(-1, self.TILE_SIZE * self.mesh_width)
             )
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
-        assert (
-            self.weight is not None and self.bias is not None
-        ), "weight and bias must be initialized before calling forward"
-        stats = ttnn.layer_norm_pre_all_gather(x)
+    def forward(
+        self, x: ttnn.Tensor, dynamic_weight=None, dynamic_bias=None, compute_kernel_config=None
+    ) -> ttnn.Tensor:
+        if (dynamic_weight is not None) or (dynamic_bias is not None):
+            assert (
+                self.weight is None and self.bias is None
+            ), "weight and bias must be None when dynamic_weight and dynamic_bias are provided"
+
+        weight = dynamic_weight or self.weight.data
+        bias = dynamic_bias or self.bias.data
+
+        stats = ttnn.layer_norm_pre_all_gather(
+            x,
+            compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            program_config=self.program_config,
+        )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             stats = ttnn.experimental.all_gather_async(
@@ -330,10 +334,11 @@ class DistributedLayerNorm(Module):
         x = ttnn.layer_norm_post_all_gather(
             x,
             stats,
-            weight=self.weight.data if self.weight is not None else None,
-            bias=self.bias.data if self.bias is not None else None,
+            weight=weight,
+            bias=bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            program_config=self.program_config,
         )
         return x
 
