@@ -131,6 +131,8 @@ def test_run_conv2d_ops(device):
     Consolidated performance test that runs all conv configurations in a single process.
     Uses Tracy signposts to mark each configuration's measurement region.
     """
+    torch.manual_seed(0)
+
     if not (is_blackhole() or is_wormhole_b0()):
         pytest.skip("Test is only for Blackhole and Wormhole B0 architectures")
 
