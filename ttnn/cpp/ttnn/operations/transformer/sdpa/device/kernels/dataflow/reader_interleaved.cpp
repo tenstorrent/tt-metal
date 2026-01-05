@@ -117,36 +117,23 @@ void kernel_main() {
         }
         uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_start + global_q_count;
-             ++global_q_chunk) {
-            const uint32_t nb = global_q_chunk / (NQH * q_num_chunks);
-            const uint32_t nq = (global_q_chunk % (NQH * q_num_chunks)) / q_num_chunks;
-            const uint32_t q_chunk = global_q_chunk % q_num_chunks;
-            const uint32_t q_iter = q_chunk - global_q_start % q_num_chunks;
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            if constexpr (is_chunked) {
+                // Chunked means that we have paged attention
+                const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
+                cb_reserve_back(cb_id_page_table, 1);
+                uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
+                uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(nb);
+                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_page_table, 1);
+                page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+            }
 
             uint32_t mask_batch_offset = nb * Sqt * Skt;
             if constexpr (!broadcast_provided_mask_heads) {
                 mask_batch_offset *= NQH;
             }
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                // Read attention sink for this Q chunk if enabled
-                if constexpr (use_attention_sink) {
-                    cb_reserve_back(cb_attention_sink, Sq_chunk_t);
-                    uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
-
-                    // Attention sink has shape [1, NH, 1, 1] - single value per head
-                    // Read the single tile for this head into the first tile of the CB
-                    const uint32_t sink_tile_id =
-                        attention_sink_tile_shape.id_of(0, nq, 0, 0);  // batch=0 since shape is [1,NH,1,1]
-                    noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
-                    noc_async_read_barrier();
-
-                    // Fill all Sq_chunk_t tiles in the CB by copying the first element of the source tile
-                    // to the first element of every row in each destination tile
-                    fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                        cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
-
-            const uint32_t mask_batch_offset = nb * Sqt * Skt;
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 // Read attention sink for this Q chunk if enabled
                 if constexpr (use_attention_sink) {
