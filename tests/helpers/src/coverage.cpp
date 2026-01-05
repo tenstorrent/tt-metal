@@ -4,9 +4,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include "llk_assert.h"
-#include "string.h"
 
 extern "C"
 {
@@ -63,14 +63,6 @@ extern "C"
     void filename_dump(const char* f, void*)
     {
         __gcov_filename_to_gcfn(f, write_data, NULL);
-    }
-
-    size_t strlen(const char* s)
-    {
-        size_t n = 0;
-        for (; s[n] != '\0'; n++)
-            ;
-        return n;
     }
 
     // The first value in the coverage segment is the number of bytes written to it.
