@@ -47,20 +47,13 @@ jobs:
             local dir=$1
             echo "Collecting from: $dir"
             
-            # Try pytest collection, skip conftest.py to avoid import errors
-            output=$(pytest "$dir" --collect-only -q --tb=no --no-header --noconftest 2>&1)
-            echo "$output"
+            # Show first error to see what's missing
+            pytest "$dir" --collect-only --noconftest 2>&1 | head -50
             
-            # Extract count from last line (e.g., "123 tests collected" or "collected 123 tests")
-            count=$(echo "$output" | tail -1 | grep -oE '[0-9]+' | head -1)
-            
-            if [ -z "$count" ]; then
-              echo "Warning: Could not extract count, output was:"
-              echo "$output"
-              echo "0"
-            else
-              echo "$count"
-            fi
+            # Count using simple pattern - look for ".py::" which indicates a collected test
+            count=$(pytest "$dir" --collect-only -q --noconftest 2>&1 | grep -c "\.py::" || echo "0")
+            echo "Count: $count"
+            echo "$count"
           }
           
           # Count tests in PR branch
