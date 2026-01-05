@@ -149,13 +149,6 @@ jobs:
         with:
           commands: pytest -n auto models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_v2') }}
-      
-      - name: Run phi3 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/experimental/phi3/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'phi3') }}
 
       - name: Run swin_s model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}

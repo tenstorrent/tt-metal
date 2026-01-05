@@ -24,7 +24,6 @@ on:
           - vgg_unet
           - vanilla_unet
           - swin_v2
-          - phi3
           - swin_s
           - vovnet
           - ufld_v2

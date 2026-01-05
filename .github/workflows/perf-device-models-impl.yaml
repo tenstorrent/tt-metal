@@ -343,15 +343,6 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['swin-v2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: phi3 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "phi3"
-          commands: |
-            pytest models/experimental/phi3/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['phi3'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: swin_s tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
