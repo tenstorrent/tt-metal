@@ -73,7 +73,7 @@ jobs:
           count_tests() {
             local dir=$1
             echo "Collecting from: $dir" >&2
-            output=$(pytest "$dir" --collect-only -q 2>&1)
+            output=$(pytest "$dir" --collect-only -q --noconftest 2>&1)
             echo "Pytest output:" >&2
             echo "$output" >&2
             count=$(echo "$output" | tail -1 | grep -oE '[0-9]+' | head -1)
