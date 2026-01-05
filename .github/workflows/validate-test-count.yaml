@@ -26,8 +26,7 @@ jobs:
         uses: actions/checkout@v4
         # Default fetch-depth: 1 - just PR branch
 
-      - name: Count tests in PR branch and main branch
-        id: count-tests
+      - name: Count and compare tests
         run: |
           # Define locked directories to check
           DIRS="eltwise conv matmul pool fused transformers reduce tensor debug base_functionality benchmarks"
@@ -40,10 +39,11 @@ jobs:
           
           # Count tests in PR branch
           echo "=== PR branch test counts ==="
+          declare -A pr_counts
           for dir in $DIRS; do
             count=$(count_tests "tests/ttnn/unit_tests/operations/$dir")
+            pr_counts[$dir]=$count
             echo "  $dir: $count"
-            echo "pr_${dir}=$count" >> $GITHUB_OUTPUT
           done
           
           # Checkout base branch
@@ -52,17 +52,14 @@ jobs:
           
           # Count tests in base branch
           echo "=== Base branch test counts ==="
+          declare -A base_counts
           for dir in $DIRS; do
             count=$(count_tests "tests/ttnn/unit_tests/operations/$dir")
+            base_counts[$dir]=$count
             echo "  $dir: $count"
-            echo "base_${dir}=$count" >> $GITHUB_OUTPUT
           done
-
-      - name: Compare test counts
-        run: |
-          # Define locked directories to check
-          DIRS="eltwise conv matmul pool fused transformers reduce tensor debug base_functionality benchmarks"
           
+          # Compare and generate report
           FAILED=0
           
           echo "## Test Count Validation Results" >> $GITHUB_STEP_SUMMARY
@@ -70,17 +67,16 @@ jobs:
           echo "| Directory | Base | PR | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
           
-          # Check each directory
           for dir in $DIRS; do
-            PR_COUNT=${{ steps.count-tests.outputs.pr_${dir} }}
-            BASE_COUNT=${{ steps.count-tests.outputs.base_${dir} }}
+            pr_count=${pr_counts[$dir]}
+            base_count=${base_counts[$dir]}
             
-            if [ "$PR_COUNT" -gt "$BASE_COUNT" ]; then
-              echo "| $dir | $BASE_COUNT | $PR_COUNT | ❌ New tests added (+$((PR_COUNT - BASE_COUNT))) |" >> $GITHUB_STEP_SUMMARY
-              echo "::error::New tests detected in tests/ttnn/unit_tests/operations/$dir/ ($BASE_COUNT → $PR_COUNT)"
+            if [ "$pr_count" -gt "$base_count" ]; then
+              echo "| $dir | $base_count | $pr_count | ❌ New tests added (+$((pr_count - base_count))) |" >> $GITHUB_STEP_SUMMARY
+              echo "::error::New tests detected in tests/ttnn/unit_tests/operations/$dir/ ($base_count → $pr_count)"
               FAILED=1
             else
-              echo "| $dir | $BASE_COUNT | $PR_COUNT | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
+              echo "| $dir | $base_count | $pr_count | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
             fi
           done
           
