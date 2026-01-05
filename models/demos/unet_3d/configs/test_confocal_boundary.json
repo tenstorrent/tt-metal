@@ -21,7 +21,7 @@
         "label_internal_path": "label",
         "type": "StandardHDF5Dataset",
         "output_dir": "./models/demos/unet_3d/data/predictions/confocal_boundary/validation",
-        "batch_size": 2,
+        "batch_size_per_device": 1,
         "num_workers": 4,
         "global_normalization": true,
           "file_paths": [

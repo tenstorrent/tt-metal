@@ -69,6 +69,17 @@ def print_metrics(metrics) -> None:
             logger.info(f"Average {metric_name}: class-wise {value}, mean {value.mean()}")
 
 
+def get_device():
+    num_devices = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, num_devices),
+        dispatch_core_config=ttnn.device.DispatchCoreConfig(),
+        l1_small_size=2048,
+        trace_region_size=679936,
+        num_command_queues=2,
+    )
+
+
 def main():
     """Main entry point for prediction with 3D U-Net models.
 
@@ -78,17 +89,12 @@ def main():
     config = load_config()
 
     model = UNet3DRunner()
-    device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 2),
-        dispatch_core_config=ttnn.device.DispatchCoreConfig(),
-        l1_small_size=2048,
-        trace_region_size=679936,
-        num_command_queues=2,
-    )
+    device = get_device()
+    num_devices = device.get_num_devices()
     model.initialize_inference(device, config)
     predictor = get_predictor(model, config)
     metrics = []
-    for test_loader in get_test_loaders(config["dataset"]):
+    for test_loader in get_test_loaders(config["dataset"], num_devices):
         metric = predictor(test_loader)
         if metric is not None:
             metrics.append(metric)
