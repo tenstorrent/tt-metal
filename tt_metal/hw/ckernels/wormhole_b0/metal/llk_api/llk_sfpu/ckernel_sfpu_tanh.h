@@ -23,7 +23,7 @@ namespace ckernel::sfpu {
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
-    sfpi::vFloat result;
+    sfpi::vFloat result = sfpi::vConst0;
 
     constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
 
@@ -48,9 +48,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
     v_else {
         // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
         sfpi::vFloat two_x = 2.f * val;
-
-        // Perform sigmoid manually as 1/(1+exp(-x))
-        sfpi::vFloat sig = _sfpu_sigmoid_(two_x);
+        sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
 
         // Compute 2*sigmoid(2x) - 1
         result = 2.f * sig - sfpi::vConst1;
