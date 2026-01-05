@@ -143,7 +143,31 @@ list(
     json-dev
     ttml
     Unspecified # TODO: audit if there's anything we need to ship here
+    # Empty placeholder components - these are group "header" components with no install targets.
+    # Files are installed to sub-components (e.g., metalium-runtime, not metalium).
+    #
+    # DEB vs RPM behavior difference:
+    # - CPack DEB: tolerant of empty components, silently creates empty packages or skips them
+    # - CPack RPM: strict, emits "file not found" errors when packaging empty components
+    #
+    # Removing these is a no-op for DEB (already works) but required for RPM. Empty packages
+    # serve no purpose in either format, so we exclude them unconditionally for simplicity.
+    metalium-jit
+    metalium
+    metalium-dev
+    metalium-examples
+    metalium-validation
+    nn
+    nn-dev
+    nn-examples
+    nn-validation
+    ml
 )
+
+# When using system SFPI, the jit-build component has no files
+if(TT_USE_SYSTEM_SFPI)
+    list(REMOVE_ITEM CPACK_COMPONENTS_ALL jit-build)
+endif()
 
 # Component groups and components (common to both DEB and RPM)
 cpack_add_component_group(metalium-jit)
