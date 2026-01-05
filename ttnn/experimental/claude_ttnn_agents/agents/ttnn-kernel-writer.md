@@ -182,20 +182,31 @@ def test_functional_correctness(device):
 namespace NAMESPACE {
 void MAIN {
     // Get compile-time args
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t NC = get_compile_time_arg_val(2);
 
     // REQUIRED: Initialize hardware before using helpers
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
     // Implement phases as specified in design document
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        // Phase 1: [USE HELPER as per design]
-        compute_kernel_lib::X(...);
+    // Example: reduce with TileShape API
+    // NOTE: "Tile" in TileShape = block dimensions (Ht×Wt×NC), NOT the 32×32 tile
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+        cb_in, cb_scaler, cb_out,
+        compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
 
-        // Phase 2: [USE HELPER as per design]
-        compute_kernel_lib::Y(...);
-    }
+    // For single-row reduction:
+    // compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+    //     cb_in, cb_scaler, cb_out,
+    //     compute_kernel_lib::TileShape::row(Wt));
+
+    // For PRELOADED mode with custom stride:
+    // compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW,
+    //                            compute_kernel_lib::ReduceInputMode::PRELOADED>(
+    //     cb_in, cb_scaler, cb_out,
+    //     compute_kernel_lib::TileShape::grid(Ht, Wt, NC),
+    //     compute_kernel_lib::TileLayout::with_row_stride(input_stride));
 }
 }
 ```
@@ -234,10 +245,13 @@ cb_pop_front(cb_tilized, 1);
 ```cpp
 // Design: USE HELPER: compute_kernel_lib::reduce<AVG, REDUCE_ROW>(...)
 
-// CORRECT:
+// CORRECT - using TileShape API:
 compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-    cb_tilized, cb_scaler, cb_reduced, Ht, Wt, NC);
+    cb_tilized, cb_scaler, cb_reduced,
+    compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
 ```
+
+**Note**: "Tile" in `TileShape` refers to the **block dimensions being processed** (rows × cols × batches of 32×32 tiles), NOT the 32×32 hardware tile itself.
 
 ## What You DON'T Do
 
