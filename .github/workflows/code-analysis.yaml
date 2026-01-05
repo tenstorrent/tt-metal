@@ -231,7 +231,7 @@ jobs:
         run: cmake --preset clang-static-analyzer
 
       - name: 🔬 Analyze with CodeChecker
-        uses: whisperity/codechecker-analysis-action@v1
+        uses: whisperity/codechecker-analysis-action@v1.0.4
         id: codechecker
         with:
           logfile: /work/.build/clang-static-analyzer/compile_commands.json
