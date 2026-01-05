@@ -79,7 +79,7 @@ def test_pow_arange_masking_fp32(exponent, device):
     golden = golden_function(tt_input, exponent, device=device)
 
     tt_result = ttnn.pow(tt_in, exponent)
+    # tt_result = ttnn.multiply(tt_in, exponent, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.LOG)], activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False)], use_legacy=False )
     result = ttnn.to_torch(tt_result)
-    print(result)
 
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
