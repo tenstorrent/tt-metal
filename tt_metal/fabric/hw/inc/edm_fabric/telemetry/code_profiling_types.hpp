@@ -14,11 +14,13 @@ enum class CodeProfilingTimerType : uint32_t {
     NONE = 0,
     RECEIVER_CHANNEL_FORWARD = 1 << 0,
     SENDER_CHANNEL_FORWARD = 1 << 1,
+    RECEIVER_CHANNEL_SEND_ACKS = 1 << 2,
+    RECEIVER_CHANNEL_SEND_COMPLETION_ACK = 1 << 3,
     // Future timers can be added here:
     // SENDER_CHANNEL_PROCESS = 1 << 1,
     // PACKET_ROUTING = 1 << 2,
     // etc.
-    LAST = SENDER_CHANNEL_FORWARD << 1  // Sentinel for size calculation
+    LAST = RECEIVER_CHANNEL_SEND_COMPLETION_ACK << 1  // Sentinel for size calculation
 };
 
 /**

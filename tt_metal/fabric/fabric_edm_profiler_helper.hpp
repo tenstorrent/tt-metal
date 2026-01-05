@@ -16,6 +16,8 @@ namespace tt::tt_fabric {
 const std::unordered_map<std::string, CodeProfilingTimerType> CodeProfilingTimerTypeMap = {
     {"RECEIVER_CHANNEL_FORWARD", CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD},
     {"SENDER_CHANNEL_FORWARD", CodeProfilingTimerType::SENDER_CHANNEL_FORWARD},
+    {"RECEIVER_CHANNEL_SEND_ACKS", CodeProfilingTimerType::RECEIVER_CHANNEL_SEND_ACKS},
+    {"RECEIVER_CHANNEL_SEND_COMPLETION_ACK", CodeProfilingTimerType::RECEIVER_CHANNEL_SEND_COMPLETION_ACK},
 };
 
 CodeProfilingTimerType convert_to_code_profiling_timer_type(const std::string& timer_str);
