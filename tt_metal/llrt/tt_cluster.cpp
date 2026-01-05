@@ -101,7 +101,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     }
 
     std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
-    if (cluster_desc == nullptr) {
+    {
         temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
