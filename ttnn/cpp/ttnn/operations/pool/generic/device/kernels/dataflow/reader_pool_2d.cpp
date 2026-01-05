@@ -516,7 +516,6 @@ void kernel_main() {
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     if constexpr (config_in_dram) {
-        // DPRINT << "Loading reader config from "<<reader_dram_addr<<" of size "<<reader_page_size<<ENDL();
         if (reader_id == 0) {
             load_config_tensor_if_in_dram<
                 reader_dram_addr,
