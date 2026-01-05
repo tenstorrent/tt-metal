@@ -292,7 +292,14 @@ int main(int argc, char** argv) {
         uint32_t* start_ptr = (uint32_t*)align(src_vec.data(), addr_align);
         std::vector<uint32_t> result_vec;
 
-        const std::string copy_mode_str = copy_mode == 0 ? "memcpy" : copy_mode == 1 ? "4 byte writes" : "nt_memcpy";
+        std::string copy_mode_str;
+        if (copy_mode == 0) {
+            copy_mode_str = "memcpy";
+        } else if (copy_mode == 1) {
+            copy_mode_str = "4 byte writes";
+        } else {
+            copy_mode_str = "nt_memcpy";
+        }
 
         log_info(
             LogTest,

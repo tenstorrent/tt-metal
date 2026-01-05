@@ -90,7 +90,14 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     uint32_t num_bfp8_in_tile = num_tile_words + num_exp_words;
 
     // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
-    uint32_t exp_bit_mask = (tile_HW == 16) ? 0x0 : (tile_HW == 32) ? 0x1 : 0x3;
+    uint32_t exp_bit_mask;
+    if (tile_HW == 16) {
+        exp_bit_mask = 0x0;
+    } else if (tile_HW == 32) {
+        exp_bit_mask = 0x1;
+    } else {
+        exp_bit_mask = 0x3;
+    }
 
     int num_elements_in_dword = 4;
     uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword;  // each uint32_t contains 4 BFP8 values
