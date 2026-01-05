@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -38,12 +39,17 @@ def test_vae_attention(device, input_shape, encoder_shape, block_name, pcc, is_c
     vae.eval()
     state_dict = vae.state_dict()
 
+    model_config = VAEModelOptimisations()
     if block_name == "encoder":
         torch_attention = vae.encoder.mid_block.attentions[0]
-        tt_attention = TtAttention(device, state_dict, "encoder.mid_block.attentions.0", 512, 1, 512, None, 512)
+        tt_attention = TtAttention(
+            device, state_dict, "encoder.mid_block.attentions.0", model_config, 512, 1, 512, None, 512
+        )
     else:
         torch_attention = vae.decoder.mid_block.attentions[0]
-        tt_attention = TtAttention(device, state_dict, "decoder.mid_block.attentions.0", 512, 1, 512, None, 512)
+        tt_attention = TtAttention(
+            device, state_dict, "decoder.mid_block.attentions.0", model_config, 512, 1, 512, None, 512
+        )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (
         torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32) if encoder_shape is not None else None

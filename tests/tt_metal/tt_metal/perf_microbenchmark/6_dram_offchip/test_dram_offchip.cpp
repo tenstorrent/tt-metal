@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -367,7 +367,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (size_t i = 0; i < vec.size(); i++) {
+    for (unsigned int& elem : vec) {
         float num_1_float = rand_float() + offset;
         float num_2_float = rand_float() + offset;
 
@@ -375,7 +375,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
 
         // pack 2 uint16 into uint32
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        elem = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
     return vec;
 }

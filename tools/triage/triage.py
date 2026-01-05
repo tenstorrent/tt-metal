@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -22,6 +22,7 @@ Options:
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
+    --disable-progress               Disable progress bars. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -350,10 +351,12 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
 # Purposely uninitialized global console object to ensure proper initialization only once later
 console: Console = None  # type: ignore[assignment]
+progress_disabled: bool = False
 
 
 def init_console_and_verbosity(args: ScriptArguments) -> None:
     global console
+    global progress_disabled
 
     if console is not None:
         return
@@ -363,6 +366,7 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 500
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
+    progress_disabled = bool(args["--disable-progress"])
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -379,6 +383,7 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
 
 def create_progress() -> Progress:
     global console
+    global progress_disabled
 
     return Progress(
         SpinnerColumn(),
@@ -388,6 +393,7 @@ def create_progress() -> Progress:
         TextColumn("[progress.tasks]{task.completed}/{task.total}[/] [progress.description]{task.description}[/]"),
         console=console,
         transient=True,
+        disable=progress_disabled,
     )
 
 
@@ -529,8 +535,8 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
 
                 docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
                 utils.ERROR(f"  Script help:\n{docstring_indented}")
-            else:
-                utils.INFO("  pass")
+        else:
+            utils.INFO("  pass")
         return
 
     for failure in failures:
@@ -668,6 +674,8 @@ def run_script(
     argv: list[str] | None = None,
     return_result: bool = False,
 ) -> Any:
+    force_exit = False
+
     # Resolve script path
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
@@ -675,6 +683,7 @@ def run_script(
         if stack is None or len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
         script_path = stack[1].filename
+        force_exit = True
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
@@ -713,6 +722,10 @@ def run_script(
     if return_result:
         return result
     serialize_result(script, result)
+
+    if force_exit:
+        # Remove nanobind leak check to avoid false positives on exit
+        os._exit(0)
 
 
 class TTTriageError(Exception):
@@ -827,6 +840,9 @@ def main():
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
+
+    # Remove nanobind leak check to avoid false positives on exit
+    os._exit(0)
 
 
 if __name__ == "__main__":

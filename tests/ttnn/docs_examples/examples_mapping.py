@@ -337,6 +337,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.var": reduction.test_var,
     "ttnn.argmax": reduction.test_argmax,
     "ttnn.prod": reduction.test_prod,
+    "ttnn.sampling": reduction.test_sampling,
     "ttnn.topk": reduction.test_topk,
     "ttnn.cumsum": reduction.test_cumsum,
     "ttnn.ema": reduction.test_ema,
