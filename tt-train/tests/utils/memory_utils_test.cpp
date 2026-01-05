@@ -175,8 +175,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     EXPECT_EQ(dram_usage.current, expected_size);
 
     auto l1_usage = ttml::utils::MemoryUsageTracker::get_L1_usage();
-    EXPECT_EQ(l1_usage.current, 0);
-    EXPECT_EQ(l1_usage.peak_buffer, 0);
+    EXPECT_EQ(l1_usage.peak_l1, 0);
 }
 
 TEST_F(MemoryUtilsTest, L1Usage) {
@@ -216,18 +215,16 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         // TODO: verify that 12288 comes from program cache
         EXPECT_EQ(dram_usage.current, 12288);
 
-        // num_cores = 64 (256 * 256 / (32 * 32))
-        // peak_cb = tile_size * sizeof(bfloat16) * num_cores * n_cb (cb0, cb1, cb_out)
-        size_t expected_peak_cb = 2048 * 2 * 64 * 3;
+        // peak_cb = tile_size * sizeof(bfloat16) * n_cb (cb0, cb1, cb_out)
+        size_t expected_peak_cb = 2048 * 2 * 3;
         EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
 
-        // current L1 should be zero after operation completes
-        size_t expected_current = add_result_size;
-        EXPECT_EQ(l1_usage.current, expected_current);
+        // Output tensor is in L1
+        EXPECT_EQ(l1_usage.peak_l1, add_result_size);
 
         // peak_buffer should be volume of tensors (one result tensor in L1)
-        size_t expected_peak_buffer = expected_current;
-        EXPECT_EQ(l1_usage.peak_buffer, expected_peak_buffer);
+        size_t expected_peak_buffer = add_result_size + expected_peak_cb;
+        EXPECT_EQ(l1_usage.peak_total, expected_peak_buffer);
     }
 
     // Second capture: two 128x128 tensors added with width sharding
@@ -254,7 +251,8 @@ TEST_F(MemoryUtilsTest, L1Usage) {
 
         auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
         auto add_result = ttnn::add(tensor1, tensor2);
-        size_t add_result_size = compute_tensor_size(add_result);
+        size_t add_result_size =
+            compute_tensor_size(add_result) / num_cores;  // Each core gets 1/num_cores of the result
         ttml::utils::MemoryUsageTracker::end_capture();
 
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
@@ -266,12 +264,11 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         size_t expected_peak_cb = 0;  // CBs are not allocated since add uses sharded inputs as CBs
         EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
 
-        // peak_buffer should be volume of tensors (one result tensor in L1)
-        size_t expected_peak_buffer = add_result_size;
-        EXPECT_EQ(l1_usage.peak_buffer, expected_peak_buffer);
+        // Output tensor is in L1
+        EXPECT_EQ(l1_usage.peak_l1, add_result_size);
 
-        // current L1 should be the result tensor after operation completes
-        size_t expected_current = expected_peak_buffer;
-        EXPECT_EQ(l1_usage.current, expected_current);
+        // peak_total should be the sum of peak_l1 and peak_cb
+        size_t expected_peak_total = add_result_size + expected_peak_cb;
+        EXPECT_EQ(l1_usage.peak_total, expected_peak_total);
     }
 }

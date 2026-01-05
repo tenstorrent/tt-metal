@@ -7,26 +7,12 @@
 #include <nlohmann/json.hpp>
 
 #include "ttnn/common/guard.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 
 namespace ttml::utils {
 
-struct DRAMUsage {
-    /** peak memory usage in bytes between begin_capture and end_capture */
-    long long peak = 0;
-    /** current memory usage in bytes at the time of end_capture */
-    long long current = 0;
-};
-
-struct L1Usage {
-    /** peak circular buffer usage in bytes between begin_capture and end_capture */
-    long long peak_cb = 0;
-    /** peak L1 buffer usage in bytes between begin_capture and end_capture */
-    long long peak_buffer = 0;
-    /** peak total (cb + buffer) usage in bytes between begin_capture and end_capture */
-    long long peak_total = 0;
-    /** current L1 buffer usage in bytes at the time of end_capture */
-    long long current = 0;
-};
+using DRAMUsage = ttnn::graph::DRAMUsage;
+using L1UsagePerCore = ttnn::graph::PeakMemoryUsagePerCore;
 
 namespace MemoryUsageTracker {
 /**
@@ -55,7 +41,7 @@ DRAMUsage get_DRAM_usage();
  * @note This function throws an exception if capture is not active
  * @return The L1 usage
  */
-L1Usage get_L1_usage();
+L1UsagePerCore get_L1_usage();
 
 /**
  * @brief A convenience function to print memory usage

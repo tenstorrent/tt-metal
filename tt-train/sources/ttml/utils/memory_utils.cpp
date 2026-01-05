@@ -4,112 +4,10 @@
 
 #include "memory_utils.hpp"
 
-#include <regex>
-
-#include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 
 namespace ttml::utils {
 using namespace ttnn::graph;
-
-namespace {
-// Parse CoreRangeSet string format: "{[(x=X1,y=Y1) - (x=X2,y=Y2)], [(x=X3,y=Y3) - (x=X4,y=Y4)], ...}"
-// Returns total number of cores across all ranges.
-size_t parse_core_range_set_num_cores(const std::string& core_range_set_str) {
-    size_t total_cores = 0;
-
-    // Regex to match each CoreRange: [(x=X1,y=Y1) - (x=X2,y=Y2)]
-    // Captures: x1, y1, x2, y2
-    std::regex range_pattern(R"(\[\(x=(\d+),y=(\d+)\)\s*-\s*\(x=(\d+),y=(\d+)\)\])");
-
-    auto ranges_begin = std::sregex_iterator(core_range_set_str.begin(), core_range_set_str.end(), range_pattern);
-    auto ranges_end = std::sregex_iterator();
-
-    for (auto it = ranges_begin; it != ranges_end; ++it) {
-        const std::smatch& match = *it;
-        size_t x1 = std::stoul(match[1].str());
-        size_t y1 = std::stoul(match[2].str());
-        size_t x2 = std::stoul(match[3].str());
-        size_t y2 = std::stoul(match[4].str());
-
-        // Number of cores in this range: (x2 - x1 + 1) * (y2 - y1 + 1)
-        size_t cores_in_range = (x2 - x1 + 1) * (y2 - y1 + 1);
-        total_cores += cores_in_range;
-    }
-
-    return total_cores;
-}
-}  // namespace
-
-// Very simple implementation:
-// - Only tracks (de)allocations. If allocation we increase the current usage, if deallocation we decrease it.
-// This means that all tensors created before the trace capture are not tracked.
-DRAMUsage extract_DRAM_usage(const nlohmann::json& trace) {
-    DRAMUsage result;
-    long long current_buffer = 0;
-
-    for (size_t i = 0; i < trace.size(); ++i) {
-        const auto& v = trace[i];
-
-        if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
-            size_t buffer_size = std::stoll(v[kParams][kSize].get<std::string>());
-            current_buffer += buffer_size;
-        } else if (v[kNodeType] == kNodeBufferDeallocate) {
-            auto connection = v[kConnections][0].get<int>();
-            auto buffer = trace[connection];
-            if (buffer[kParams][kType] == "DRAM") {
-                size_t buffer_size = std::stoll(buffer[kParams][kSize].get<std::string>());
-                current_buffer -= buffer_size;
-            }
-        }
-
-        // Track peak
-        result.peak = std::max(result.peak, current_buffer);
-    }
-
-    // Current usage is whatever remains allocated at end of trace
-    result.current = current_buffer;
-    return result;
-}
-
-L1Usage extract_L1_usage(const nlohmann::json& trace) {
-    L1Usage result;
-    long long current_cb = 0;
-    long long current_buffer = 0;
-
-    for (size_t i = 0; i < trace.size(); ++i) {
-        const auto& v = trace[i];
-
-        if (v[kNodeType] == kNodeCBAllocate) {
-            auto core_range_set_str = v[kParams][kCoreRangeSet].get<std::string>();
-            size_t num_cores = parse_core_range_set_num_cores(core_range_set_str);
-            size_t size_per_core = std::stoll(v[kParams][kSize].get<std::string>());
-            size_t total_size = size_per_core * num_cores;
-
-            current_cb += total_size;
-            result.peak_cb = std::max(result.peak_cb, current_cb);
-        } else if (v[kNodeType] == kNodeCBDeallocateAll) {
-            current_cb = 0;
-        } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "L1") {
-            current_buffer += std::stoll(v[kParams][kSize].get<std::string>());
-            result.peak_buffer = std::max(result.peak_buffer, current_buffer);
-        } else if (v[kNodeType] == kNodeBufferDeallocate) {
-            auto connection = v[kConnections][0].get<int>();
-            auto buffer = trace[connection];
-            if (buffer[kParams][kType] == "L1") {
-                current_buffer -= std::stoll(buffer[kParams][kSize].get<std::string>());
-            }
-        }
-
-        // Track peak total (CB + buffer)
-        auto total = current_cb + current_buffer;
-        result.peak_total = std::max(result.peak_total, total);
-    }
-
-    // Current L1 buffer usage at end of trace (CBs are typically deallocated)
-    result.current = current_buffer;
-    return result;
-}
 
 namespace MemoryUsageTracker {
 static std::shared_ptr<ttnn::graph::GraphProcessor> graph_processor;
@@ -138,19 +36,19 @@ DRAMUsage get_DRAM_usage() {
     if (trace.empty()) {
         fmt::print("WARNING: Calling get_DRAM_usage() before trace capture\n");
     }
-    return extract_DRAM_usage(trace);
+    return ttnn::graph::extract_dram_usage(trace);
 }
 
-L1Usage get_L1_usage() {
+L1UsagePerCore get_L1_usage() {
     if (trace.empty()) {
         fmt::print("WARNING: Calling get_L1_usage() before trace capture\n");
     }
-    return extract_L1_usage(trace);
+    return ttnn::graph::extract_resource_usage_per_core(trace, 1);
 }
 
 void print_memory_usage() {
-    auto dram_usage = extract_DRAM_usage(trace);
-    auto l1_usage = extract_L1_usage(trace);
+    auto dram_usage = get_DRAM_usage();
+    auto l1_usage = get_L1_usage();
 
     fmt::print("=== Memory Usage Summary ===\n");
 
@@ -162,11 +60,10 @@ void print_memory_usage() {
 
     // Print L1 usage
     fmt::print(
-        "Peak L1 CB {:.2f} MB, Peak L1 Buffer {:.2f} MB, Peak L1 Total {:.2f} MB, Current L1 {:.2f} MB\n",
+        "Peak L1 CB {:.2f} MB, Peak L1 Buffer {:.2f} MB, Peak L1 Total {:.2f} MB\n",
         l1_usage.peak_cb / 1024.0 / 1024.0,
-        l1_usage.peak_buffer / 1024.0 / 1024.0,
-        l1_usage.peak_total / 1024.0 / 1024.0,
-        l1_usage.current / 1024.0 / 1024.0);
+        l1_usage.peak_l1 / 1024.0 / 1024.0,
+        l1_usage.peak_total / 1024.0 / 1024.0);
 }
 }  // namespace MemoryUsageTracker
 
