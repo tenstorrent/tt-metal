@@ -291,8 +291,16 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        # Note: libtracy.so* is included for Tracy profiler support when ENABLE_TRACY=ON
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so", "libtracy.so*"]
+        # Note: libtracy.so and libtracy.so.* are included for Tracy profiler support when ENABLE_TRACY=ON
+        lib_patterns = [
+            "_ttnn.so",
+            "_ttnncpp.so",
+            "libtt_metal.so",
+            "libdevice.so",
+            "libtt_stl.so",
+            "libtracy.so",
+            "libtracy.so.*",
+        ]
         runtime_patterns = [
             "hw/**/*",
         ]
