@@ -10,9 +10,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -84,7 +81,7 @@ void MAIN {
          * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
             cb_stats, cb_reduce, cb_var, compute_kernel_lib::TileShape::row(stats_tiles_cols));
 
         /*

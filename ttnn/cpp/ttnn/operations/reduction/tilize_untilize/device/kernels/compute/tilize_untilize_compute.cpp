@@ -6,13 +6,6 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-
-// Provide default REDUCE_OP/REDUCE_DIM so reduce_helpers.hpp always compiles.
-// For IDENTITY operations, these are never used (guarded by if constexpr).
-#ifndef REDUCE_OP
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-#endif
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 /**

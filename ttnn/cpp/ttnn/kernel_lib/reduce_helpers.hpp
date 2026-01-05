@@ -52,8 +52,8 @@
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(cb_in, cb_scaler, cb_out,
  *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
- *   // Using defines for reduce type/dim (REDUCE_OP and REDUCE_DIM must be defined)
- *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out,
+ *   // Reduce types and dimensions must now be specified explicitly as template parameters
+ *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out,
  *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  */
 
@@ -169,8 +169,8 @@ struct NoOp {
  *
  * @note post_reduce_op is only invoked for REDUCE_ROW dimension.
  *
- * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - defaults to REDUCE_OP define
- * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - defaults to REDUCE_DIM define
+ * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
+ * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam input_mode Input handling mode (STREAMING, STREAMING_BATCHED, PRELOADED, PERSISTENT) - defaults to STREAMING
  * @tparam reconfig Data format reconfiguration mode (NONE, INPUT, OUTPUT, BOTH) - defaults to BOTH
  * @tparam init If true, calls reduce_init before processing (default: true)
@@ -203,8 +203,8 @@ struct NoOp {
  *       compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
  *
  * @example
- *   // Using defines for reduce type/dim with single tile
- *   compute_kernel_lib::reduce(cb_in, cb_scaler, cb_out,
+ *   // Reduce type and dimension must be specified explicitly as template parameters
+ *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(cb_in, cb_scaler, cb_out,
  *       compute_kernel_lib::TileShape::single());
  *
  * @example
@@ -241,8 +241,8 @@ struct NoOp {
  *       });
  */
 template <
-    PoolType reduce_type = REDUCE_OP,
-    ReduceDim reduce_dim = REDUCE_DIM,
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
     ReduceInputMode input_mode = ReduceInputMode::STREAMING,
     ReduceDataFormatReconfig reconfig = ReduceDataFormatReconfig::BOTH,
     bool init = true,

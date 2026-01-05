@@ -2,12 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -138,11 +132,11 @@ void MAIN {
 
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-        reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
 
     tile_regs_commit();
@@ -166,7 +160,7 @@ void MAIN {
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -209,7 +203,7 @@ void MAIN {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
             cb_reserve_back(cb_var, 1);
             cb_wait_front(post_cb_scaler_global, 1);
-            reduce_init(cb_stats, post_cb_scaler_global, cb_var);
+            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_stats, post_cb_scaler_global, cb_var);
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_distributed_blocks; w++) {
                 reduce_tile(

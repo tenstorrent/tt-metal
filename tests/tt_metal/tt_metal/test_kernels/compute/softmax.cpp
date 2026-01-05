@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
@@ -125,7 +122,7 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB

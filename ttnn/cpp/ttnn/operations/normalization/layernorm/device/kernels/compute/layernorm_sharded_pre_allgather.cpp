@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -122,8 +119,8 @@ void MAIN {
 #endif
     // E[x],
     compute_kernel_lib::reduce<
-        REDUCE_OP,
-        REDUCE_DIM,
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputMode::PRELOADED,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
         cb_in,
@@ -169,7 +166,7 @@ void MAIN {
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::PRELOADED>(
+    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PRELOADED>(
         cb_x2,
         cb_scaler,
         cb_ex_partial2,
@@ -182,7 +179,7 @@ void MAIN {
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -190,7 +187,7 @@ void MAIN {
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile(
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                     cb_ex_external2,
                     cb_scaler_global,
                     0,

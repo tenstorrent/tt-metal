@@ -163,6 +163,9 @@ TilizeUntilizeProgramFactory::cached_program_t TilizeUntilizeProgramFactory::cre
     } else if (op_type == static_cast<uint32_t>(OpType::REDUCE_W_MAX)) {
         kernel_defines["REDUCE_OP"] = "PoolType::MAX";
         kernel_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    } else {
+        kernel_defines["REDUCE_OP"] = "PoolType::SUM";
+        kernel_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
     }
 
     // Compile-time args for reader kernel

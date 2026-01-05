@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_COL
-
 #include <cstdint>
 
 #include "compute_kernel_api/transpose_wh.h"
@@ -55,8 +52,8 @@ void MAIN {
                 transpose(input_cb_id, intermed_cb_id0);  // 32 x B
                 reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
                 compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_COL,
                     compute_kernel_lib::ReduceInputMode::STREAMING,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     intermed_cb_id0, scalar_cb_id, intermed_cb_id1, compute_kernel_lib::TileShape::single());  // 1 x B
