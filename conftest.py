@@ -544,6 +544,7 @@ def mesh_device(request, silicon_arch_name, device_params):
         mesh_shape = ttnn.MeshShape(1, param)
 
     override_trace_region_size = get_supported_trace_region_size(request, param)
+    override_trace_region_size = 0
     if override_trace_region_size:
         device_params["trace_region_size"] = override_trace_region_size
         logger.info(f"Overriding trace region size to {override_trace_region_size}")

@@ -161,7 +161,7 @@ def prepare_generator_args(
         (0, True, 1, False, False, 500, None),  # batch1-trace
         (0, True, 32, False, False, 500, None),  # batch32-trace
         (0, True, 4, True, False, 500, None),  # batch4-trace-with-text-prompts
-        (0, False, 1, True, True, 500, None),  # batch1-multi-image-notrace
+        (0, False, 32, True, False, 500, None),  # batch32-multi-image-notrace
         (0, True, 1, True, True, 500, None),  # batch1-multi-image-trace
         (0, True, 1, False, False, 5, 1),  # tracy
     ],
@@ -170,7 +170,7 @@ def prepare_generator_args(
         "batch1-trace",
         "batch32-trace",
         "batch4-trace-with-text-prompts",
-        "batch1-multi-image-notrace",
+        "batch32-multi-image-notrace",
         "batch1-multi-image-trace",
         "tracy",
     ],
@@ -178,13 +178,13 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "data_parallel",
     [
-        1,
-        # 4,
+        # 1,
+        4,
     ],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 21448704, "num_command_queues": 2, "l1_small_size": 24576}],
+    [{"fabric_config": True, "trace_region_size": 0, "num_command_queues": 2, "l1_small_size": 3768}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -289,7 +289,14 @@ def test_multimodal_demo_text(
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+        [
+            UserMessage(
+                content=[
+                    ImageMedia(image=ocr_image),
+                    "What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!What is the full text of this image? Do OCR!",
+                ]
+            )
+        ],
     ]
 
     if multi_image:
@@ -326,7 +333,7 @@ def test_multimodal_demo_text(
         ]
 
     if multi_image:
-        dialogs = multi_image_dialogs + dialogs
+        dialogs = multi_image_dialogs
 
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
