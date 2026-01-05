@@ -33,11 +33,11 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------------------
         | cb_r2c_w0     | CBIndex::c_0  | bfloat16   |    2048    |    2     |      4096       |
         | cb_s2c_in     | CBIndex::c_1  | bfloat8_b  |    1024    |    2     |      2048       |
-        | cb_c2c_mm0    | CBIndex::c_2  | bfloat16   |    2048    |    1     |      4096       |
-        | cb_c2c_mm1    | CBIndex::c_3  | bfloat16   |    2048    |    1     |      4096       |
-        | cb_c2w_elt    | CBIndex::c_4  | bfloat16   |    2048    |    1     |      4096       |
-        | cb_r2c_in2    | CBIndex::c_5  | bfloat16   |    2048    |    1     |      4096       |
-        | cb_c2w_mm2    | CBIndex::c_6  | bfloat16   |    2048    |    1     |      4096       |
+        | cb_c2c_mm0    | CBIndex::c_2  | bfloat16   |    2048    |    1     |      2048       |
+        | cb_c2c_mm1    | CBIndex::c_3  | bfloat16   |    2048    |    1     |      2048       |
+        | cb_c2w_elt    | CBIndex::c_4  | bfloat16   |    2048    |    1     |      2048       |
+        | cb_r2c_in2    | CBIndex::c_5  | bfloat16   |    2048    |    1     |      2048       |
+        | cb_c2w_mm2    | CBIndex::c_6  | bfloat16   |    2048    |    1     |      2048       |
         ----------------------------------------------------------------------------------------
     */
 
@@ -115,6 +115,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             runtime_args[0] = core_id++;
             tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
         }
     }
 
