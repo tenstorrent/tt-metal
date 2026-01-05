@@ -107,20 +107,19 @@ void py_module(nb::module_& m) {
             nb::arg("noop_backward") = false,
             nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
-            "reduce_scatter", 
-            &ttml::ops::distributed::reduce_scatter, 
-            nb::arg("tensor"), 
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none());
-        py_distributed.def("all_gather", 
-            &ttml::ops::distributed::all_gather, 
-            nb::arg("tensor"), 
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none());
-        py_distributed.def("broadcast", 
-            &ttml::ops::distributed::broadcast, 
+            "reduce_scatter",
+            &ttml::ops::distributed::reduce_scatter,
             nb::arg("tensor"),
+            nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "all_gather",
+            &ttml::ops::distributed::all_gather,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
     }
 
     {
