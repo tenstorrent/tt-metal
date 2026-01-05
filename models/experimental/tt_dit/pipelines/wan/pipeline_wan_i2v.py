@@ -232,14 +232,14 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
                 logger.info(
                     f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
                 )
-                self.transformer.load_state_dict(self.torch_transformer.state_dict())
+                self.transformer.load_torch_state_dict(self.torch_transformer.state_dict())
                 save_cache_dict(self.transformer.to_cached_state_dict(cache_path), cache_path)
             else:
                 logger.info(f"Loading transformer weights from cache: {cache_path}")
                 self.transformer.from_cached_state_dict(load_cache_dict(cache_path))
         else:
             logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer.load_state_dict(self.torch_transformer.state_dict())
+            self.transformer.load_torch_state_dict(self.torch_transformer.state_dict())
 
     def _load_transformer2(self):
         self.transformer_2 = WanTransformer3DModel(
@@ -275,14 +275,14 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
                 logger.info(
                     f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
                 )
-                self.transformer_2.load_state_dict(self.torch_transformer_2.state_dict())
+                self.transformer_2.load_torch_state_dict(self.torch_transformer_2.state_dict())
                 save_cache_dict(self.transformer_2.to_cached_state_dict(cache_path), cache_path)
             else:
                 logger.info(f"Loading transformer weights from cache: {cache_path}")
                 self.transformer_2.from_cached_state_dict(load_cache_dict(cache_path))
         else:
             logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformer_2.load_state_dict(self.torch_transformer_2.state_dict())
+            self.transformer_2.load_torch_state_dict(self.torch_transformer_2.state_dict())
 
     def _get_t5_prompt_embeds(
         self,

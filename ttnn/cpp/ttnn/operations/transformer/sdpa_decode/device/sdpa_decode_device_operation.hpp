@@ -41,36 +41,31 @@ struct SdpaDecodeDeviceOperation {
 
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_q,
-        const Tensor& input_tensor_k,
-        const std::optional<const Tensor>& input_tensor_v,
-        const std::optional<const Tensor>& cur_pos_tensor,
-        const std::optional<const Tensor>& page_table_tensor,
-        const std::optional<const Tensor>& attn_mask,
-        const std::optional<const Tensor>& attention_sink,
-        bool is_causal,
-        bool paged_attention,
-        const std::vector<uint32_t>& cur_pos,
-        std::optional<float> scale,
-        std::optional<uint32_t> sliding_window_size,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const std::optional<SDPAProgramConfig>& program_config,
-        DeviceComputeKernelConfig compute_kernel_config,
-        uint32_t k_chunk_size,
-        std::optional<bool> share_cache,
-        std::optional<bool> use_mla,
-        std::optional<uint32_t> head_dim_v);
-
 };
 
 }  // namespace ttnn::operations::transformer::sdpa_decode
 
 namespace ttnn::prim {
 
-constexpr auto sdpa_decode = ttnn::register_operation<
-    "ttnn::prim::sdpa_decode",
-    ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation>();
+ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_return_value_t sdpa_decode(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& page_table_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& attention_sink,
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v);
 
 }  // namespace ttnn::prim

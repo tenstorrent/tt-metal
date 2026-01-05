@@ -63,7 +63,7 @@ public:
 
     void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;
 
-    void track_function_start(std::string_view function_name, std::span<std::any> args) override;
+    void track_function_start(std::string_view function_name, std::span<std::any> input_parameters) override;
 
     void track_function_end() override;
     void track_function_end(const std::any& output) override;
@@ -89,7 +89,7 @@ private:
     RunMode run_mode = RunMode::NORMAL;
     std::stack<node_id> current_op_id;
     std::unordered_map<std::int64_t, node_id> buffer_id_to_counter;
-    std::unordered_map<std::int64_t, node_id> tensor_id_to_counter;
+    std::unordered_map<std::uint64_t, node_id> tensor_id_to_counter;
     node_id last_finished_op_id = -1;
     std::vector<Vertex> graph;
     std::vector<node_id> current_input_tensors;
@@ -98,6 +98,8 @@ private:
     node_id add_buffer(const tt::tt_metal::Buffer* buffer);
 
     void begin_function_process(const Tensor& tensor);
+
+    void begin_function_process(const std::reference_wrapper<const Tensor>& tensor_ref);
 
     template <typename T>
     void begin_function_process(const std::optional<T>& tensor_opt);

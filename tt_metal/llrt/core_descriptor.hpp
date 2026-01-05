@@ -45,7 +45,7 @@ const core_descriptor_t& get_core_descriptor_config(
     ChipId device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
-    ChipId chip, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
+    ChipId device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 inline const CoreCoord& get_compute_grid_size(
     ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {

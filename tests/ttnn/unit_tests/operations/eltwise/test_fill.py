@@ -10,6 +10,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "input_shapes",

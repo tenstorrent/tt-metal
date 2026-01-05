@@ -625,19 +625,19 @@ class MochiTransformer3DModel:
         self.pos_frequencies.data = torch.load(cache_dict["pos_frequencies"])
         self.rope.load_state_dict(torch.load(cache_dict["rope"]))
 
-    def load_state_dict(self, state_dict):
-        self.patch_embed.load_state_dict(substate(state_dict, "patch_embed"))
+    def load_torch_state_dict(self, state_dict):
+        self.patch_embed.load_torch_state_dict(substate(state_dict, "patch_embed"))
         self.time_embed.load_state_dict(substate(state_dict, "time_embed"))
         self.pos_frequencies.data = state_dict["pos_frequencies"]
         for i, block in enumerate(self.transformer_blocks):
             block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
-        self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
-        self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+        self.norm_out_norm.load_torch_state_dict(substate(state_dict, "norm_out.norm"))
+        self.norm_out_linear.load_torch_state_dict(substate(state_dict, "norm_out.linear"))
+        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
         identity_tensor = torch.eye(self.inner_dim)
         identity_state = {"weight": identity_tensor}
-        self.fracture_spatial_input.load_state_dict(identity_state)
+        self.fracture_spatial_input.load_torch_state_dict(identity_state)
 
     def prepare_rope_features(self, T, H, W):
         pH, pW = H // self.patch_size, W // self.patch_size

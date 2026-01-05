@@ -13,6 +13,7 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 
 namespace ttnn::operations::ccl {
 

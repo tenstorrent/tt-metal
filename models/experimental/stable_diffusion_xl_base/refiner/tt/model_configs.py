@@ -136,10 +136,64 @@ class RefinerModelOptimisations(ModelOptimisations):
             act_block_h_override=64,
         )
 
+        self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,
+            per_core_M=8,
+            per_core_N=3,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=6,
+            per_core_M=4,
+            per_core_N=24,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=3,
+            per_core_M=16,
+            per_core_N=12,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
     def get_matmul_config(self, matmul_path):
+        # # # GEGLU # # #
+        if "net.0.proj" in matmul_path:
+            if "mid_block" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["1D_GEGLU_LINEAR_256_1536_SPLIT_GELU"]
+            elif "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_4096_768_SPLIT_GELU"]
+            elif "down_blocks.2" in matmul_path or "up_blocks.1" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_1024_1536_SPLIT_GELU"]
         return None
 
     def get_mm_compute_config(self, module_path):
+        return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
+
+    def get_mm_output_memory_config(self, module_path):
+        if "attn1" in module_path or "attn2" in module_path:
+            return ttnn.L1_MEMORY_CONFIG
+        if "attentions" in module_path and "proj_in" in module_path:
+            return ttnn.L1_MEMORY_CONFIG
+        if "resnets" in module_path and "conv_shortcut" in module_path:
+            return ttnn.L1_MEMORY_CONFIG
         return None
 
     def get_conv_config(self, conv_path):
@@ -216,3 +270,26 @@ class RefinerModelOptimisations(ModelOptimisations):
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
+
+    def _get_groupnorm_config(self, module_path):
+        if "up_blocks.3" in module_path and "resnets.0" in module_path and "norm1" in module_path:
+            return self.groupnorm_configs["DRAM_GROUPNORM_4X8"]
+        if "up_blocks.3" in module_path and "resnets.0" not in module_path and "norm1" in module_path:
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
+        if "resnets" in module_path:
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+        if "attentions" in module_path:
+            return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
+        return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+
+    def get_layernorm_config(self, module_path):
+        return ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
+
+    def get_sdpa_config(self, module_path, is_self_attention):
+        if not is_self_attention:
+            return self.sdpa_configs["128_K"]
+        # TODO: 512 should be possible, latents base optimizations regressed this
+        if "down_blocks.1" in module_path or "up_blocks.2" in module_path:
+            return self.sdpa_configs["256_K"]
+        else:
+            return self.sdpa_configs["512_K"]

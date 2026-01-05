@@ -65,7 +65,7 @@ struct ReduceScatterDeviceOperation {
             const tt::tt_metal::GlobalSemaphore& barrier_semaphore);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -81,20 +81,17 @@ struct ReduceScatterDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        uint32_t dim,
-        std::optional<uint32_t> cluster_axis,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-        const ttnn::MemoryConfig& memory_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor,
-        uint32_t num_links,
-        tt::tt_fabric::Topology topology);
 };
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
-constexpr auto reduce_scatter =
-    ttnn::register_operation<"ttnn::prim::reduce_scatter", ttnn::operations::ccl::ReduceScatterDeviceOperation>();
+ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduce_scatter(
+    const ttnn::Tensor& input_tensor,
+    uint32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology);
 }  // namespace ttnn::prim

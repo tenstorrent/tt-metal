@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/assert.h"
-#include "debug/ring_buffer.h"
+#include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
 
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"
@@ -12,7 +12,7 @@
 namespace NAMESPACE {
 void MAIN {
 #else
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
 #endif
