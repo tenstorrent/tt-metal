@@ -107,6 +107,14 @@ class DeepseekGenerator:
                 self.hf_config.first_k_dense_replace = int(dense_layers)
             except Exception as e:
                 logger.warning(f"Failed to override first_k_dense_replace with value '{dense_layers}': {e}")
+        # Ensure first_k_dense_replace doesn't exceed num_hidden_layers
+        if hasattr(self.hf_config, "first_k_dense_replace") and hasattr(self.hf_config, "num_hidden_layers"):
+            if self.hf_config.first_k_dense_replace > self.hf_config.num_hidden_layers:
+                logger.warning(
+                    f"Clamping first_k_dense_replace from {self.hf_config.first_k_dense_replace} "
+                    f"to {self.hf_config.num_hidden_layers} (num_hidden_layers)"
+                )
+                self.hf_config.first_k_dense_replace = self.hf_config.num_hidden_layers
         # Tokenizer is optional; caller can pass a tokenizer or handle failure.
         self.tokenizer = tokenizer
 
