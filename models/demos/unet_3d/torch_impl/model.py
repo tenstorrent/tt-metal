@@ -18,7 +18,6 @@ class UNet3DTch(nn.Module):
         num_levels=3,
         num_groups=8,
         scale_factor=2,
-        final_sigmoid=True,
     ):
         super(UNet3DTch, self).__init__()
         self.encoders = nn.ModuleList()
@@ -54,7 +53,6 @@ class UNet3DTch(nn.Module):
 
         # Final convolution
         self.final_conv = nn.Conv3d(c * 2, out_channels, kernel_size=1)
-        self.final_sigmoid = final_sigmoid
 
     def forward(self, x):
         skip_connections = []
@@ -74,6 +72,5 @@ class UNet3DTch(nn.Module):
         # Final convolution
         x = self.final_conv(x)
 
-        if self.final_sigmoid:
-            x = torch.nn.functional.sigmoid(x)
+        x = torch.nn.functional.sigmoid(x)
         return x

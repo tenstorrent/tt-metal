@@ -100,7 +100,6 @@ def main():
             metrics.append(metric)
 
     if metrics:
-        logger.info(f"Per-class metric: {metrics}")
         print_metrics(metrics)
 
 

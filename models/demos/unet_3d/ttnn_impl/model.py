@@ -22,7 +22,6 @@ class UNet3D:
         num_levels=3,
         num_groups=8,
         scale_factor=2,
-        final_sigmoid=True,
     ):
         self.encoders = []
         self.decoders = []
@@ -61,7 +60,6 @@ class UNet3D:
             c //= 2
 
         self.final_conv = FinalConv(c * 2, out_channels)
-        self.final_sigmoid = final_sigmoid
 
     def load_state_dict(self, params_dict: dict[str, torch.Tensor]):
         for idx, encoder in enumerate(self.encoders):
