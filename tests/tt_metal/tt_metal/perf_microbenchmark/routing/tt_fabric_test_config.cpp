@@ -1527,7 +1527,19 @@ void TestConfigBuilder::expand_neighbor_exchange(
     log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
     if (!neighbor_pairs.empty()) {
-        add_senders_from_pairs(test, neighbor_pairs, base_pattern);
+        // add_senders_from_pairs(test, neighbor_pairs, base_pattern);
+        // Instead of grouping pairs by sender, we're going to keep them as separate test patterns
+        for (const auto& pair : neighbor_pairs) {
+            const auto& src_node = pair.first;
+            const auto& dst_node = pair.second;
+
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.device = dst_node};
+            specific_pattern.ftype = ChipSendType::CHIP_UNICAST;
+
+            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+            test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+        }
     }
 }
 
