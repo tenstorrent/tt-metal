@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -76,6 +77,8 @@ def test_sfpu_reduce(
     dimension_combinations,
     workers_tensix_coordinates,
 ):
+    if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
+        pytest.skip(reason="Dest must be in 32bit mode when input is 32bit")
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]

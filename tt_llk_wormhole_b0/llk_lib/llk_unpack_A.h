@@ -234,10 +234,6 @@ template <
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
-    // if (true) {
-    //     unpack_to_dest_tile_done(unp_cfg_context);
-    //     return;
-    // }
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 

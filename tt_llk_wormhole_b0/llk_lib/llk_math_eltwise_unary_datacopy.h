@@ -380,12 +380,13 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_uninit_()
 {
     // clear debug feature disable
-    if constexpr (type == A2D && src_b_bcast_type != BroadcastType::NONE && unpack_to_dest)
+    if constexpr (src_b_bcast_type != BroadcastType::NONE && unpack_to_dest)
     {
+        tensix_sync();
         reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
     }
 }
