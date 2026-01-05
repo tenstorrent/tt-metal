@@ -1,7 +1,7 @@
 # DeepSeek-V3
 
 ## Platforms:
-    Galaxy (WH)
+    Galaxy (WH) - 2x or 4x configurations
 
 ## Introduction
 This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deepseek-ai/DeepSeek-R1-0528) model and is compatible with other DeepSeek-V3 checkpoints. The TT-NN pipeline supports full-model execution, teacher-forced accuracy verification, random-weight smoke tests, and multiple prompt ingestion patterns for throughput benchmarking.
@@ -13,14 +13,103 @@ This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deep
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-## Demo CLI
+## Running on Multi-Host Galaxy (2x or 4x)
 
-Quick start (replace the placeholder paths with your environment):
+DeepSeek-V3 requires a multi-host Galaxy setup. Use the `launch_multihost_galaxy` script to run commands across all hosts:
+
+### Quick Start
 
 ```bash
-python models/demos/deepseek_v3/demo/demo.py \
-  --model-path /abs/path/to/load/hf/deepseek-v3 \
-  --cache-dir /abs/path/to/save/ttnn/cache \
+# Run tests on 2x Galaxy (2 hosts)
+./launch_multihost_galaxy 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
+
+# Run tests on 4x Galaxy (4 hosts)
+./launch_multihost_galaxy 4x -- pytest models/demos/deepseek_v3/tests/test_model.py
+
+# Run the demo
+./launch_multihost_galaxy 2x -- python models/demos/deepseek_v3/demo/demo.py \
+  --model-path \$DEEPSEEK_V3_HF_MODEL \
+  --cache-dir \$DEEPSEEK_V3_CACHE \
+  "Your prompt here!"
+
+# Dry run (print command without executing)
+./launch_multihost_galaxy -d 2x -- pytest models/demos/deepseek_v3/tests/test_model.py
+```
+
+### Configuration
+
+The script automatically:
+- Detects the current hostname and selects the appropriate cluster configuration
+- Sources the Python virtual environment (`python_env/bin/activate`)
+- Sets `MESH_DEVICE` environment variable (`DUAL` for 2x, `QUAD` for 4x)
+- Exports required environment variables (`DEEPSEEK_V3_HF_MODEL`, `DEEPSEEK_V3_CACHE`)
+- Wraps your command with `tt-run` and MPI for multi-host execution
+
+### Special Commands
+
+```bash
+# Reset the Galaxy cluster (kills python processes, resets devices, clears shared memory)
+./launch_multihost_galaxy 2x -- reset
+```
+
+### Supported Hosts
+
+Supported clusters:
+- **g05glx01-04**: 2x pairs (01-02, 03-04) and 4x (all four hosts)
+
+To add new host configurations, edit `models/demos/deepseek_v3/scripts/launch_multihost_galaxy.py`.
+
+## Running on Single Galaxy
+
+Many unit tests and submodule tests can run on a single Galaxy without requiring multi-host setup:
+
+```bash
+# Run tests directly (no launch script needed)
+pytest models/demos/deepseek_v3/tests/test_mlp.py
+pytest models/demos/deepseek_v3/tests/test_attention.py
+```
+
+The demo can also run on a single Galaxy in data parallel mode with a reduced number of layers (5 layers instead of the full model):
+
+```bash
+MESH_DEVICE=TG python models/demos/deepseek_v3/demo/demo.py \
+             --prompts-file models/demos/deepseek_v3/demo/test_prompts.json \
+             --output-path deepseek_tt_out_batch_4.json \
+             --max-new-tokens 128 \
+             --model-path $DEEPSEEK_V3_HF_MODEL \
+             --cache-dir $DEEPSEEK_V3_CACHE
+```
+
+This is useful for development and testing when multi-host resources are not available.
+
+The pipeline parallel model supports all 61 layers on single galaxy.
+
+## Demo
+
+Running the demo on Galaxy (2x or 4x):
+
+```bash
+# On 2x Galaxy
+./launch_multihost_galaxy 2x -- python models/demos/deepseek_v3/demo/demo.py \
+  --model-path \$DEEPSEEK_V3_HF_MODEL \
+  --cache-dir \$DEEPSEEK_V3_CACHE \
+  --early_print_first_user \
+  "Write a haiku about autumnal days by the sea"
+
+# On 4x Galaxy
+./launch_multihost_galaxy 4x -- python models/demos/deepseek_v3/demo/demo.py \
+  --model-path \$DEEPSEEK_V3_HF_MODEL \
+  --cache-dir \$DEEPSEEK_V3_CACHE \
+  --early_print_first_user \
+  "Write a haiku about autumnal days by the sea"
+```
+
+The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` and `DEEPSEEK_V3_CACHE` environment variables. You can reference them directly:
+
+```bash
+./launch_multihost_galaxy 2x -- python models/demos/deepseek_v3/demo/demo.py \
+  --model-path \$DEEPSEEK_V3_HF_MODEL \
+  --cache-dir \$DEEPSEEK_V3_CACHE \
   --early_print_first_user \
   "Write a haiku about autumnal days by the sea"
 ```
