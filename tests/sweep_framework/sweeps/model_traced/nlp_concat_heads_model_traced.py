@@ -42,16 +42,31 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     This can happen with None memory configs or invalid shapes.
     """
     output_memory_config = test_vector.get("output_memory_config")
+    input_memory_config = test_vector.get("input_a_memory_config")
     input_shape = test_vector.get("input_shape")
 
-    # Check for None memory config
+    # Check for None memory configs
     if output_memory_config is None:
         return True, "output_memory_config is None"
 
+    if input_memory_config is None:
+        return True, "input_a_memory_config is None"
+
     # Check for invalid shape (must be 4D)
-    if input_shape is not None:
-        if isinstance(input_shape, (tuple, list)) and len(input_shape) != 4:
+    if input_shape is None:
+        return True, "input_shape is None"
+
+    if isinstance(input_shape, (tuple, list)):
+        if len(input_shape) != 4:
             return True, "Input shape must be 4D"
+    elif isinstance(input_shape, str):
+        # Try to parse string shape
+        try:
+            shape = eval(input_shape)
+            if len(shape) != 4:
+                return True, "Input shape must be 4D"
+        except:
+            return True, "Could not parse input_shape string"
 
     return False, None
 

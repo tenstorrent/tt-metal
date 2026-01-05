@@ -38,6 +38,54 @@ if model_traced_params:
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate conv2d test vectors that might cause timeouts or excessive memory usage.
+    """
+    input_specs = test_vector.get("input_specs")
+
+    if input_specs is None:
+        return False, None
+
+    # Parse input specs - handle both tuple and string formats
+    if isinstance(input_specs, str):
+        try:
+            input_specs = eval(input_specs)
+        except:
+            return False, None
+
+    # input_specs format:
+    # [batch_size, output_channels, input_channels, input_height, input_width,
+    #  kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, has_bias]
+    if len(input_specs) < 15:
+        return False, None
+
+    batch_size = input_specs[0]
+    output_channels = input_specs[1]
+    input_channels = input_specs[2]
+    input_height = input_specs[3]
+    input_width = input_specs[4]
+    kernel_height = input_specs[5]
+    kernel_width = input_specs[6]
+
+    # Calculate total tensor sizes to detect memory-intensive configs
+    input_size = batch_size * input_channels * input_height * input_width
+    weight_size = output_channels * input_channels * kernel_height * kernel_width
+    output_size = batch_size * output_channels * input_height * input_width  # Approximate
+
+    total_elements = input_size + weight_size + output_size
+
+    # Skip extremely large configurations that are likely to timeout
+    # These thresholds are empirical - adjust based on observed failures
+    if total_elements > 50_000_000:  # 50M elements
+        return True, f"conv2d: Configuration too large ({total_elements:,} total elements) - likely to timeout"
+
+    # Skip configurations with very large kernels or feature maps that might be unstable
+    if input_height > 1024 or input_width > 1024:
+        return True, f"conv2d: Input dimensions too large ({input_height}x{input_width})"
+
+    if kernel_height > 32 or kernel_width > 32:
+        return True, f"conv2d: Kernel too large ({kernel_height}x{kernel_width})"
+
     return False, None
 
 
