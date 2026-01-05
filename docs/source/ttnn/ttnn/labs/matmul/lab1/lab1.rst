@@ -302,7 +302,7 @@ model that gives developers direct control over the Tensix hardware architecture
 TT-Metalium is unique because it exposes the distinctive architecture of Tenstorrent's Tensix processors.
 Unlike traditional GPUs that rely on massive thread parallelism, TT-Metalium enables a cooperative programming model where developers typically
 write three types of kernels per Tensix core: reader kernels for data input, compute kernels for calculations, and writer kernels for data output.
-These kernels coordinate through circular buffers in local SRAM, enabling efficient pipelined execution that overlaps data movement with computation.
+These kernels coordinate through circular buffers (CBs) in local SRAM, enabling efficient pipelined execution that overlaps data movement with computation.
 
 TT-Metalium's compute API abstraction layer maintains kernel code compatibility across different hardware generations while ensuring optimal performance.
 This means the same kernel code can run efficiently on different Tenstorrent processor generations without requiring developers to rewrite code
@@ -385,20 +385,19 @@ Before diving into the function `eltwise_add_tensix`, let us discuss the differe
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
 a **compute kernel** for calculations, and a **writer kernel** for data output.
 Reader and writer kernels are collectively referred to as data movement kernels.
-Data movement and compute kernels communicate through circular buffers in internal SRAM.
+Data movement and compute kernels communicate through circular buffers (CBs) in internal SRAM.
 The circular buffers act as producer-consumer FIFO (First In First Out) queues, enabling safe and efficient data exchange between kernels.
+A kernel can even read from and write to the same circular buffer, allowing processing to be divided into multiple
+steps, all of which use uniform interfaces (CBs) to promote code reuse.
 Each circular buffer is assumed to have only one reader kernel and one writer kernel.
 Note that the circular buffers typically contain only a small number of tiles at a time, not the entire tensor.
 
-.. figure:: images/tenstorrent-circular-buffer-send-data-cross-kernel-or-itself.webp
+.. figure:: images/cb_data_flow.jpg
    :width: 900
    :alt: Kernel data flow through circular buffers
    :align: center
 
    Figure 4: Kernel data flow through circular buffers
-
-.. note::
-   **Note:** This image has known issues. Writer should be Kernel 1, not Kernel 0. Also grammar in "Think of them as pipes"!
 
 Each kernel interacts with the buffers as follows:
 
