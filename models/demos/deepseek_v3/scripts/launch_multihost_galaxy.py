@@ -185,7 +185,7 @@ def build_inner_command(
     if is_reset:
         return f"source {shlex.quote(venv_path)} && {RESET_COMMAND}"
 
-    cmd_str = " ".join(command)
+    cmd_str = shlex.join(command)
     mesh_device = MESH_DEVICE_MAP[config_type]
 
     parts = [f"source {shlex.quote(venv_path)}"]
