@@ -17,7 +17,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
 )
 from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
-from tests.ttnn.utils_for_testing import update_for_unsigned_single
+from tests.ttnn.utils_for_testing import convert_to_signed_tensor
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -664,7 +664,7 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = update_for_unsigned_single(output_tensor)
+    output_tensor = convert_to_signed_tensor(output_tensor)
     assert torch.equal(golden_tensor, output_tensor)
 
 

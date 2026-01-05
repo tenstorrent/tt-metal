@@ -112,11 +112,11 @@ def assert_allclose(
         expected_result = ttnn.to_torch(expected_result)
         # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
         # so ttnn tensor must have a post-conversion correction to avoid this error.
-        expected_result = update_for_unsigned_single(expected_result)
+        expected_result = convert_to_signed_tensor(expected_result)
 
     if isinstance(actual_result, ttnn.Tensor):
         actual_result = ttnn.to_torch(actual_result)
-        actual_result = update_for_unsigned_single(actual_result)
+        actual_result = convert_to_signed_tensor(actual_result)
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -405,7 +405,7 @@ def maybe_trace(op_func, enable_trace, device):
     return output
 
 
-def update_for_unsigned_single(py_tensor):
+def convert_to_signed_tensor(py_tensor):
     """ "
     Use on the result of the `to_torch` function to convert the tensor to the signed type.
     """
