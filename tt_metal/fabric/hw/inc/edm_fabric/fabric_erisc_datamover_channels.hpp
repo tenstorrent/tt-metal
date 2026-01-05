@@ -144,6 +144,10 @@ public:
     FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
         static_cast<DERIVED_T*>(this)->set_cached_next_buffer_slot_addr_impl(next_buffer_slot_addr);
     }
+
+    FORCE_INLINE void advance_remote_receiver_buffer_index() {
+        static_cast<DERIVED_T*>(this)->advance_remote_receiver_buffer_index_impl();
+    }
 };
 
 // Elastic sender channel implementation (stub for now)
@@ -273,13 +277,18 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
-private:
+    FORCE_INLINE void advance_remote_receiver_buffer_index_impl() {
+        next_packet_buffer_index = wrap_increment<NUM_BUFFERS>(next_packet_buffer_index);
+        this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index];
+    }
+
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
 
     // header + payload regions only
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
+    std::size_t next_packet_buffer_index;
     std::size_t cached_next_buffer_slot_addr;
 };
 
