@@ -2740,7 +2740,26 @@ class MasterConfigLoader:
                     if not tensor_config:
                         failed_configs += 1
                         continue
-                    # Allow None values for num_q_heads and num_kv_heads - test files will infer them
+
+                    # Infer num_q_heads and num_kv_heads from input shape if not provided
+                    if tensor_config.shape and len(tensor_config.shape) >= 4:
+                        hidden_dim = tensor_config.shape[3]  # [B, 1, S, hidden_dim]
+
+                        # If num_kv_heads is None but num_q_heads is provided, assume MHA
+                        if num_kv_heads is None and num_q_heads is not None:
+                            # MHA: hidden_dim = 3 * num_q_heads * head_dim
+                            head_dim = hidden_dim // (3 * num_q_heads)
+                            num_kv_heads = num_q_heads
+                        # If both are None, try to infer from hidden_dim
+                        elif num_q_heads is None and num_kv_heads is None:
+                            # Common pattern: assume head_dim=64 and MHA
+                            # hidden_dim = 3 * num_heads * head_dim
+                            # Try common head_dim values: 64, 128, 32
+                            for head_dim in [64, 128, 32, 96]:
+                                if hidden_dim % (3 * head_dim) == 0:
+                                    num_q_heads = hidden_dim // (3 * head_dim)
+                                    num_kv_heads = num_q_heads
+                                    break
 
                     # Parse tensor config
                     parsed_dtype = self.parse_dtype(tensor_config.dtype)

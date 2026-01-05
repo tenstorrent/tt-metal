@@ -56,64 +56,26 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle None input_shape - this indicates extraction failed
-    # In this case, we cannot infer the correct dimensions, so we need to use defaults
-    if input_shape is None:
-        # Use a default shape that works with the parameters we have
-        if num_q_heads is not None and isinstance(num_q_heads, (int, float)):
-            num_q_heads = int(num_q_heads)
-            # If num_kv_heads is None, assume MHA (Multi-Head Attention) where num_kv_heads = num_q_heads
-            if num_kv_heads is None:
-                num_kv_heads = num_q_heads
-            elif isinstance(num_kv_heads, float):
-                num_kv_heads = int(num_kv_heads)
-            # Assume head_dim=64 (common default)
-            head_dim = 64
-            hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
-            shape = (1, 1, 256, hidden_dim)  # Default: batch=1, seq_len=256
-        else:
-            # Cannot proceed without any head configuration
-            raise ValueError(
-                f"Cannot infer dimensions: input_shape is None and num_q_heads is not provided. "
-                f"num_q_heads={num_q_heads}, num_kv_heads={num_kv_heads}"
-            )
-    elif isinstance(input_shape, (tuple, list)):
+    # Convert input_shape to tuple (loader should always provide this)
+    if isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape)
     else:
         shape = input_shape
 
-    # Input shape is [B, 1, S, hidden_dim] where S is the sequence length
-    # For shape [1, 1, 256, 1536]: B=1, S=256, hidden_dim=1536
+    # Extract dimensions from shape: [B, 1, S, hidden_dim]
     batch_size = shape[0]
-    seq_len = shape[2]  # Third dimension is sequence length
+    seq_len = shape[2]
     hidden_dim = shape[3]
 
-    # Convert num_q_heads and num_kv_heads from float to int if needed
-    if num_q_heads is not None and isinstance(num_q_heads, float):
+    # Convert to int if needed (loader provides these, just ensure type correctness)
+    if isinstance(num_q_heads, float):
         num_q_heads = int(num_q_heads)
-    if num_kv_heads is not None and isinstance(num_kv_heads, float):
+    if isinstance(num_kv_heads, float):
         num_kv_heads = int(num_kv_heads)
 
-    # Try to infer num_kv_heads if missing
-    # When num_kv_heads is None, it typically means MHA (Multi-Head Attention) where num_kv_heads = num_q_heads
-    if num_kv_heads is None and num_q_heads is not None:
-        num_kv_heads = num_q_heads
-
-    # Try to infer head dimensions
-    if num_q_heads is not None and num_kv_heads is not None:
-        # For GQA/MHA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
-        # If num_q_heads == num_kv_heads (MHA): hidden_dim = 3 * num_heads * head_dim
-        head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)
-    else:
-        # Cannot infer without both parameters - use defaults
-        # Assume MHA with head_dim=64
-        head_dim = 64
-        if num_q_heads is None:
-            # hidden_dim = 3 * num_heads * head_dim for MHA
-            num_q_heads = hidden_dim // (3 * head_dim)
-            num_kv_heads = num_q_heads
-        elif num_kv_heads is None:
-            num_kv_heads = num_q_heads
+    # Calculate head_dim from provided parameters
+    # For GQA/MHA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
+    head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
