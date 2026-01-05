@@ -235,7 +235,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
 def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking):
     """Test Conv3d with exact Qwen2.5-VL-3B parameters (issue #35201).
 
-    Uses custom blocking (C_in_block=32, C_out_block=32, spatial_blocks=1) to fit
+    Uses custom blocking (C_in_block=16, C_out_block=32, spatial_blocks=1) to fit
     the large kernel=(2, 14, 14) in L1 memory. This is a full-spatial convolution
     that reduces 2×14×14 input to 1×1×1 output with 1280 output channels.
     """

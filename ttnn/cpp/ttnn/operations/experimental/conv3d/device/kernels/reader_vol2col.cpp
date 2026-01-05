@@ -114,20 +114,22 @@ void kernel_main() {
                                         // For each output coordinate (t, h, w),
                                         // gather the kT*kH*kW patch around (t,h,w).
                                         for (uint32_t kt = 0; kt < kT; kt++) {
-                                            int32_t t_idx = (int32_t)(t + kt) - padding_t;
-                                            const bool outside_t = (t_idx < 0 || t_idx >= (int32_t)T_in);
-                                            t_idx = clampIndex(t_idx, 0, (int32_t)T_in - 1);
+                                            int32_t t_idx = static_cast<int32_t>(t + kt) - padding_t;
+                                            const bool outside_t = (t_idx < 0 || t_idx >= static_cast<int32_t>(T_in));
+                                            t_idx = clampIndex(t_idx, 0, static_cast<int32_t>(T_in) - 1);
 
                                             for (uint32_t kh = 0; kh < kH; kh++) {
-                                                int32_t h_idx = (int32_t)(h + kh) - padding_h;
-                                                const bool outside_h = (h_idx < 0 || h_idx >= (int32_t)H_in);
-                                                h_idx = clampIndex(h_idx, 0, (int32_t)H_in - 1);
+                                                int32_t h_idx = static_cast<int32_t>(h + kh) - padding_h;
+                                                const bool outside_h =
+                                                    (h_idx < 0 || h_idx >= static_cast<int32_t>(H_in));
+                                                h_idx = clampIndex(h_idx, 0, static_cast<int32_t>(H_in) - 1);
 
                                                 for (uint32_t kw = 0; kw < kW; kw++) {
-                                                    int32_t w_idx = (int32_t)(w + kw) - padding_w;
-                                                    const bool outside_w = (w_idx < 0 || w_idx >= (int32_t)W_in);
+                                                    int32_t w_idx = static_cast<int32_t>(w + kw) - padding_w;
+                                                    const bool outside_w =
+                                                        (w_idx < 0 || w_idx >= static_cast<int32_t>(W_in));
                                                     const bool in_padding = (outside_t || outside_h || outside_w);
-                                                    w_idx = clampIndex(w_idx, 0, (int32_t)W_in - 1);
+                                                    w_idx = clampIndex(w_idx, 0, static_cast<int32_t>(W_in) - 1);
 
                                                     if constexpr (is_padding_zeros) {
                                                         if (in_padding) {
@@ -141,8 +143,10 @@ void kernel_main() {
                                                     // Now do the normal read from DRAM.
                                                     // Flattened index in the input (including batch offset)
                                                     const uint32_t in_page_idx =
-                                                        batch_idx * T_in_H_in_W_in + (uint32_t)(t_idx)*H_in_W_in +
-                                                        (uint32_t)(h_idx)*W_in + (uint32_t)(w_idx);
+                                                        batch_idx * T_in_H_in_W_in +
+                                                        static_cast<uint32_t>(t_idx) * H_in_W_in +
+                                                        static_cast<uint32_t>(h_idx) * W_in +
+                                                        static_cast<uint32_t>(w_idx);
                                                     const uint64_t in_noc_addr = in_reader.get_noc_addr(
                                                         in_page_idx, c_in_offset_bytes /*offset*/);
                                                     noc_async_read(in_noc_addr, cb_write_addr, C_in_block_bytes);
