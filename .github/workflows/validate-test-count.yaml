@@ -29,19 +29,29 @@ jobs:
 
       - name: Install pytest and dependencies
         run: |
-          pip install pytest torch loguru
+          pip install pytest
 
       - name: Count tests in PR branch
         id: pr-count
         run: |
-          # Count tests in locked directories (skip conftest.py to avoid import errors)
-          echo "=== Eltwise Tests ==="
-          pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/eltwise/ || echo "Failed to collect eltwise tests"
-          echo ""
+          # Count test functions by scanning files directly (no imports needed)
+          echo "=== Counting tests without importing ==="
           
-          ELTWISE_COUNT=$(pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/eltwise/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
-          CONV_COUNT=$(pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/conv/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
-          MATMUL_COUNT=$(pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/matmul/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          # Function to count test functions in Python files
+          count_tests() {
+            local dir=$1
+            # Find all test_*.py files and count functions starting with 'test_' or decorated with @pytest
+            find "$dir" -name "test_*.py" -type f -exec grep -h "^\s*def test_\|^\s*async def test_" {} \; | wc -l
+          }
+          
+          ELTWISE_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/eltwise")
+          CONV_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/conv")
+          MATMUL_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/matmul")
+          
+          echo "Test counts (by scanning files):"
+          echo "  Eltwise: $ELTWISE_COUNT"
+          echo "  Conv: $CONV_COUNT"
+          echo "  Matmul: $MATMUL_COUNT"
           
           echo "pr_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
           echo "pr_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
@@ -60,10 +70,15 @@ jobs:
       - name: Count tests in base branch
         id: base-count
         run: |
-          # Count tests in locked directories on base branch (skip conftest.py)
-          ELTWISE_COUNT=$(pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/eltwise/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
-          CONV_COUNT=$(pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/conv/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
-          MATMUL_COUNT=$(pytest --collect-only --noconftest -q tests/ttnn/unit_tests/operations/matmul/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          # Count test functions by scanning files directly (no imports needed)
+          count_tests() {
+            local dir=$1
+            find "$dir" -name "test_*.py" -type f -exec grep -h "^\s*def test_\|^\s*async def test_" {} \; | wc -l
+          }
+          
+          ELTWISE_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/eltwise")
+          CONV_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/conv")
+          MATMUL_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/matmul")
           
           echo "base_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
           echo "base_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
