@@ -35,12 +35,12 @@ jobs:
         run: |
           # Count tests in locked directories
           echo "=== Eltwise Tests ==="
-          pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>/dev/null || true
+          pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ || echo "Failed to collect eltwise tests"
           echo ""
           
-          ELTWISE_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
-          CONV_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/conv/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
-          MATMUL_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/matmul/ 2>/dev/null | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          ELTWISE_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          CONV_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/conv/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
+          MATMUL_COUNT=$(pytest --collect-only -q tests/ttnn/unit_tests/operations/matmul/ 2>&1 | grep -E "^[0-9]+ tests? collected" | awk '{print $1}' || echo "0")
           
           echo "pr_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
           echo "pr_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
