@@ -205,7 +205,7 @@ def test_retinanet_perf_e2e(
         use_height_and_width_as_shard_shape=True,
     )
 
-    config = PipelineConfig(use_trace=False, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
         run_model,

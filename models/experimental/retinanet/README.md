@@ -118,7 +118,8 @@ pytest models/experimental/retinanet/tests/pcc/test_cls_head.py -v
 pytest models/experimental/retinanet/tests/perf/test_perf.py -v
 
 # Test end-to-end performance
-## Fps: 5.33 (without trace + 2CQ)
+## Fps: 0.21 (with trace + 2CQ)
+export FALLBACK_ON_GROUPNORM=0
 pytest models/experimental/retinanet/tests/perf/test_perf_e2e.py -v
 ```
 
