@@ -49,8 +49,8 @@ jobs:
 
       - name: Checkout base branch
         run: |
-          git fetch origin ${{ github.base_ref }}
-          git checkout origin/${{ github.base_ref }}
+          git fetch origin main
+          git checkout origin/main
 
       - name: Count tests in base branch
         id: base-count
