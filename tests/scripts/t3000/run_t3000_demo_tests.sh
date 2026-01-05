@@ -415,11 +415,11 @@ run_t3000_gpt_oss_tests() {
   pip install -r models/demos/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8 and prefill_128"
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8 and prefill_128"
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
   echo "LOG_METAL: GPT-OSS 120B tests completed"
 
   # Record the end time
