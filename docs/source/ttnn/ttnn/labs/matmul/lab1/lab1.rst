@@ -38,14 +38,15 @@ However, we often need to represent data with more dimensions, such as two-dimen
 In C++, two-dimensional arrays are usually stored in memory using **row-major order**.
 This means that elements of each row are stored contiguously in memory, with rows placed one after another.
 
-Consider a ``3x4`` matrix ``A``::
+Consider a ``3x4`` matrix ``A``:
 
 .. figure:: images/a_matrix_3x4.jpg
    :width: 300
    :alt: A 3x4 matrix A
    :align: center
 
-Using row-major layout, this matrix is stored in memory as::
+
+Using row-major layout, this matrix is stored in memory as:
 
 .. figure:: images/matrix_3x4_row_major.jpg
    :width: 900
