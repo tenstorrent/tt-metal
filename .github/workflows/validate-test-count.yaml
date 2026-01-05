@@ -50,12 +50,14 @@ jobs:
           python-version: '3.10'
 
       - name: Download built wheel
+        if: ${{ needs.build.outputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@v4
         with:
-          name: tt-metal-wheel
+          name: ${{ needs.build.outputs.wheel-artifact-name }}
           path: ./wheels
 
       - name: Install tt-metal wheel and dependencies
+        if: ${{ needs.build.outputs.wheel-artifact-name != '' }}
         run: |
           pip install pytest
           pip install ./wheels/*.whl
