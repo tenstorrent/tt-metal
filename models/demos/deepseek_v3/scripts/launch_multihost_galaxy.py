@@ -271,7 +271,7 @@ def format_config_summary(
         lines.append(f"  {'-' * 56}")
         lines.append(f"  {'Environment:':<18}")
         for key, value in host_cfg.env:
-            display_value = value if len(value) <= 36 else value[:33] + "..."
+            display_value = value if len(value) <= 75 else value[:72] + "..."
             lines.append(f"    {key}={display_value}")
 
     lines.append("=" * 60)
