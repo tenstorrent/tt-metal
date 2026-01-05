@@ -103,7 +103,6 @@ uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_ty
     }
     return static_cast<uint32_t>(offset);
 }
-#endif
 
 DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_core) {
     const auto& hal = MetalContext::instance().hal();
@@ -114,6 +113,7 @@ DeviceAddr getControlVectorAddress(IDevice* device, const CoreCoord& virtual_cor
                                 dev_msgs::profiler_msg_t::Field::control_vector);
     return control_vector_addr;
 }
+#endif
 
 }  // namespace
 
