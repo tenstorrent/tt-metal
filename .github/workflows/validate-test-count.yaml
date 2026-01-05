@@ -18,7 +18,25 @@ on:
       - 'tests/ttnn/unit_tests/operations/base_functionality/**'
       - 'tests/ttnn/unit_tests/operations/benchmarks/**'
 jobs:
+  build:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: "22.04"
+      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      # Cannot do a Sanitizer build as that's not compatible with the downstream test.
+      # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
+      # name clashes.
+      build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
+      build-wheel: true
+      publish-artifact: false
+      skip-tt-train: true
+      distributed: false
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
   check-test-count:
+    needs: build
     runs-on: ubuntu-latest
     name: "Ensure no new tests added to locked directories"
     steps:
@@ -31,58 +49,17 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies for test collection
+      - name: Download built wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: tt-metal-wheel
+          path: ./wheels
+
+      - name: Install tt-metal wheel and dependencies
         run: |
-          pip install pytest multiprocess psutil loguru
-          # Install common dependencies that tests might import
-          pip install torch numpy || true
-          
-          # Create stub modules for tt-metal specific imports
-          mkdir -p stub_modules
-          
-          # Create ttnn stub with better handling of special methods
-          cat > stub_modules/ttnn.py << 'EOF'
-          import sys
-          from types import ModuleType
-          
-          class _Stub:
-              def __getattr__(self, name):
-                  return _Stub()
-              def __call__(self, *args, **kwargs):
-                  return _Stub()
-              def __iter__(self):
-                  return iter([])
-              def __bool__(self):
-                  return True
-          
-          def __getattr__(name):
-              # Create sub-modules dynamically
-              mod = ModuleType(f'ttnn.{name}')
-              mod.__dict__.update({k: _Stub() for k in dir(_Stub)})
-              sys.modules[f'ttnn.{name}'] = mod
-              return mod
-          
-          # Pre-populate common submodules
-          for submod in ['device', 'operations', 'core']:
-              sys.modules[f'ttnn.{submod}'] = ModuleType(f'ttnn.{submod}')
-              sys.modules[f'ttnn.{submod}'].__dict__['__getattr__'] = lambda n: _Stub()
-          EOF
-          
-          # Create tt_lib stub
-          cat > stub_modules/tt_lib.py << 'EOF'
-          class _Stub:
-              def __getattr__(self, name):
-                  return _Stub()
-              def __call__(self, *args, **kwargs):
-                  return _Stub()
-          
-          def __getattr__(name):
-              return _Stub()
-          EOF
-          
-          # Add to PYTHONPATH
-          echo "PYTHONPATH=$PWD/stub_modules:$PYTHONPATH" >> $GITHUB_ENV
-          
+          pip install pytest
+          pip install ./wheels/*.whl
+
       - name: Count and compare tests
         run: |
           # Define locked directories to check
@@ -91,15 +68,7 @@ jobs:
           # Function to count test functions using pytest
           count_tests() {
             local dir=$1
-            echo "Collecting from: $dir"
-            
-            # Show first error to see what's missing
-            pytest "$dir" --collect-only --noconftest 2>&1 | head -50
-            
-            # Count using simple pattern - look for ".py::" which indicates a collected test
-            count=$(pytest "$dir" --collect-only -q --noconftest 2>&1 | grep -c "\.py::" || echo "0")
-            echo "Count: $count"
-            echo "$count"
+            pytest "$dir" --collect-only -q 2>&1 | tail -1 | grep -oE '[0-9]+' | head -1 || echo "0"
           }
           
           # Count tests in PR branch
