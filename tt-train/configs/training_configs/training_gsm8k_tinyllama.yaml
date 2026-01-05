@@ -1,5 +1,4 @@
 training_config:
-  project_name: "tt_train_gsm8k_finetune" # not really nanogpt, but want to use the same wandb project name for now
   model_type: "gpt2"
   seed: 5489
   batch_size: 32

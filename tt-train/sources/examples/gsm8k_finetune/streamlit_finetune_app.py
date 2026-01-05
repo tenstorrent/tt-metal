@@ -725,21 +725,19 @@ def main():
 
         if current_data:
             # Display current metrics
-            with col1:
-                st.metric(
-                    "Current Step",
-                    f"{current_data['step']:,}",
-                    delta=f"Epoch {current_data['epoch']}",
-                )
-
-            with col2:
-                st.metric("Training Loss", f"{current_data['training_loss']:.4f}")
-
-            with col3:
-                st.metric("Validation Loss", f"{current_data['val_loss']:.4f}")
-
-            with col4:
-                st.metric("Learning Rate", f"{current_data['lr']:.2e}")
+            metrics = [
+                ("Current Step", f"{current_data['step']:,}", f"Epoch {current_data['epoch']}"),
+                ("Training Loss", f"{current_data['training_loss']:.4f}", None),
+                ("Validation Loss", f"{current_data['val_loss']:.4f}", None),
+                ("Learning Rate", f"{current_data['lr']:.2e}", None),
+            ]
+            
+            for col, (label, value, delta) in zip([col1, col2, col3, col4], metrics):
+                with col:
+                    if delta:
+                        st.metric(label, value, delta=delta)
+                    else:
+                        st.metric(label, value)
 
             # Show training progress
             if max_steps > 0:
@@ -749,14 +747,16 @@ def main():
                     f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)"
                 )
         else:
-            with col1:
-                st.metric("Current Step", "N/A")
-            with col2:
-                st.metric("Training Loss", "N/A")
-            with col3:
-                st.metric("Validation Loss", "N/A")
-            with col4:
-                st.metric("Learning Rate", "N/A")
+            metrics = [
+                ("Current Step", "N/A"),
+                ("Training Loss", "N/A"),
+                ("Validation Loss", "N/A"),
+                ("Learning Rate", "N/A"),
+            ]
+    
+            for col, (label, value) in zip([col1, col2, col3, col4], metrics):
+                with col:
+                    st.metric(label, value)
 
             st.info(
                 "Waiting for training data... Make sure `output.txt` is being generated."
