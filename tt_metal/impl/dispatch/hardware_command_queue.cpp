@@ -527,7 +527,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
                 return;
             }
             if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
-                // Illegal NOC txn killed watcher, early exit. We're         in test mode, so main thread will assert.
+                // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
             }

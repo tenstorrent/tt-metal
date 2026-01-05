@@ -491,7 +491,7 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
             }
             if (merged.intersects(*it) || it->intersects(merged)) {
                 // There is an intersection between `merged` and `it`.
-                // For simplicity, erase the entire `it`, but add back what         isn't present in `merged`.
+                // For simplicity, erase the entire `it`, but add back what isn't present in `merged`.
                 for (const auto& coord : *it) {
                     if (!merged.contains(coord)) {
                         add_back.push_back(MeshCoordinateRange(coord));
@@ -499,7 +499,7 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
                 }
                 it = ranges_.erase(it);
             } else {
-                // Cannot merge nor intersect with `it`,         proceed to the next element.
+                // Cannot merge nor intersect with `it`, proceed to the next element.
                 ++it;
             }
         }
@@ -616,7 +616,7 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         }
 
         return complement_set;
-    }  // Slow path: iterate over all coordinates in the         parent range, and create ranges for the complement.
+    }  // Slow path: iterate over all coordinates in the parent range, and create ranges for the complement.
     for (const auto& coord : parent) {
         if (!intersection.contains(coord)) {
             complement_set.merge(MeshCoordinateRange(coord, coord));

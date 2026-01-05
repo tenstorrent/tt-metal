@@ -269,7 +269,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
         if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-            // Move addresses in the NCRISC memory range to l1 (copied         by kernel)
+            // Move addresses in the NCRISC memory range to l1 (copied by kernel)
             return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE_SCRATCH;
         }
 

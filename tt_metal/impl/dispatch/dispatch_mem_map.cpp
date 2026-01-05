@@ -89,10 +89,10 @@ uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
         return 48u + index;
     }
     if (last_core_type == CoreType::ETH) {
-        // There are         32 streams.
+        // There are 32 streams.
         return 16u + index;
     }
-    TT_THROW("        get_dispatch_starting_stream_index not implemented for core type");
+    TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
 }
 
 uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {

@@ -525,7 +525,7 @@ PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_
         return PatternType::AllDeviceBroadcast;
     } else {
         TT_THROW(
-            "Invalid pattern type: '{}'.         Valid types are: all_to_all_device_unicast, all_hosts_random_sockets, "
+            "Invalid pattern type: '{}'. Valid types are: all_to_all_device_unicast, all_hosts_random_sockets, "
             "all_device_broadcast",
             pattern_string);
     }

@@ -282,6 +282,6 @@ int main() {
         std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Passed!" << std::endl;
         return 0;
     }
-    std::cout << "Running EltwiseBinary MeshTraces on         2 MeshCQs Failed with Incorrect Outputs!" << std::endl;
+    std::cout << "Running EltwiseBinary MeshTraces on MeshCQs Failed with Incorrect Outputs!" << std::endl;
     return 1;
 }

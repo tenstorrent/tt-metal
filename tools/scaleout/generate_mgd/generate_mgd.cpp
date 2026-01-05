@@ -85,7 +85,7 @@ std::string find_node_type_from_template(
             return child.node_ref().node_descriptor();
         }
         if (child.has_graph_ref()) {
-            // Recurse into         nested graph to find node type
+            // Recurse into nested graph to find node type
             return find_node_type_from_template(child.graph_ref().graph_template(), cluster_desc);
         }
     }

@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (builder.should_skip_test_on_platform(test_config)) {
-            log_info(tt::LogTest, "Skipping Test Group: {} due to platform         skip policy", test_config.name);
+            log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
             continue;
         }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);

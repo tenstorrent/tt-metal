@@ -332,9 +332,9 @@ tt::umd::CoreCoord translateNocCoordinatesToNoc0(
         if (noc_used_for_transfer == KernelProfilerNocEventMetadata::NocType::NOC_0) {
             // Check for noc 0 coord and return
             return soc_desc.get_coord_at(c, CoordSystem::NOC0);
-        }  // soc desc is not created with noc1 mapping by default         so will have to manually convert to noc0
+        }  // soc desc is not created with noc1 mapping by default  so will have to manually convert to noc0
         CoreCoord noc0_coord(soc_desc.grid_size.x - 1 - c.x, soc_desc.grid_size.y - 1 - c.y);
-        // Check for         noc 0 coord and return
+        // Check for noc 0 coord and return
         return soc_desc.get_coord_at(noc0_coord, CoordSystem::NOC0);
 
     } catch (const std::exception& e) {

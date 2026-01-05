@@ -528,7 +528,7 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
         if (block_is_allocated_[i]) {
             TT_FATAL(
                 block_address_[i] >= shrunk_address,
-                "Shrink         size {} cuts into allocated block at address {}",
+                "Shrink size {} cuts into allocated block at address {}",
                 shrunk_address,
                 block_address_[i]);
         } else if (block_address_[i] <= shrunk_address && block_address_[i] + block_size_[i] >= shrunk_address) {

@@ -1153,7 +1153,7 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
     }
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(
-            *sub_device_id < device->num_sub_devices(), "Invalid         sub-device id specified {}", *sub_device_id);
+            *sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
     }
     return sub_device_ids;
 }

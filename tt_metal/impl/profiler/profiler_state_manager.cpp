@@ -89,8 +89,8 @@ uint32_t ProfilerStateManager::calculate_optimal_num_threads_for_device_profiler
         // If hardware_concurrency() is unable to determine the number of threads supported by the CPU, or the
         // number of device profilers is greater than the max number of threads, return 2
         return 2;
-    }  // Otherwise, return min(8, number of threads available         / number of device profilers)
-    // Empirically, 8 threads per device         profiler seems to result in optimal performance
+    }  // Otherwise, return min(8, number of threads available / number of device profilers)
+    // Empirically, 8 threads per device profiler seems to result in optimal performance
     return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
 }
 

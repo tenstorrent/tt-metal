@@ -886,7 +886,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         if (dispatch_core_type == CoreType::ETH) {
             return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
         }
-        TT_THROW("        Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
+        TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
 
     }();
 
