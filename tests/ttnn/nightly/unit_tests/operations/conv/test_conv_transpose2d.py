@@ -440,3 +440,208 @@ def test_conv_transpose2d_fp32_accum_auto_default(device):
         "Auto-default output matches explicit fp32_dest_acc_en=False. "
         "This suggests FP32 accumulation was NOT enabled (unexpected)."
     )
+
+
+# Regression tests for GitHub issue #35028
+# These tests cover bugs in the DRAM sliced codepath:
+# 1. Missing null check for weights_dtype in prepare_conv_transpose2d_weights.cpp
+# 2. Missing memory layout validation before deallocation in conv_transpose2d.cpp
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+def test_convt2d_dram_without_weights_dtype_regression(device):
+    """
+    Regression test for GitHub issue #35028 - Issue 1.
+
+    Tests the DRAM sliced codepath when weights_dtype is NOT explicitly set in Conv2dConfig.
+    This exercises the fix for the missing null check in prepare_conv_transpose2d_weights.cpp
+    where conv_config.weights_dtype.value() was called without verifying the optional had a value.
+
+    The fix uses weight_dtype which is computed with a fallback: weight_tensor.dtype()
+
+    This test specifically calls prepare_conv_transpose2d_weights to exercise the buggy code path.
+    """
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    torch.manual_seed(0)
+
+    # Test parameters - using a configuration that exercises DRAM slicing
+    batch_size = 1
+    input_channels = 64
+    output_channels = 64
+    input_height = 256
+    input_width = 256
+    filter_height = 3
+    filter_width = 3
+    stride_h = 2
+    stride_w = 2
+    pad_h = 1
+    pad_w = 1
+    activations_dtype = ttnn.bfloat16
+    layout = ttnn.ROW_MAJOR_LAYOUT
+
+    conv_weight_shape = [input_channels, output_channels, filter_height, filter_width]
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+
+    # KEY: Create Conv2dConfig WITHOUT setting weights_dtype
+    # This exercises the code path where the fix is applied
+    conv_config = ttnn.Conv2dConfig(
+        # weights_dtype is intentionally NOT set - this is the regression test
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=False,
+        output_layout=layout,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Use DRAM slice config to exercise the DRAM sliced codepath in prepare_conv_transpose2d_weights
+    dram_slice_config = ttnn.Conv2dSliceConfig(
+        slice_type=SliceWidth,
+        num_slices=4,
+    )
+
+    # This should NOT crash with the fix applied
+    # Before the fix, this would fail with "bad optional access" error in the DRAM path
+    # of prepare_conv_transpose2d_weights where conv_config.weights_dtype.value() is called
+    tt_prepared_weight = ttnn.prepare_conv_transpose2d_weights(
+        weight_tensor=tt_weight_tensor,
+        input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        input_layout=layout,
+        weights_format="IOHW",
+        in_channels=input_channels,
+        out_channels=output_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        dilation=(1, 1),
+        has_bias=True,
+        groups=1,
+        device=device,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        mirror_kernel=True,
+        input_dtype=activations_dtype,
+        dram_slice_config=dram_slice_config,
+    )
+
+    logger.info(f"Regression test: prepare_conv_transpose2d_weights without weights_dtype - Success")
+    assert tt_prepared_weight is not None, "Prepared weight tensor should not be None"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+def test_convt2d_dram_deallocate_activation_regression(device):
+    """
+    Regression test for GitHub issue #35028 - Issue 2.
+
+    Tests the DRAM sliced codepath with deallocate_activation=True.
+    This exercises the fix for the missing memory layout validation in conv_transpose2d.cpp.
+
+    The fix adds a check to only deallocate non-DRAM tensors, matching the L1 path pattern:
+    `!input_tensor_on_device.memory_config().is_dram()`
+
+    In the DRAM path, the input tensor is always in DRAM, so with the fix it should
+    NOT be deallocated. This test verifies that the input tensor remains allocated
+    after the operation completes.
+
+    Without the fix (original code): input tensor gets deallocated -> is_allocated() returns False
+    With the fix: input tensor stays allocated -> is_allocated() returns True
+    """
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    torch.manual_seed(0)
+
+    # Test parameters - using a configuration that exercises DRAM slicing
+    batch_size = 1
+    input_channels = 64
+    output_channels = 64
+    input_height = 256
+    input_width = 256
+    filter_height = 3
+    filter_width = 3
+    stride_h = 2
+    stride_w = 2
+    pad_h = 1
+    pad_w = 1
+    out_pad_h = 1
+    out_pad_w = 1
+    activations_dtype = ttnn.bfloat16
+    weights_dtype = ttnn.bfloat16
+    layout = ttnn.ROW_MAJOR_LAYOUT
+
+    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_weight_shape = [input_channels, output_channels, filter_height, filter_width]
+    conv_bias_shape = [1, 1, 1, output_channels]
+
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float()
+
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, weights_dtype)
+    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, activations_dtype, layout=layout, device=device)
+
+    # KEY: Create Conv2dConfig WITH deallocate_activation=True
+    # This exercises the code path where the fix is applied
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=True,  # KEY: This triggers the deallocation code path
+        output_layout=layout,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Use DRAM slice config to exercise the DRAM sliced codepath
+    dram_slice_config = ttnn.Conv2dSliceConfig(
+        slice_type=SliceWidth,
+        num_slices=4,
+    )
+
+    # Run conv_transpose2d with deallocate_activation=True
+    ttnn.conv_transpose2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        output_padding=(out_pad_h, out_pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        dram_slice_config=dram_slice_config,
+        dtype=activations_dtype,
+    )
+
+    # KEY ASSERTION: Verify the input tensor is still allocated after the operation
+    # With the fix (!is_dram() check), DRAM tensors should NOT be deallocated
+    # Without the fix, DRAM tensors would be incorrectly deallocated
+    assert tt_input_tensor.is_allocated(), (
+        "DRAM input tensor was incorrectly deallocated! "
+        "The fix should prevent deallocation of DRAM tensors (only L1 tensors should be deallocated). "
+        "Check that conv_transpose2d_DRAM has the check: !input_tensor_on_device.memory_config().is_dram()"
+    )
+
+    logger.info("Regression test: DRAM input tensor correctly remained allocated after conv_transpose2d")

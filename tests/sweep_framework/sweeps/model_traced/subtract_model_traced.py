@@ -51,6 +51,7 @@ def run(
     input_a_memory_config,
     input_b_memory_config,
     output_memory_config=None,  # Make optional with default
+    scalar=None,  # For tensor-scalar operations
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -58,14 +59,50 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple) and model_traced suite (dict with 'self'/'other')
-    if isinstance(input_shape, dict):
-        shape_a = input_shape.get("self", input_shape.get("input_a", (1, 1, 32, 32)))
-        shape_b = input_shape.get("other", input_shape.get("input_b", (1, 1, 32, 32)))
-    else:
-        shape_a = input_shape
-        shape_b = input_shape
+    # Handle both sample suite (tuple) and model_traced suite (dict)
+    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
+        # This is model_traced suite - dict with 'self' and 'other' keys
+        shape_a = input_shape["self"]
+        shape_b = input_shape["other"]
 
+        # Check if this is a tensor-scalar operation (other is None and scalar is provided)
+        if shape_b is None and scalar is not None:
+            # Tensor-scalar operation
+            torch_input_tensor_a = gen_func_with_cast_tt(
+                partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+            )(shape_a)
+
+            # Use scalar directly
+            torch_output_tensor = torch.sub(torch_input_tensor_a, scalar)
+
+            # Convert first tensor to TTNN
+            is_host = storage_type and "HOST" in str(storage_type)
+            from_torch_kwargs = {"dtype": input_a_dtype, "layout": input_a_layout}
+            if not is_host:
+                from_torch_kwargs["device"] = device
+                from_torch_kwargs["memory_config"] = input_a_memory_config
+
+            input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+
+            # Perform tensor-scalar subtract
+            start_time = start_measuring_time()
+            output_tensor = ttnn.subtract(input_tensor_a, scalar)
+            e2e_perf = stop_measuring_time(start_time)
+
+            output_tensor = ttnn.to_torch(output_tensor)
+
+            return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+        # else: shape_a and shape_b are already set for tensor-tensor operation
+    else:
+        # This is sample suite - use same shape for both inputs
+        if isinstance(input_shape, (tuple, list)):
+            shape_a = tuple(input_shape)
+            shape_b = tuple(input_shape)
+        else:
+            shape_a = input_shape
+            shape_b = input_shape
+
+    # Tensor-tensor operation (original code continues here with shape_a and shape_b set)
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
