@@ -35,8 +35,9 @@ int main(int argc, char** argv) {
     argv = app.ensure_utf8(argv);
 
     // - 8 DP groups (data parallelism) along mesh dimension 0
-    // - 4 TP devices per group (tensor parallelism) along mesh dimension 
-    // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd config file)
+    // - 4 TP devices per group (tensor parallelism) along mesh dimension
+    // you need a right mgd config file for this (default mesh shape is 1x32, look at enable_fabric function for the mgd
+    // config file)
     const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(8, 4);  // 8 DP groups × 4 TP devices
     const uint32_t num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
     const uint32_t dp_size = logical_mesh_shape[0];
@@ -85,7 +86,6 @@ int main(int argc, char** argv) {
         .bias = bias,
     };
     auto training_dataset = ttml::datasets::make_regression(training_params);
-    
 
     // Collate function: prepare batch data for TP+DP training
     std::function<BatchType(std::vector<DatasetSample>&& samples)> collate_fn =
@@ -196,8 +196,8 @@ int main(int argc, char** argv) {
 
             // Forward pass
             auto output = (*model)(data);
-            auto loss = ttml::ops::mse_loss(output, targets);            
-            
+            auto loss = ttml::ops::mse_loss(output, targets);
+
             // Log loss
             fmt::print("Step: {} Loss: {}\n", training_step++, get_loss_value(loss));
 
