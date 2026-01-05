@@ -309,7 +309,16 @@ Proceed with analysis, or suggest different references?"
    - User requests changes → refine spec, re-present for approval
    - Do NOT proceed without explicit user approval
 4. Phases 3-6: Run `ttnn-operation-scaffolder` then `ttnn-factory-builder`
-5. Phase 7: Run `ttnn-kernel-writer` to implement correct kernel computation
+5. Phase 7a: Run `ttnn-kernel-designer` to produce Kernel Design Document
+   - Maps computation phases to kernel helper functions (priority) or raw calls
+   - Creates `{operation_dir}/kernel_design.md`
+   - **USER REVIEW**: Present kernel design summary (helper vs raw decisions, CB flow)
+   - User approves → proceed to Phase 7b
+   - User requests changes → refine design, re-present
+   - Do NOT proceed to kernel writing without approval
+6. Phase 7b: Run `ttnn-kernel-writer` with the design document
+   - Implements kernels following the design's USE HELPER / NO HELPER guidance
+   - MUST NOT add raw CB operations for phases where design says USE HELPER
 ```
 
 See `.claude/subagent_breakdown.md` for detailed workflow and https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html for official docs.
