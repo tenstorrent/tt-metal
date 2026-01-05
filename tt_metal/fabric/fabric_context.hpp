@@ -101,6 +101,7 @@ public:
     }
 
     // Get all fabric defines for kernel compilation (used by tt_metal.cpp)
+    // Returns empty map if routing mode is undefined
     std::map<std::string, std::string> get_fabric_kernel_defines() const;
 
     // ============ Builder Context Access ============
@@ -117,6 +118,9 @@ private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
     size_t compute_packet_header_size_bytes() const;
     size_t compute_max_payload_size_bytes() const;
+
+    // Compute and validate routing mode from topology
+    void compute_routing_mode();
 
     // Topology-based sizing
     uint32_t get_max_1d_hops_from_topology() const;
@@ -148,6 +152,8 @@ private:
     uint32_t routing_1d_extension_words_ = 0;  // Valid only in 1D mode
     uint32_t max_2d_hops_ = 0;                 // Valid only in 2D mode
     uint32_t routing_2d_buffer_size_ = 0;      // Valid only in 2D mode
+
+    uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED by default
 
     // Builder context (lazy init on first access)
     mutable std::unique_ptr<FabricBuilderContext> builder_context_;

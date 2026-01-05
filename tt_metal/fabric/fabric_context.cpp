@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "fabric/hw/inc/fabric_routing_mode.h"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -253,15 +254,17 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->is_2D_routing_enabled_ = is_2D_topology(this->topology_);
     this->bubble_flow_control_enabled_ = is_ring_or_torus(this->topology_);
 
-    // Step 4: Compute packet specifications (depends on: routing flags)
+    // Step 4: Compute and validate routing mode (depends on: topology_)
+    this->compute_routing_mode();
+
+    // Step 5: Compute packet specifications (depends on: routing flags)
     this->compute_packet_specifications();
 
-    // Step 5: Additional independent configs
+    // Step 6: Additional independent configs
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
     builder_context_ = nullptr;
-    set_routing_mode(this->topology_);
 }
 
 // Destructor needed because of unique_ptr with forward-declared FabricBuilderContext
@@ -348,9 +351,13 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
 std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() const {
     std::map<std::string, std::string> defines;
 
+    // Only emit defines if routing mode has been computed
+    if (routing_mode_ == ROUTING_MODE_UNDEFINED) {
+        return defines;  // Return empty map
+    }
+
     // Add routing mode define
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    defines["ROUTING_MODE"] = std::to_string(control_plane.get_routing_mode());
+    defines["ROUTING_MODE"] = std::to_string(routing_mode_);
 
     // Add UDM mode define - only define it when enabled (not "0"), since header checks with #ifdef
     bool udm_enabled =
@@ -369,6 +376,55 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines() co
     }
 
     return defines;
+}
+
+void FabricContext::compute_routing_mode() {
+    // Compute routing mode from topology configuration
+    // This consolidates the logic from fabric_host_utils.cpp's set_routing_mode functions
+
+    // Determine dimension based on topology
+    uint32_t dimension = is_2D_routing_enabled_ ? 2 : 1;
+    TT_FATAL(dimension == 1 || dimension == 2, "Invalid dimension {}. Supported dimensions are 1 or 2", dimension);
+
+    // Build routing mode from topology flags
+    uint16_t mode = 0;
+    if (topology_ == Topology::Ring) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
+    } else if (topology_ == Topology::Linear) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
+    } else if (topology_ == Topology::NeighborExchange) {
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
+    } else if (topology_ == Topology::Mesh) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
+    } else if (topology_ == Topology::Torus) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
+    }
+
+    mode |= ROUTING_MODE_LOW_LATENCY;
+
+    // Validate dimension flags are orthogonal (only one can be set)
+    TT_FATAL(
+        __builtin_popcount(mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
+        "Only one dimension mode (1D, 2D, 3D) can be active at once");
+
+    // Validate topology flags are orthogonal
+    TT_FATAL(
+        __builtin_popcount(
+            mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
+                    ROUTING_MODE_TORUS)) == 1,
+        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
+
+    // Validate 1D can't be used with MESH or TORUS
+    TT_FATAL(
+        !(mode & ROUTING_MODE_1D) || !(mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
+        "1D routing mode cannot be combined with MESH or TORUS topology");
+
+    // Validate 2D can't be used with LINE or RING
+    TT_FATAL(
+        !(mode & ROUTING_MODE_2D) || !(mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
+        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
+
+    routing_mode_ = mode;
 }
 
 }  // namespace tt::tt_fabric

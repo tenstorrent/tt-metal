@@ -17,7 +17,6 @@
 #include <set>
 #include <vector>
 #include <algorithm>
-#include "fabric/hw/inc/fabric_routing_mode.h"
 #include "fabric_context.hpp"
 #include <queue>
 #include <unordered_map>
@@ -109,63 +108,6 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     }
 
     return link_indices;
-}
-
-void set_routing_mode(uint16_t routing_mode) {
-    // override for forced routing mode
-    if (routing_mode == ROUTING_MODE_UNDEFINED) {
-        return;
-    }
-
-    // Validate dimension flags are orthogonal (only one can be set)
-    TT_FATAL(
-        __builtin_popcount(routing_mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
-        "Only one dimension mode (1D, 2D, 3D) can be active at once");
-
-    // Validate topology flags are orthogonal
-    TT_FATAL(
-        __builtin_popcount(
-            routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_NEIGHBOR_EXCHANGE | ROUTING_MODE_MESH |
-                            ROUTING_MODE_TORUS)) == 1,
-        "Only one topology mode (RING, LINE, NEIGHBOR_EXCHANGE, MESH, TORUS) can be active at once");
-
-    // Validate 1D can't be used with MESH or TORUS
-    TT_FATAL(
-        !(routing_mode & ROUTING_MODE_1D) || !(routing_mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
-        "1D routing mode cannot be combined with MESH or TORUS topology");
-
-    // Validate 2D can't be used with LINE or RING
-    TT_FATAL(
-        !(routing_mode & ROUTING_MODE_2D) ||
-            !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING | ROUTING_MODE_NEIGHBOR_EXCHANGE)),
-        "2D routing mode cannot be combined with LINE or RING or NEIGHBOR_EXCHANGE topology");
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    control_plane.set_routing_mode(routing_mode);
-}
-
-void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
-    // TODO: take more parameters to set detail routing mode
-    TT_FATAL(
-        dimension == 1 || dimension == 2 || dimension == 3,
-        "Invalid dimension {}. Supported dimensions are 1, 2, or 3",
-        dimension);
-
-    uint16_t mode = (dimension == 3 ? ROUTING_MODE_3D : 0);
-    if (topology == Topology::Ring) {
-        mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
-    } else if (topology == Topology::Linear) {
-        mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
-    } else if (topology == Topology::NeighborExchange) {
-        mode |= (ROUTING_MODE_1D | ROUTING_MODE_NEIGHBOR_EXCHANGE);
-    } else if (topology == Topology::Mesh) {
-        mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
-    } else if (topology == Topology::Torus) {
-        mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
-    }
-
-    mode |= ROUTING_MODE_LOW_LATENCY;
-    set_routing_mode(mode);
 }
 
 void serialize_mesh_coordinates_to_file(

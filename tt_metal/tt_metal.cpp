@@ -52,7 +52,6 @@
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
-#include "fabric/hw/inc/fabric_routing_mode.h"
 #include "fabric/fabric_context.hpp"
 #include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -1074,16 +1073,13 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    auto mode = control_plane.get_routing_mode();
-    if (mode != ROUTING_MODE_UNDEFINED) {
-        // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes)
-        auto& fabric_context = control_plane.get_fabric_context();
-        auto fabric_defines = fabric_context.get_fabric_kernel_defines();
-        if (!fabric_defines.empty()) {
-            kernel->add_defines(fabric_defines);
-        }
+    const auto& fabric_context = MetalContext::instance().get_control_plane().get_fabric_context();
+    // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
+    auto fabric_defines = fabric_context.get_fabric_kernel_defines();
+    if (!fabric_defines.empty()) {
+        kernel->add_defines(fabric_defines);
     }
+
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1107,15 +1103,11 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    auto mode = control_plane.get_routing_mode();
-    if (mode != ROUTING_MODE_UNDEFINED) {
-        // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes)
-        auto& fabric_context = control_plane.get_fabric_context();
-        auto fabric_defines = fabric_context.get_fabric_kernel_defines();
-        if (!fabric_defines.empty()) {
-            kernel->add_defines(fabric_defines);
-        }
+    const auto& fabric_context = MetalContext::instance().get_control_plane().get_fabric_context();
+    // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
+    auto fabric_defines = fabric_context.get_fabric_kernel_defines();
+    if (!fabric_defines.empty()) {
+        kernel->add_defines(fabric_defines);
     }
 
     TT_FATAL(
