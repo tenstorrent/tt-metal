@@ -836,6 +836,12 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
+        # Observe the outputs here:
+        # ttnn.set_printoptions(profile="full")
+        # print(f"attn_output_84SD[0, 0, :8, :4]:\n{attn_output_84SD[0, 0, :8, :4].cpu()}")
+        # print(f"attn_output_84SD[0, 0, -8:, :4]:\n{attn_output_84SD[0, 0, -8:, :4].cpu()}")
+        # ttnn.set_printoptions(profile="short")
+
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD_8b)

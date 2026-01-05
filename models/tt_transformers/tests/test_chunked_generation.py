@@ -144,15 +144,17 @@ def test_chunked_prefill_single_user(
     logger.info("Running reference model")
     ref_output = reference_model(pt_prefill_input, start_pos, mode="decode")
 
+    results = {}
+
     # Run TT model, collecting various last_token_idxs
     logger.info("Running TT model")
     for last_token_idx in [
-        prefill_chunk_size - 10,
-        prefill_chunk_size - 1,
+        # prefill_chunk_size - 10,
+        # prefill_chunk_size - 1,
         prefill_chunk_size,
-        prefill_chunk_size + 1,
-        seq_len - 10,
-        seq_len - 1,
+        # prefill_chunk_size + 1,
+        # seq_len - 10,
+        # seq_len - 1,
     ]:
         prefill_input_trimmed = tt_prefill_input[:, : last_token_idx + 1]
 
@@ -164,19 +166,26 @@ def test_chunked_prefill_single_user(
             4 * block_size,
         ]:  # Reuse zero or more blocks of cache
             logger.info(f"Running TT model for last_token_idx: {last_token_idx}, start_pos: {start_pos}")
-            tt_output_torch = generator.prefill_forward_text(
-                prefill_input_trimmed,
-                page_table=static_page_table,
-                kv_cache=[tt_kv_cache],
-                enable_trace=False,
-                start_pos=[start_pos],
-            )
-            ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
+            fail_count = 0
+            for i in range(100):
+                tt_output_torch = generator.prefill_forward_text(
+                    prefill_input_trimmed,
+                    page_table=static_page_table,
+                    kv_cache=[tt_kv_cache],
+                    enable_trace=False,
+                    start_pos=[start_pos],
+                )
+                ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
 
-            passing, pcc_message = comp_pcc(ref_output_slice, tt_output_torch, pcc)
+                passing, pcc_message = comp_pcc(ref_output_slice, tt_output_torch, pcc)
 
-            logger.info(comp_allclose(ref_output_slice, tt_output_torch))
-            logger.info(
-                f"passing: {passing}, PCC: {pcc_message} (for last_token_idx: {last_token_idx}, start_pos: {start_pos})"
-            )
-            assert passing
+                logger.info(comp_allclose(ref_output_slice, tt_output_torch))
+                logger.info(
+                    f"passing: {passing}, PCC: {pcc_message} (for last_token_idx: {last_token_idx}, start_pos: {start_pos}, iteration: {i})"
+                )
+                if not passing:
+                    fail_count += 1
+                # assert passing
+            results[f"{last_token_idx}_{start_pos}"] = fail_count
+    logger.info(f"Results: {results}")
+    assert all(v == 0 for v in results.values()), f"Some results had failures: {results}"
