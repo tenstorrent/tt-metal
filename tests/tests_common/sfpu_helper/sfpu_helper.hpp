@@ -5,6 +5,13 @@
 // Sfpu golden functions
 #include <cmath>
 #include <numbers>
+#include <vector>
+#include <cstdint>
+#include <functional>
+#include <random>
+#include <map>
+
+#include <tt-metalium/bfloat16.hpp>
 
 inline float exponential(float x) { return std::exp(x); }
 
