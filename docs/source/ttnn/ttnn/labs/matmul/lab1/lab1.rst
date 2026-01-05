@@ -216,23 +216,26 @@ A high-level view of a Tenstorrent device in the system is shown in Figure 1:
 
 A PCIe card contains one or more Tensix devices, each device consisting of a Tensix processor and a dedicated DRAM.
 Note that the device DRAM is separate from the system (host) DRAM and explicit communication is required to transfer data between them.
-The Tensix processor contains an array of Tensix cores with network on-chip (NoC) to pass data from DRAM to fast on-chip SRAM and between cores.
-On-Chip SRAM is often referred to as L1 memory, but it does not operate as a cache; instead, it serves as a working memory for the Tensix cores.
+The Tensix processor contains an array of Tensix cores with network on-chip (NoC) to pass data from DRAM to fast on-chip SRAM
+and between Tensix cores.
+On-Chip SRAM is often referred to as L1 memory, but it does not operate as a cache; instead, it serves as a working memory
+for the Tensix cores.
 Each Tensix core has a dedicated compute unit specifically optimized for matrix and vector operations on tensors.
 
-The host program first transfers tensors from host memory into buffers in the device DRAM.
-Tensix cores then move data from DRAM into on-chip SRAM, perform matrix and vector operations using dedicated hardware units and may store intermediate
-results in on-chip SRAM or device DRAM.
+The host program first transfers tensors from host DRAM memory into buffers in the device DRAM.
+Tensix cores then move data from device DRAM into on-chip SRAM, perform matrix and vector operations using dedicated hardware units
+and may store intermediate results in on-chip SRAM or device DRAM.
 Once all the required computation is done, the results are moved back to host memory for further processing, verification, or I/O.
 
-A key design principle of Tenstorrent architecture is that most computation steps occur entirely on the device, with explicit and carefully orchestrated
-data movement between DRAM and Tensix SRAM, and between neighboring cores over the NoC.
-Typical workloads move input data from the host to the accelerator once, perform many layers or time steps directly on Tensix cores while reusing
-local SRAM-resident data, and only transfer compact outputs or checkpoints back to the host.
+A key design principle of Tenstorrent architecture is that most computation steps occur entirely on the device,
+with explicit and carefully orchestrated data movements.
+Typical workloads move input data from the host to device DRAM once, perform many computation steps directly on Tensix cores,
+and transfer only final outputs back to the host.
 When used this way, host-device communication over PCIe represents a relatively small fraction of the total runtime,
-allowing the accelerator's on-card compute and data-movement engines to dominate performance.
+allowing the accelerator's on-device compute and data-movement engines to dominate performance.
 
-In this lab we will focus on programming a single Tensix core in TT-Metalium. Descriptions of the architectural features will be limited to this context.
+In this lab we will focus on programming a single Tensix core in TT-Metalium. Descriptions of the architectural features
+will be limited to this context.
 We will extend the architectural and programming model description to multiple Tensix cores in subsequent labs.
 
 Tile-Based Architecture
