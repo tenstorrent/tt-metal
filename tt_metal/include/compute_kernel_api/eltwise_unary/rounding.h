@@ -91,6 +91,28 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
 
 // clang-format off
 /**
+ * Performs element-wise stochastic rounding operation of FP32 values to BF16
+ * on each element of a tile in DST register at index tile_index.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Note: this operation uses the SFPSTOCHRND instruction; see the known issues on Wormhole and Blackhole:
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                         | Type     | Valid Range                                           | Required |
+ * |-----------------|-------------------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the stochastic round on     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void stochastic_round_tile(uint32_t idst) {
+    MATH(SFPU_TWO_PARAM_KERNEL(_calculate_stochastic_round_, APPROX, 8, idst, (int)VectorMode::RC));
+}
+
+// clang-format off
+/**
  * Performs element-wise frac computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only

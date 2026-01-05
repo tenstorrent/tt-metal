@@ -202,6 +202,9 @@ void MetalContext::initialize(
     // Set fw_compile_hash for Inspector RPC build environment info
     Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
 
+    // Reset timeout detection state
+    dispatch_timeout_detection_processed_ = false;
+
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
@@ -633,7 +636,6 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
-        log_critical(tt::LogMetal, "Initializing control plane");
         this->initialize_control_plane_impl();
     }
     return *control_plane_;
@@ -1046,8 +1048,8 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     l1_bank_to_noc_xy_[device_id].clear();
     l1_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
-        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
-            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, l1_noc_coord_per_bank[bank_id]);
+        for (const auto& noc_coord : l1_noc_coord_per_bank) {
+            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
@@ -1715,6 +1717,33 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
 
     CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+}
+
+void MetalContext::on_dispatch_timeout_detected() {
+    std::lock_guard<std::mutex> lock(dispatch_timeout_detection_mutex_);
+
+    if (!dispatch_timeout_detection_processed_) {
+        dispatch_timeout_detection_processed_ = true;
+        log_error(tt::LogMetal, "Timeout detected");
+        // Serialize Inspector RPC data if enabled
+        if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
+            log_info(tt::LogMetal, "Serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+        }
+
+        // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
+        std::string command = rtoptions_.get_dispatch_timeout_command_to_execute();
+        if (!command.empty()) {
+            log_info(tt::LogMetal, "Executing command: {}", command);
+
+            int result = std::system(command.c_str());
+
+            if (result != 0) {
+                log_warning(
+                    tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

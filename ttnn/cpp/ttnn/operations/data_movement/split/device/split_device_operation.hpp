@@ -29,14 +29,11 @@ struct SplitDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, int num_splits, int dim, const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
 }  // namespace ttnn::operations::data_movement::split
 
 namespace ttnn::prim {
-constexpr auto split =
-    ttnn::register_operation<"ttnn::prim::split", ttnn::operations::data_movement::split::SplitDeviceOperation>();
+std::vector<ttnn::Tensor> split(
+    const Tensor& input_tensor, int num_splits, int dim, const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim
