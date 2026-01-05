@@ -49,7 +49,12 @@ inline void scale_dest(uint32_t dst, uint32_t scalar) {
  * @brief The compute logic for accumulating a CB. Does
  * no src configuring or packing
  */
-template <bool FLOAT32_REDUCTION, typename input_policy, typename... AdditionalCBs>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool FLOAT32_REDUCTION,
+    typename input_policy,
+    typename... AdditionalCBs>
 inline void accumulate_compute_loop(
     uint32_t cb_in,
     uint32_t cb_scalar,
@@ -65,7 +70,7 @@ inline void accumulate_compute_loop(
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, last_tile_partial](uint32_t cb) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
+        reduce_init<reduce_type, reduce_dim, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
@@ -74,7 +79,7 @@ inline void accumulate_compute_loop(
             for (auto j : block.local()) {
                 // If it's the last tile and it's partial, use the second tile in cb_scalar
                 const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                reduce_tile<reduce_type, reduce_dim, FLOAT32_REDUCTION>(
                     cb, cb_scalar, num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
@@ -114,6 +119,8 @@ inline void accumulate_compute_loop(
  * @param epilogue Optional functor to call after the accumulation before tile registers
  * are committed and packed
  * @param additional_cbs Optional additional input CBs to accumulate
+ * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
+ * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
  * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
@@ -127,17 +134,14 @@ inline void accumulate_compute_loop(
  * will be incorrect @anchor scalar_tile_ones
  * @note If the last tile is partial, we need two scalar tiles in cb_scalar:
  * One for the full tiles, and one for the partial tile @anchor partial_tile_scaler_tiles
- * @note This function must be called from a compilation unit
- * that has the following preprocessor directives (this is for
- * the reduce interface):
- * #define REDUCE_OP PoolType::SUM
- * #define REDUCE_DIM ReduceDim::REDUCE_ROW @anchor reduce_defines
  * @note All input CBs will wait on the same number of tiles in a block,
  * and will have the same pop policy
  * @note This first streams all `num_tiles` tiles from `cb_in0` then
  * streams all `num_tiles` tiles from `cb_in1` @anchor stream_cbs
  */
 template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
     bool FLOAT32_REDUCTION,
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
@@ -161,7 +165,7 @@ inline void row_wise_accumulate_with_epilogue(
     reconfig_data_format(cb_in, cb_scalar);
     tile_regs_acquire();
 
-    detail::accumulate_compute_loop<FLOAT32_REDUCTION, input_policy>(
+    detail::accumulate_compute_loop<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, last_tile_partial, additional_cbs...);
 
     epilogue();
@@ -190,20 +194,24 @@ inline void row_wise_accumulate_with_epilogue(
  * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
+ * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
+ * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
  * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  *
- * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs, \ref
+ * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref stream_cbs, \ref
  * partial_tile_scaler_tiles
  */
 template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
     bool FLOAT32_REDUCTION,
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t N, uint32_t num_tiles, uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, N, [N]() {
             detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N));
         });
@@ -220,14 +228,18 @@ inline void row_wise_mean(
  * @param N Number of entries in the set
  * @param num_tiles Number of tiles containing the data
  * @param block_size Number of tiles to process at a time
+ * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
+ * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
  * @tparam input_policy The policy for how to handle the input CB
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
  *
- * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref reduce_defines, \ref stream_cbs, \ref
+ * See \ref dst0_overwritten, \ref scalar_tile_ones, \ref stream_cbs, \ref
  * partial_tile_scaler_tiles
  */
 template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
     bool FLOAT32_REDUCTION,
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
@@ -239,7 +251,7 @@ inline void row_wise_mean_with_pre_add(
     uint32_t N,
     uint32_t num_tiles,
     uint32_t block_size) {
-    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
         cb_in0,
         cb_scalar,
         cb_out,

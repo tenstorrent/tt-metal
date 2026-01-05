@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM  // wtf why do we need to define this here?
-#define REDUCE_DIM ReduceDim::REDUCE_COL
-
 #include <cstdint>
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"

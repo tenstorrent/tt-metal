@@ -41,7 +41,8 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     unpack_tilizeA_B_block<use_neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         in_cb_id, in_scalar_cb_id, tiles_per_reduction, scalar_tile_idx, num_faces, unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
-        reduce_tile_math(c_i, num_faces);  // Reduce the 2 faces (containing 4 rows for bilinear interpolation)
+        reduce_tile_math<REDUCE_OP, REDUCE_DIM>(
+            c_i, num_faces);  // Reduce the 2 faces (containing 4 rows for bilinear interpolation)
     }
     cb_pop_front(in_cb_id, 4);
 

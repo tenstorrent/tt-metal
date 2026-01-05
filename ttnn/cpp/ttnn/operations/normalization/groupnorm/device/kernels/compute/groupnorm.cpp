@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -315,8 +312,8 @@ void MAIN {
                 // Partial/E[x]
                 cb_wait_front(cb_x, out_block_hw_normal);
                 compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputMode::PRELOADED,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_x, cb_scaler, cb_ex_partial, compute_kernel_lib::TileShape::grid(out_block_h_actual, block_w));
@@ -328,8 +325,8 @@ void MAIN {
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputMode::STREAMING,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external,
@@ -444,8 +441,8 @@ void MAIN {
                 // Partial-Var(x)
                 cb_wait_front(cb_xmm, out_block_hw_normal);
                 compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputMode::PRELOADED,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_xmm,
@@ -458,8 +455,8 @@ void MAIN {
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 compute_kernel_lib::reduce<
-                    REDUCE_OP,
-                    REDUCE_DIM,
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputMode::STREAMING,
                     compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
                     cb_ex_external,

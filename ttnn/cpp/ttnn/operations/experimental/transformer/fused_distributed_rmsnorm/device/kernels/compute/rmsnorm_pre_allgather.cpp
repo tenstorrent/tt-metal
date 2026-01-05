@@ -10,9 +10,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
@@ -78,7 +75,7 @@ void MAIN {
         /*
          * sum(x**2)
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
             intermediate_cb, reduce_scalar_cb, output_cb, compute_kernel_lib::TileShape::single());
     }
     cb_pop_front(reduce_scalar_cb, onetile);

@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
@@ -435,7 +432,7 @@ void reduce_cb(
     bool use_prev_reduce,
     uint32_t cb_length_t) {
     // Single reduce call with lambda that conditionally accumulates
-    compute_kernel_lib::reduce<reduce_type, REDUCE_DIM>(
+    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
         cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(cb_length_t), {},
         // PostReduceOp: conditionally accumulate with previous result
         [cb_prev_out, use_prev_reduce]() {

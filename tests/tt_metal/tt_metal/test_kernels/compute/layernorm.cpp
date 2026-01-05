@@ -4,12 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -98,7 +92,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, 1 * onetile);
-        reduce_init(cb_x, cb_scaler, cb_ex);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -154,7 +148,7 @@ void MAIN {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_xmm2, cb_scaler, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);

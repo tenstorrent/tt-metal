@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#define REDUCE_OP (PoolType::SUM)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"

@@ -12,7 +12,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -27,11 +27,11 @@ void MAIN {
                 cb_wait_front(tt::CBIndex::c_0, onetile);
 #if (MATH_ONLY == 1)
                 UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }

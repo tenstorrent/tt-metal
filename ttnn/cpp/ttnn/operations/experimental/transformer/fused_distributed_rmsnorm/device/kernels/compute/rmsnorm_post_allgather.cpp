@@ -10,12 +10,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
-#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
-#define BCAST_DIM BroadcastType::COL
-
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
@@ -76,7 +70,7 @@ void MAIN {
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
             stats_cb, reduce_scalar_cb, reduce_result_cb, compute_kernel_lib::TileShape::row(stats_tiles_cols));
 
         /*

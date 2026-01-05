@@ -11,9 +11,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
@@ -65,16 +62,18 @@ void MAIN {
 
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         // Batched mode for optimal performance
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
-            cb_x2, cb_reduce, cb_out, compute_kernel_lib::TileShape::row(Wt));
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::TileShape::row(Wt));
 
         /*
          * sum(x)
          */
         // STREAMING_BATCHED: All Wt tiles already in CB (see cumulative wait above)
         // Batched mode for optimal performance
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
-            cb_inp, cb_reduce, cb_out, compute_kernel_lib::TileShape::row(Wt));
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_inp, cb_reduce, cb_out, compute_kernel_lib::TileShape::row(Wt));
     }
     cb_pop_front(cb_reduce, 1);
 }
