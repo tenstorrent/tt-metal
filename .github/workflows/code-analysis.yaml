@@ -73,10 +73,8 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
-        CARGO_HOME: /tmp/.cargo
-        TT_FROM_PRECOMPILED_DIR: /work
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
@@ -112,8 +110,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-          clean: true
 
       - name: Determine merge base
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
@@ -131,8 +127,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-          clean: true
 
       - name: Create shim
         run: |
@@ -169,7 +163,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: false
 
       - name: Restore shim
