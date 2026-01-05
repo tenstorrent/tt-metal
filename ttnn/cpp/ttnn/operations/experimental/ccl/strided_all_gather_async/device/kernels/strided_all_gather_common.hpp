@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -289,7 +289,7 @@ FORCE_INLINE uint32_t write_chunk(
                         &mux_connection,
                         pkt_scatter_hdr,
                         l1_read_addr,
-                        NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                        NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {0}));
                 }
                 if (direction == 1 && write_local) {
                     uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);

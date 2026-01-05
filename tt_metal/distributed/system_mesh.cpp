@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
@@ -26,14 +26,13 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_metal::distributed {
-namespace {
-
 // Helper type to keep track of device ID and fabric node ID for a given mesh coordinate.
 struct MappedDevice {
     MaybeRemote<int> device_id;
     tt::tt_fabric::FabricNodeId fabric_node_id;
 };
 
+namespace {
 // Initializes a mesh container with MappedDevice objects, with configured fabric node IDs.
 MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshId mesh_id, const MeshShape& shape) {
     std::vector<MappedDevice> system_mesh_devices;

@@ -9,9 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn {
-namespace experimental {
-namespace ccl {
+namespace ttnn::experimental::ccl {
 
 void AllGatherFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -434,25 +432,34 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     }
 }
 
-bool MatmulFusedOpSignaler::is_all_gather() { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
+bool MatmulFusedOpSignaler::is_all_gather() const { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
 
-bool MatmulFusedOpSignaler::is_reduce_scatter() { return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER; }
+bool MatmulFusedOpSignaler::is_reduce_scatter() const {
+    return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER;
+}
 
-bool MatmulFusedOpSignaler::is_llama_reduce_scatter() {
+bool MatmulFusedOpSignaler::is_llama_reduce_scatter() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER;
 }
 
-bool MatmulFusedOpSignaler::is_llama_all_gather() {
+bool MatmulFusedOpSignaler::is_llama_all_gather() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER;
 }
 
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 void MinimalMatmulFusedOpSignaler::init_all_gather(
-    uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt, tt::tt_fabric::Topology topology) {
+    uint32_t ring_size,
+    uint32_t start_ring_index,
+    uint32_t input_tensor_Wt,
+    tt::tt_fabric::Topology topology,
+    bool read_local_slice_from_input,
+    const std::optional<const tt::tt_metal::Tensor>& ag_input) {
     this->ring_size = ring_size;
     this->start_ring_index = start_ring_index;
     this->input_tensor_Wt = input_tensor_Wt;
     this->topology = topology;
+    this->read_local_slice_from_input = read_local_slice_from_input;
+    this->ag_input = ag_input;
 
     initialized_all_gather = true;
 }
@@ -510,12 +517,13 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->input_tensor_Wt));
     out_rt_args.push_back(static_cast<uint32_t>(k_block_tiles));
     out_rt_args.push_back(static_cast<uint32_t>(this->topology));
+    out_rt_args.push_back(static_cast<uint32_t>(this->read_local_slice_from_input));
+    out_rt_args.push_back(static_cast<uint32_t>(this->input_tensor_Wt * this->start_ring_index));
+    out_rt_args.push_back(static_cast<uint32_t>((this->input_tensor_Wt * (this->start_ring_index + 1)) - 1));
 
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental::ccl

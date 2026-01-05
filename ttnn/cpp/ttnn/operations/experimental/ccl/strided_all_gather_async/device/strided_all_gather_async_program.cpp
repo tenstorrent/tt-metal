@@ -234,6 +234,7 @@ StridedAllGatherAsyncProgramFactory::create_at(
             attributes.topology,
             attributes.semaphore,
             empty_fused_op_signaler,
+            false,
             attributes.tiles_per_chunk,
             attributes.num_workers_per_link,
             attributes.num_buffers_per_channel,
@@ -258,6 +259,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
+    bool read_local_slice_from_input,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
@@ -545,8 +547,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 for (uint32_t d = 0; d < ring_size; d++) {
                     reader_rt_args.push_back(device_k_block_counts[d]);
                     reader_rt_args.push_back(device_chunk_widths[d].size());
-                    for (uint32_t c = 0; c < device_chunk_widths[d].size(); c++) {
-                        reader_rt_args.push_back(device_chunk_widths[d][c]);
+                    for (unsigned int width : device_chunk_widths[d]) {
+                        reader_rt_args.push_back(width);
                     }
                 }
                 if (fuse_op) {
@@ -627,13 +629,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     opposite_core_coord.y,
                     mm_block_wt_val,
                     mm_block_ht_val,
-                    mm_cores_y_val};
+                    mm_cores_y_val,
+                    read_local_slice_from_input};
                 writer_rt_args.push_back(device_max_chunks);
                 for (uint32_t d = 0; d < ring_size; d++) {
                     writer_rt_args.push_back(device_k_block_counts[d]);
                     writer_rt_args.push_back(device_chunk_widths[d].size());
-                    for (uint32_t c = 0; c < device_chunk_widths[d].size(); c++) {
-                        writer_rt_args.push_back(device_chunk_widths[d][c]);
+                    for (unsigned int width : device_chunk_widths[d]) {
+                        writer_rt_args.push_back(width);
                     }
                 }
                 detail::strided_fabric_mux_connection_rt_args(

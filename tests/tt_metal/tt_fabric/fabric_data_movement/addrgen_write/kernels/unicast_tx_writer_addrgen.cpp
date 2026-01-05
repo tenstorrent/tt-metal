@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
-#include "accessor/tensor_accessor.h"
-#include "accessor/tensor_accessor_args.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor_args.h"
 #include "kernel_common.hpp"
 
 using namespace tt;
@@ -121,7 +121,8 @@ void kernel_main() {
             auto noc_addr0 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 0, 0);
             auto noc_addr1 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 1, 0);
             header->to_noc_unicast_scatter_write(
-                tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_addr0, noc_addr1}, static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)},
+                tt::tt_fabric::NocUnicastScatterCommandHeader(
+                    {noc_addr0, noc_addr1}, {static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)}),
                 SRC_ALIGNED_PAGE_SIZE * 2);
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
             auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);

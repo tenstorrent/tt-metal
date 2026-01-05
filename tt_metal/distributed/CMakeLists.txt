@@ -79,6 +79,9 @@ endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
+# Enable unity builds for faster compilation
+TT_ENABLE_UNITY_BUILD(distributed)
+
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)
     target_sources(distributed PRIVATE ${FBS_GENERATED_HEADER_FILE})

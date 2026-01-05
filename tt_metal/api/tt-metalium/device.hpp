@@ -27,9 +27,7 @@
 
 #include <tt_stl/span.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -44,6 +42,7 @@ using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string
 enum class BufferType;
 
 class Allocator;
+class AllocatorImpl;
 class Buffer;
 class Program;
 class SubDevice;
@@ -133,6 +132,10 @@ public:
 
     virtual const std::unique_ptr<Allocator>& allocator() const = 0;
     virtual const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const = 0;
+
+    // Internal use only, AllocatorImpl is not exposed out
+    virtual const std::unique_ptr<AllocatorImpl>& allocator_impl() const = 0;
+    virtual const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const = 0;
 
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
@@ -224,6 +227,4 @@ public:
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

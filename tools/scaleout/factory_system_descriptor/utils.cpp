@@ -32,12 +32,65 @@
 
 namespace tt::scaleout_tools {
 
+bool check_min_connection_count_satisfied(
+    const std::set<PhysicalChannelConnection>& discovered_connections,
+    const std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>>& generated_connections,
+    uint32_t min_connections,
+    std::vector<std::pair<std::pair<AsicId, AsicId>, uint32_t>>& insufficient_connections) {
+    // Helper to extract AsicId from PhysicalChannelEndpoint
+    auto get_asic_id = [](const PhysicalChannelEndpoint& endpoint) -> AsicId {
+        return std::make_tuple(endpoint.hostname, *endpoint.tray_id, endpoint.asic_channel.asic_location);
+    };
+
+    // Helper to create ordered pair of AsicIds (for consistent map keys)
+    auto make_asic_pair = [](const AsicId& a, const AsicId& b) {
+        return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+    };
+
+    // Build map of expected ASIC pairs from generated_connections (FSD)
+    // Initialize all expected pairs with count = 0
+    std::map<std::pair<AsicId, AsicId>, uint32_t> asic_pair_connection_counts;
+
+    for (const auto& conn : generated_connections) {
+        auto asic_a = get_asic_id(conn.first);
+        auto asic_b = get_asic_id(conn.second);
+        auto asic_pair = make_asic_pair(asic_a, asic_b);
+        // Initialize to 0 if not present (we count from discovered connections)
+        if (!asic_pair_connection_counts.contains(asic_pair)) {
+            asic_pair_connection_counts[asic_pair] = 0;
+        }
+    }
+
+    // Count actual discovered connections for each ASIC pair
+    for (const auto& conn : discovered_connections) {
+        auto asic_a = get_asic_id(conn.first);
+        auto asic_b = get_asic_id(conn.second);
+        auto asic_pair = make_asic_pair(asic_a, asic_b);
+        // Only count if this pair is expected (exists in FSD)
+        if (asic_pair_connection_counts.contains(asic_pair)) {
+            asic_pair_connection_counts[asic_pair]++;
+        }
+    }
+
+    // Check if all ASIC pairs have at least min_connections
+    bool all_satisfied = true;
+    for (const auto& [asic_pair, count] : asic_pair_connection_counts) {
+        if (count < min_connections) {
+            all_satisfied = false;
+            insufficient_connections.push_back({asic_pair, count});
+        }
+    }
+
+    return all_satisfied;
+}
+
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
     const YAML::Node& discovered_gsd,
     bool strict_validation,
     bool assert_on_connection_mismatch,
-    bool log_output) {
+    bool log_output,
+    std::optional<uint32_t> min_connections = std::nullopt) {
 
     const auto& hosts = generated_fsd.hosts();
 
@@ -215,7 +268,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         }
 
         // Check for duplicates before inserting
-        if (generated_connections.find(connection_pair_sorted) != generated_connections.end()) {
+        if (generated_connections.contains(connection_pair_sorted)) {
             duplicate_generated_connections.insert(connection_pair_sorted);
         } else {
             generated_connections.insert(connection_pair_sorted);
@@ -271,7 +324,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             }
 
             // Check for duplicates before inserting
-            if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
+            if (discovered_connections.contains(connection_pair_sorted)) {
                 duplicate_discovered_connections.insert(connection_pair_sorted);
             } else {
                 discovered_connections.insert(connection_pair_sorted);
@@ -313,7 +366,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             }
 
             // Check for duplicates before inserting
-            if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
+            if (discovered_connections.contains(connection_pair_sorted)) {
                 duplicate_discovered_connections.insert(connection_pair_sorted);
             } else {
                 discovered_connections.insert(connection_pair_sorted);
@@ -420,7 +473,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     // Only in strict validation: also find connections in GSD but not in FSD
     if (strict_validation) {
         for (const auto& conn : discovered_connections) {
-            if (generated_connections.find(conn) == generated_connections.end()) {
+            if (!generated_connections.contains(conn)) {
                 extra_in_gsd.insert(conn);
             }
         }
@@ -430,15 +483,15 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     if (!missing_in_gsd.empty()) {
         auto missing_port_info = extract_port_info(missing_in_gsd);
         std::ostringstream oss;
-        oss << "Channel Connections found in FSD but missing in GSD (" << std::to_string(missing_in_gsd.size())
-            << " connections):\n";
+        oss << "Physical Discovery found " << missing_in_gsd.size()
+            << " missing channel connections:\n";
         for (const auto& conn : missing_in_gsd) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
         oss << "\n";
 
-        oss << "Port Connections found in FSD but missing in GSD ("
-            << std::to_string(missing_port_info.size()) + " connections):\n";
+        oss << "Physical Discovery found " << missing_port_info.size()
+            << " missing port/cable connections:\n";
         for (const auto& conn : missing_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
@@ -452,15 +505,15 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         auto extra_port_info = extract_port_info(extra_in_gsd);
 
         std::ostringstream oss;
-        oss << "Channel Connections found in GSD but missing in FSD (" << std::to_string(extra_in_gsd.size())
-            << " connections):\n";
+        oss << "Physical Discovery found " << extra_in_gsd.size()
+            << " extra channel connections:\n";
         for (const auto& conn : extra_in_gsd) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
         oss << "\n";
 
-        oss << "Port Connections found in GSD but missing in FSD ("
-            << std::to_string(extra_port_info.size()) + " connections):\n";
+        oss << "Physical Discovery found " << extra_port_info.size()
+            << " extra port/cable connections:\n";
         for (const auto& conn : extra_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
@@ -469,9 +522,48 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         }
     }
 
-    // Handle validation results
+    // Handle validation results - check relaxed mode at per-ASIC-pair granularity
+    bool relaxed_mode_satisfied = false;
+    std::vector<std::pair<std::pair<AsicId, AsicId>, uint32_t>> insufficient_connections;
+
+    if (min_connections.has_value()) {
+        relaxed_mode_satisfied = check_min_connection_count_satisfied(
+            discovered_connections, generated_connections, min_connections.value(), insufficient_connections);
+    }
+
     if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
         std::string mode_text = strict_validation ? "" : " in non-strict validation";
+
+        // In relaxed mode, skip throwing errors if all ASIC pairs have enough connections
+        if (relaxed_mode_satisfied) {
+            if (log_output) {
+                std::cout << "Relaxed validation mode: All ASIC pairs have at least " << min_connections.value()
+                          << " connections." << std::endl;
+                if (!missing_in_gsd.empty()) {
+                    std::cout << "Note: " << missing_in_gsd.size()
+                              << " missing channel connections detected but ignored due to relaxed mode." << std::endl;
+                }
+                if (!extra_in_gsd.empty()) {
+                    std::cout << "Note: " << extra_in_gsd.size()
+                              << " extra channel connections detected but ignored due to relaxed mode." << std::endl;
+                }
+            }
+            // Return empty set since we're treating this as success in relaxed mode
+            return {};
+        }
+
+        // If min_connections was specified but not satisfied, report which ASIC pairs are insufficient
+        if (min_connections.has_value() && !insufficient_connections.empty() && log_output) {
+            std::cout << "Relaxed validation mode FAILED: The following ASIC pairs have fewer than "
+                      << min_connections.value() << " connections:" << std::endl;
+            for (const auto& [asic_pair, count] : insufficient_connections) {
+                const auto& [asic_a, asic_b] = asic_pair;
+                std::cout << "  - (" << std::get<0>(asic_a) << ", tray " << std::get<1>(asic_a) << ", asic "
+                          << std::get<2>(asic_a) << ") <-> (" << std::get<0>(asic_b) << ", tray " << std::get<1>(asic_b)
+                          << ", asic " << std::get<2>(asic_b) << "): " << count << " connections" << std::endl;
+            }
+        }
+
         if (assert_on_connection_mismatch) {
             throw std::runtime_error(
                 "Connection mismatch detected" + mode_text + ". Check console output for details.");
@@ -496,7 +588,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& gsd_filename,
     bool strict_validation,
     bool assert_on_connection_mismatch,
-    bool log_output) {
+    bool log_output,
+    std::optional<uint32_t> min_connections) {
     // Read the generated FSD using protobuf
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
     std::ifstream fsd_file(fsd_filename);
@@ -515,7 +608,18 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
 
     // Call a shared validation function that does the actual work
-    return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output);
+    return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output, min_connections);
+}
+
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation,
+    bool assert_on_connection_mismatch,
+    bool log_output,
+    std::optional<uint32_t> min_connections) {
+    return validate_fsd_against_gsd_impl(
+        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output, min_connections);
 }
 
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
@@ -586,7 +690,7 @@ std::string generate_cluster_descriptor_from_fsd(
         {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
     };
 
-    if (ubb_bus_ids.find(arch) == ubb_bus_ids.end()) {
+    if (!ubb_bus_ids.contains(arch)) {
         throw std::runtime_error("No bus ID mapping for architecture: " + arch_str);
     }
     const auto& tray_bus_ids = ubb_bus_ids.at(arch);
@@ -609,7 +713,7 @@ std::string generate_cluster_descriptor_from_fsd(
         TrayId tray_id{board_location.tray_id()};
         for (uint32_t asic_location : asic_locations_on_board) {
             auto key = std::make_tuple(host_id, tray_id, asic_location);
-            if (asic_to_unique_chip_id.find(key) == asic_to_unique_chip_id.end()) {
+            if (!asic_to_unique_chip_id.contains(key)) {
                 asic_to_unique_chip_id[key] = next_unique_chip_id;
                 unique_chip_id_to_asic[next_unique_chip_id] = key;
                 next_unique_chip_id++;

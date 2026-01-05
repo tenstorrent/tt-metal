@@ -4,20 +4,20 @@
 
 // clang-format off
 #include "ckernel.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "risc_common.h"
 #include <tensix.h>
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
-#include "debug/fw_debug.h"
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "internal/debug/fw_debug.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 #if !defined(UCK_CHLKC_MATH)
-#include "circular_buffer.h"
-#include "circular_buffer_init.h"
+#include "internal/circular_buffer_interface.h"
+#include "internal/circular_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
@@ -42,12 +42,19 @@ uint8_t my_relative_y_ __attribute__((used));
 namespace ckernel {
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
-
-volatile tt_reg_ptr uint* reg_base = reinterpret_cast<volatile uint*>(0xFFB10000);
-volatile tt_reg_ptr uint* pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
-volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
-tt_reg_ptr uint* regmem = reinterpret_cast<tt_reg_ptr uint*>(REGFILE_BASE);
-
+// Transition shim
+#if defined(__PTR_CONST)
+#define PTR_CONST const
+#else
+#define PTR_CONST
+#endif
+volatile tt_reg_ptr uint* PTR_CONST reg_base = reinterpret_cast<volatile uint*>(0xFFB10000);
+volatile tt_reg_ptr uint* PTR_CONST pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
+volatile tt_reg_ptr uint* PTR_CONST regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
+#undef PTR_CONST
+#if defined(__INSTRN_BUFFER_TOS)
+volatile tt_reg_ptr uint32_t* const instrn_buffer = reinterpret_cast<volatile uint32_t*>(INSTRN_BUF_BASE);
+#endif
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
 

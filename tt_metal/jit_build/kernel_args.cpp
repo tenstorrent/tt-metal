@@ -38,7 +38,7 @@ void log_kernel_defines_and_args(
     str_replace_all(defines_as_csv, " ", "");
     str_replace_all(defines_as_csv, ",", ", ");
 
-    if (kernel_defines_and_args_.find(out_dir) == kernel_defines_and_args_.end()) {
+    if (!kernel_defines_and_args_.contains(out_dir)) {
         kernel_defines_and_args_[out_dir] = defines_as_csv;
     } else {
         if (kernel_defines_and_args_[out_dir] != defines_as_csv) {

@@ -20,6 +20,9 @@ Description:
 
     This enables other scripts to easily run comprehensive checks across all devices and their
     block locations and RISC cores without needing to depend on multiple separate scripts.
+
+Owner:
+    adjordjevic-TT
 """
 
 from collections.abc import Callable
@@ -27,16 +30,16 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check
+from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check, create_progress
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
-from utils import ORANGE, RST
+import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data"],
+    depends=["inspector_data", "metal_device_id_mapping"],
 )
 
 # List of block types that script returns, can be extended if other block types are needed
@@ -77,26 +80,12 @@ class CheckResult:
 
 @dataclass
 class DeviceDescription:
-    """
-    Wrapper for Device that determines whether to use unique_id for display
-    based on Metal/Exalens ID mismatch.
-    """
-
     device: Device
-    use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
-
-    def __init__(self, device: Device, metal_device_id_mapping: MetalDeviceIdMapping):
-        self.device = device
-        # Check if exalens device._id maps to the same unique_id as device.unique_id
-        inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
-        self.use_unique_id = inspector_unique_id != device.unique_id
+    use_unique_id: bool
 
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
-    if device_desc.use_unique_id:
-        return str(device_desc.device.unique_id)
-    else:
-        return str(device_desc.device._id)
+    return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device._id)
 
 
 @dataclass
@@ -175,20 +164,19 @@ def get_devices(
             metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
 
             if len(metal_device_ids) == 0:
-                print(
-                    f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
+                utils.WARN(
+                    f"  No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache."
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
             else:
                 device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
         else:
-            print(f"  {ORANGE}Using all available devices.{RST}")
+            utils.WARN(f"  Using all available devices.")
             device_ids = [int(id) for id in context.devices.keys()]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
-        metal_device_ids = [int(id) for id in devices]
-        device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
+        device_ids = [int(id) for id in devices]
 
     return [context.devices[id] for id in device_ids]
 
@@ -197,6 +185,12 @@ class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
+        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
+        self._use_unique_id = any(
+            metal_device_id_mapping.has_metal_device_id(device._id)
+            and metal_device_id_mapping.get_unique_id(device._id) != device.unique_id
+            for device in devices
+        )
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices
@@ -229,16 +223,24 @@ class RunChecks:
     def run_per_device_check(self, check: Callable[[Device], object]) -> list[PerDeviceCheckResult] | None:
         """Run a check function on each device, collecting results."""
         result: list[PerDeviceCheckResult] = []
-        for device in self.devices:
-            check_result = check(device)
-            # Use the common result collection helper
-            self._collect_results(
-                result,
-                check_result,
-                PerDeviceCheckResult,
-                device_description=DeviceDescription(device, self.metal_device_id_mapping),
+        with create_progress() as progress:
+            device_task = progress.add_task(
+                "Processing devices", total=len(self.devices), visible=len(self.devices) > 1
             )
-        return result if len(result) > 0 else None
+            try:
+                for device in self.devices:
+                    check_result = check(device)
+                    # Use the common result collection helper
+                    self._collect_results(
+                        result,
+                        check_result,
+                        PerDeviceCheckResult,
+                        device_description=DeviceDescription(device, self._use_unique_id),
+                    )
+                    progress.advance(device_task)
+                return result if len(result) > 0 else None
+            finally:
+                progress.remove_task(device_task)
 
     def run_per_block_check(
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
@@ -251,18 +253,28 @@ class RunChecks:
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            for block_type in block_types_to_check:
-                for location in self.block_locations[device][block_type]:
-                    check_result = check(location)
-                    # Use the common result collection helper
-                    self._collect_results(
-                        result,
-                        check_result,
-                        PerBlockCheckResult,
-                        device_description=DeviceDescription(device, self.metal_device_id_mapping),
-                        location=location,
-                    )
-            return result if len(result) > 0 else None
+            with create_progress() as progress:
+                progress_count = 0
+                for block_type in block_types_to_check:
+                    for location in self.block_locations[device][block_type]:
+                        progress_count += 1
+                device_task = progress.add_task(f"Processing NOC locations", total=progress_count)
+                try:
+                    for block_type in block_types_to_check:
+                        for location in self.block_locations[device][block_type]:
+                            check_result = check(location)
+                            progress.advance(device_task)
+                            # Use the common result collection helper
+                            self._collect_results(
+                                result,
+                                check_result,
+                                PerBlockCheckResult,
+                                device_description=DeviceDescription(device, self._use_unique_id),
+                                location=location,
+                            )
+                    return result if len(result) > 0 else None
+                finally:
+                    progress.remove_task(device_task)
 
         # Reuse the device iteration from run_per_device_check
         return self.run_per_device_check(per_device_blocks_check)
@@ -303,7 +315,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self.metal_device_id_mapping),
+                    device_description=DeviceDescription(location._device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
                 )

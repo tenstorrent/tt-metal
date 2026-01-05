@@ -296,8 +296,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     const uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
-    const uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
-    const uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    const uint32_t stride_h = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.first;
+    const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
 
     if (sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
@@ -306,7 +306,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     }
 
     const bool is_conv_1d_depthwise_conv =
-        is_1d_deptwise_conv(groups, ashape[3], output_channels, filter_w, ashape[2], has_bias);
+        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, filter_w, ashape[1], has_bias);
 
     const bool enable_split_reader =
         is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
@@ -426,7 +426,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         weight_block_w_ntiles,
         out_subblock_w_ntiles);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
+    // For 1D depthwise conv, weight_block_h_ntiles must accommodate inner_dim = act_block_h_ntiles * TILE_HEIGHT *
+    // kernel_w. So weight_block_h_ntiles = act_block_h_ntiles * kernel_w (filter_w).
+    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv ? act_block_h_ntiles * filter_w : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     // writer of conv op partially removes padding on the width
@@ -1176,9 +1178,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     uint32_t reader_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
-                    } else if (
-                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
                     }
                     reader_rt_args.push_back(reader_remaining_tiles_to_push);
@@ -1287,9 +1287,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =
                             activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
-                    } else if (
-                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                     }
                     sender_rt_args.push_back(writer_remaining_tiles_to_push);
@@ -1334,9 +1332,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =
                             activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
-                    } else if (
-                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    } else if (activation_reuse_config.cores_with_non_meaningful_work.contains(core)) {
                         writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                     }
                     receiver_args.push_back(writer_remaining_tiles_to_push);

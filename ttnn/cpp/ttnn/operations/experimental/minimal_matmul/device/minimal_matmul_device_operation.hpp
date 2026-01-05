@@ -24,6 +24,7 @@ struct minimal_matmul_override_variables_t {
     tt::tt_metal::KernelHandle in1_sender_kernels_id;
     tt::tt_metal::KernelHandle in1_receiver_kernels_id;
     bool transpose_core_grid;
+    bool read_local_slice_from_input;
 };
 
 struct MinimalMatmulConfig {

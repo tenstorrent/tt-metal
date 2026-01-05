@@ -4,22 +4,36 @@
 
 #pragma once
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation_types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::transformer::sdpa_windowed::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks sdpa_windowed_multi_core(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& cu_window_seqlens,
-    const Tensor& output_tensor,
-    std::optional<float> scale,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config);
+struct WindowedSDPASharedVariables {
+    tt::tt_metal::KernelHandle reader_kernels_id{};
+    tt::tt_metal::KernelHandle writer_kernels_id{};
+    tt::tt_metal::KernelHandle compute_kernels_id{};
+    tt::tt_metal::CoreCoord grid_size;
+    uint32_t num_cores = 0;
+};
 
-}  // namespace ttnn::operations::transformer::detail
+struct WindowedSDPAProgramFactory {
+    using shared_variables_t = WindowedSDPASharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::transformer::sdpa_windowed::program

@@ -10,11 +10,14 @@ Usage:
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
     stored in global variables from risc firmware and NOC status registers.
+
+Owner:
+    jbaumanTT
 """
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess
+from ttexalens.memory_access import MemoryAccess
 from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -39,7 +42,7 @@ def check_noc_status(
     and stores them in dictionary creating summary of checking process
     """
 
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
 
     fw_elf_path = dispatcher_core_data.firmware_path
     fw_elf = elfs_cache[fw_elf_path]
@@ -50,7 +53,7 @@ def check_noc_status(
     message = f"{risc_name} NOC{noc_id}: "
     passed = True
 
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = MemoryAccess.create(location.noc_block.get_risc_debug(risc_name))
 
     # Skip check when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).

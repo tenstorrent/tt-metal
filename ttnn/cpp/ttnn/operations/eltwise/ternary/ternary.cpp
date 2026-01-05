@@ -14,9 +14,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ternary_composite_op.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace ternary {
+namespace ttnn::operations::ternary {
 
 namespace ternary_utils {
 
@@ -120,7 +118,7 @@ Tensor invoke_impl(
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
-        std::move(condition),
+        condition,
         t_true,
         t_false,
         output_dtype,
@@ -283,6 +281,4 @@ Tensor AddcmulOperation::invoke(
         std::nullopt);
 }
 
-}  // namespace ternary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::ternary

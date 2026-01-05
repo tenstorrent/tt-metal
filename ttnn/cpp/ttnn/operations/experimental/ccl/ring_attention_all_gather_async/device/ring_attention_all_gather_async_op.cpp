@@ -197,9 +197,7 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 namespace {
 
@@ -231,8 +229,8 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
     optional_output_tensors.reserve(persistent_output_buffer.size());
-    for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-        optional_output_tensors.push_back(persistent_output_buffer[i]);
+    for (const auto& buffer : persistent_output_buffer) {
+        optional_output_tensors.push_back(buffer);
     }
 
     return tt::tt_metal::operation::run(
@@ -276,8 +274,6 @@ std::vector<Tensor> ring_attention_all_gather_async(
         sub_device_id);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

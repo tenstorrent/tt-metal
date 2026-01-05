@@ -6,8 +6,9 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "internal/ethernet/tt_eth_api.h"
+#include "internal/ethernet/tunneling.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
@@ -125,15 +126,17 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         acks_received_and_processed(0),
         completions_received_and_processed(0) {}
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         return *acks_received_counter_ptr - acks_received_and_processed;
     }
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         return *completions_received_counter_ptr - completions_received_and_processed;
     }
 
@@ -153,6 +156,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(to_sender_packets_completed_streams[sender_channel_index]) {}
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         return get_ptr_val(to_sender_packets_acked_stream);
     }
@@ -161,6 +165,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
+    template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         return get_ptr_val(to_sender_packets_completed_stream);
     }

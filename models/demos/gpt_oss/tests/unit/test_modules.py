@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
@@ -46,7 +47,7 @@ def run_attention_component(
     hidden_states = torch.randn(hidden_shape)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     reference_attention = reference_layer.self_attn
 
@@ -63,7 +64,7 @@ def run_attention_component(
     tt_out = attention_module(tt_hidden_states, rope_mats, tt_position_idx)
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
+    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.95)
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -81,7 +82,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
         ref_output = reference_rms_norm(hidden_states)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     # TTNN RMSNorm forward
     rms_norm_module = decoder_layer.input_layernorm
@@ -103,7 +104,7 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
     router_scores, router_indices = reference_router(hidden_states)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     # Extract TT TopK router from decoder layer
     tt_router = decoder_layer.mlp.router
@@ -175,7 +176,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     reference_output, routing_scores = reference_model(hidden_states)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     # Create TT MLP using TestFactory setup
     tt_mlp = decoder_layer.mlp
@@ -190,9 +191,10 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
-        (1, 1),
-        (1, 128),
-    ]
+        (1, 1),  # decode
+        (1, 128),  # prefill
+        (1, 4096),  # prefill 4k
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_shape",
@@ -201,11 +203,33 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
         (4, 8),
     ],
 )
-def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
-    """Test complete decoder layer - combines attention + MLP + norms"""
+def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, test_modules, reset_seeds):
+    """
+    Test decoder layer components.
+
+    Args:
+        test_modules: Which modules to test (from --test-modules flag). Options:
+            - "all": Test all components (default)
+            - "attention": Test attention only
+            - "rms_norm": Test RMS normalization only
+            - "router": Test TopK router only (decode mode only)
+            - "mlp": Test full MLP pipeline (router + experts)
+            - "decoder": Test full decoder layer only
+            - Comma-separated: "attention,mlp" or "router,experts" etc.
+
+    Usage:
+        pytest test_modules.py  # runs all tests
+        pytest test_modules.py --test-modules=attention
+        pytest test_modules.py --test-modules=attention,mlp
+    """
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    model_name = getattr(setup["model_args"], "model_name", None)
+
+    if seq_len >= 4096 and model_name == "gpt-oss-20b":
+        pytest.skip("prefill seq_len=4096 currently unsupported for gpt-oss-20b")
+
     config = setup["config"]
 
     # Set attention implementation for transformers compatibility
@@ -245,9 +269,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         layer_idx=0,
         ccl_manager=setup["ccl_manager"],
         dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
+        tensor_cache_path=setup["tensor_cache_path"] / "module_tests_",
     )
 
     # Create input
@@ -258,6 +282,8 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Create attention mask like the working attention test
     mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
+    if reference_layer.attention_type == "sliding_attention":
+        mask += torch.tril(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=-config.sliding_window)
 
     # Handle decode mode for TT model like original
     if seq_len == 1:  # decode
@@ -323,32 +349,59 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Create TTNN tensors for component tests
     tt_hidden_states = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     )
 
-    # Test individual components
-    if seq_len == 1:
-        run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+    # Parse test_modules (supports comma-separated values)
+    modules_to_test = set(test_modules.split(","))
+    run_all = "all" in modules_to_test
 
-    run_attention_component(
-        setup["mesh_device"],
-        hidden_states.shape,
-        mask,
-        position_embeddings_ref,
-        rope_mats,
-        tt_position_idx,
-        reference_layer,
-        decoder_layer,
-    )
+    logger.info(f"Running tests: {test_modules}")
 
-    run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
-    run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
-    # Test full decoder layer integration
-    tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx)
+    # Helper to check if a module should be tested
+    def should_test(module_name):
+        return run_all or module_name in modules_to_test
 
-    # Compare outputs
-    pcc_threshold = 0.927 if seq_len == 1 else 0.88
-    passing, output = run_component_comparison(
-        tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
-    )
-    assert passing, f"Decoder layer test failed. Output: {output}"
+    if should_test("router"):
+        if seq_len == 1:
+            logger.info("Testing TopK Router...")
+            run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+        elif "router" in modules_to_test:
+            pytest.skip("Router test only runs in decode mode (seq_len=1)")
+
+    if should_test("attention"):
+        logger.info("Testing Attention...")
+        run_attention_component(
+            setup["mesh_device"],
+            hidden_states.shape,
+            mask,
+            position_embeddings_ref,
+            rope_mats,
+            tt_position_idx,
+            reference_layer,
+            decoder_layer,
+        )
+
+    if should_test("rms_norm"):
+        logger.info("Testing RMS Norm...")
+        run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+
+    if should_test("mlp"):
+        logger.info("Testing Full MLP Pipeline...")
+        run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+
+    if should_test("decoder"):
+        logger.info("Testing Full Decoder Layer...")
+        # Test full decoder layer integration
+        tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx)
+
+        # Compare outputs
+        pcc_threshold = 0.924 if seq_len == 1 else 0.88
+        passing, output = run_component_comparison(
+            tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
+        )
+        logger.info(f"Decoder layer test: {passing} with output: {output}")
+        assert passing, f"Decoder layer test failed. Output: {output}"
+
+    tested_modules = [m for m in modules_to_test if m != "router" or seq_len == 1]
+    logger.info(f"✓ Tests completed successfully: {', '.join(tested_modules)}")

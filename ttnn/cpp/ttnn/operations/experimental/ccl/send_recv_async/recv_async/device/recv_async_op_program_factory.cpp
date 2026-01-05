@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
 
@@ -29,7 +30,10 @@ RecvAsyncMeshWorkloadFactory::cached_mesh_workload_t RecvAsyncMeshWorkloadFactor
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
+    ttnn::MeshCoordinateRangeSet workload_coords =
+        ttnn::send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
+            tensor_coords, operation_attributes.mesh_socket);
+    for (const auto& coord : workload_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
@@ -352,16 +356,14 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
         const auto& output_tensor = tensor_args.output_tensor;
 
         if (!socket_storage_in_dram) {
-            for (uint32_t core_idx = 0; core_idx < receiver_core_coords.size(); ++core_idx) {
-                const auto& receiver_core_coord = receiver_core_coords[core_idx];
+            for (const auto& receiver_core_coord : receiver_core_coords) {
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
                 writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
                 writer_runtime_args[1] = output_tensor.buffer()->address();
             }
         } else {
-            for (uint32_t core_idx = 0; core_idx < receiver_core_coords.size(); ++core_idx) {
-                const auto& receiver_core_coord = receiver_core_coords[core_idx];
+            for (const auto& receiver_core_coord : receiver_core_coords) {
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, receiver_core_coord);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
