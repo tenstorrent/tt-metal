@@ -21,7 +21,6 @@ class ConvBlockTch(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        # check datatype of weight and input
         x = self.norm(x)
         x = self.conv(x)
         x = self.relu(x)

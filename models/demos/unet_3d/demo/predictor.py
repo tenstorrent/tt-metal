@@ -88,9 +88,6 @@ class Predictor:
                         prediction_array[index] = (pred > 0.5).astype("uint16")
 
             logger.info(f"Finished inference in {time.perf_counter() - start:.2f} seconds")
-            # logger.info(f"Saving labels to: {output_file}")
-            # now transpose whole prediction array
-            # self._create_prediction_dataset(h5_output_file, prediction_array)
 
             result = {}
 

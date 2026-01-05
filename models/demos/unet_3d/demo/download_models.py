@@ -117,7 +117,7 @@ def main() -> None:
     download_file(args.url, checkpoint_path)
     checkpoint_obj = torch.load(checkpoint_path, map_location="cpu")
     state_dict = extract_state_dict(checkpoint_obj)
-    # print shape of each tensor in state_dict
+
     logger.info("Extracted %s tensors from checkpoint:", len(state_dict))
     for key in sorted(state_dict.keys()):
         tensor = state_dict[key]

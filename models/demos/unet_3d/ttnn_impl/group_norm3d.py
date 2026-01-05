@@ -16,7 +16,6 @@ def find_closest_largest_divisor(num: int, start_divisor: int):
     Used to choose a core count that divides a work quota. Assumes
     1 <= start_divisor <= num. Decrements until a divisor is found.
     """
-    # print(f"num: {num}, start_divisor: {start_divisor}")
     divisor = start_divisor
     while num % divisor != 0:
         divisor = divisor - 1
@@ -140,8 +139,6 @@ class GroupNorm3D:
     def load_state_dict(self, device, params_dict: dict[str, torch.Tensor], module_prefix: Optional[str] = None):
         weight_str = f"{module_prefix}.weight" if module_prefix else "weight"
         bias_str = f"{module_prefix}.bias" if module_prefix else "bias"
-        # self.weight_torch = weight_tensor
-        # self.bias_torch = bias_tensor
         weight_tensor_padded = torch.nn.functional.pad(
             params_dict[weight_str], (0, self.channels_padding), "constant", 0
         )

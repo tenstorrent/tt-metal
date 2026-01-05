@@ -59,7 +59,6 @@ class StandardLabelToBoundary:
         results.append(_recover_ignore_index(boundaries, m, self.ignore_index))
 
         if self.append_label:
-            # append original input data
             results.append(m)
 
         return np.stack(results, axis=0)

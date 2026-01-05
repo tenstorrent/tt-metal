@@ -103,7 +103,7 @@ class UNet3D:
         # Bottleneck
         x = self.bottleneck(x, self.device)
 
-        # # Decoder path
+        # Decoder path
         for decoder in self.decoders:
             skip = skip_connections.pop()
             x = decoder(x, skip, self.device)

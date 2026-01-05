@@ -81,8 +81,6 @@ class UNet3DTestInfra:
         )
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=8):
-        ttnn.CoreGrid(y=8, x=8)
-        device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input if torch_input_tensor is None else torch_input_tensor
         n, c, d, h, w = torch_input_tensor.shape
@@ -98,7 +96,6 @@ class UNet3DTestInfra:
             ttnn.CoreGrid(x=8, y=4),
             ttnn.ShardStrategy.HEIGHT,
         )
-        # input_mem_config = self.ttnn_model.initial_mem_config(device, 1, n, d, h, w, c)
         input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
         tt_inputs_host = ttnn.from_host_shards(
             [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
