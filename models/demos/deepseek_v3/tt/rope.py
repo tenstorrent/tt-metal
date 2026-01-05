@@ -175,7 +175,9 @@ class RotarySetup:
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
 
         if seq_len is not None:
-            assert seq_len <= self.hf_config.max_seq_len, "seq_len must be less than or equal to max_seq_len"
+            assert (
+                seq_len <= self.hf_config.max_seq_len
+            ), f"seq_len {seq_len} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
             cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
             sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
 
