@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <ctype.h>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -30,7 +30,7 @@
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "hw/inc/debug/ring_buffer.h"
+#include "api/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -496,9 +496,14 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
             reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
-    string core_type_str = programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? "acteth"
-                           : programmable_core_type == HalProgrammableCoreType::IDLE_ETH ? "idleth"
-                                                                                         : "worker";
+    string core_type_str;
+    if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        core_type_str = "acteth";
+    } else if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
+        core_type_str = "idleth";
+    } else {
+        core_type_str = "worker";
+    }
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_coord.x,
@@ -706,6 +711,14 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
         case dev_msgs::DebugSanitizeL1AddrOverflow:
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (read or write past the end of local memory).";
+            break;
+        case dev_msgs::DebugSanitizeEthDestL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send to core with L1 destination overflow).";
+            break;
+        case dev_msgs::DebugSanitizeEthSrcL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (ethernet send with L1 source overflow).";
             break;
         default:
             error_msg = fmt::format(

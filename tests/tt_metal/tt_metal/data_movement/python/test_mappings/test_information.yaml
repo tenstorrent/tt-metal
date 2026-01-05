@@ -514,3 +514,48 @@ tests:
       has an input and output port. We have a core that is sending and receiving data at the same time,
       with packets circulating around the torus. This does not happen in Read After Write tests because
       the read requests get stuck behind the larger write requests.
+
+  700:
+    name: "NOC API Latency - Unicast Write"
+    comment: |
+      Measures the latency (in cycles) of NOC unicast write API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
+
+  701:
+    name: "NOC API Latency - Unicast Read"
+    comment: |
+      Measures the latency (in cycles) of NOC unicast read API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
+
+  702:
+    name: "NOC API Latency - Stateful Write"
+    comment: |
+      Measures the latency (in cycles) of NOC stateful write API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
+      The state setup is done outside the measurement window.
+
+  703:
+    name: "NOC API Latency - Stateful Read"
+    comment: |
+      Measures the latency (in cycles) of NOC stateful read API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256).
+      The state setup is done outside the measurement window.
+
+  704:
+    name: "NOC API Latency - Multicast Write 2x2"
+    comment: |
+      Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a 2x2 multicast grid.
+
+  705:
+    name: "NOC API Latency - Multicast Write 5x5"
+    comment: |
+      Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a 5x5 multicast grid.
+
+  706:
+    name: "NOC API Latency - Multicast Write All Cores"
+    comment: |
+      Measures the latency (in cycles) of NOC multicast write API calls using experimental dataflow 2.0 API.
+      Tests sweep over transaction sizes (32B-4KB) and number of transactions (1-256) with a multicast grid
+      covering all compute cores in the device.

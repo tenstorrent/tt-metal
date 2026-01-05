@@ -64,7 +64,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
-# prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_pybind.hpp
+# prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)

@@ -6,9 +6,9 @@
  * This kernel writes tiles from the output buffer to interleaved dram.
  */
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 
 void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(0);

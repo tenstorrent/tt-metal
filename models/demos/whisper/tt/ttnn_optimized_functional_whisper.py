@@ -158,26 +158,16 @@ def get_decode_sdpa_configs(config, bsz, device):
     head_size = config.d_model // config.decoder_attention_heads
     padded_num_heads = nearest_32(config.decoder_attention_heads)
 
-    # Q, K, V are batch sharded across cores (currently only supporting batch 1)
-    sdpa_batch_sharded_memcfg = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            grid=ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        # Volume must match batch size
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(0, bsz - 1),
-                    ),
-                }
-            ),
-            shard_shape=[
-                padded_num_heads,
-                head_size,
-            ],
-            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        ),
+    # Q, K, V are batch sharded across cores
+    grid_size = device.compute_with_storage_grid_size()
+    batch_grid = ttnn.num_cores_to_corerangeset(bsz, grid_size, row_wise=True)
+
+    sdpa_batch_sharded_memcfg = ttnn.create_sharded_memory_config(
+        shape=(padded_num_heads, head_size),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -386,26 +376,39 @@ def whisper_attention(
         ttnn.deallocate(hidden_states)
         fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
 
+        fused_qkv = unsqueeze_to_4D_at_dim_1(fused_qkv)
+        (
+            query_states,
+            key_states,
+            value_states,
+        ) = ttnn.experimental.nlp_create_qkv_heads(
+            fused_qkv,
+            num_heads=config.decoder_attention_heads,
+            num_kv_heads=config.decoder_attention_heads,
+            transpose_k_heads=transpose_k_heads,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(fused_qkv)
         if sdpa_with_kv_cache:
-            # Transpose fused_qkv to S, H, B, d
-            fused_qkv = ttnn.transpose(fused_qkv, 0, 2)
-            # Create QKV heads
-            (
-                query_states,  # S, H, B, d
-                key_states,  # S, H, B, d
-                value_states,  # S, H, B, d
-            ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-                fused_qkv,
-                num_heads=config.decoder_attention_heads,
-                num_kv_heads=config.decoder_attention_heads,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
             k_cache = kv_cache[0]  # B, H, MaxS, d
             v_cache = kv_cache[1]  # B, H, MaxS, d
 
             sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config = get_decode_sdpa_configs(
                 config, bsz, hidden_states.device()
             )
+
+            # Transpose from [B, H, S, d] to [S, B, H, d] for SDPA decode operations
+            query_states = ttnn.transpose(query_states, 0, 2)  # [B, H, S, d] -> [S, H, B, d]
+            query_states = ttnn.transpose(query_states, 1, 2)  # [S, H, B, d] -> [S, B, H, d]
+            key_states = ttnn.transpose(key_states, 0, 2)
+            key_states = ttnn.transpose(key_states, 1, 2)
+            value_states = ttnn.transpose(value_states, 0, 2)
+            value_states = ttnn.transpose(value_states, 1, 2)
+
+            # Convert to sharded (required by paged_update_cache and sdpa ops)
+            query_states = ttnn.interleaved_to_sharded(query_states, sdpa_batch_sharded_memcfg)
+            key_states = ttnn.interleaved_to_sharded(key_states, sdpa_batch_sharded_memcfg)
+            value_states = ttnn.interleaved_to_sharded(value_states, sdpa_batch_sharded_memcfg)
 
             # Update KV cache
             ttnn.experimental.paged_update_cache(
@@ -424,23 +427,12 @@ def whisper_attention(
                 program_config=sdpa_decode_progcfg,
                 compute_kernel_config=sdpa_decode_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )  # B, bsz, H, D
-            attn_output = ttnn.reshape(attn_output, (bsz, attn_output.shape[-2], 1, attn_output.shape[-1]))
-        else:
-            # Encoder-attention or no-KV-cache-decoder-attention
-            (
-                query_states,  # B, H, S, d
-                key_states,  # B, H, d, S
-                value_states,  # B, H, S, d
-            ) = ttnn.experimental.nlp_create_qkv_heads(
-                fused_qkv,
-                num_heads=config.decoder_attention_heads,
-                num_kv_heads=config.decoder_attention_heads,
-                transpose_k_heads=transpose_k_heads,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(fused_qkv)
+            )  # [1, B, H, d]
 
+            # Transpose back to [B, H, S, d] format for nlp_concat_heads
+            attn_output = ttnn.transpose(attn_output, 1, 2)  # [1, B, H, d] -> [1, H, B, d]
+            attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
+        else:
             attn_output = functional_sdpa(
                 query_states,
                 key_states,
@@ -455,8 +447,6 @@ def whisper_attention(
             ttnn.deallocate(value_states)
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
-    attn_output = ttnn.squeeze(attn_output, 0)
-
     attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
 
@@ -768,7 +758,6 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
                 dilation=1,
                 groups=1,
                 dtype=ttnn.bfloat16,
-                conv_config=conv1_config,
                 compute_config=conv1_compute_config,
                 return_weights_and_bias=True,
             )

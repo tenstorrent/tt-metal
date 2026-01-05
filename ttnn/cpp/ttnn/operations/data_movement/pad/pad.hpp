@@ -36,7 +36,7 @@ struct ExecutePad {
     // legacy API
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::Array4D& output_shape,
+        const tt::tt_metal::Array4D& output_padded_shape,
         const tt::tt_metal::Array4D& input_tensor_start,
         float value,
         bool use_multicore = false,

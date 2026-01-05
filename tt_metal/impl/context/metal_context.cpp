@@ -8,6 +8,7 @@
 #include <mutex>
 #include <future>
 #include <vector>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -62,6 +63,60 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
         "Worker L1 size {} is larger than max size {}",
         worker_l1_size,
         max_worker_l1_size);
+}
+
+// Construct compute-only distributed context by filtering out switch meshes
+std::shared_ptr<distributed::multihost::DistributedContext> construct_compute_only_distributed_context(
+    MetalContext& metal_context) {
+    const auto& global_context = distributed::multihost::DistributedContext::get_current_world();
+    if (*global_context->size() == 1) {
+        return global_context;
+    }
+
+    // Get all compute mesh IDs (excludes switches) from control plane mesh graph
+    const auto& mesh_graph = metal_context.get_control_plane().get_mesh_graph();
+
+    // If there are no switch meshes, return the global context directly
+    if (mesh_graph.get_switch_ids().empty()) {
+        return global_context;
+    }
+
+    const auto& compute_mesh_ids = mesh_graph.get_mesh_ids();
+
+    // Get global logical bindings to map ranks to mesh IDs
+    const auto& global_logical_bindings = metal_context.get_control_plane().get_global_logical_bindings();
+
+    // Collect all MPI ranks for compute meshes only
+    std::unordered_set<int> compute_mpi_ranks;
+    for (const auto& [rank, mesh_binding] : global_logical_bindings) {
+        const auto& [mesh_id, _] = mesh_binding;
+        // Check if this mesh_id is a compute mesh (not a switch)
+        if (std::find(compute_mesh_ids.begin(), compute_mesh_ids.end(), mesh_id) != compute_mesh_ids.end()) {
+            compute_mpi_ranks.insert(rank.get());
+        }
+    }
+
+    // If no compute meshes found, fall back to host_local_context
+    if (compute_mpi_ranks.empty()) {
+        TT_THROW("No compute meshes found in mesh graph.");
+    }
+
+    // Convert to sorted vector for create_sub_context
+    std::vector<int> compute_ranks_vec(compute_mpi_ranks.begin(), compute_mpi_ranks.end());
+    std::sort(compute_ranks_vec.begin(), compute_ranks_vec.end());
+
+    // Check if current rank is in compute ranks
+    int current_rank = *global_context->rank();
+    bool is_current_rank_in_compute =
+        std::find(compute_ranks_vec.begin(), compute_ranks_vec.end(), current_rank) != compute_ranks_vec.end();
+
+    // If current rank is not in compute ranks (e.g., host only has switches), return host_local_context
+    if (!is_current_rank_in_compute) {
+        return metal_context.get_control_plane().get_host_local_context();
+    }
+
+    // Create sub-context with only compute mesh ranks
+    return global_context->create_sub_context(compute_ranks_vec);
 }
 
 }  // namespace
@@ -146,6 +201,9 @@ void MetalContext::initialize(
     inspector_data_ = Inspector::initialize();
     // Set fw_compile_hash for Inspector RPC build environment info
     Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
+
+    // Reset timeout detection state
+    dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
@@ -241,7 +299,9 @@ void MetalContext::initialize(
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    cluster_->set_internal_routing_info_for_ethernet_cores(true);
+    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        cluster_->set_internal_routing_info_for_ethernet_cores(true);
+    }
 
     // Initialize debug tools, reset cores, init FW
     if (dprint_server_) {
@@ -423,9 +483,21 @@ MetalContext::MetalContext() {
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
-distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
+}
+
+const distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+    // If control plane is not initilazed, return the global distributed context
+    if (!control_plane_) {
+        return *distributed_context_;
+    }
+    // Lazy initilazation of compute only distributed context
+    if (!compute_only_distributed_context_) {
+        compute_only_distributed_context_ = construct_compute_only_distributed_context(*this);
+    }
+    return *compute_only_distributed_context_;
 }
 
 std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {
@@ -546,9 +618,15 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
     };
 
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
 
@@ -608,7 +686,8 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config,
-    tt_fabric::FabricUDMMode fabric_udm_mode) {
+    tt_fabric::FabricUDMMode fabric_udm_mode,
+    tt_fabric::FabricManagerMode fabric_manager) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -665,6 +744,7 @@ void MetalContext::set_fabric_config(
     // Set the fabric tensix config
     this->set_fabric_tensix_config(fabric_tensix_config);
     this->fabric_udm_mode_ = fabric_udm_mode;
+    this->fabric_manager_ = fabric_manager;
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -705,6 +785,8 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
+
+tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
@@ -777,40 +859,41 @@ void MetalContext::reset_cores(ChipId device_id) {
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
-    // Active ethernet
-    if (hal_->get_eth_fw_is_cooperative()) {
-        for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-            CoreCoord virtual_core =
-                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            if (erisc_app_still_running(device_id, virtual_core)) {
-                log_info(
-                    tt::LogMetal,
-                    "While initializing device {}, active ethernet dispatch core {} detected as still "
-                    "running, issuing exit signal.",
-                    device_id,
-                    virtual_core.str());
-                erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
-                device_to_early_exit_cores[device_id].insert(virtual_core);
+    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Active ethernet
+        if (hal_->get_eth_fw_is_cooperative()) {
+            for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                CoreCoord virtual_core =
+                    cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                if (erisc_app_still_running(device_id, virtual_core)) {
+                    log_info(
+                        tt::LogMetal,
+                        "While initializing device {}, active ethernet dispatch core {} detected as still "
+                        "running, issuing exit signal.",
+                        device_id,
+                        virtual_core.str());
+                    erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
+                    device_to_early_exit_cores[device_id].insert(virtual_core);
+                }
             }
-        }
-    } else {
-        for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-            // Ensure exit to base firmware. Send this before assertion subordinate cores otherwise if we stop the
-            // subordinates we could hang waiting for subordinates to finish
-            CoreCoord virtual_core =
-                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            if (rtoptions_.get_enable_2_erisc_mode()) {
-                erisc_send_exit_signal(
-                    device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
-                llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+        } else {
+            for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                // Ensure exit to base firmware. Send this before assertion subordinate cores otherwise if we stop the
+                // subordinates we could hang waiting for subordinates to finish
+                CoreCoord virtual_core =
+                    cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                if (rtoptions_.get_enable_2_erisc_mode()) {
+                    erisc_send_exit_signal(
+                        device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
+                    llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+                }
+                // Only send reset to subordinate cores
+                // Assert all cores except ERISC0, which is running base firmware.
+                tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
             }
-            // Only send reset to subordinate cores
-            // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-            cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
         }
     }
-
     // Early exiting dispatch cores should show RUN_MSG_DONE when they exit.
     for (auto& id_and_cores : device_to_early_exit_cores) {
         const int timeout_ms = 10000;  // 10 seconds for now
@@ -838,13 +921,15 @@ void MetalContext::reset_cores(ChipId device_id) {
         }
     }
 
-    // Reset idle ethernet cores
-    for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        CoreCoord virtual_core =
-            cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+    if (has_flag(
+            tt::tt_metal::MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Reset idle ethernet cores
+        for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+            cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        }
     }
-
     cluster_->l1_barrier(device_id);
 }
 
@@ -963,8 +1048,8 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     l1_bank_to_noc_xy_[device_id].clear();
     l1_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
-        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
-            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, l1_noc_coord_per_bank[bank_id]);
+        for (const auto& noc_coord : l1_noc_coord_per_bank) {
+            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
             uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
@@ -1188,6 +1273,9 @@ void MetalContext::initialize_firmware(
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
+            if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+                break;
+            }
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
             tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
@@ -1283,11 +1371,13 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
-    core_info.core_magic_number() = programmable_core_type == HalProgrammableCoreType::TENSIX
-                                        ? dev_msgs::CoreMagicNumber::WORKER
-                                        : (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH
-                                               ? dev_msgs::CoreMagicNumber::ACTIVE_ETH
-                                               : dev_msgs::CoreMagicNumber::IDLE_ETH);
+    if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::WORKER;
+    } else if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::ACTIVE_ETH;
+    } else {
+        core_info.core_magic_number() = dev_msgs::CoreMagicNumber::IDLE_ETH;
+    }
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0);
     // There are multiple NoC endpoints for DRAM, but not all are exposed through the API. Watcher will flag endpoints
     // that are not exposed as invalid transactions. This helps to avoid BH issue highlighted by SYS-592 where writing
@@ -1410,11 +1500,14 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
         // Harvested rows/cols in the virtual space are placed at the end of the worker grid,
         if (hal_->is_coordinate_virtualization_enabled() and idx < harvested_axis_coord.size()) {
             // On BH virtual coordinates are not contiguous
-            uint32_t end_virtual_grid = hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW
-                                            ? hal_->get_virtual_worker_start_y() + logical_grid_size.y
-                                        : (cluster_->arch() == ARCH::BLACKHOLE)
-                                            ? max_along_axis - 1
-                                            : hal_->get_virtual_worker_start_x() + logical_grid_size.x;
+            uint32_t end_virtual_grid;
+            if (hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
+                end_virtual_grid = hal_->get_virtual_worker_start_y() + logical_grid_size.y;
+            } else if (cluster_->arch() == ARCH::BLACKHOLE) {
+                end_virtual_grid = max_along_axis - 1;
+            } else {
+                end_virtual_grid = hal_->get_virtual_worker_start_x() + logical_grid_size.x;
+            }
 
             // BH translated tensix cores are same as noc0 physical
             core_info.virtual_harvested_coords()[idx] = end_virtual_grid + harvested_axis_coord.size() - (idx + 1);
@@ -1629,6 +1722,33 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
 
     CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+}
+
+void MetalContext::on_dispatch_timeout_detected() {
+    std::lock_guard<std::mutex> lock(dispatch_timeout_detection_mutex_);
+
+    if (!dispatch_timeout_detection_processed_) {
+        dispatch_timeout_detection_processed_ = true;
+        log_error(tt::LogMetal, "Timeout detected");
+        // Serialize Inspector RPC data if enabled
+        if (rtoptions_.get_serialize_inspector_on_dispatch_timeout()) {
+            log_info(tt::LogMetal, "Serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+        }
+
+        // Execute command if specified (mostly used to call tt-triage when a timeout occurs)
+        std::string command = rtoptions_.get_dispatch_timeout_command_to_execute();
+        if (!command.empty()) {
+            log_info(tt::LogMetal, "Executing command: {}", command);
+
+            int result = std::system(command.c_str());
+
+            if (result != 0) {
+                log_warning(
+                    tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

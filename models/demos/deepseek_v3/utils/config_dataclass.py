@@ -343,3 +343,15 @@ class SparseMatmulConfig(OpConfigBase):
     output_tile: ttnn.Tile | None = None
     sparsity: ttnn.Tensor | None = None
     nnz: int | None = None
+
+
+@dataclass
+class KvCacheConfig(OpConfigBase):
+    """Common parameters for a kv cache.
+    Attributes:
+        The expected ordering is:
+        (num_blocks, num_heads = 1, block_size, kvpe_dim)
+    """
+
+    kv_cache_shape: tuple[int, int, int, int]
+    dtype: ttnn.DataType | None = None

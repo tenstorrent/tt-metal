@@ -39,25 +39,6 @@ std::string get_binary_doc_string(
         input_a,
         input_b);
 }
-
-std::string get_unary_doc_string(
-    std::string_view op_name, std::string_view input, fmt::format_string<std::string_view&> op_desc) {
-    return fmt::format(
-        R"doc(
-        {0}
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "{1}", "Tensor {2} is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes")doc",
-        fmt::format(op_desc, input),
-        input,
-        op_name);
-}
 }  // namespace
 
 namespace ttnn::operations::data_movement::detail {
@@ -83,24 +64,18 @@ void bind_copy(nb::module_& mod) {
 }
 
 void bind_assign(nb::module_& mod) {
-    auto doc = get_unary_doc_string(
-        "assign", "input", R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.
+    const auto* doc =
+        R"doc(
+    Returns a new tensor which is a new copy of input tensor. Alternatively, copies input tensor ``input_a`` to ``input_b`` if their shapes and memory layouts match, and returns input_b tensor.
 
+    Input tensor must have BFLOAT16 data type.
+    Output tensor will have BFLOAT16 data type.
 
-    Alternatively, copies input tensor ``input_a`` to ``input_b`` if their
-    shapes and memory layouts match, and returns input_b tensor.
+    Args:
+        input_tensor_a (ttnn.Tensor): Tensor assign is applied to. Tensor of shape [W, Z, Y, X].
+        input_tensor_b (ttnn.Tensor): Input tensor. Tensor of shape [W, Z, Y, X]. Only if performing assign to from tensor_a.
 
-    Input tensors can be of any data type.
-
-    Output tensor will be of same data type as Input tensor.
-
-    .. csv-table::
-        :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-        "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-        "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-
-    )doc");
+    )doc";
 
     bind_registered_operation(
         mod,

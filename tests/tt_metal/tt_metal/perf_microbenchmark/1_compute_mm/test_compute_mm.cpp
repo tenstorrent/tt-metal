@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
@@ -1516,8 +1516,8 @@ bool validation_single_core(
 
     std::vector<float> result_vec;
     result_vec.reserve(result_untilized.size());
-    for (int i = 0; i < result_untilized.size(); ++i) {
-        result_vec.push_back(to_float(static_cast<bfloat16>(result_untilized[i])));
+    for (auto val : result_untilized) {
+        result_vec.push_back(to_float(static_cast<bfloat16>(val)));
     }
 
     // for (int i=0; i<result_vec.size(); ++i) {
