@@ -12,9 +12,9 @@ The standard matrix multiplication algorithm transforms two input matrices into 
 Basic Algorithm
 ---------------
 
-Given two matrices A of shape (M, K) and B of shape (K, N), the resulting matrix C will have shape (M, N).
+Given two matrices ``A`` of shape ``MxK`` and ``B`` of shape ``KxN``, the resulting matrix ``C`` will have shape ``MxN``.
 The classical matrix multiplication algorithm can be expressed using a triple-nested loop structure,
-where each element of the resulting matrix is computed as the dot product of the corresponding row of A and the corresponding column of B:
+where each element of the resulting matrix is computed as the dot product of the corresponding row of ``A`` and the corresponding column of ``B``:
 
 .. code-block:: cpp
 
@@ -38,21 +38,23 @@ However, we often need to represent data with more dimensions, such as two-dimen
 In C++, two-dimensional arrays are usually stored in memory using **row-major order**.
 This means that elements of each row are stored contiguously in memory, with rows placed one after another.
 
-Consider a 3x4 matrix::
+Consider a ``3x4`` matrix ``A``:
 
-   Matrix A:
-   [a00  a01  a02  a03]
-   [a10  a11  a12  a13]
-   [a20  a21  a22  a23]
+.. figure:: images/a_matrix_3x4.jpg
+   :width: 400
+   :alt: A 3x4 matrix A
+   :align: center
 
-In row-major layout, this matrix is stored in memory as::
+Using row-major layout, this matrix is stored in memory as::
 
-   Memory: [a00][a01][a02][a03][a10][a11][a12][a13][a20][a21][a22][a23]
-           └───── row 0 ─────┘ └───── row 1 ─────┘  └───── row 2 ─────┘
+.. figure:: images/matrix_3x4_row_major.jpg
+   :width: 1200
+   :alt: A 3x4 matrix A in row-major layout
+   :align: center
 
-When accessing element ``A[i][j]`` in a matrix with ``n`` columns, the memory address is calculated as::
+When accessing element ``A[i][j]`` in a matrix with ``N`` columns, the memory address is calculated as::
 
-   address = base_address + (i * n + j) * sizeof(element)
+   ``address = base_address + (i * N + j) * sizeof(element)``
 
 Cache-Friendly Access Patterns
 ------------------------------
@@ -68,8 +70,8 @@ Conversely, accessing matrix elements column-by-column is cache-unfriendly becau
 
 In the standard matrix multiplication algorithm ``C = A * B``, where C[i][j] = ∑ₖ A[i][k] * B[k][j], and assuming ``i``, ``j``, ``k`` loop order:
 
-* Accessing matrix **A** is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
-* Accessing matrix **B** is not cache-friendly because memory accesses skip whole matrix rows for two consecutive values of ``k``.
+* Accessing matrix ``A`` is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
+* Accessing matrix ``B`` is not cache-friendly because memory accesses skip a whole matrix row for two consecutive values of ``k``.
 
 This asymmetry significantly impacts performance and motivates various optimization techniques such as loop reordering or tiling.
 
@@ -236,21 +238,21 @@ Tile-Based Architecture
 -----------------------
 
 The Tenstorrent architecture is a tile-based architecture.
-This means that the data is processed in tiles, which are commonly 32x32 blocks of data.
+This means that the data is processed in tiles, which are commonly ``32x32`` blocks of data.
 Similar to vector architectures, which can perform an operation on one or more vectors of data using a single instruction,
 a Tensix core can perform matrix operations on one or more tiles in one instruction.
-For example, a Tensix core can perform a matrix multiplication on two tiles each having 32x32 elements and produce a 32x32 result tile in one instruction.
+For example, a Tensix core can perform a matrix multiplication on two tiles each having ``32x32`` elements and produce a ``32x32`` result tile in one instruction.
 
 Memory Layout and Tiling
 ========================
 
-Most applications deal with data that is larger than a single 32x32 tile, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
+Most applications deal with data that is larger than a single ``32x32`` tile, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
 In the previous exercise you performed loop tiling, which changed memory access pattern without changing the underlying data layout,
 which was still stored in row-major order.
 An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
 This **tiled memory layout** is the main memory layout used by the Tenstorrent architecture.
 
-Consider an example 9x4 matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
+Consider an example ``9x4`` matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
 
 .. figure:: images/row_major_layout.png
    :width: 600
@@ -259,9 +261,9 @@ Consider an example 9x4 matrix. In row-major layout, this matrix is stored in me
 
    Figure 2: Row-major layout of a 9x4 matrix
 
-Numbers in the matrix indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.
+Numbers in the matrix in Figure 2indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.
 
-In tiled memory layout with tile size 3x2, this matrix is stored in memory as shown in Figure 3:
+In tiled memory layout with tile size ``3x2``, this matrix is stored in memory as shown in Figure 3:
 
 .. figure:: images/tiled_layout.png
    :width: 600
@@ -271,7 +273,7 @@ In tiled memory layout with tile size 3x2, this matrix is stored in memory as sh
    Figure 3: Tiled layout of a 9x4 matrix
 
 
-Once again, the numbers in the matrix indicate memory addresses that the corresponding element is stored at.
+Once again, numbers in the matrix in Figure 3 indicate memory addresses that the corresponding elements are stored at.
 Observe that all elements of a tile are stored contiguously in memory. In this tiled layout there are two "second-order" row-major orderings:
 
 1. Elements within each tile are stored in row-major order.
@@ -339,7 +341,7 @@ launch is key to reasoning about performance, correctness, and why the APIs are 
 Example TT-Metalium Program
 ===========================
 
-We will now present a simple example TT-Metalium program that performs an elementwise addition of two tensors of shape MxN.
+We will now present a simple example TT-Metalium program that performs an elementwise addition of two tensors of shape ``MxN``.
 This program will be used to illustrate the TT-Metalium programming model, different types of kernels, and how they map to the underlying architecture.
 Key points will be highlighted in this text. Detailed comments are provided in the C++ code to help with code understanding.
 
@@ -438,7 +440,7 @@ The function `eltwise_add_tensix` creates and configures the kernels that will b
 At a high-level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
 one compute kernel, and three circular buffers to pass data between the kernels, and then triggers kernel execution on the device.
 
-The function creates three Tensor objects of shape MxN using the tile layout described earlier.
+The function creates three Tensor objects of shape ``MxN`` using the tile layout described earlier.
 These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
 The input tensors are created and initialized by transferring the data from the host to the device in one step using `Tensor::from_vector`.
 The vectors passed to `Tensor::from_vector` are the same input vectors that were used for the reference computation.
@@ -989,19 +991,19 @@ Consider the concrete example shown in Figure 6.
 
    Figure 6: Tiled Matrix Multiplication Example
 
-Figure 6 shows an example where A is a 9x4 matrix, and B is a 4x6 matrix. If we choose 3x2 tiles for matrix A, we
-can divide A into six tiles A0 through A5, each of shape 3x2. The figure shows labeling of the tiles in row-major order, which is exactly how tiled layout
-works on the Tenstorrent architecture. We can similarly divide B into four tiles B0 through B3, each of shape 2x3 (note that the number of rows in B's tiles must match
-the number of columns in A's tiles).
-The output matrix C is 9x6 and based on chosen tile shapes for A and B must be tiled such that C's tiles have the same number of rows as A's tiles
-and the same number of columns as B's tiles.
-Each C tile is computed by summing products of one tile row of A with one tile column of B, exactly like scalar matrix multiplication,
-but with tiles instead of individual numbers. For instance, tile C0 corresponds to tile row 0 of A and tile column 0 of B, and therefore
+Figure 6 shows an example where ``A`` is a ``9x4`` matrix, and ``B`` is a ``4x6`` matrix. If we choose ``3x2`` tiles for matrix ``A``, we
+can divide ``A`` into six tiles ``A0`` through ``A5``, each of shape ``3x2``. The figure shows labeling of the tiles in row-major order, which is exactly how tiled layout
+works on the Tenstorrent architecture. We can similarly divide ``B`` into four tiles ``B0`` through ``B3``, each of shape ``2x3`` (note that the number of rows in ``B``'s tiles must match
+the number of columns in ``A``'s tiles).
+The output matrix ``C`` is ``9x6`` and based on chosen tile shapes for ``A`` and ``B`` must be tiled such that ``C``'s tiles have the same number of rows as ``A``'s tiles
+and the same number of columns as ``B``'s tiles.
+Each ``C`` tile is computed by summing products of one tile row of ``A`` with one tile column of ``B``, exactly like scalar matrix multiplication,
+but with tiles instead of individual numbers. For instance, tile ``C0`` corresponds to tile row 0 of ``A`` and tile column 0 of ``B``, and therefore
 
-C0 = A0 * B0 + A1 * B2,
+``C0`` = ``A0`` * ``B0`` + ``A1`` * ``B2``,
 
-where each * is an inner 3x2 by 2x3 matrix multiplication producing a 3x3 tile that is accumulated into C0.
-We can summarize computations for all C tiles in a table as follows:
+where each * is an inner ``3x2`` by ``2x3`` matrix multiplication producing a ``3x3`` tile that is accumulated into ``C0``.
+We can summarize computations for all ``C`` tiles in a table as follows:
 
 +-----------+--------+--------+-----------+--------+--------+
 | Computing | From A | From B |   ``+``   | From A | From B |
@@ -1050,16 +1052,16 @@ Further splitting each row so that only one multiplication is performed in each 
 +-----------+--------+--------+
 
 
-From this table we can observe that if we compute the C tiles in row-major order (C0, C1, C2, ..., C5),
-we will visit tiles of A and B in a regular pattern, visiting one row of tiles of A with all columns of tiles of B.
-For example, to compute C0 and C1 we start with row of tiles A0, A1 while cycling through columns of tiles B0, B2 followed by B1, B3.
-From this viewpoint, we can think of A0, A1, ..., A5 as the "elements" of a 3x2 tile matrix, B0, ..., B3 as the "elements" of a 2x2 tile matrix,
-and C0, ..., C5 as the "elements" of a 3x2 tile matrix.
-The computation of C from A and B then follows the standard non-tiled matrix multiplication algorithm,
+From this table we can observe that if we compute the ``C`` tiles in row-major order (``C0``, ``C1``, ``C2``, ..., ``C5``),
+we will visit tiles of ``A`` and ``B`` in a regular pattern, visiting one row of tiles of ``A`` with all columns of tiles of ``B``.
+For example, to compute ``C0`` and ``C1`` we start with row of tiles ``A0``, ``A1`` while cycling through columns of tiles ``B0``, ``B2`` followed by ``B1``, ``B3``.
+From this viewpoint, we can think of ``A0``, ``A1``, ..., ``A5`` as the "elements" of a ``3x2`` tile matrix, ``B0``, ..., ``B3`` as the "elements" of a ``2x2`` tile matrix,
+and ``C0``, ..., ``C5`` as the "elements" of a ``3x2`` tile matrix.
+The computation of ``C`` from ``A`` and ``B`` then follows the standard non-tiled matrix multiplication algorithm,
 except that each "element" is itself a 2D tile, and each element-wise multiply is a smaller matrix multiplication.
 
 This view fits neatly into the Tenstorrent architecture, where each Tensix core can perform matrix multiplication on two tiles in a single instruction.
-All that needs to be done is to present the tiles of A and B to the matrix engine in the correct order, and accumulate results into the correct output tile.
+All that needs to be done is to present the tiles of ``A`` and ``B`` to the matrix engine in the correct order, and accumulate results into the correct output tile.
 
 Exercise 7: Implementing Matrix Multiplication in TT-Metalium
 =============================================================
