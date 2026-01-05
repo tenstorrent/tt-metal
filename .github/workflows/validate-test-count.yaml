@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies for test collection
         run: |
-          pip install pytest multiprocess psutil
+          pip install pytest multiprocess psutil loguru
           # Install common dependencies that tests might import
           pip install torch numpy || true
           
