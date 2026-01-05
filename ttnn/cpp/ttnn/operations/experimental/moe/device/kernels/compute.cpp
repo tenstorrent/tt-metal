@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/common.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -18,5 +19,16 @@ void MAIN {
     // CB Aliases
     constexpr auto cb_r2c_w1 = tt::CBIndex::c_0;
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
+
+    // Constants for MoE
+    constexpr uint32_t num_w0_tiles = 224;
+    constexpr uint32_t num_w1_tiles = 224;
+    constexpr uint32_t num_w2_tiles = 224;
+
+    // Read W0 from CB into registers
+    for (uint32_t i = 0; i < num_w0_tiles; ++i) {
+        cb_wait_front(cb_r2c_w0, 1);
+        cb_pop_front(cb_r2c_w0, 1);
+    }
 }
 }  // namespace NAMESPACE
