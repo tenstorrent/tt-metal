@@ -80,6 +80,7 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
 }
 
 inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+<<<<<<< HEAD
     // Compute grid area and initial blocks-per-core using integer math.
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
 
@@ -98,6 +99,26 @@ inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t w
 inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreRangeSet& grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
+=======
+    // Compute grid area and initial blocks-per-core using integer math.
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+
+    // Find the closest square larger than nblocks_per_core
+    auto [adjusted_nblocks_per_core, single_block_size] =
+        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
+    nblocks_per_core = adjusted_nblocks_per_core;
+
+    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
+    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    return NcoresWH{ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size};
+}
+
+inline BlockSplitWH split_blocks_for_tilize_wh(
+    CoreRangeSet& grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    // Compute grid area and initial blocks-per-core using integer math.
+>>>>>>> main
     const uint32_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
     auto [ncores, nblocks_per_core, total_blocks_width, total_blocks_height, single_block_size] =
