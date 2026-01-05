@@ -33,6 +33,11 @@ def run_activation_unary_test(device, h, w, ttnn_function, pcc=0.99):
 def test_hardtanh(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.hardtanh)
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_hardtanh2(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.hardtanh)
+
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
