@@ -68,7 +68,7 @@ jobs:
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.ref }}
-          fetch-depth: ${{ startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/') && 1 || 500 }}
+          fetch-depth: ${{ (startsWith(inputs.ref || github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
 
       # Python for driving the build; not the version the wheel targets
