@@ -940,19 +940,14 @@ class TtModelArgs:
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
-            def w2_prg_config(seq_len):
-                if seq_len == 128:
-                    return self.matmul_1d_config(
-                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
-                    )
-                # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
-                if seq_len < 4096:
+            def w2_prg_config(seq_len, batch_size):
+                if must_use_default_matmul(seq_len, batch_size):
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_M=math.ceil(seq_len / self.tile_size / 8),  # M / TILE_HEIGHT / grid height
                         per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
@@ -2726,6 +2721,16 @@ class TtModelArgs:
                     logger.warning(f"Falling back to base model encoding with no chat template")
 
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+
+
+def must_use_default_matmul(seq_len, batch_size):
+    # For shorter sequence lengths use the default matmul since it performs better than the minimal matmul
+    # We also have to couple this decision to batched prefill since
+    # minimal matmul and reduce scatter produce different outputs for same input rows
+    # and for batched prefill to produce the same output as non-batched prefill
+    # https://github.com/tenstorrent/tt-metal/issues/35167
+    # https://github.com/tenstorrent/tt-metal/issues/35087
+    return seq_len < 4096 or batch_size > 1
 
 
 def num_to_corerange(x):

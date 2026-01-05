@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.llama3_70b_galaxy.tt.model_config import must_use_default_matmul
 
 
 class TtLlamaAttention(LightweightModule):
@@ -806,8 +807,7 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if must_use_default_matmul(seq_len, batch_size):
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 self.wo_interleaved,

@@ -7,6 +7,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
+from models.demos.llama3_70b_galaxy.tt.model_config import must_use_default_matmul
+
 
 def pad_to_next_multiple(tensor):
     # Get the current size of the last two dimensions
@@ -204,7 +206,7 @@ class TtLlamaMLP(LightweightModule):
         seq_len = x.shape[-2]
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
-        short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
+        short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len, batch_size)
 
         minimal_pc_1_3 = self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"](seq_len)
         minimal_pc_2 = self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"](seq_len)
@@ -212,8 +214,7 @@ class TtLlamaMLP(LightweightModule):
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if must_use_default_matmul(seq_len, batch_size):
             w1_out = ttnn.linear(
                 x,
                 self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -246,8 +247,7 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if must_use_default_matmul(seq_len, batch_size):
             w3_out = ttnn.linear(
                 x,
                 self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -291,8 +291,7 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        if must_use_default_matmul(seq_len, batch_size):
             w2_out = ttnn.linear(
                 w2_in_gathered,
                 self.w2_interleaved,
