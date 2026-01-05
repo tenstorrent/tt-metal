@@ -27,14 +27,13 @@ autograd::TensorPtr reduce_scatter(const autograd::TensorPtr& tensor, int dim, s
 autograd::TensorPtr scatter(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis) {
     auto* device = &autograd::ctx().get_device();
     auto mesh_shape = device->shape();
-    uint32_t tp_size = cluster_axis.has_value() ? mesh_shape[cluster_axis.value()] 
-                                                 : static_cast<uint32_t>(device->num_devices());
-    
+    uint32_t tp_size =
+        cluster_axis.has_value() ? mesh_shape[cluster_axis.value()] : static_cast<uint32_t>(device->num_devices());
 
     auto scattered = ttnn_fixed::distributed::reduce_scatter(tensor->get_value(), dim, cluster_axis);
     /* average across TP as input is assumed to be replicated across TP axis*/
     auto out = autograd::create_tensor(ttnn::multiply(scattered, 1.F / static_cast<float>(tp_size)));
-    
+
     /* input is replicated across TP axis, so d(nx/n) / dx = dx / dx = 1 for i=0,1,...,n and 0 otherwise */
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis]() {
         tensor->add_grad(ttnn_fixed::distributed::all_gather(out->get_grad(), dim, cluster_axis));
@@ -46,7 +45,7 @@ autograd::TensorPtr scatter(const autograd::TensorPtr& tensor, int dim, std::opt
 
 autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim, std::optional<uint32_t> cluster_axis) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::all_gather(tensor->get_value(), dim, cluster_axis));
-        
+
     autograd::GradFunction grad = [tensor, out, dim, cluster_axis]() {
         if (out->is_grad_initialized()) {
             tensor->add_grad(ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis));

@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
             const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
             auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
                 data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
-                
+
             auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
                 targets, ttnn::Shape{batch_size, 1, 1, num_targets}, device, ttnn::Layout::TILE, mapper.get()));
 
