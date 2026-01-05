@@ -80,12 +80,8 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
 
     auto assert_dram_usage = [](const auto& dram_usage, size_t expected_size, size_t expected_peak_size) {
-        EXPECT_FALSE(dram_usage.peak.empty());
-        EXPECT_FALSE(dram_usage.current.empty());
-        for (const auto& [dev_id, peak] : dram_usage.peak) {
-            EXPECT_EQ(peak, expected_peak_size);
-            EXPECT_EQ(dram_usage.current.at(dev_id), expected_size);
-        }
+        EXPECT_EQ(dram_usage.peak, expected_peak_size);
+        EXPECT_EQ(dram_usage.current, expected_size);
     };
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 
@@ -175,20 +171,12 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     expected_size = expected_peak_size - 983040;  // Some intermediates are deallocated
 
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
-    EXPECT_FALSE(dram_usage.peak.empty());
-    EXPECT_FALSE(dram_usage.current.empty());
-    for (const auto& [dev_id, peak] : dram_usage.peak) {
-        EXPECT_EQ(peak, expected_peak_size);
-        EXPECT_EQ(dram_usage.current[dev_id], expected_size);
-    }
+    EXPECT_EQ(dram_usage.peak, expected_peak_size);
+    EXPECT_EQ(dram_usage.current, expected_size);
 
     auto l1_usage = ttml::utils::MemoryUsageTracker::get_L1_usage();
-    EXPECT_FALSE(l1_usage.peak_cb.empty());
-    EXPECT_FALSE(l1_usage.current.empty());
-    for (const auto& [dev_id, current] : l1_usage.current) {
-        EXPECT_EQ(current, 0);
-        EXPECT_EQ(l1_usage.peak_buffer[dev_id], 0);
-    }
+    EXPECT_EQ(l1_usage.current, 0);
+    EXPECT_EQ(l1_usage.peak_buffer, 0);
 }
 
 TEST_F(MemoryUtilsTest, L1Usage) {
@@ -226,29 +214,21 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_L1_usage();
 
         // DRAM usage should be 0 since we're using L1 tensors
-        for (const auto& [dev_id, current] : dram_usage.current) {
-            // TODO: verify that 12288 comes from program cache
-            EXPECT_EQ(current, 12288);
-        }
+        // TODO: verify that 12288 comes from program cache
+        EXPECT_EQ(dram_usage.current, 12288);
 
         // num_cores = 64 (256 * 256 / (32 * 32))
         // peak_cb = tile_size * sizeof(bfloat16) * num_cores * n_cb (cb0, cb1, cb_out)
         size_t expected_peak_cb = 2048 * 2 * 64 * 3;
-        for (const auto& [dev_id, peak_cb] : l1_usage.peak_cb) {
-            EXPECT_EQ(peak_cb, expected_peak_cb);
-        }
+        EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
 
         // current L1 should be zero after operation completes
         size_t expected_current = add_result_size;
-        for (const auto& [dev_id, current] : l1_usage.current) {
-            EXPECT_EQ(current, expected_current);
-        }
+        EXPECT_EQ(l1_usage.current, expected_current);
 
         // peak_buffer should be volume of tensors (one result tensor in L1)
         size_t expected_peak_buffer = expected_current;
-        for (const auto& [dev_id, peak_buffer] : l1_usage.peak_buffer) {
-            EXPECT_EQ(peak_buffer, expected_peak_buffer);
-        }
+        EXPECT_EQ(l1_usage.peak_buffer, expected_peak_buffer);
     }
 
     // Second capture: two 128x128 tensors added
@@ -271,27 +251,19 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_L1_usage();
 
         // DRAM usage should be 0 since we're using L1 tensors
-        for (const auto& [dev_id, current] : dram_usage.current) {
-            EXPECT_EQ(current, 0);
-        }
+        EXPECT_EQ(dram_usage.current, 0);
 
         // num_cores = 16 (128 * 128 / (32 * 32))
         // peak_cb = tile_size * sizeof(bfloat16) * num_cores * n_cb (cb0, cb1, cb_out)
-        size_t expected_peak_cb = 2048 * 2 * 16 * 3;
-        for (const auto& [dev_id, peak_cb] : l1_usage.peak_cb) {
-            EXPECT_EQ(peak_cb, expected_peak_cb);
-        }
+        size_t expected_peak_cb = 0;  // CBs are not allocated since we have cache hit
+        EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
 
         // peak_buffer should be volume of tensors (one result tensor in L1)
         size_t expected_peak_buffer = add_result_size;
-        for (const auto& [dev_id, peak_buffer] : l1_usage.peak_buffer) {
-            EXPECT_EQ(peak_buffer, expected_peak_buffer);
-        }
+        EXPECT_EQ(l1_usage.peak_buffer, expected_peak_buffer);
 
         // current L1 should be zero after operation completes
         size_t expected_current = expected_peak_buffer;
-        for (const auto& [dev_id, current] : l1_usage.current) {
-            EXPECT_EQ(current, expected_current);
-        }
+        EXPECT_EQ(l1_usage.current, expected_current);
     }
 }

@@ -5,29 +5,27 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include <string>
-#include <unordered_map>
 
 #include "ttnn/common/guard.hpp"
 
 namespace ttml::utils {
 
 struct DRAMUsage {
-    /** device id -> peak memory usage in bytes between begin_capture and end_capture */
-    std::unordered_map<std::string, long long> peak;
-    /** device id -> current memory usage in bytes at the time of end_capture */
-    std::unordered_map<std::string, long long> current;
+    /** peak memory usage in bytes between begin_capture and end_capture */
+    long long peak = 0;
+    /** current memory usage in bytes at the time of end_capture */
+    long long current = 0;
 };
 
 struct L1Usage {
-    /** device id -> peak circular buffer usage in bytes between begin_capture and end_capture */
-    std::unordered_map<std::string, long long> peak_cb;
-    /** device id -> peak L1 buffer usage in bytes between begin_capture and end_capture */
-    std::unordered_map<std::string, long long> peak_buffer;
-    /** device id -> peak total (cb + buffer) usage in bytes between begin_capture and end_capture */
-    std::unordered_map<std::string, long long> peak_total;
-    /** device id -> current L1 buffer usage in bytes at the time of end_capture */
-    std::unordered_map<std::string, long long> current;
+    /** peak circular buffer usage in bytes between begin_capture and end_capture */
+    long long peak_cb = 0;
+    /** peak L1 buffer usage in bytes between begin_capture and end_capture */
+    long long peak_buffer = 0;
+    /** peak total (cb + buffer) usage in bytes between begin_capture and end_capture */
+    long long peak_total = 0;
+    /** current L1 buffer usage in bytes at the time of end_capture */
+    long long current = 0;
 };
 
 namespace MemoryUsageTracker {
