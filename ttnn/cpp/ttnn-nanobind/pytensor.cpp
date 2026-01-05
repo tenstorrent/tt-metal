@@ -395,33 +395,27 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         TT_THROW("Unreachable");
     };
 
+    auto extract_single_buffer = [](const HostStorage& storage) -> HostBuffer {
+        std::vector<HostBuffer> buffers;
+        storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+        TT_FATAL(
+            buffers.size() == 1,
+            "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+            "composer "
+            "to concatenate multi-device shards.",
+            storage.buffer().shape());
+        return buffers.front();
+    };
+
     return convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [](const HostStorage& storage) {
-                std::vector<HostBuffer> buffers;
-                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
-                    "to concatenate multi-device shards.",
-                    storage.buffer().shape());
-                return buffers.front();
+            [&extract_single_buffer](const HostStorage& storage) -> HostBuffer {
+                return extract_single_buffer(storage);
             },
-            [&tt_tensor](const DeviceStorage& storage) mutable -> HostBuffer {
-                // Implement device storage handling
+            [&tt_tensor, &extract_single_buffer](const DeviceStorage&) -> HostBuffer {
                 auto host_tensor = tt_tensor.cpu();
-                // Extract HostBuffer
                 const auto& host_storage = std::get<HostStorage>(host_tensor.storage());
-                std::vector<HostBuffer> buffers;
-                host_storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
-                    "to concatenate multi-device shards.",
-                    host_storage.buffer().shape());
-                return buffers.front();
+                return extract_single_buffer(host_storage);
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
