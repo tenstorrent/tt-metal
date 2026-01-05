@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
 
@@ -26,6 +27,33 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
     }
     if (!operation_attributes.enough_space_height) {
         return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
+    }
+    const auto& a = tensor_args.input_tensor;
+    const auto& input_shape = a.padded_shape();
+    auto* device = a.device();
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid =
+        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
+
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block =
+            (a.padded_shape()[-1] * a.padded_shape()[-2]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return program::UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory{};
+        }
     }
     return program::UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
 }
