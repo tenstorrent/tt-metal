@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 // #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>

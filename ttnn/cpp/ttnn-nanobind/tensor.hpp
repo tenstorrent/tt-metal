@@ -12,7 +12,7 @@ namespace nb = nanobind;
 
 void pytensor_module_types(nb::module_& m_tensor);
 void pytensor_module(nb::module_& m_tensor);
-void tensor_mem_config_module_types(nb::module_& mod);
-void tensor_mem_config_module(nb::module_& mod);
+void tensor_mem_config_module_types(nb::module_& m_tensor);
+void tensor_mem_config_module(nb::module_& m_tensor);
 
 }  // namespace ttnn::tensor

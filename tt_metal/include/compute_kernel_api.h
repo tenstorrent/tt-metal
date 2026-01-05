@@ -432,18 +432,35 @@ ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_in
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void expm1_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_expm1<true, DST_ACCUM_MODE>(idst))); }
+template <bool approx = false>
+ALWI void expm1_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_expm1<approx, DST_ACCUM_MODE>(idst)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void expm1_tile_init() { MATH((llk_math_eltwise_unary_sfpu_expm1_init<true>())); }
+template <bool approx = false>
+ALWI void expm1_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_expm1_init<approx, DST_ACCUM_MODE>()));
+}
 
-// silu
-// Function SILU (same as Swish)
-// use activation Silu[x] = x*Sigmoid[x]
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX>(idst))); }
+// clang-format off
+/**
+ * Performs SILU (same as Swish) operation on each element of a tile
+ * in DST register at index tile_index. Uses the following implementation:
+ * Silu[x] = x*Sigmoid[x]
+ *
+ * Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
 
 ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
 

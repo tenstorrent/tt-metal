@@ -25,25 +25,20 @@ struct RotaryEmbeddingDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const Tensor& cos,
-        const Tensor& sin,
-        uint32_t seq_len,
-        std::optional<uint32_t> token_idx,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        ttnn::DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::rotary_embedding
 
 namespace ttnn::prim {
-constexpr auto rotary_embedding = ttnn::register_operation<
-    "ttnn::prim::rotary_embedding",
-    ttnn::operations::experimental::transformer::rotary_embedding::RotaryEmbeddingDeviceOperation>();
+ttnn::operations::experimental::transformer::rotary_embedding::tensor_return_value_t rotary_embedding(
+    const Tensor& input,
+    const Tensor& cos,
+    const Tensor& sin,
+    uint32_t seq_len,
+    std::optional<uint32_t> token_idx,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 }  // namespace ttnn::prim

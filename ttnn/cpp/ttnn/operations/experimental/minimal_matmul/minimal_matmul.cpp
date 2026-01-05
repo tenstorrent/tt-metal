@@ -24,7 +24,7 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
         input_tensor,
         weight_tensor,
         bias_tensor,
-        fused_activation,
+        std::move(fused_activation),
         config,
         memory_config,
         dtype,

@@ -193,7 +193,7 @@ operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_r
         true /*fp32_acc*/,
         true /*packer_acc*/);
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .config = config,
             .fused_activation = std::move(fused_activation),

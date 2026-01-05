@@ -26,7 +26,7 @@ class GlobalCircularBuffer;
 
 class CircularBuffer {
 public:
-    CircularBuffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
+    CircularBuffer(const CoreRangeSet& core_ranges, const CircularBufferConfig& config);
     CircularBuffer(
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,

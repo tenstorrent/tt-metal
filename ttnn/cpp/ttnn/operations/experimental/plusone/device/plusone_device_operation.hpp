@@ -31,16 +31,13 @@ struct PlusOneDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        bool skip_negative_entries = false);
 };
 
 }  // namespace ttnn::operations::experimental::plusone
 
 namespace ttnn::prim {
-constexpr auto plus_one =
-    ttnn::register_operation<"ttnn::prim::plus_one", ttnn::operations::experimental::plusone::PlusOneDeviceOperation>();
+ttnn::operations::experimental::plusone::tensor_return_value_t plus_one(
+    const Tensor& input_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool skip_negative_entries = false);
 }  // namespace ttnn::prim
