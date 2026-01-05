@@ -209,13 +209,10 @@ void MAIN {
                     if (n_block_iter < N_blocks_per_core - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
-                    }
-#ifndef FUSE_AG
-                    else {
+                    } else {
                         // going to stride on M, so reuse in1
                         reuse_in1_block = true;
                     }
-#endif
                 }
                 if (!reuse_in0_block) {
                     cb_pop_front(in0_cb, in0_block_num_tiles);
@@ -243,9 +240,7 @@ void MAIN {
 #endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
-#ifndef FUSE_AG
         n_forward = !n_forward;
-#endif
     }
 }
 }  // namespace NAMESPACE
