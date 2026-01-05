@@ -75,15 +75,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
                 sub_device_manager->get_core_go_message_mapping());
         }
     } else {
-        for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
-            auto& hw_cq = device_->command_queue(cq_id);
-            // Only need to reset launch messages once, so reset on cq 0
-            hw_cq.reset_worker_state(
-                cq_id == 0,
-                num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
-        }
+        TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
     }
     sub_device_manager->reset_sub_device_stall_group();
 }
