@@ -218,31 +218,6 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     auto lock = lock_api_function_();
-
-    // Check if this is a parent mesh and if any submeshes have active traces.
-    // If so, route the workload through the submesh CQs instead of the parent's CQ.
-    // This allows submesh traces to capture parent mesh operations.
-    if (mesh_device_->is_parent_mesh()) {
-        auto submeshes = mesh_device_->get_submeshes();
-        if (!submeshes.empty()) {
-            // Route through submesh CQs - each submesh's CQ will handle its portion
-            // The workload needs to be dispatched through each submesh that has an active trace.
-            // Each submesh's CQ is in bypass mode (tracing), so the work will be captured.
-            for (auto& submesh : submeshes) {
-                auto& submesh_cq = submesh->mesh_command_queue(this->id_);
-                // The submesh CQ will handle the intersection of the workload with its devices
-                submesh_cq.enqueue_mesh_workload(mesh_workload, false);
-            }
-            if (blocking) {
-                for (auto& submesh : submeshes) {
-                    auto& submesh_cq = submesh->mesh_command_queue(this->id_);
-                    submesh_cq.finish();
-                }
-            }
-            return;
-        }
-    }
-
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -324,7 +299,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
-        mesh_workload.impl().get_program_config_sizes(),
+        mesh_workload.impl().get_program_config_sizes(mesh_device_),
         mesh_workload.impl().get_program_binary_status(mesh_device_id),
         num_workers,
         expected_num_workers_completed,
@@ -563,6 +538,23 @@ void FDMeshCommandQueue::write_shard_to_device(
         return;
     }
 
+    // Route through submesh CQ if this is a parent mesh with submeshes.
+    // This avoids setting in_use_ on the parent CQ, which would cause
+    // validation errors when submeshes are closed.
+    if (mesh_device_->is_parent_mesh()) {
+        auto submesh = mesh_device_->get_submesh_for_coordinate(device_coord);
+        if (submesh) {
+            auto* target_device = mesh_device_->get_view().get_device(device_coord);
+            auto local_coord = submesh->get_view().find_device(target_device->id());
+            auto& submesh_cq = submesh->mesh_command_queue(this->id_);
+            auto* fd_submesh_cq = dynamic_cast<FDMeshCommandQueue*>(&submesh_cq);
+            if (fd_submesh_cq) {
+                fd_submesh_cq->write_shard_to_device(buffer, local_coord, src, region, sub_device_ids);
+                return;
+            }
+        }
+    }
+
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
 
@@ -587,6 +579,24 @@ void FDMeshCommandQueue::read_shard_from_device(
 
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
+    }
+
+    // Route through submesh CQ if this is a parent mesh with submeshes.
+    // This avoids setting in_use_ on the parent CQ, which would cause
+    // validation errors when submeshes are closed.
+    if (mesh_device_->is_parent_mesh()) {
+        auto submesh = mesh_device_->get_submesh_for_coordinate(device_coord);
+        if (submesh) {
+            auto* target_device = mesh_device_->get_view().get_device(device_coord);
+            auto local_coord = submesh->get_view().find_device(target_device->id());
+            auto& submesh_cq = submesh->mesh_command_queue(this->id_);
+            auto* fd_submesh_cq = dynamic_cast<FDMeshCommandQueue*>(&submesh_cq);
+            if (fd_submesh_cq) {
+                fd_submesh_cq->read_shard_from_device(
+                    buffer, local_coord, dst, region, num_txns_per_device, sub_device_ids);
+                return;
+            }
+        }
     }
 
     in_use_ = true;

@@ -106,7 +106,6 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
 
-    // Filter device ranges to only compile those that belong to this submesh (if it's a submesh)
     std::vector<MeshCoordinateRange> device_ranges_to_compile;
     if (mesh_device->get_parent_mesh()) {
         // This is a submesh - filter programs that belong to this submesh
@@ -126,22 +125,17 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
         }
     } else {
         // Parent mesh - compile all programs
-        for (auto& [device_range, program] : programs_) {
+        for (auto& [device_range, _] : programs_) {
             device_ranges_to_compile.push_back(device_range);
         }
     }
 
-    if (device_ranges_to_compile.size() == 1) {
-        // Compile from main thread for homogeneous workloads
-        this->compile_program(device_ranges_to_compile[0], mesh_device);
-    } else if (!device_ranges_to_compile.empty()) {
-        for (const auto& device_range : device_ranges_to_compile) {
-            // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
-            mesh_device->enqueue_to_thread_pool(
-                [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
-        }
-        mesh_device->wait_for_thread_pool();
+    for (const auto& device_range : device_ranges_to_compile) {
+        // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
+        mesh_device->enqueue_to_thread_pool(
+            [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
     }
+    mesh_device->wait_for_thread_pool();
     finalize_offsets(mesh_device);
 }
 
@@ -150,15 +144,6 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     // the Mesh. Only done when the MeshWorkload is enqueued for the first
     // time.
     auto* mesh_device = mesh_cq.device();
-    // if (mesh_device->is_parent_mesh()) {
-    //     auto submeshes = mesh_device->get_submeshes();
-    //     for (auto& submesh : submeshes) {
-    //         auto submesh
-    //         load_binaries(mesh_cq);
-    //     }
-    //     return;
-    // }
-
     if (!program_binary_status_.empty()) {
         TT_FATAL(
             program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
@@ -204,7 +189,6 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                 // For submeshes, we need to convert parent coordinates to submesh local coordinates
                 MeshCoordinateRange local_device_range = device_range;
                 if (mesh_device->get_parent_mesh()) {
-                    // This is a submesh - check if device_range belongs to this submesh via parent mesh
                     auto* parent_mesh = mesh_device->get_parent_mesh().get();
                     bool belongs_to_submesh = false;
                     for (const auto& coord : device_range) {
@@ -271,7 +255,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     for (auto& [device_range, program] : programs_) {
         // For submeshes, only generate dispatch commands for programs that belong to this submesh
         if (mesh_device->get_parent_mesh()) {
-            // This is a submesh - check if device_range belongs to this submesh via parent mesh
             auto* parent_mesh = mesh_device->get_parent_mesh().get();
             bool belongs_to_submesh = false;
             for (const auto& coord : device_range) {
@@ -366,10 +349,26 @@ std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     return semaphores_;
 }
 
-std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
+std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes(MeshDevice* mesh_device) {
     // Get the config sizes for all L1 Program Data Structures
     std::vector<uint32_t> global_program_config_sizes;
     for (auto& program_on_grid : programs_) {
+        // Filter programs based on whether they belong to the current mesh_device
+        if (mesh_device->get_parent_mesh()) {
+            auto* parent_mesh = mesh_device->get_parent_mesh().get();
+            bool belongs_to_submesh = false;
+            for (const auto& coord : program_on_grid.first) {
+                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
+                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
+                    belongs_to_submesh = true;
+                    break;
+                }
+            }
+            if (!belongs_to_submesh) {
+                continue;
+            }
+        }
+
         if (!global_program_config_sizes.empty()) {
             for (int i = 0; i < global_program_config_sizes.size(); i++) {
                 TT_FATAL(
@@ -475,7 +474,6 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     std::vector<MeshCoordinateRange> device_ranges_to_finalize;
     std::unordered_set<uint32_t> filtered_device_range_handles;
     if (mesh_device->get_parent_mesh()) {
-        // This is a submesh - filter programs that belong to this submesh
         auto* parent_mesh = mesh_device->get_parent_mesh().get();
         uint32_t device_range_idx = 0;
         for (auto& [device_range, program] : programs_) {
