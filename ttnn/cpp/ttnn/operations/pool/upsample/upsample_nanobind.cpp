@@ -23,7 +23,7 @@ void bind_upsample(nb::module_& mod) {
         Upsamples a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
 
-        The algorithms available for upsampling are 'nearest' for now.
+        The algorithms available for upsampling are 'nearest' and 'bilinear'.
 
 
         Args:
