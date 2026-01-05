@@ -31,8 +31,13 @@ RUN mkdir -p /tmp/doxygen \
     && make -C /tmp/doxygen install \
     && rm -rf /tmp/doxygen
 
+# Install ClangBuildAnalyzer from source
+# Pin to specific version with SHA256 verification for supply chain security
+ENV CBA_VERSION=1.6.0 \
+    CBA_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
 RUN mkdir -p /tmp/cba \
-    && wget -O /tmp/cba/cba.tar.gz https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v1.6.0.tar.gz \
+    && wget -q -O /tmp/cba/cba.tar.gz "https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v${CBA_VERSION}.tar.gz" \
+    && echo "${CBA_SHA256}  /tmp/cba/cba.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/cba/cba.tar.gz -C /tmp/cba --strip-components=1 \
     && cmake -S /tmp/cba/ -B /tmp/cba/build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /tmp/cba/build \
