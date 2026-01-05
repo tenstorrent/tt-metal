@@ -33,17 +33,10 @@ jobs:
 
       - name: Install dependencies for test collection
         run: |
-          pip install pytest torch
-          # Create stub modules to satisfy imports during collection
-          mkdir -p stub_modules
-          cat > stub_modules/ttnn.py << 'EOF'
-          # Stub module for test collection only
-          def __getattr__(name):
-              return lambda *args, **kwargs: None
-          EOF
-          export PYTHONPATH="$PWD/stub_modules:$PYTHONPATH"
-          echo "PYTHONPATH=$PWD/stub_modules:$PYTHONPATH" >> $GITHUB_ENV
-
+          pip install pytest
+          # Install common dependencies that tests might import
+          pip install torch numpy || true
+          
       - name: Count and compare tests
         run: |
           # Define locked directories to check
@@ -52,8 +45,22 @@ jobs:
           # Function to count test functions using pytest
           count_tests() {
             local dir=$1
-            # Use pytest --collect-only and count the test items
-            pytest "$dir" --collect-only -q 2>&1 | tail -1 | grep -oE '[0-9]+ test' | grep -oE '[0-9]+' || echo "0"
+            echo "Collecting from: $dir"
+            
+            # Try pytest collection, show output for debugging
+            output=$(pytest "$dir" --collect-only -q --tb=no --no-header 2>&1)
+            echo "$output"
+            
+            # Extract count from last line (e.g., "123 tests collected" or "collected 123 tests")
+            count=$(echo "$output" | tail -1 | grep -oE '[0-9]+' | head -1)
+            
+            if [ -z "$count" ]; then
+              echo "Warning: Could not extract count, output was:"
+              echo "$output"
+              echo "0"
+            else
+              echo "$count"
+            fi
           }
           
           # Count tests in PR branch
