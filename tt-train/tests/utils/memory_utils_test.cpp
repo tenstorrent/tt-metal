@@ -213,7 +213,6 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_L1_usage();
 
-        // DRAM usage should be 0 since we're using L1 tensors
         // TODO: verify that 12288 comes from program cache
         EXPECT_EQ(dram_usage.current, 12288);
 
@@ -231,16 +230,27 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         EXPECT_EQ(l1_usage.peak_buffer, expected_peak_buffer);
     }
 
-    // Second capture: two 128x128 tensors added
+    // Second capture: two 128x128 tensors added with width sharding
     {
         auto shape = ttnn::Shape({128, 128});
         std::vector<float> data(128 * 128, 2.0F);
 
-        // Create tensors in DRAM first, then move to L1
+        // Create width-sharded memory config
+        // 128x128 in tiles = 4x4 tiles (each tile is 32x32)
+        // Width sharding: distribute across width dimension (4 cores)
+        uint32_t num_cores = 4;  // Sharding across 4 cores for width
+        auto core_range = ttnn::CoreRangeSet({ttnn::CoreRange({0, 0}, {num_cores - 1, 0})});
+
+        // Shard shape: each core gets 4 tiles height x 1 tile width = 128x32 elements
+        auto shard_spec = tt::tt_metal::ShardSpec(core_range, {128, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        auto sharded_memory_config =
+            ttnn::MemoryConfig{ttnn::TensorMemoryLayout::WIDTH_SHARDED, ttnn::BufferType::L1, shard_spec};
+
+        // Create tensors in DRAM first, then move to L1 with width sharding
         auto tensor1_dram = ttml::core::from_vector(data, shape, device, ttnn::TILE_LAYOUT);
         auto tensor2_dram = ttml::core::from_vector(data, shape, device, ttnn::TILE_LAYOUT);
-        auto tensor1 = ttnn::to_memory_config(tensor1_dram, ttnn::L1_MEMORY_CONFIG);
-        auto tensor2 = ttnn::to_memory_config(tensor2_dram, ttnn::L1_MEMORY_CONFIG);
+        auto tensor1 = ttnn::to_memory_config(tensor1_dram, sharded_memory_config);
+        auto tensor2 = ttnn::to_memory_config(tensor2_dram, sharded_memory_config);
 
         auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
         auto add_result = ttnn::add(tensor1, tensor2);
@@ -250,19 +260,17 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto dram_usage = ttml::utils::MemoryUsageTracker::get_DRAM_usage();
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_L1_usage();
 
-        // DRAM usage should be 0 since we're using L1 tensors
-        EXPECT_EQ(dram_usage.current, 0);
+        // DRAM usage from cache miss
+        EXPECT_EQ(dram_usage.current, 10240);
 
-        // num_cores = 16 (128 * 128 / (32 * 32))
-        // peak_cb = tile_size * sizeof(bfloat16) * num_cores * n_cb (cb0, cb1, cb_out)
-        size_t expected_peak_cb = 0;  // CBs are not allocated since we have cache hit
+        size_t expected_peak_cb = 0;  // CBs are not allocated since add uses sharded inputs as CBs
         EXPECT_EQ(l1_usage.peak_cb, expected_peak_cb);
 
         // peak_buffer should be volume of tensors (one result tensor in L1)
         size_t expected_peak_buffer = add_result_size;
         EXPECT_EQ(l1_usage.peak_buffer, expected_peak_buffer);
 
-        // current L1 should be zero after operation completes
+        // current L1 should be the result tensor after operation completes
         size_t expected_current = expected_peak_buffer;
         EXPECT_EQ(l1_usage.current, expected_current);
     }
