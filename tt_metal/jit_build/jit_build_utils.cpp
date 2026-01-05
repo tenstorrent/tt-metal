@@ -6,11 +6,12 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <string>
-#include <chrono>
-#include <fstream>
+
+#include "impl/context/metal_context.hpp"
 
 namespace tt::jit_build::utils {
 
@@ -19,18 +20,15 @@ bool run_command(const std::string& cmd, const std::string& log_file, const bool
     // ZoneText( cmd.c_str(), cmd.length());
     int ret;
     static std::mutex io_mutex;
-    if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
+    // Use cached env var from rtoptions instead of calling getenv() on every invocation
+    const bool dump_commands = tt::tt_metal::MetalContext::instance().rtoptions().get_dump_build_commands();
+    if (dump_commands || verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);
-            std::cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
-            std::cout << cmd << std::endl << std::endl;
+            std::cout << "===== RUNNING SYSTEM COMMAND:\n";
+            std::cout << cmd << "\n" << std::endl;
         }
         ret = system(cmd.c_str());
-        // {
-        //     std::lock_guard<std::mutex> lk(io_mutex);
-        //     cout << "===== DONE SYSTEM COMMAND: " << cmd << std::endl;
-        // }
-
     } else {
         std::string redirected_cmd = cmd + " >> " + log_file + " 2>&1";
         ret = system(redirected_cmd.c_str());
