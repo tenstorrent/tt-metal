@@ -413,6 +413,9 @@ run_t3000_gpt_oss_tests() {
   gpt_oss_20b=openai/gpt-oss-20b
   gpt_oss_120b=openai/gpt-oss-120b
 
+  # install gpt-oss requirements
+  pip install -r models/demos/gpt_oss/requirements.txt
+
   HF_MODEL=$gpt_oss_20b TT_CACHE_PATH=$TT_CACHE_HOME/$gpt_oss_20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8 and prefill_128"
   echo "LOG_METAL: GPT-OSS 20B tests completed"
 
