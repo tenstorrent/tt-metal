@@ -187,7 +187,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(device_id, num_hw_cqs, dispatch_core_config);
-    
+
     size_t trace_region_alignment = hal.get_alignment(HalMemType::DRAM) * soc_desc.get_num_dram_views();
     size_t aligned_total_trace_size = (trace_region_size + trace_region_alignment - 1) / trace_region_alignment * trace_region_alignment;
     AllocatorConfig config(
