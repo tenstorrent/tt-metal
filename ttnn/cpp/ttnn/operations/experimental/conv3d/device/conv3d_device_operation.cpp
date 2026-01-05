@@ -51,10 +51,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.logical_shape().size() == 5,
         "Activation tensor must have 5 dimensions. got {}",
         input_tensor_a.logical_shape().size());
-    TT_FATAL(
-        input_tensor_a.logical_shape()[0] == 1,
-        "Activation tensor must have batch size 1. got {}",
-        input_tensor_a.logical_shape()[0]);
     // check row-major
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
