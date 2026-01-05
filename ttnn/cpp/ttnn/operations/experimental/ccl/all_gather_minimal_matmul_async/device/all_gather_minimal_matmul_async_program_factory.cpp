@@ -31,8 +31,6 @@ void override_program_parameters(
     auto output_addr = output_tensors.at(0).buffer()->address();
     auto in2_addr =
         optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-    auto in3_addr =
-        override_variables.read_local_slice_from_input ? optional_input_tensors.at(1).value().buffer()->address() : 0;
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
@@ -47,7 +45,6 @@ void override_program_parameters(
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
-            in0_sender_args[3] = in3_addr;
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
             in0_receiver_args[1] = output_addr;
@@ -428,15 +425,6 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
-                            ? fused_op_signaler->ag_input.value().buffer()->address()
-                            : 0;
-    auto in3_data_format =
-        (fuse_op && fused_op_signaler->read_local_slice_from_input)
-            ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
-            : in1_data_format;
-    auto in3_tile_size = tt::tile_size(in3_data_format);
-
     /**
      * Create kernels
      */
@@ -464,7 +452,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_valid_semaphore_id,
         in0_is_output_writer,
         true,  // is_injector_core
-        in3_tile_size,
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -502,7 +489,6 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_valid_semaphore_id,
         in0_is_output_writer,
         false,  // is_injector_core
-        in3_tile_size,
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor, bias_tensor);
 
@@ -681,7 +667,6 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_addr,
             out_addr,
             in2_addr,
-            in3_addr,
             is_in0_sink,
             (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
             (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
