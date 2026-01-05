@@ -36,6 +36,7 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import (
     TTNNSpeechT5Decoder,
     TTNNDecoderConfig,
     preprocess_decoder_parameters,
+    init_kv_cache,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     TTNNSpeechT5SpeechDecoderPostnet,
@@ -43,52 +44,6 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     preprocess_postnet_parameters,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_generator import SpeechT5Generator
-
-
-# Pytest fixtures for multi-device support
-@pytest.fixture(scope="module")
-def mesh_device(request):
-    """Fixture to create mesh device based on MESH_DEVICE environment variable."""
-    mesh_device_env = os.environ.get("MESH_DEVICE")
-
-    # Map environment variable to device configuration
-    device_configs = {
-        "N150": (1, 1),
-        "N300": (1, 2),
-        "N150x4": (1, 4),
-        "T3K": (1, 8),
-        "TG": (8, 4),
-        "P150": (1, 1),
-        "P300": (1, 2),
-        "P150x4": (1, 4),
-        "P150x8": (1, 8),
-        "BHGLX": (8, 4),
-    }
-
-    if mesh_device_env in device_configs:
-        mesh_shape = device_configs[mesh_device_env]
-        if mesh_shape == (1, 1):
-            # Single device
-            mesh_device = ttnn.open_device(device_id=0, l1_small_size=24576)
-            mesh_device.enable_program_cache()
-        else:
-            # Multi-device mesh
-            devices = ttnn.get_device_ids()[: mesh_shape[0] * mesh_shape[1]]
-            mesh_device = ttnn.MeshDevice(devices, mesh_shape)
-    else:
-        # Default to single device
-        mesh_device = ttnn.open_device(device_id=0, l1_small_size=24576)
-        mesh_device.enable_program_cache()
-
-    yield mesh_device
-
-    # Cleanup
-    if hasattr(mesh_device, "close"):
-        mesh_device.close()
-    else:
-        # Multi-device cleanup
-        for device in mesh_device.get_devices():
-            ttnn.close_device(device)
 
 
 def get_high_perf_compute_config(device):
@@ -116,6 +71,8 @@ def generate_speech_ttnn(
     warmup_mode=False,
     enable_trace=False,
     generator=None,
+    use_kv_cache=False,
+    decoder_config=None,
 ):
     """
     Generate speech using optimized TTNN SpeechT5 pipeline.
@@ -134,6 +91,8 @@ def generate_speech_ttnn(
         warmup_mode: If True, skip vocoder and detailed timing for faster warm-up (default: False)
         enable_trace: If True, use trace execution for decoder and postnet (default: False)
         generator: SpeechT5Generator instance for trace support (required if enable_trace=True)
+        use_kv_cache: If True, use KV cache for faster autoregressive generation (default: False)
+        decoder_config: TTNNDecoderConfig (required if use_kv_cache=True)
 
     Returns:
         torch.Tensor: Generated audio waveform (if return_stats=False)
@@ -168,6 +127,21 @@ def generate_speech_ttnn(
     # Initialize decoder sequence
     batch_size = token_ids.shape[0]
     num_mel_bins = 80  # Standard for SpeechT5
+    encoder_seq_len = encoder_output.shape[1]
+
+    # Initialize KV cache if enabled
+    kv_cache = None
+    cross_attn_cache = None
+    if use_kv_cache and decoder_config is not None:
+        kv_cache, cross_attn_cache = init_kv_cache(
+            decoder_config,
+            device,
+            max_batch_size=batch_size,
+            max_seq_len=max_steps + 10,
+            encoder_seq_len=encoder_seq_len,
+        )
+
+    # Initial mel frame (zeros)
     output_sequence_ttnn = ttnn.from_torch(
         torch.zeros(batch_size, 1, num_mel_bins),
         dtype=ttnn.bfloat16,
@@ -180,6 +154,10 @@ def generate_speech_ttnn(
     steps_completed = 0
     total_decoder_time = 0.0
     total_postnet_time = 0.0
+    current_seq_len = 1  # Track sequence length for stats
+
+    # For KV cache mode, track the current input frame
+    current_input_ttnn = output_sequence_ttnn
 
     # Autoregressive generation loop
     decoder_loop_start = time.time()
@@ -198,7 +176,29 @@ def generate_speech_ttnn(
             decoder_hidden_states = generator._execute_decoder_trace(
                 current_seq_len, output_sequence_ttnn, encoder_output, ttnn_speaker_embeddings
             )
+        elif use_kv_cache and kv_cache is not None:
+            # KV cache mode: pass only the current frame (seq_len=1 after step 0)
+            # Create position tensor for cache update (must be in DRAM)
+            current_pos = ttnn.from_torch(
+                torch.tensor([step], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            decoder_hidden_states = ttnn_decoder(
+                decoder_input_values=current_input_ttnn,
+                encoder_hidden_states=encoder_output,
+                speaker_embeddings=ttnn_speaker_embeddings,
+                kv_cache=kv_cache,
+                cross_attn_cache=cross_attn_cache,
+                cross_attn_cache_valid=(step > 0),  # Reuse cross-attn cache after first step
+                current_decode_pos=current_pos,
+                position_offset=step,  # Pass step as position for correct positional encoding
+            )
         else:
+            # Standard mode: pass full sequence
             decoder_hidden_states = ttnn_decoder(
                 decoder_input_values=output_sequence_ttnn,
                 encoder_hidden_states=encoder_output,
@@ -227,38 +227,78 @@ def generate_speech_ttnn(
         if ttnn.to_torch(any_stop_scalar).item() > 0:
             break
 
-        # Extract new mel frames (device-only)
-        current_seq_len = output_sequence_ttnn.shape[1]
-        start_idx = (current_seq_len - 1) * 2  # reduction_factor = 2
-        end_idx = start_idx + 2
+        # Extract new mel frames
+        if use_kv_cache and kv_cache is not None:
+            # In KV cache mode, mel_after has shape [batch, reduction_factor, mel_bins]
+            # since we only processed 1 input frame
+            mel_after_shape = mel_after.shape
+            if len(mel_after_shape) == 4:
+                # Handle 4D output [B, 1, S, mel_bins]
+                mel_frames = mel_after_shape[2]
+            else:
+                mel_frames = mel_after_shape[1]
 
-        # Slice the new frames from mel_after
-        new_frames_ttnn = ttnn.slice(
-            mel_after,
-            [0, start_idx, 0],  # start indices [batch, seq, mel_bins]
-            [batch_size, end_idx, num_mel_bins],  # end indices
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+            # Get both frames from the output (reduction_factor=2)
+            new_frames_ttnn = mel_after
+            if len(mel_after_shape) == 4:
+                # Squeeze if 4D
+                new_frames_ttnn = ttnn.reshape(mel_after, [batch_size, mel_frames, num_mel_bins])
 
-        # Build spectrogram incrementally on device
-        if spectrogram_ttnn is None:
-            spectrogram_ttnn = new_frames_ttnn
+            # Build spectrogram incrementally
+            if spectrogram_ttnn is None:
+                spectrogram_ttnn = new_frames_ttnn
+            else:
+                spectrogram_ttnn = ttnn.concat(
+                    [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+
+            # Get the last frame for next iteration input
+            last_frame_ttnn = ttnn.slice(
+                new_frames_ttnn,
+                [0, mel_frames - 1, 0],
+                [batch_size, mel_frames, num_mel_bins],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            current_input_ttnn = last_frame_ttnn
+
+            # Also update the full sequence for tracking
+            output_sequence_ttnn = ttnn.concat(
+                [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            current_seq_len = output_sequence_ttnn.shape[1]
         else:
-            spectrogram_ttnn = ttnn.concat(
-                [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+            # Standard mode: extract frames from full mel_after
+            current_seq_len = output_sequence_ttnn.shape[1]
+            start_idx = (current_seq_len - 1) * 2  # reduction_factor = 2
+            end_idx = start_idx + 2
+
+            # Slice the new frames from mel_after
+            new_frames_ttnn = ttnn.slice(
+                mel_after,
+                [0, start_idx, 0],  # start indices [batch, seq, mel_bins]
+                [batch_size, end_idx, num_mel_bins],  # end indices
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
-        # Extend sequence with last frame from new frames (directly from mel_after)
-        last_frame_idx = start_idx + 1
-        last_frame_ttnn = ttnn.slice(
-            mel_after,
-            [0, last_frame_idx, 0],  # start indices [batch, seq, mel_bins] - take frame at start_idx + 1
-            [batch_size, last_frame_idx + 1, num_mel_bins],  # end indices
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        output_sequence_ttnn = ttnn.concat(
-            [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+            # Build spectrogram incrementally on device
+            if spectrogram_ttnn is None:
+                spectrogram_ttnn = new_frames_ttnn
+            else:
+                spectrogram_ttnn = ttnn.concat(
+                    [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+
+            # Extend sequence with last frame from new frames (directly from mel_after)
+            last_frame_idx = start_idx + 1
+            last_frame_ttnn = ttnn.slice(
+                mel_after,
+                [0, last_frame_idx, 0],  # start indices [batch, seq, mel_bins] - take frame at start_idx + 1
+                [batch_size, last_frame_idx + 1, num_mel_bins],  # end indices
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            output_sequence_ttnn = ttnn.concat(
+                [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
         steps_completed += 1
 
@@ -316,6 +356,7 @@ def run_demo(
     output_dir=".",
     max_steps=100,
     enable_trace=False,
+    use_kv_cache=False,
     speaker_id=0,
     mesh_device=None,
     model_location_generator=None,
@@ -494,6 +535,8 @@ def run_demo(
             warmup_mode=True,
             enable_trace=enable_trace,
             generator=generator,  # Pass generator for trace support
+            use_kv_cache=use_kv_cache,
+            decoder_config=decoder_config,
         )
         warmup_duration = time.time() - warmup_start_time
         print(f"✅ Warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
@@ -527,6 +570,8 @@ def run_demo(
                 return_stats=True,
                 enable_trace=enable_trace,
                 generator=generator,
+                use_kv_cache=use_kv_cache,
+                decoder_config=decoder_config,
             )
             generation_time = time.time() - generation_start
 
@@ -600,13 +645,53 @@ def run_demo(
     return 0
 
 
-def test_demo(mesh_device, model_location_generator):
-    """Pytest version of the demo for automated testing."""
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 300000, "trace_region_size": 10000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+        }.get(os.environ.get("MESH_DEVICE"), (1, 1))
+    ],
+    indirect=True,
+)
+def test_demo(mesh_device, device_params, model_location_generator, request):
+    """
+    Pytest version of the demo for automated testing.
+
+    Command-line options (defined in conftest.py):
+        --input-text: Custom input text (default: "Hello world...")
+        --max-steps: Override max generation steps (default: 24)
+        --output-dir: Directory to save output audio (default: pytest_output)
+
+    Usage:
+        MESH_DEVICE=N150 pytest models/experimental/speecht5_tts/demo_ttnn.py::test_demo -v
+        MESH_DEVICE=N150 pytest models/experimental/speecht5_tts/demo_ttnn.py::test_demo -v \
+            --input-text "Hello world" --max-steps 500 --output-dir ./output
+    """
+    # Get command-line overrides
+    input_text = (
+        request.config.getoption("--input-text")
+        or "Hello world, this is a test of text to speech synthesis on Tenstorrent hardware."
+    )
+    max_steps = request.config.getoption("--max-steps") or 24
+    output_dir = request.config.getoption("--output-dir") or "pytest_output"
+
     run_demo(
-        texts=["Hello world, this is a test of text to speech synthesis on Tenstorrent hardware."],
-        output_dir="pytest_output",
-        max_steps=24,  # Reduced for faster CI
+        texts=[input_text],
+        output_dir=output_dir,
+        max_steps=max_steps,
         enable_trace=False,
+        use_kv_cache=True,  # KV cache enabled by default
         speaker_id=0,
         mesh_device=mesh_device,
         model_location_generator=model_location_generator,
@@ -629,6 +714,9 @@ def main(mesh_device=None):
     parser.add_argument(
         "--enable_trace", action="store_true", help="Enable TTNN trace for faster inference (default: False)"
     )
+    parser.add_argument(
+        "--use_kv_cache", action="store_true", help="Use KV cache for faster autoregressive generation (default: False)"
+    )
     parser.add_argument("--speaker_id", type=int, default=0, help="Speaker ID from CMU ARCTIC dataset (0-7456)")
 
     args = parser.parse_args()
@@ -641,6 +729,7 @@ def main(mesh_device=None):
         output_dir=args.output_dir,
         max_steps=args.max_steps,
         enable_trace=args.enable_trace,
+        use_kv_cache=args.use_kv_cache,
         speaker_id=args.speaker_id,
         mesh_device=mesh_device,
         model_location_generator=None,

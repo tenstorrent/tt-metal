@@ -22,10 +22,149 @@ Key Features:
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
 import torch
 import ttnn
+
+from models.common.utility_functions import nearest_32
+
+
+# ============================================================================
+# KV Cache Initialization
+# ============================================================================
+
+
+def init_kv_cache(config, device, max_batch_size, max_seq_len, encoder_seq_len):
+    """
+    Initialize KV cache for decoder self-attention and cross-attention.
+
+    Following Whisper pattern from models/demos/whisper/tt/ttnn_optimized_functional_whisper.py
+
+    Args:
+        config: TTNNDecoderConfig
+        device: TTNN device
+        max_batch_size: Maximum batch size
+        max_seq_len: Maximum decoder sequence length
+        encoder_seq_len: Encoder sequence length (for cross-attention cache)
+
+    Returns:
+        tuple: (kv_cache, cross_attn_cache)
+            - kv_cache: List of [K, V] tensors per layer for self-attention
+            - cross_attn_cache: List of [K, V] tensors per layer for cross-attention
+    """
+    kv_cache = []
+    cross_attn_cache = []
+    head_dim = config.hidden_size // config.num_heads
+    num_layers = config.num_layers
+
+    # SDPA decode requires K sequence length to be a multiple of chunk size (256)
+    # Round up max_seq_len to nearest multiple of 256
+    chunk_size = 256
+    max_seq_len = ((max_seq_len + chunk_size - 1) // chunk_size) * chunk_size
+
+    for layer_idx in range(num_layers):
+        # Self-attention cache: [batch, num_heads, max_seq_len, head_dim]
+        # Following Whisper pattern - both K and V have same format
+        k_cache = torch.zeros((max_batch_size, config.num_heads, max_seq_len, head_dim))
+        v_cache = torch.zeros((max_batch_size, config.num_heads, max_seq_len, head_dim))
+
+        k_cache_ttnn = ttnn.from_torch(
+            k_cache,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_cache_ttnn = ttnn.from_torch(
+            v_cache,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        kv_cache.append([k_cache_ttnn, v_cache_ttnn])
+
+        # Cross-attention cache: Pre-allocated for encoder K/V
+        # K is transposed: [batch, heads, head_dim, enc_seq_len]
+        # V is normal: [batch, heads, enc_seq_len, head_dim]
+        cross_k = torch.zeros((max_batch_size, config.num_heads, head_dim, encoder_seq_len))
+        cross_v = torch.zeros((max_batch_size, config.num_heads, encoder_seq_len, head_dim))
+
+        cross_k_ttnn = ttnn.from_torch(
+            cross_k,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cross_v_ttnn = ttnn.from_torch(
+            cross_v,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cross_attn_cache.append([cross_k_ttnn, cross_v_ttnn])
+
+    return kv_cache, cross_attn_cache
+
+
+def get_decode_sdpa_configs(config, bsz, device, max_seq_len=256):
+    """
+    Get sharded memory config and program config for SDPA decode.
+
+    Following Whisper pattern - creates HEIGHT-sharded memory config required
+    by paged_update_cache and scaled_dot_product_attention_decode.
+
+    Args:
+        config: TTNNDecoderConfig
+        bsz: Batch size
+        device: TTNN device
+        max_seq_len: Maximum sequence length for KV cache (used to compute chunk sizes)
+
+    Returns:
+        tuple: (sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config)
+    """
+    head_dim = config.hidden_size // config.num_heads
+    padded_num_heads = nearest_32(config.num_heads)  # 12 -> 32
+
+    # Batch-sharded across cores
+    grid_size = device.compute_with_storage_grid_size()
+    batch_grid = ttnn.num_cores_to_corerangeset(bsz, grid_size, row_wise=True)
+
+    sdpa_batch_sharded_memcfg = ttnn.create_sharded_memory_config(
+        shape=(padded_num_heads, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Compute appropriate chunk sizes based on max_seq_len
+    # Chunk sizes must divide evenly into padded sequence length
+    padded_seq_len = nearest_32(max_seq_len)
+    # Use smaller of 256 or padded_seq_len to ensure divisibility
+    k_chunk_size = min(256, padded_seq_len)
+    q_chunk_size = min(256, padded_seq_len)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+        exp_approx_mode=False,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+    )
+
+    sdpa_decode_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
 # ============================================================================
@@ -154,6 +293,7 @@ class TTNNSpeechDecoderPrenet:
         self,
         decoder_input_values: ttnn.Tensor,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
+        position_offset: int = 0,
     ) -> ttnn.Tensor:
         """
         Speech decoder prenet with comprehensive L1 memory management.
@@ -161,6 +301,7 @@ class TTNNSpeechDecoderPrenet:
         Args:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             speaker_embeddings: [batch, speaker_embedding_dim] - optional
+            position_offset: Offset for positional encoding (used in KV cache mode)
 
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
@@ -186,9 +327,10 @@ class TTNNSpeechDecoderPrenet:
             if self.config.speech_decoder_prenet_dropout > 0.0:
                 # Use precomputed dropout mask for performance
                 mask = self.parameters["dropout_masks"][i]
-                # Slice mask to match current sequence length [seq_len, hidden_size]
+                # Slice mask to match current sequence length and position [seq_len, hidden_size]
+                # For KV cache mode, use position_offset to get correct dropout mask position
                 seq_len = hidden_states.shape[1]
-                mask_sliced = mask[:seq_len, :]
+                mask_sliced = mask[position_offset : position_offset + seq_len, :]
                 # Expand mask to match batch dimension [batch, seq_len, hidden_size]
                 batch_size = hidden_states.shape[0]
                 mask_expanded = ttnn.unsqueeze(mask_sliced, 0)  # [1, seq_len, hidden_size]
@@ -209,8 +351,11 @@ class TTNNSpeechDecoderPrenet:
         )
 
         # PHASE 4: Add scaled positional encoding (ensure slice uses L1)
+        # For KV cache mode, use position_offset to get correct positional encoding
         seq_len = hidden_states.shape[1]
-        pe_slice = self.parameters["positional_encoding"][:, :seq_len, :]
+        start_pos = position_offset
+        end_pos = position_offset + seq_len
+        pe_slice = self.parameters["positional_encoding"][:, start_pos:end_pos, :]
         pe_slice = ttnn.to_memory_config(pe_slice, ttnn.L1_MEMORY_CONFIG)  # Ensure sliced positional encoding is in L1
 
         # Scale positional encoding (L1 output)
@@ -306,10 +451,11 @@ class TTNNSpeechT5Attention:
     Cross-Attention: Q from hidden_states, K/V from encoder_hidden_states, no causal mask
     """
 
-    def __init__(self, device, parameters, config: TTNNDecoderConfig):
+    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_seq_len: int = 256):
         self.device = device
         self.parameters = parameters
         self.config = config
+        self.max_seq_len = max_seq_len
 
         self.num_heads = config.num_heads
         self.hidden_size = config.hidden_size
@@ -366,24 +512,44 @@ class TTNNSpeechT5Attention:
         hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
         key_value_states: Optional[ttnn.Tensor] = None,
+        kv_cache: Optional[List[ttnn.Tensor]] = None,
+        cross_attn_cache: Optional[List[ttnn.Tensor]] = None,
+        cross_attn_cache_valid: bool = False,
+        current_decode_pos: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
-        Multi-head attention with comprehensive L1 memory management.
+        Multi-head attention with KV cache support.
 
         Args:
             hidden_states: [batch, seq_len, hidden_size] - queries
             attention_mask: [batch, 1, seq_len, seq_len or kv_seq_len] - optional mask
             key_value_states: [batch, kv_seq_len, hidden_size] - for cross-attention
+            kv_cache: [K_cache, V_cache] - self-attention KV cache
+            cross_attn_cache: [K_cache, V_cache] - cross-attention KV cache
+            cross_attn_cache_valid: If True, use cached cross-attention K/V
+            current_decode_pos: Current position tensor for cache update (must be in DRAM)
 
         Returns:
             output: [batch, seq_len, hidden_size]
         """
-        batch, seq_len, _ = hidden_states.shape
+        # Handle both 3D [B, S, H] and 4D [B, 1, S, H] tensors
+        shape = hidden_states.shape
+        if len(shape) == 4:
+            batch, _, seq_len, _ = shape
+        else:
+            batch, seq_len, _ = shape
 
         # Determine if this is cross-attention
         is_cross_attention = key_value_states is not None
 
+        # Check if we're in decode mode (KV cache enabled)
+        is_decode = kv_cache is not None and current_decode_pos is not None
+
         if not is_cross_attention:
+            # Self-attention path
+            # For decode mode, don't transpose K since we need [B, H, S, d] format
+            transpose_k = not is_decode
+
             qkv_states = ttnn.linear(
                 hidden_states,
                 self.parameters["qkv_proj"]["weight"],
@@ -391,7 +557,9 @@ class TTNNSpeechT5Attention:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=get_high_perf_compute_config(),
             )
-            qkv_states = ttnn.unsqueeze(qkv_states, dim=1)
+            # Only unsqueeze if 3D (from decode mode output might already be 4D)
+            if len(qkv_states.shape) == 3:
+                qkv_states = ttnn.unsqueeze(qkv_states, dim=1)
 
             (
                 query,
@@ -402,84 +570,199 @@ class TTNNSpeechT5Attention:
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 num_heads=self.num_heads,
                 num_kv_heads=self.num_heads,
-                transpose_k_heads=True,
+                transpose_k_heads=transpose_k,
             )
             ttnn.deallocate(qkv_states)
 
+            if is_decode:
+                # Decode mode: update KV cache and use SDPA decode
+                k_cache, v_cache = kv_cache
+
+                # Get sharded config for SDPA decode
+                sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_cfg = get_decode_sdpa_configs(
+                    self.config, batch, self.device, self.max_seq_len
+                )
+
+                # CRITICAL: Transpose from [B, H, S, d] to [S, B, H, d] for SDPA decode
+                query = ttnn.transpose(query, 0, 2)  # [B, H, S, d] -> [S, H, B, d]
+                query = ttnn.transpose(query, 1, 2)  # [S, H, B, d] -> [S, B, H, d]
+                key = ttnn.transpose(key, 0, 2)
+                key = ttnn.transpose(key, 1, 2)
+                value = ttnn.transpose(value, 0, 2)
+                value = ttnn.transpose(value, 1, 2)
+
+                # CRITICAL: Convert to sharded (required by paged_update_cache)
+                query = ttnn.interleaved_to_sharded(query, sdpa_batch_sharded_memcfg)
+                key = ttnn.interleaved_to_sharded(key, sdpa_batch_sharded_memcfg)
+                value = ttnn.interleaved_to_sharded(value, sdpa_batch_sharded_memcfg)
+
+                # Update KV cache
+                ttnn.experimental.paged_update_cache(
+                    k_cache, key, update_idxs_tensor=current_decode_pos, page_table=None
+                )
+                ttnn.experimental.paged_update_cache(
+                    v_cache, value, update_idxs_tensor=current_decode_pos, page_table=None
+                )
+
+                # SDPA decode with cache
+                attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+                    query,
+                    k_cache,
+                    v_cache,
+                    cur_pos_tensor=current_decode_pos,
+                    scale=self.scaling,
+                    program_config=sdpa_decode_progcfg,
+                    compute_kernel_config=sdpa_decode_compute_cfg,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )  # Output: [1, B, H, d]
+
+                # Transpose back: [1, B, H, d] -> [B, H, 1, d]
+                attn_output = ttnn.transpose(attn_output, 1, 2)  # [1, B, H, d] -> [1, H, B, d]
+                attn_output = ttnn.transpose(attn_output, 0, 2)  # [1, H, B, d] -> [B, H, 1, d]
+
+                # Concatenate heads
+                attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            else:
+                # Standard self-attention (prefill mode)
+                # K is already transposed by nlp_create_qkv_heads
+
+                # Apply scaling
+                query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+                attn_weights = ttnn.matmul(
+                    query,
+                    key,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=get_high_perf_compute_config(),
+                )
+
+                # Apply attention mask if provided
+                if attention_mask is not None:
+                    attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+                # Softmax
+                attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+                # Apply attention to values
+                attn_output = ttnn.matmul(
+                    attn_weights,
+                    value,
+                    compute_kernel_config=get_high_perf_compute_config(),
+                )
+
+                attn_output = ttnn.transformer.concatenate_heads(
+                    attn_output,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+
         else:
-            # PHASE 2: Q always from hidden_states (high-performance compute kernel)
-            query = ttnn.linear(
-                hidden_states,
-                self.parameters["q_proj"]["weight"],
-                bias=self.parameters["q_proj"]["bias"],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=get_high_perf_compute_config(),
+            # Cross-attention path
+            # Check if we can use cached encoder K/V
+            if cross_attn_cache is not None and cross_attn_cache_valid:
+                # Reuse cached encoder K/V
+                key = cross_attn_cache[0]
+                value = cross_attn_cache[1]
+
+                # Compute only Q from hidden_states
+                query = ttnn.linear(
+                    hidden_states,
+                    self.parameters["q_proj"]["weight"],
+                    bias=self.parameters["q_proj"]["bias"],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=get_high_perf_compute_config(),
+                )
+                # Only unsqueeze if 3D (from decode mode it might be 4D)
+                if len(query.shape) == 3:
+                    query = ttnn.unsqueeze(query, dim=1)
+                query = ttnn.experimental.nlp_create_qkv_heads(
+                    query,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    num_heads=self.num_heads,
+                    num_kv_heads=0,
+                )[0]
+
+            else:
+                # Compute Q from hidden_states
+                query = ttnn.linear(
+                    hidden_states,
+                    self.parameters["q_proj"]["weight"],
+                    bias=self.parameters["q_proj"]["bias"],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=get_high_perf_compute_config(),
+                )
+
+                # Compute K, V from encoder
+                kv_states = ttnn.linear(
+                    key_value_states,
+                    self.parameters["kv_proj"]["weight"],
+                    bias=self.parameters["kv_proj"]["bias"],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=get_high_perf_compute_config(),
+                )
+                # Only unsqueeze if 3D (encoder output is usually 3D)
+                if len(kv_states.shape) == 3:
+                    kv_states = ttnn.unsqueeze(kv_states, dim=1)
+                kv_states_hidden_size = kv_states.shape[3]
+                key = kv_states[:, :, :, : kv_states_hidden_size // 2]
+                value = kv_states[:, :, :, kv_states_hidden_size // 2 :]
+                ttnn.deallocate(kv_states)
+
+                # Only unsqueeze query if it's 3D (from decode mode it might be 4D)
+                if len(query.shape) == 3:
+                    query = ttnn.unsqueeze(query, dim=1)
+                query = ttnn.experimental.nlp_create_qkv_heads(
+                    query,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    num_heads=self.num_heads,
+                    num_kv_heads=0,
+                )[0]
+
+                key = ttnn.experimental.nlp_create_qkv_heads(
+                    key,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    num_heads=self.num_heads,
+                    num_kv_heads=0,
+                )[0]
+
+                value = ttnn.experimental.nlp_create_qkv_heads(
+                    value,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    num_heads=self.num_heads,
+                    num_kv_heads=0,
+                )[0]
+
+                # Transpose K for matmul: [B, H, S, d] -> [B, H, d, S]
+                key = ttnn.permute(key, [0, 1, 3, 2])
+
+                # Copy to pre-allocated cache (required for trace)
+                if cross_attn_cache is not None:
+                    ttnn.copy(key, cross_attn_cache[0])
+                    ttnn.copy(value, cross_attn_cache[1])
+                    key = cross_attn_cache[0]
+                    value = cross_attn_cache[1]
+
+            # Apply scaling
+            query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            attn_weights = ttnn.matmul(
+                query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
             )
 
-            # Cross-attention: K, V from encoder
+            # Softmax (no mask for cross-attention)
+            attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            kv_states = ttnn.linear(
-                key_value_states,
-                self.parameters["kv_proj"]["weight"],
-                bias=self.parameters["kv_proj"]["bias"],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=get_high_perf_compute_config(),
-            )
-            kv_states = ttnn.unsqueeze(kv_states, dim=1)
-            kv_states_hidden_size = kv_states.shape[3]
-            key = kv_states[:, :, :, : kv_states_hidden_size // 2]
-            value = kv_states[:, :, :, kv_states_hidden_size // 2 :]
-            ttnn.deallocate(kv_states)
-
-            query = ttnn.unsqueeze(query, dim=1)
-            query = ttnn.experimental.nlp_create_qkv_heads(
-                query,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                num_heads=self.num_heads,
-                num_kv_heads=0,
-            )[0]
-
-            key = ttnn.experimental.nlp_create_qkv_heads(
-                key,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                num_heads=self.num_heads,
-                num_kv_heads=0,
-            )[0]
-
-            value = ttnn.experimental.nlp_create_qkv_heads(
+            # Apply attention to values
+            attn_output = ttnn.matmul(
+                attn_weights,
                 value,
+                compute_kernel_config=get_high_perf_compute_config(),
+            )
+
+            attn_output = ttnn.transformer.concatenate_heads(
+                attn_output,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                num_heads=self.num_heads,
-                num_kv_heads=0,
-            )[0]
-            key = ttnn.permute(key, [0, 1, 3, 2])
-
-        # Apply scaling (L1 output)
-        query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        attn_weights = ttnn.matmul(
-            query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
-        )
-
-        # PHASE 6: Apply attention mask if provided (L1 outputs)
-        if attention_mask is not None:
-            attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # PHASE 7: Softmax (L1 output)
-        attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # PHASE 8: Apply attention to values (L1 output)
-        attn_output = ttnn.matmul(
-            attn_weights,
-            value,
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
-        )
-
-        attn_output = ttnn.transformer.concatenate_heads(
-            attn_output,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+            )
 
         # PHASE 10: Output projection (L1 output)
         output = ttnn.linear(
@@ -514,13 +797,15 @@ class TTNNSpeechT5DecoderLayer:
             device,
             parameters["self_attn"],
             config,
+            max_seq_len=max_sequence_length,
         )
 
-        # Cross-attention
+        # Cross-attention (doesn't use KV cache for self-attention, so max_seq_len not critical)
         self.encoder_attn = TTNNSpeechT5Attention(
             device,
             parameters["encoder_attn"],
             config,
+            max_seq_len=max_sequence_length,
         )
 
         # Feed-forward
@@ -571,14 +856,22 @@ class TTNNSpeechT5DecoderLayer:
         hidden_states: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
+        kv_cache: Optional[List[ttnn.Tensor]] = None,
+        cross_attn_cache: Optional[List[ttnn.Tensor]] = None,
+        cross_attn_cache_valid: bool = False,
+        current_decode_pos: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
-        Decoder layer with comprehensive L1 memory management.
+        Decoder layer with KV cache support.
 
         Args:
             hidden_states: [batch, seq_len, hidden_size]
             encoder_hidden_states: [batch, enc_seq_len, hidden_size]
             attention_mask: [batch, 1, seq_len, seq_len] - causal mask for self-attn
+            kv_cache: [K_cache, V_cache] - self-attention KV cache for this layer
+            cross_attn_cache: [K_cache, V_cache] - cross-attention KV cache for this layer
+            cross_attn_cache_valid: If True, use cached cross-attention K/V
+            current_decode_pos: Current position tensor for cache update
 
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
@@ -597,6 +890,8 @@ class TTNNSpeechT5DecoderLayer:
             hidden_states,
             attention_mask=attention_mask,
             key_value_states=None,  # Self-attention
+            kv_cache=kv_cache,
+            current_decode_pos=current_decode_pos,
         )
 
         # Dropout skipped for inference
@@ -610,7 +905,12 @@ class TTNNSpeechT5DecoderLayer:
         # Match the sharding configuration from l1_width_sharded_memory
         # For hidden_size=768 (24 tiles), l1_width_sharded_memory creates:
         # CoreGrid(y=3, x=8) with width sharding
-        batch_size, seq_len, hidden_size = hidden_states.shape
+        # Handle both 3D [B, S, H] and 4D [B, 1, S, H] tensors
+        shape = hidden_states.shape
+        if len(shape) == 4:
+            batch_size, _, seq_len, hidden_size = shape
+        else:
+            batch_size, seq_len, hidden_size = shape
         num_cores = hidden_size // ttnn.TILE_SIZE  # 24 cores
         if num_cores % 8 == 0:
             core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
@@ -653,6 +953,8 @@ class TTNNSpeechT5DecoderLayer:
             hidden_states,
             attention_mask=None,  # No causal mask for cross-attention
             key_value_states=encoder_hidden_states,  # Cross-attention
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=cross_attn_cache_valid,
         )
 
         # Dropout skipped for inference
@@ -802,15 +1104,25 @@ class TTNNSpeechT5Decoder:
         decoder_input_values: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
+        kv_cache: Optional[List] = None,
+        cross_attn_cache: Optional[List] = None,
+        cross_attn_cache_valid: bool = False,
+        current_decode_pos: Optional[ttnn.Tensor] = None,
+        position_offset: int = 0,
         timing_details: bool = False,
     ):
         """
-        Forward pass with comprehensive L1 memory management.
+        Forward pass with KV cache support.
 
         Args:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             encoder_hidden_states: [batch, enc_seq_len, hidden_size]
             speaker_embeddings: [batch, speaker_embedding_dim] - optional
+            kv_cache: List of [K_cache, V_cache] per layer for self-attention
+            cross_attn_cache: List of [K_cache, V_cache] per layer for cross-attention
+            cross_attn_cache_valid: If True, use cached cross-attention K/V
+            current_decode_pos: Current position tensor for cache update (must be in DRAM)
+            position_offset: Offset for positional encoding (used in KV cache mode, typically same as step)
             timing_details: If True, return tuple (output, timing_dict)
 
         Returns:
@@ -823,6 +1135,9 @@ class TTNNSpeechT5Decoder:
 
         timing = {}
 
+        # Check if we're in decode mode (KV cache enabled)
+        is_decode = kv_cache is not None and current_decode_pos is not None
+
         # PHASE 1: Ensure all inputs are in L1
         start_time = time.time()
         decoder_input_values = ttnn.to_memory_config(decoder_input_values, ttnn.L1_MEMORY_CONFIG)
@@ -832,18 +1147,25 @@ class TTNNSpeechT5Decoder:
         timing["memory_input"] = time.time() - start_time
 
         # PHASE 2: Prenet processing (L1 output)
+        # For KV cache mode, pass position_offset to get correct positional encoding
         start_time = time.time()
-        hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
+        hidden_states = self.prenet(
+            decoder_input_values, speaker_embeddings=speaker_embeddings, position_offset=position_offset
+        )
         timing["prenet"] = time.time() - start_time
 
         seq_len = hidden_states.shape[1]
 
         # PHASE 3: Create causal attention mask (L1 output)
+        # For decode mode with seq_len=1, no causal mask needed
         start_time = time.time()
-        causal_mask = self._create_causal_mask(seq_len)
+        if is_decode and seq_len == 1:
+            causal_mask = None  # No mask needed for single token
+        else:
+            causal_mask = self._create_causal_mask(seq_len)
         timing["causal_mask"] = time.time() - start_time
 
-        # PHASE 4: Pass through decoder layers with L1 management
+        # PHASE 4: Pass through decoder layers with KV cache support
         start_time = time.time()
         layer_times = []
         for i, layer in enumerate(self.layers):
@@ -852,6 +1174,10 @@ class TTNNSpeechT5Decoder:
                 hidden_states=hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=causal_mask,
+                kv_cache=kv_cache[i] if kv_cache is not None else None,
+                cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
+                cross_attn_cache_valid=cross_attn_cache_valid,
+                current_decode_pos=current_decode_pos,
             )
             layer_times.append(time.time() - layer_start)
 
