@@ -41,7 +41,7 @@ This means that elements of each row are stored contiguously in memory, with row
 Consider a ``3x4`` matrix ``A``:
 
 .. figure:: images/a_matrix_3x4.jpg
-   :width: 300
+   :width: 250
    :alt: A 3x4 matrix A
    :align: center
 
@@ -49,7 +49,7 @@ Consider a ``3x4`` matrix ``A``:
 Using row-major layout, this matrix is stored in memory as:
 
 .. figure:: images/matrix_3x4_row_major.jpg
-   :width: 900
+   :width: 750
    :alt: A 3x4 matrix A in row-major layout
    :align: center
 
@@ -360,6 +360,8 @@ Make sure you are in the ``tt-metal`` directory and then build the example progr
 
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
 
+Program Description
+===================
 
 The main program for the code example being discussed is located in the file ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 The first thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
@@ -670,18 +672,18 @@ It is mainly used to inspect scalar variables, addresses, and the contents of ti
 numerical issues or hangs.
 
 The DPRINT API is controlled through environment variables on the host side.
-The host-side environment variable ``TT_METAL_DPRINT_CORES`` specifies which cores DPRINT information will be forwarded to the host terminal.
+The host-side environment variable ``TT_METAL_DPRINT_CORES`` specifies which cores' DPRINT information will be forwarded to the host terminal.
 If this environment variable is not set, calls to DPRINT APIs produce no output and behave as no-ops at runtime.
 When debugging, it is common to set this variable to ``all`` to print from all cores (i.e. ``export TT_METAL_DPRINT_CORES=all``).
 When not debugging, you should unset this variable to disable printing (i.e. ``unset TT_METAL_DPRINT_CORES``).
-This is particularly important to do when evaluating performance.
+Unsetting this variable is particularly important to do when evaluating performance.
 
-An alternative to printing to the host terminal is to print to a log file, which can be done by setting the ``TT_METAL_DPRINT_FILE`` environment variable,
-which can be used to specify a log file. The log file is stored in the ``generated/dprint`` directory, and is named after the device and core.
+An alternative to printing to the host terminal is to print to a log file, which can be done by setting
+the ``TT_METAL_DPRINT_FILE`` environment variable (e.g. ``export TT_METAL_DPRINT_FILE=log.txt``).
 
 To use DPRINT in a kernel, you include the debug header and use a C++ stream-like syntax:
 DPRINT supports printing integers, floats, and strings, but it does **not** directly support the C++ ``bool`` type.
-The common pattern is to cast booleans to an integer (for example, ``uint32_t``) before printing them.
+The common pattern is to cast a Boolean to an integer (for example, ``uint32_t``) before printing it.
 The following example shows a simple print of local kernel variables, including a Boolean flag:
 
 .. code-block:: cpp
@@ -712,7 +714,8 @@ The key rules are:
   - When reading from CBs (e.g. in writer kernels): between ``cb_wait_front()`` and ``cb_pop_front()``.
   - When writing to CBs (e.g. in reader kernels): between ``cb_reserve_back()`` and ``cb_push_back()``.
 
-- The math (compute) RISC cannot directly see CBs, so CB tile printing is most commonly done from data-movement RISCs (reader or writer kernels).
+- The math (compute) RISC cannot directly see CBs, so CB tile printing is most commonly done from
+reader or writer kernels.
 
 Simplified example of printing a full tile from an output CB in a writer kernel is shown below.
 
@@ -721,45 +724,50 @@ Simplified example of printing a full tile from an output CB in a writer kernel 
    #include "api/dataflow/dataflow_api.h"
    #include "api/debug/dprint.h"
    #include "api/debug/dprint_tile.h"
+   #include "tt-metalium/constants.hpp"
 
    void kernel_main() {
        // Assume this circular buffer holds output tiles from a compute kernel.
-       constexpr uint32_t cb_out = tt::CBIndex::c_16;
+       constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
 
        // Number of tiles to consume and optionally print.
        uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
        for (uint32_t t = 0; t < n_tiles; ++t) {
-            // Wait until one tile is available at the front of cb_out.
-            cb_wait_front(cb_out, 1);
+           // Wait until one tile is available at the front of cb_out.
+           cb_wait_front(cb_out, 1);
 
-            DPRINT << "Output tile " << t << " from cb_out = " << cb_out << ENDL();
+           // Perform the actual operation of this kernel here, including the
+           // noc_async_write_barrier(); to ensure CB has the content we want to print.
+           // ...
 
-            // Print each row of a tile.
-            // TileSlice has limited capacity, so we must print one row at a time.
-            for (uint32_t r = 0; r < TILE_HEIGHT; r++) {
-                  SliceRange sr = {
-                     .h0 = static_cast<uint8_t>(r),
-                     .h1 = static_cast<uint8_t>(r + 1),  // one row
-                     .hs = 1,                            // stride is 1
-                     .w0 = 0,
-                     .w1 = TILE_WIDTH,                   // full width
-                     .ws = 1                             // stride is 1
-                  };
+           DPRINT << "Output tile " << t << " from cb_out = " << static_cast<uint32_t>(cb_out) << ENDL();
 
-                  // TileSlice(cb_id, tile_idx, slice_range, endl_rows, print_untilized)
-                  DPRINT << r << ": "
-                        << TileSlice(
-                              cb_out,
-                              /* tile_idx = */ 0,
-                              sr,
-                              /* endl_rows = */ true,
-                              /* print_untilized = */ true)
-                        << ENDL();
-            }
+           // Print each row of a tile.
+           // TileSlice has limited capacity, so we must print one row at a time.
+           for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; row++) {
+               SliceRange slice_range {
+                   .h0 = static_cast<uint8_t>(row),
+                   .h1 = static_cast<uint8_t>(row + 1), // One row
+                   .hs = 1,                             // Stride is 1
+                   .w0 = 0,
+                   .w1 = tt::constants::TILE_WIDTH,     // Full width
+                   .ws = 1                              // Stride is 1
+               };
 
-            // Mark this tile as consumed in the CB.
-            cb_pop_front(cb_out, 1);
+               // TileSlice(cb_id, tile_idx, slice_range, endl_rows, print_untilized)
+               DPRINT << row << ": "
+                      << TileSlice(
+                         static_cast<uint8_t>(cb_out),
+                         /* tile_idx = */ 0,
+                         slice_range,
+                         /* endl_rows = */ true,
+                         /* print_untilized = */ true)
+                      << ENDL();
+           }
+
+           // Mark this tile as consumed in the CB.
+           cb_pop_front(cb_out, 1);
        }
    }
 
@@ -789,11 +797,15 @@ needing deep knowledge of the underlying Tenstorrent architecture, while still a
 Exercise 4: Using DPRINT to Debug a Kernel
 ==========================================
 
-Add DPRINT statements to the writer kernel in our example program to print the values of iterator i and the contents of
-the resulting tile for the first three tiles processed by the kernel.
-Modify the input data to the program to not use random numbers for the first three tiles so you can verify that the
-results are as expected.
+Add DPRINT statements to the writer kernel in our example program to print:
+* Value of the iterator ``i`` in every iteteration of the `for'` loop
+* Contents of the resulting tile for the first three tiles processed by the kernel..
+
+For testing purposes, modify the input data to the program to not use random numbers for the input data
+so you can verify that the results are as expected. Keep in mind that the input data vector is in row-major order,
+but it is then stored in tiled layout in the tensor.
 Since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
+Easiest way to rebuild the program is to rerun ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
 
 Debugging Hangs with Watcher
 ============================
