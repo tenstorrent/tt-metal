@@ -47,8 +47,8 @@ jobs:
             local dir=$1
             echo "Collecting from: $dir"
             
-            # Try pytest collection, show output for debugging
-            output=$(pytest "$dir" --collect-only -q --tb=no --no-header 2>&1)
+            # Try pytest collection, skip conftest.py to avoid import errors
+            output=$(pytest "$dir" --collect-only -q --tb=no --no-header --noconftest 2>&1)
             echo "$output"
             
             # Extract count from last line (e.g., "123 tests collected" or "collected 123 tests")
