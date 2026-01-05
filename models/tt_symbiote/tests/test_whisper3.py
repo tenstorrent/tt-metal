@@ -6,6 +6,7 @@ from datasets import load_dataset
 from torch import nn
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 from transformers.models.whisper.modeling_whisper import WhisperConfig
+from transformers.models.whisper.modeling_whisper import WhisperEncoderLayer as OriginalWhisperEncoderLayer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -45,7 +46,7 @@ class WhisperEncoderLayer(TTNNModule):
                 Whether or not to return the attentions tensors of all attention layers. See `attentions` under
                 returned tensors for more detail.
         """
-        config = WhisperConfig.from_pretrained("openai/whisper-large-v3")
+        config = WhisperConfig.from_pretrained("distil-whisper/distil-large-v3")
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.unsqueeze(hidden_states, dim=1)  # Add dummy dimension for batch size
@@ -59,14 +60,10 @@ class WhisperEncoderLayer(TTNNModule):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1024}], indirect=True)
 def test_whisper3(device):
     """Test Whisper 3 model with TTNN acceleration."""
-    nn_to_ttnn = {
-        nn.Linear: TTNNLinear,
-        nn.SiLU: TTNNSilu,
-        # OriginalWhisperEncoderLayer: WhisperEncoderLayer
-    }
+    nn_to_ttnn = {nn.Linear: TTNNLinear, nn.SiLU: TTNNSilu, OriginalWhisperEncoderLayer: WhisperEncoderLayer}
     torch_dtype = torch.bfloat16
 
-    model_id = "openai/whisper-large-v3"
+    model_id = "distil-whisper/distil-large-v3"
 
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
