@@ -58,10 +58,7 @@ class HostConfig:
 MESH_DEVICE_MAP = {"2x": "DUAL", "4x": "QUAD"}
 
 # Special alias commands that bypass normal job setup
-COMMAND_ALIASES: dict[str, str] = {
-    "reset": "tt-smi -glx_reset --snapshot_no_tty; sudo rm -rf /dev/shm/*",
-    "nuke": "sudo pkill -9 python; tt-smi -glx_reset --snapshot_no_tty; sudo rm -rf /dev/shm/*",
-}
+COMMAND_ALIASES: dict[str, str] = {"reset": "tt-smi -glx_reset --snapshot_no_tty; sudo rm -rf /dev/shm/*"}
 
 # Common environment variables for all hosts
 COMMON_ENV: tuple[tuple[str, str], ...] = (
@@ -321,13 +318,6 @@ def run_galaxy_command(
     if tt_metal_home is None:
         tt_metal_home = os.environ.get("TT_METAL_HOME", os.getcwd())
 
-    # Warn about nuke killing all Python processes
-    if command == ["nuke"]:
-        print("\n" + "!" * 60)
-        print("  WARNING: 'nuke' will kill ALL Python processes on all hosts!")
-        print("  This may affect other users or unrelated work.")
-        print("!" * 60 + "\n")
-
     tt_run_cmd, cfg, host_cfg, hostname = build_tt_run_command(command, config_type, hostname, tt_metal_home)
 
     # Print configuration summary
@@ -371,7 +361,7 @@ def main(args: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Launch a job on multi-host Galaxy via tt-run.",
         usage="%(prog)s [-d] {2x,4x} -- command [args...]",
-        epilog="Special commands: 'reset' (reset devices), 'nuke' (reset + kill all python)",
+        epilog="Special commands: 'reset' (reset devices and clear shared memory)",
     )
     parser.add_argument(
         "-d",
