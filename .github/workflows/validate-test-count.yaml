@@ -52,7 +52,8 @@ jobs:
           # Function to count test functions using pytest
           count_tests() {
             local dir=$1
-            pytest "$dir" --collect-only -q 2>/dev/null | grep "test session starts" -A 9999 | grep "<" | wc -l || echo "0"
+            # Use pytest --collect-only and count the test items
+            pytest "$dir" --collect-only -q 2>&1 | tail -1 | grep -oE '[0-9]+ test' | grep -oE '[0-9]+' || echo "0"
           }
           
           # Count tests in PR branch
