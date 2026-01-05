@@ -22,7 +22,7 @@ from models.demos.unet_3d.demo.utils import (
 logger = configure_logging()
 
 
-def get_test_loaders(loaders_config: dict):
+def get_test_loaders(loaders_config: dict, num_devices):
     """Returns test DataLoader.
 
     Args:
@@ -40,7 +40,7 @@ def get_test_loaders(loaders_config: dict):
     num_workers = loaders_config.get("num_workers", 1)
     logger.info(f"Number of workers for the dataloader: {num_workers}")
 
-    batch_size = loaders_config.get("batch_size", 1)
+    batch_size = loaders_config.get("batch_size_per_device", 1) * num_devices
     # use generator in order to create data loaders lazily one by one
     for test_dataset in test_datasets:
         collate_fn = default_prediction_collate

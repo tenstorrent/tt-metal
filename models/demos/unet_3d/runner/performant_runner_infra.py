@@ -59,7 +59,7 @@ class UNet3DTestInfra:
         self.device = device
         self.num_devices = self.device.get_num_devices()
         self.channels = config["model"]["in_channels"]
-        self.batch_size = 1 * self.num_devices
+        self.batch_size = config["dataset"]["batch_size_per_device"] * self.num_devices
         self.input_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = get_mesh_mappers(self.device)
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
