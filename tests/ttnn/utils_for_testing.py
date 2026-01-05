@@ -405,8 +405,12 @@ def maybe_trace(op_func, enable_trace, device):
     return output
 
 
+# Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+# This was changed to convert to unsigned types instead to address issue with the value truncation
+# https://github.com/tenstorrent/tt-metal/issues/31150 -- the function below is necessary to make
+# the tests relying on the older signed behavior work.
 def convert_to_signed_tensor(py_tensor):
-    """ "
+    """
     Use on the result of the `to_torch` function to convert the tensor to the signed type.
     """
     if py_tensor.dtype == torch.uint16:
