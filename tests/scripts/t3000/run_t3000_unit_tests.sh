@@ -628,14 +628,14 @@ run_t3000_gpt_oss_unit_tests() {
 
   echo "LOG_METAL: Running run_t3000_gpt_oss_unit_tests"
 
-  # GPT-OSS weights
-  gpt_oss_20b=openai/gpt-oss-20b
-  gpt_oss_120b=openai/gpt-oss-120b
-  tt_cache_gpt_oss_20b=$TT_CACHE_HOME/$gpt_oss_20b
-  tt_cache_gpt_oss_120b=$TT_CACHE_HOME/$gpt_oss_120b
+  # Install gpt-oss requirements
+  pip install -r models/demos/gpt_oss/requirements.txt
 
-  HF_MODEL=$gpt_oss_20b TT_CACHE_PATH=$tt_cache_gpt_oss_20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
-  HF_MODEL=$gpt_oss_120b TT_CACHE_PATH=$tt_cache_gpt_oss_120b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+  # Test GPT-OSS 20B model
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
+
+  # Test GPT-OSS 120B model
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
