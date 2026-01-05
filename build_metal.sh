@@ -4,12 +4,9 @@ set -eo pipefail
 
 ARCH=`uname -m`
 
-# Source /etc/os-release to get distribution info
-# Note: Ubuntu uses ID and VERSION_ID, Fedora uses ID and VERSION_ID but may also use BUILD_ID
+# Source /etc/os-release to get distribution info (sets ID, VERSION_ID, etc.)
+# ID will be "ubuntu", "fedora", etc.
 source /etc/os-release
-
-# FLAVOR is used for backwards compatibility; prefer ID from os-release
-FLAVOR="${ID:-unknown}"
 
 # VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
 VERSION="unknown-version"
