@@ -95,13 +95,13 @@ jobs:
         with:
           commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'stable_diffusion') }}
-
-      - name: Run sentence_bert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/sentence_bert/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'sentence_bert') }}
+      # Disabled until the test is fixed; issue #35263
+      # - name: Run sentence_bert model_perf test
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+      #   with:
+      #     commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/sentence_bert/tests/perf/ -m models_performance_bare_metal
+      #   if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'sentence_bert') }}
       - name: Run resnet50 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
