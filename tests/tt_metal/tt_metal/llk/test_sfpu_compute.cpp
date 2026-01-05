@@ -89,14 +89,7 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
         return bfloat16(std::tanh(static_cast<float>(input)));
     } else if (op_name == "sign") {
         float val = static_cast<float>(input);
-        float result;
-        if (0.0f < val) {
-            result = 1.0f;
-        } else if (val < 0.0f) {
-            result = -1.0f;
-        } else {
-            result = 0.0f;
-        }
+        float result = static_cast<float>((val > 0.0f) - (val < 0.0f));
         return bfloat16(result);
     } else {
         TT_THROW("Unsupported op_name in test");
