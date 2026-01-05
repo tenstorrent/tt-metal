@@ -20,11 +20,14 @@ bool run_command(const std::string& cmd, const std::string& log_file, const bool
     int ret;
     static std::mutex io_mutex;
 
+#ifndef NDEBUG
     // Clear ASan/LSan environment variables for subprocesses to prevent the sanitizer
     // runtime from being injected into the cross-compiler toolchain. The sanitizers are
     // meant for testing our code, not external tools like the RISC-V compiler.
-    const std::string env_cleanup = "unset LD_PRELOAD ASAN_OPTIONS LSAN_OPTIONS UBSAN_OPTIONS; ";
-    const std::string sanitized_cmd = env_cleanup + cmd;
+    const std::string sanitized_cmd = "unset LD_PRELOAD ASAN_OPTIONS LSAN_OPTIONS UBSAN_OPTIONS; " + cmd;
+#else
+    const std::string& sanitized_cmd = cmd;
+#endif
 
     if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
         {
