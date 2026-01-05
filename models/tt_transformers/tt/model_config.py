@@ -726,6 +726,9 @@ class ModelArgs:
                 exp_approx_mode=False,
                 # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
                 q_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx % 256 == 0) else 64,
+                # Original:
+                # k_chunk_size=256 if seqlen >= 2048 else 64,
+                # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
                 k_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx % 256 == 0) else 64,
             )
 

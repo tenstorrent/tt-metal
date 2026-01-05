@@ -498,6 +498,9 @@ class TtLlamaAttention_optimized:
         seq_len = query_layer.shape[2]
         # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
         q_chunk_size = 128 if seq_len % 128 == 0 and (chunk_start_idx is None or chunk_start_idx % 128 == 0) else 32
+        # Original:
+        # k_chunk_size = 512 if seq_len % 512 == 0 else 128 if seq_len % 128 == 0 else 32
+        # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
         k_chunk_size = (
             512
             if seq_len % 512 == 0 and (chunk_start_idx is None or chunk_start_idx % 512 == 0)
