@@ -5,7 +5,10 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <tt_stl/unreachable.hpp>
 
 #include "api/tt-metalium/data_types.hpp"
 #include "api/tt-metalium/kernel_types.hpp"
@@ -41,6 +44,23 @@ struct KernelSource {
             name = "Kernel_Source_Code";
         }
         return name;
+    }
+
+    // Returns the actual source code (file content or source string)
+    std::string get_content() const {
+        switch (source_type_) {
+            case SourceType::FILE_PATH: {
+                std::ifstream file(path_);
+                if (!file.is_open()) {
+                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
+                }
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                return buffer.str();
+            }
+            case SourceType::SOURCE_CODE: return source_;
+        }
+        ttsl::unreachable();
     }
 };
 
