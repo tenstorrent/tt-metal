@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -52,6 +53,18 @@ enum class ClusterType : std::uint8_t {
  * @return ClusterType The cluster type detected at runtime
  */
 tt::tt_metal::ClusterType GetClusterType();
+
+/**
+ * @brief Get the default mesh shape from the mesh graph descriptor for the current cluster type
+ *
+ * This returns the shape defined in the default textproto:
+ * - Galaxy: 8x4 (32 chips)
+ * - T3K: 2x4 (8 chips)
+ * - P300: 1x2 (2 chips)
+ *
+ * @return distributed::MeshShape The default mesh shape for the cluster
+ */
+distributed::MeshShape GetDefaultMeshShape();
 
 /**
  * @brief Serialize the cluster descriptor to a file and return the path

@@ -13,6 +13,11 @@ tt::tt_metal::ClusterType get_cluster_type() { return tt::tt_metal::GetClusterTy
 
 std::string serialize_cluster_descriptor() { return tt::tt_metal::SerializeClusterDescriptor(); }
 
+tt::tt_metal::distributed::MeshShape get_mesh_shape() {
+    // Call the public tt-metal API to get the default mesh shape
+    return tt::tt_metal::GetDefaultMeshShape();
+}
+
 }  // namespace cluster
 
 using namespace cluster;
