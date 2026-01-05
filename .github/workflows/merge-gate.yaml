@@ -203,6 +203,7 @@ jobs:
       version: 22.04
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
+      build-wheel: true
       publish-artifact: false
 
   metalium-basic-tests:
@@ -248,6 +249,27 @@ jobs:
       per-test-timeout: 11
       runner: ${{ matrix.platform }}
       product: tt-nn
+
+  ttnn-pytest-smoke-tests:
+    needs: [build-asan, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/pytest-smoke.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-asan.outputs.wheel-artifact-name }}
+      runner: ${{ matrix.platform }}
 
   ttnn-merge-gate-tests:
     needs: [build, find-changes]
@@ -382,14 +404,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-pytest-smoke-tests, ttsim-unit-tests, triage-tests, fabric-cpu-only-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-pytest-smoke-tests, ttsim-unit-tests, triage-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
