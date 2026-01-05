@@ -15,12 +15,8 @@ set(CPACK_RPM_NN-VALIDATION_PACKAGE_GROUP "Applications/System")
 
 set(CPACK_RPM_COMPONENT_INSTALL YES)
 
-# Use VERSION_RPM if defined, otherwise fall back to project version
-if(DEFINED VERSION_RPM)
-    set(CPACK_RPM_PACKAGE_VERSION "${VERSION_RPM}")
-else()
-    set(CPACK_RPM_PACKAGE_VERSION "${PROJECT_VERSION}")
-endif()
+# VERSION_RPM is set by cmake/version.cmake with distro-specific suffix (e.g., .fc43)
+set(CPACK_RPM_PACKAGE_VERSION "${VERSION_RPM}")
 set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
 
 # Enable automatic dependency detection

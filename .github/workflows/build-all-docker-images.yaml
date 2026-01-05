@@ -48,6 +48,9 @@ on:
       fedora-43-dev-tag:
         description: "Docker tag for Fedora 43 Dev image"
         value: ${{ jobs.check-images.outputs.fedora-43-dev-tag }}
+      fedora-43-basic-dev-tag:
+        description: "Docker tag for Fedora 43 Basic Dev image"
+        value: ${{ jobs.check-images.outputs.fedora-43-basic-dev-tag }}
       fedora-43-basic-ttnn-runtime-tag:
         description: "Docker tag for Fedora 43 Basic TTNN Runtime image"
         value: ${{ jobs.check-images.outputs.fedora-43-basic-ttnn-runtime-tag }}
@@ -83,6 +86,7 @@ jobs:
       fedora-43-ci-build-tag: ${{ steps.fedora-43-tags.outputs.ci-build-tag }}
       fedora-43-ci-test-tag: ${{ steps.fedora-43-tags.outputs.ci-test-tag }}
       fedora-43-dev-tag: ${{ steps.fedora-43-tags.outputs.dev-tag }}
+      fedora-43-basic-dev-tag: ${{ steps.fedora-43-tags.outputs.basic-dev-tag }}
       fedora-43-basic-ttnn-runtime-tag: ${{ steps.fedora-43-tags.outputs.basic-ttnn-runtime-tag }}
       fedora-43-needs-build: ${{ steps.fedora-43-check.outputs.needs-build }}
       # ManyLinux
@@ -94,50 +98,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Helper function to compute hash from Dockerfile + its COPY sources + extra files
-      # This automatically extracts files from COPY statements, avoiding manual enumeration
-      - name: Define hash function
-        id: define-hash-fn
-        run: |
-          # Create helper script for computing dockerfile hashes
-          cat > /tmp/dockerfile-hash.sh << 'HASHSCRIPT'
-          #!/bin/bash
-          # Usage: dockerfile-hash.sh <dockerfile> [extra-files...]
-          # Computes hash of: dockerfile + files from COPY statements + extra files
-          set -euo pipefail
-
-          DOCKERFILE="$1"; shift
-          declare -a FILES=("$DOCKERFILE")
-
-          # Add extra files passed as arguments
-          for f in "$@"; do [[ -f "$f" ]] && FILES+=("$f"); done
-
-          # Extract COPY source paths (skip --from=, skip ${VAR} refs, skip directories)
-          while IFS= read -r line; do
-            [[ "$line" =~ --from= ]] && continue
-            if [[ "$line" =~ ^[[:space:]]*COPY[[:space:]]+ ]]; then
-              src="${line#*COPY}"
-              # Remove flags like --chmod=xxx
-              while [[ "$src" =~ ^[[:space:]]*--[a-z]+= ]]; do src="${src#*--*=* }"; done
-              src="${src#"${src%%[![:space:]]*}"}"  # trim leading space
-              # Handle JSON array format
-              if [[ "$src" =~ ^\[ ]]; then
-                src=$(echo "$src" | sed -E 's/^\[\"([^"]+)\".*/\1/')
-              else
-                src="${src%% *}"
-              fi
-              # Skip variable refs, remove leading /
-              [[ "$src" =~ \$\{ ]] && continue
-              src="${src#/}"
-              [[ -f "$src" ]] && FILES+=("$src")
-            fi
-          done < "$DOCKERFILE"
-
-          # Sort, dedupe, and hash
-          printf '%s\n' "${FILES[@]}" | sort -u | xargs cat | sha1sum | cut -d' ' -f1
-          HASHSCRIPT
-          chmod +x /tmp/dockerfile-hash.sh
-
       # Compute Ubuntu 22.04 tags
       - name: Compute Ubuntu 22.04 tags
         id: ubuntu-2204-tags
@@ -145,16 +105,16 @@ jobs:
           # Extra files not in COPY but affect the image
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
-          HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
+          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           ARCH="amd64"
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_DEV_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_TTNN_RUNTIME_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Ubuntu 22.04 images exist
@@ -174,16 +134,16 @@ jobs:
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
-          HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
+          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           ARCH="amd64"
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_DEV_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_TTNN_RUNTIME_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Ubuntu 24.04 images exist
@@ -203,13 +163,16 @@ jobs:
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
-          HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.fedora $EXTRA_FILES)
+          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.fedora $EXTRA_FILES)
           ARCH="amd64"
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_TTNN_RUNTIME_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.fedora)
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.fedora)
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.fedora)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/fedora-43-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Fedora 43 images exist
@@ -229,7 +192,7 @@ jobs:
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
-          MANYLINUX_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
+          MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
           echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/manylinux-amd64:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check ManyLinux image exists
@@ -439,6 +402,17 @@ jobs:
           target: dev
           push: true
           tags: ${{ needs.check-images.outputs.fedora-43-dev-tag }}
+          build-args: FEDORA_VERSION=43
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic Dev image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-dev
+          push: true
+          tags: ${{ needs.check-images.outputs.fedora-43-basic-dev-tag }}
           build-args: FEDORA_VERSION=43
           cache-to: type=inline
           pull: true

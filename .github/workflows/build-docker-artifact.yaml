@@ -97,35 +97,6 @@ jobs:
           echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
           echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
 
-      # Helper function to compute hash from Dockerfile + its COPY sources + extra files
-      - name: Define hash function
-        run: |
-          cat > /tmp/dockerfile-hash.sh << 'HASHSCRIPT'
-          #!/bin/bash
-          set -euo pipefail
-          DOCKERFILE="$1"; shift
-          declare -a FILES=("$DOCKERFILE")
-          for f in "$@"; do [[ -f "$f" ]] && FILES+=("$f"); done
-          while IFS= read -r line; do
-            [[ "$line" =~ --from= ]] && continue
-            if [[ "$line" =~ ^[[:space:]]*COPY[[:space:]]+ ]]; then
-              src="${line#*COPY}"
-              while [[ "$src" =~ ^[[:space:]]*--[a-z]+= ]]; do src="${src#*--*=* }"; done
-              src="${src#"${src%%[![:space:]]*}"}"
-              if [[ "$src" =~ ^\[ ]]; then
-                src=$(echo "$src" | sed -E 's/^\[\"([^"]+)\".*/\1/')
-              else
-                src="${src%% *}"
-              fi
-              [[ "$src" =~ \$\{ ]] && continue
-              src="${src#/}"
-              [[ -f "$src" ]] && FILES+=("$src")
-            fi
-          done < "$DOCKERFILE"
-          printf '%s\n' "${FILES[@]}" | sort -u | xargs cat | sha1sum | cut -d' ' -f1
-          HASHSCRIPT
-          chmod +x /tmp/dockerfile-hash.sh
-
       - name: Compute tags
         id: tags
         run: |
@@ -139,18 +110,18 @@ jobs:
             DOCKERFILE="dockerfile/Dockerfile"
           fi
 
-          HASH=$(/tmp/dockerfile-hash.sh "$DOCKERFILE" $EXTRA_FILES)
+          HASH=$(.github/scripts/dockerfile-hash.sh "$DOCKERFILE" $EXTRA_FILES)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_DEV_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_TTNN_RUNTIME_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
-          MANYLINUX_HASH=$(/tmp/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
+          MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
           echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
@@ -275,7 +246,7 @@ jobs:
   build-fedora-images:
     name: "🐳️ Build Fedora images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.distro == 'fedora' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
+    if: needs.check-docker-images.outputs.distro == 'fedora' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -322,6 +293,18 @@ jobs:
           target: dev
           push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
+          build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic Dev image
+        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.fedora
+          target: basic-dev
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
           build-args: FEDORA_VERSION=${{ needs.check-docker-images.outputs.version }}
           cache-to: type=inline
           pull: true

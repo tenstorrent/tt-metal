@@ -81,33 +81,79 @@ function(ParseGitDescribe)
 
     set(VERSION_FULL "${VERSION_NUMERIC}")
     set(VERSION_DEB "${VERSION_NUMERIC}")
+    set(VERSION_RPM "${VERSION_NUMERIC}")
     if(VERSION_STATUS)
         string(APPEND VERSION_FULL "-${VERSION_STATUS}")
         string(APPEND VERSION_DEB "~${VERSION_STATUS}") # Debian versioning uses a ~ for "less than blank"
+        string(APPEND VERSION_RPM "~${VERSION_STATUS}") # RPM also uses ~ for pre-release versions
     endif()
     if(VERSION_COMMIT_COUNT)
         string(APPEND VERSION_FULL "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
         string(APPEND VERSION_DEB "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
+        # RPM uses . instead of + for additional version segments
+        string(APPEND VERSION_RPM ".${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
     endif()
     if(VERSION_DIRTY)
         string(APPEND VERSION_FULL "+m")
         string(APPEND VERSION_DEB "+m")
+        string(APPEND VERSION_RPM ".m")
     endif()
 
-    # Include Ubuntu's version to disambiguate packages
-    execute_process(
-        COMMAND
-            lsb_release -sr
-        OUTPUT_VARIABLE UBUNTU_RELEASE
-        OUTPUT_STRIP_TRAILING_WHITESPACE
+    # Include distro version to disambiguate packages
+    # Detect distro type from /etc/os-release
+    set(DISTRO_SUFFIX "")
+    if(EXISTS "/etc/os-release")
+        file(STRINGS "/etc/os-release" OS_RELEASE_ID REGEX "^ID=")
+        file(STRINGS "/etc/os-release" OS_RELEASE_VERSION REGEX "^VERSION_ID=")
+        if(OS_RELEASE_ID MATCHES "ID=\"?([^\"]+)\"?")
+            string(TOLOWER "${CMAKE_MATCH_1}" DISTRO_ID)
+        endif()
+        if(OS_RELEASE_VERSION MATCHES "VERSION_ID=\"?([^\"]+)\"?")
+            set(DISTRO_VERSION "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+
+    # For backwards compatibility, also check lsb_release
+    if(NOT DISTRO_VERSION)
+        execute_process(
+            COMMAND
+                lsb_release -sr
+            OUTPUT_VARIABLE DISTRO_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+    endif()
+
+    # Add distro suffix based on detected OS
+    if(DISTRO_ID STREQUAL "fedora")
+        string(APPEND VERSION_RPM ".fc${DISTRO_VERSION}")
+    elseif(
+        DISTRO_ID
+            STREQUAL
+            "rhel"
+        OR DISTRO_ID
+            STREQUAL
+            "centos"
+        OR DISTRO_ID
+            STREQUAL
+            "rocky"
+        OR DISTRO_ID
+            STREQUAL
+            "almalinux"
     )
-    string(APPEND VERSION_DEB "~ubuntu${UBUNTU_RELEASE}")
+        string(APPEND VERSION_RPM ".el${DISTRO_VERSION}")
+    endif()
+    # Ubuntu/Debian suffix for DEB packages
+    if(DISTRO_VERSION)
+        string(APPEND VERSION_DEB "~ubuntu${DISTRO_VERSION}")
+    endif()
 
     message(STATUS "Version: ${VERSION_FULL}")
 
     # Output variables
     set(VERSION_FULL "${VERSION_FULL}" PARENT_SCOPE)
     set(VERSION_DEB "${VERSION_DEB}" PARENT_SCOPE)
+    set(VERSION_RPM "${VERSION_RPM}" PARENT_SCOPE)
     set(VERSION_NUMERIC "${VERSION_NUMERIC}" PARENT_SCOPE)
     set(VERSION_HASH "${VERSION_HASH}" PARENT_SCOPE)
 endfunction()

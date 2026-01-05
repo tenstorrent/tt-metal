@@ -239,6 +239,19 @@ RUN dnf install -y \
 
 #############################################################
 
+FROM base AS basic-dev
+
+# Minimal build environment for basic development tasks
+# Similar to Ubuntu's Dockerfile.basic-dev base target
+RUN dnf install -y \
+    cmake \
+    ninja-build \
+    gcc-c++ \
+    make \
+    && dnf clean all
+
+#############################################################
+
 FROM base AS basic-ttnn-runtime
 
 # Set up virtual environment using uv
