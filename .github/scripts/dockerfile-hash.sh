@@ -29,20 +29,31 @@ for f in "$@"; do
 done
 
 # Extract COPY source paths (skip --from=, skip ${VAR} refs, skip directories)
-while IFS= read -r line; do
+# Handle multi-line statements with backslash continuations
+accumulated_line=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+    # Handle backslash line continuations
+    # Remove trailing whitespace for continuation check
+    trimmed="${line%"${line##*[![:space:]]}"}"
+    if [[ "$trimmed" == *'\' ]]; then
+        # Line continues - remove trailing backslash and accumulate
+        accumulated_line+="${trimmed%\\} "
+        continue
+    else
+        # Complete line (either no continuation or final line of continuation)
+        full_line="${accumulated_line}${line}"
+        accumulated_line=""
+    fi
+
     # Skip COPY --from= which copies from other build stages
-    [[ "$line" =~ --from= ]] && continue
+    [[ "$full_line" =~ --from= ]] && continue
 
-    if [[ "$line" =~ ^[[:space:]]*COPY[[:space:]]+ ]]; then
-        src="${line#*COPY}"
+    if [[ "$full_line" =~ ^[[:space:]]*COPY[[:space:]]+ ]]; then
+        src="${full_line#*COPY}"
 
-        # Remove flags like --chmod=xxx, --chown=xxx
-        while [[ "$src" =~ ^[[:space:]]*--[a-z]+= ]]; do
-            src="${src#*--*=* }"
-        done
-
-        # Trim leading whitespace
-        src="${src#"${src%%[![:space:]]*}"}"
+        # Remove flags like --chmod=xxx, --chown=xxx using sed for robustness
+        # This handles multiple flags and various whitespace patterns
+        src=$(echo "$src" | sed -E 's/^[[:space:]]*(--[a-z]+(=[^[:space:]]*)?[[:space:]]+)*//')
 
         # Handle JSON array format: ["source", "dest"]
         if [[ "$src" =~ ^\[ ]]; then
