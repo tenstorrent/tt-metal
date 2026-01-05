@@ -11,7 +11,12 @@ on:
       - 'tests/ttnn/unit_tests/operations/matmul/**'
       - 'tests/ttnn/unit_tests/operations/pool/**'
       - 'tests/ttnn/unit_tests/operations/fused/**'
-
+      - 'tests/ttnn/unit_tests/operations/transformers/**'
+      - 'tests/ttnn/unit_tests/operations/reduce/**'
+      - 'tests/ttnn/unit_tests/operations/tensor/**'
+      - 'tests/ttnn/unit_tests/operations/debug/**'
+      - 'tests/ttnn/unit_tests/operations/base_functionality/**'
+      - 'tests/ttnn/unit_tests/operations/benchmarks/**'
 jobs:
   check-test-count:
     runs-on: ubuntu-latest
@@ -19,84 +24,44 @@ jobs:
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Need full history to compare
+        # Default fetch-depth: 1 - just PR branch
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install pytest and dependencies
+      - name: Count tests in PR branch and main branch
+        id: count-tests
         run: |
-          pip install pytest
-
-      - name: Count tests in PR branch
-        id: pr-count
-        run: |
-          # Count test functions by scanning files directly (no imports needed)
-          echo "=== Counting tests without importing ==="
+          # Define locked directories to check
+          DIRS="eltwise conv matmul pool fused transformers reduce tensor debug base_functionality benchmarks"
           
           # Function to count test functions in Python files
           count_tests() {
             local dir=$1
-            # Find all test_*.py files and count functions starting with 'test_' or decorated with @pytest
             find "$dir" -name "test_*.py" -type f -exec grep -h "^\s*def test_\|^\s*async def test_" {} \; | wc -l
           }
           
-          ELTWISE_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/eltwise")
-          CONV_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/conv")
-          MATMUL_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/matmul")
+          # Count tests in PR branch
+          echo "=== PR branch test counts ==="
+          for dir in $DIRS; do
+            count=$(count_tests "tests/ttnn/unit_tests/operations/$dir")
+            echo "  $dir: $count"
+            echo "pr_${dir}=$count" >> $GITHUB_OUTPUT
+          done
           
-          echo "Test counts (by scanning files):"
-          echo "  Eltwise: $ELTWISE_COUNT"
-          echo "  Conv: $CONV_COUNT"
-          echo "  Matmul: $MATMUL_COUNT"
-          
-          echo "pr_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
-          echo "pr_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
-          echo "pr_matmul=$MATMUL_COUNT" >> $GITHUB_OUTPUT
-          
-          echo "PR branch test counts:"
-          echo "  Eltwise: $ELTWISE_COUNT"
-          echo "  Conv: $CONV_COUNT"
-          echo "  Matmul: $MATMUL_COUNT"
-
-      - name: Checkout base branch
-        run: |
+          # Checkout base branch
           git fetch origin main
           git checkout origin/main
-
-      - name: Count tests in base branch
-        id: base-count
-        run: |
-          # Count test functions by scanning files directly (no imports needed)
-          count_tests() {
-            local dir=$1
-            find "$dir" -name "test_*.py" -type f -exec grep -h "^\s*def test_\|^\s*async def test_" {} \; | wc -l
-          }
           
-          ELTWISE_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/eltwise")
-          CONV_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/conv")
-          MATMUL_COUNT=$(count_tests "tests/ttnn/unit_tests/operations/matmul")
-          
-          echo "base_eltwise=$ELTWISE_COUNT" >> $GITHUB_OUTPUT
-          echo "base_conv=$CONV_COUNT" >> $GITHUB_OUTPUT
-          echo "base_matmul=$MATMUL_COUNT" >> $GITHUB_OUTPUT
-          
-          echo "Base branch test counts:"
-          echo "  Eltwise: $ELTWISE_COUNT"
-          echo "  Conv: $CONV_COUNT"
-          echo "  Matmul: $MATMUL_COUNT"
+          # Count tests in base branch
+          echo "=== Base branch test counts ==="
+          for dir in $DIRS; do
+            count=$(count_tests "tests/ttnn/unit_tests/operations/$dir")
+            echo "  $dir: $count"
+            echo "base_${dir}=$count" >> $GITHUB_OUTPUT
+          done
 
       - name: Compare test counts
         run: |
-          PR_ELTWISE=${{ steps.pr-count.outputs.pr_eltwise }}
-          BASE_ELTWISE=${{ steps.base-count.outputs.base_eltwise }}
-          PR_CONV=${{ steps.pr-count.outputs.pr_conv }}
-          BASE_CONV=${{ steps.base-count.outputs.base_conv }}
-          PR_MATMUL=${{ steps.pr-count.outputs.pr_matmul }}
-          BASE_MATMUL=${{ steps.base-count.outputs.base_matmul }}
+          # Define locked directories to check
+          DIRS="eltwise conv matmul pool fused transformers reduce tensor debug base_functionality benchmarks"
           
           FAILED=0
           
@@ -105,32 +70,19 @@ jobs:
           echo "| Directory | Base | PR | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
           
-          # Check eltwise
-          if [ "$PR_ELTWISE" -gt "$BASE_ELTWISE" ]; then
-            echo "| eltwise | $BASE_ELTWISE | $PR_ELTWISE | ❌ New tests added (+$((PR_ELTWISE - BASE_ELTWISE))) |" >> $GITHUB_STEP_SUMMARY
-            echo "::error::New tests detected in tests/ttnn/unit_tests/operations/eltwise/ ($BASE_ELTWISE → $PR_ELTWISE)"
-            FAILED=1
-          else
-            echo "| eltwise | $BASE_ELTWISE | $PR_ELTWISE | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Check conv
-          if [ "$PR_CONV" -gt "$BASE_CONV" ]; then
-            echo "| conv | $BASE_CONV | $PR_CONV | ❌ New tests added (+$((PR_CONV - BASE_CONV))) |" >> $GITHUB_STEP_SUMMARY
-            echo "::error::New tests detected in tests/ttnn/unit_tests/operations/conv/ ($BASE_CONV → $PR_CONV)"
-            FAILED=1
-          else
-            echo "| conv | $BASE_CONV | $PR_CONV | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Check matmul
-          if [ "$PR_MATMUL" -gt "$BASE_MATMUL" ]; then
-            echo "| matmul | $BASE_MATMUL | $PR_MATMUL | ❌ New tests added (+$((PR_MATMUL - BASE_MATMUL))) |" >> $GITHUB_STEP_SUMMARY
-            echo "::error::New tests detected in tests/ttnn/unit_tests/operations/matmul/ ($BASE_MATMUL → $PR_MATMUL)"
-            FAILED=1
-          else
-            echo "| matmul | $BASE_MATMUL | $PR_MATMUL | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
-          fi
+          # Check each directory
+          for dir in $DIRS; do
+            PR_COUNT=${{ steps.count-tests.outputs.pr_${dir} }}
+            BASE_COUNT=${{ steps.count-tests.outputs.base_${dir} }}
+            
+            if [ "$PR_COUNT" -gt "$BASE_COUNT" ]; then
+              echo "| $dir | $BASE_COUNT | $PR_COUNT | ❌ New tests added (+$((PR_COUNT - BASE_COUNT))) |" >> $GITHUB_STEP_SUMMARY
+              echo "::error::New tests detected in tests/ttnn/unit_tests/operations/$dir/ ($BASE_COUNT → $PR_COUNT)"
+              FAILED=1
+            else
+              echo "| $dir | $BASE_COUNT | $PR_COUNT | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
           
           if [ "$FAILED" -eq 1 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
