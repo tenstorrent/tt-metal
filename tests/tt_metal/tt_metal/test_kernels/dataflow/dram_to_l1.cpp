@@ -12,6 +12,7 @@ void kernel_main() {
     const uint32_t dram_buffer_size = get_arg_val<uint32_t>(2);
     const uint32_t dram_src_bank_id = get_arg_val<uint32_t>(3);
     const uint32_t semaphore_id = get_arg_val<uint32_t>(4);
+    const uint32_t semaphore_value = get_arg_val<uint32_t>(5);
 
     experimental::Noc noc;
     experimental::CoreLocalMem<std::uint32_t> l1_buffer(l1_dst_address);
@@ -20,7 +21,7 @@ void kernel_main() {
     DPRINT << "dram_src_address: " << dram_src_address << ENDL();
 
     experimental::Semaphore semaphore(semaphore_id);
-    semaphore.set(INVALID);
+    semaphore.wait(semaphore_value);
 
     noc.async_read(
         src_dram, l1_buffer, dram_buffer_size, {.bank_id = dram_src_bank_id, .addr = dram_src_address}, {});
@@ -28,5 +29,5 @@ void kernel_main() {
 
     DPRINT << "l1_dst_address: " << l1_dst_address << ENDL();
 
-    semaphore.set(VALID);
+    semaphore.up(1);
 }

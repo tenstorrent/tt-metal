@@ -36,16 +36,15 @@ int main() {
         return 1;
     }
 
-    constexpr uint32_t l1_read_write_address = 100 * 1024;
-    constexpr uint32_t dram_read_address = 30000 * 1024;
-    constexpr uint32_t dram_write_address = 40000 * 1024;
+    uint32_t l1_address = 100 * 1024;
+    uint32_t dram_address = 30000 * 1024;
     std::vector<uint32_t> value = {0x12345678};
 
     // Initialize mesh device (1x1), command queue, workload, device range, and program.
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_write_address, value);
+    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, value);
     std::cout << "WriteToDeviceDRAMChannel passed" << std::endl;
     MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
     std::cout << "DRAM barrier passed" << std::endl;
@@ -58,28 +57,43 @@ int main() {
     Program program = CreateProgram();
 
     // Configure and create Data Movement kernels
-    KernelHandle data_movement_kernel_0 = experimental::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
-        core,
-        experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
+    std::vector<KernelHandle> dm_dram_to_l1_kernels;
+    for (uint32_t i = 0; i < 4; i++) {
+        dm_dram_to_l1_kernels.push_back(experimental::CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
+            core,
+            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
+    }
 
-    KernelHandle data_movement_kernel_1 = experimental::CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
-        core,
-        experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1});
+    std::vector<KernelHandle> dm_l1_to_dram_kernels;
+    for (uint32_t i = 0; i < 4; i++) {
+        dm_l1_to_dram_kernels.push_back(experimental::CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
+            core,
+            experimental::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
+    }
 
-    const uint32_t sem_id = CreateSemaphore(program, core, 0);
+    uint32_t semaphore_value = 0;
+    const uint32_t sem_id = CreateSemaphore(program, core, semaphore_value);
 
-    SetRuntimeArgs(program, data_movement_kernel_0, core, {dram_write_address, l1_read_write_address, 4, 0, sem_id});
-    SetRuntimeArgs(program, data_movement_kernel_1, core, {dram_read_address, l1_read_write_address, 4, 0, sem_id});
+    for (uint32_t i = 0; i < 4; i++) {
+        SetRuntimeArgs(
+            program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, sem_id, semaphore_value});
+        semaphore_value++;
+        dram_address += 1024;
+
+        SetRuntimeArgs(
+            program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, sem_id, semaphore_value});
+        semaphore_value++;
+    }
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::cout << "EnqueueMeshWorkload passed" << std::endl;
     std::vector<uint32_t> outputs{0};
-    tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_read_address, 4, outputs);
+    tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, 4, outputs);
     std::cout << "ReadFromDeviceDRAMChannel passed" << std::endl;
     mesh_device->close();
 
