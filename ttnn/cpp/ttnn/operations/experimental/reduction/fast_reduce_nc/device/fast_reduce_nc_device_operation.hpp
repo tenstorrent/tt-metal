@@ -27,19 +27,17 @@ struct FastReduceNCDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const int32_t& dim,
-        const std::optional<const Tensor>& output,
-        const MemoryConfig& output_mem_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::experimental::reduction::detail
 
 namespace ttnn::prim {
-constexpr auto fast_reduce_nc = ttnn::register_operation<
-    "ttnn::prim::fast_reduce_nc",
-    ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation>();
+
+ttnn::operations::experimental::reduction::detail::FastReduceNCDeviceOperation::tensor_return_value_t fast_reduce_nc(
+    const Tensor& input,
+    const int32_t& dim,
+    const std::optional<const Tensor>& output,
+    const MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config);
+
 }  // namespace ttnn::prim
