@@ -241,22 +241,23 @@ void kernel_main() {
     // All tilizer cores poll their ed_table against the ground truth (final_ed_table)
     // - Drain tilizer core's ed_table is updated by remote devices (via all-to-all dispatch)
     // - Non-drain tilizer cores' ed_tables are updated by the drain core (via multicast)
-    // When drain core sees a match, it multicasts a semaphore increment to non-drain cores
-    uint32_t base_ed_table_offset = ed_addr + experts_per_device * dispatch_devices * l1_alignment;
-    volatile tt_l1_ptr uint32_t* final_ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_ed_table_offset);
+    // Signaling happens at chunk boundaries (tokens_per_chunk) for pipelining
+    constexpr uint32_t ed_table_page_size = experts_per_device * dispatch_devices * l1_alignment;
+    uint32_t ground_truth_offset = ed_addr + ed_table_page_size;
+    uint32_t temp_buffer_offset = ed_addr + 2 * ed_table_page_size;  // Page 2: temp buffer for mcast
+    volatile tt_l1_ptr uint32_t* final_ed_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ground_truth_offset);
+    volatile tt_l1_ptr uint32_t* temp_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(temp_buffer_offset);
 
-    // Track which entries have already matched (to avoid re-printing/re-signaling)
-    // Use a bitmask approach - each bit represents one (expert, device) pair
-    // For simplicity, we'll use a simple array of booleans
+    // Track last signaled value for each entry (all cores need this to detect new chunks)
     constexpr uint32_t total_entries = experts_per_device * dispatch_devices;
-    bool entry_matched[total_entries];
+    uint32_t last_signaled[total_entries];
     for (uint32_t i = 0; i < total_entries; i++) {
-        entry_matched[i] = false;
+        last_signaled[i] = 0;
     }
 
     uint32_t entries_matched = 0;
 
-    // Poll until all entries match
+    // Poll until all entries reach their ground truth values
     while (entries_matched < total_entries) {
         // Invalidate L1 cache to see updates from remote writes
         invalidate_l1_cache();
@@ -264,41 +265,71 @@ void kernel_main() {
         for (uint32_t local_expert = 0; local_expert < experts_per_device; local_expert++) {
             for (uint32_t src_dev = 0; src_dev < dispatch_devices; src_dev++) {
                 uint32_t flat_idx = local_expert * dispatch_devices + src_dev;
+                uint32_t ground_truth_val = final_ed_table[flat_idx * entries_per_l1_alignment];
 
-                // Skip if already matched
-                if (entry_matched[flat_idx]) {
+                // Skip if this entry has already reached ground truth
+                if (last_signaled[flat_idx] >= ground_truth_val) {
                     continue;
                 }
 
-                // Calculate L1 address of this ed_table entry
-                uint32_t ed_entry_l1_addr = ed_addr + flat_idx * l1_alignment;
                 uint32_t current_val = ed_table[flat_idx * entries_per_l1_alignment];
-                uint32_t expected_val = final_ed_table[flat_idx * entries_per_l1_alignment];
 
-                if (current_val == expected_val) {
-                    // Entry matched!
-                    entry_matched[flat_idx] = true;
-                    entries_matched++;
+                if (is_drain_tilizer_core) {
+                    // Drain core: signal at each chunk boundary
+                    // Calculate next chunk target: next multiple of tokens_per_chunk, capped at ground_truth
+                    uint32_t next_chunk_boundary =
+                        ((last_signaled[flat_idx] / tokens_per_chunk) + 1) * tokens_per_chunk;
+                    if (next_chunk_boundary > ground_truth_val) {
+                        next_chunk_boundary = ground_truth_val;
+                    }
 
-                    // Drain core multicasts the ed_table entry value to non-drain cores
-                    // This directly updates the ed_table on non-drain cores since they
-                    // are not being incremented by remote devices
-                    if (is_drain_tilizer_core) {
+                    // Process all chunk boundaries that current_val has passed
+                    while (current_val >= next_chunk_boundary && last_signaled[flat_idx] < ground_truth_val) {
+                        // Calculate L1 address of this ed_table entry for mcast destination
+                        uint32_t ed_entry_l1_addr = ed_addr + flat_idx * l1_alignment;
+
+                        // Write the chunk boundary value to temp buffer, then mcast to all tilizer cores
                         if constexpr (num_tilizer_cores > 1) {
+                            temp_buffer[0] = next_chunk_boundary;
                             uint64_t ed_entry_mcast_addr = get_safe_multicast_noc_addr(
                                 tilizer_mcast_start_x,
                                 tilizer_mcast_start_y,
                                 tilizer_mcast_end_x,
                                 tilizer_mcast_end_y,
                                 ed_entry_l1_addr);
-                            // Write 4 bytes (the ed_table entry value) to all tilizer cores
+                            // Mcast the temp buffer value to all tilizer cores' ed_table entry
                             noc_semaphore_set_multicast_loopback_src(
-                                ed_entry_l1_addr, ed_entry_mcast_addr, num_tilizer_cores);
+                                temp_buffer_offset, ed_entry_mcast_addr, num_tilizer_cores);
+                        }
+
+                        // Update last_signaled and print
+                        last_signaled[flat_idx] = next_chunk_boundary;
+                        DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << next_chunk_boundary << ENDL();
+
+                        // Check if we've reached ground truth
+                        if (last_signaled[flat_idx] >= ground_truth_val) {
+                            entries_matched++;
+                            break;
+                        }
+
+                        // Calculate next chunk boundary
+                        next_chunk_boundary = ((last_signaled[flat_idx] / tokens_per_chunk) + 1) * tokens_per_chunk;
+                        if (next_chunk_boundary > ground_truth_val) {
+                            next_chunk_boundary = ground_truth_val;
                         }
                     }
+                } else {
+                    // Non-drain core: detect when a new chunk value has arrived
+                    if (current_val > last_signaled[flat_idx]) {
+                        // New chunk arrived, update and print
+                        last_signaled[flat_idx] = current_val;
+                        DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << current_val << ENDL();
 
-                    // Print the matched value
-                    DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << current_val << ENDL();
+                        // Check if we've reached ground truth
+                        if (last_signaled[flat_idx] >= ground_truth_val) {
+                            entries_matched++;
+                        }
+                    }
                 }
             }
         }

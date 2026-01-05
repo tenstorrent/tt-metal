@@ -362,8 +362,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         e_d_buffer_id,
         program,
         full_grid,
-        experts_per_device * dispatch_devices * l1_alignment,  // ground truth table and semaphore table
-        2,
+        experts_per_device * dispatch_devices * l1_alignment,  // E-D table page size
+        3,  // Page 0: ed_table (incremented), Page 1: ground truth table, Page 2: temp buffer for mcast
         tt::DataFormat::UInt32);  // E-D buffer where each element is 16B aligned to ensure each semaphore increment is
                                   // 16B aligned
 
