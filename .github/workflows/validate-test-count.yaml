@@ -26,15 +26,33 @@ jobs:
         uses: actions/checkout@v4
         # Default fetch-depth: 1 - just PR branch
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies for test collection
+        run: |
+          pip install pytest torch
+          # Create stub modules to satisfy imports during collection
+          mkdir -p stub_modules
+          cat > stub_modules/ttnn.py << 'EOF'
+          # Stub module for test collection only
+          def __getattr__(name):
+              return lambda *args, **kwargs: None
+          EOF
+          export PYTHONPATH="$PWD/stub_modules:$PYTHONPATH"
+          echo "PYTHONPATH=$PWD/stub_modules:$PYTHONPATH" >> $GITHUB_ENV
+
       - name: Count and compare tests
         run: |
           # Define locked directories to check
           DIRS="eltwise conv matmul pool fused transformers reduce tensor debug base_functionality benchmarks"
           
-          # Function to count test functions in Python files
+          # Function to count test functions using pytest
           count_tests() {
             local dir=$1
-            find "$dir" -name "test_*.py" -type f -exec grep -h "^\s*def test_\|^\s*async def test_" {} \; | wc -l
+            pytest "$dir" --collect-only -q 2>/dev/null | grep "test session starts" -A 9999 | grep "<" | wc -l || echo "0"
           }
           
           # Count tests in PR branch
