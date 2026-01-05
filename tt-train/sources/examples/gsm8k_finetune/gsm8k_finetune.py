@@ -44,14 +44,16 @@ CONFIG = "training_gsm8k_tinyllama.yaml"
 
 
 class CollateFn:
-    def __init__(self, eos_token_id, max_sequence_length, padded_vocab_size):
+    def __init__(self, 
+                eos_token_id: int, 
+                max_sequence_length: int, 
+                padded_vocab_size: int):
         self.eos_token_id = eos_token_id
         self.max_sequence_length = max_sequence_length
         self.padded_vocab_size = padded_vocab_size
 
     def __call__(self, batch):
-        X = [sample[0] for sample in batch]
-        Y = [sample[1] for sample in batch]
+        X, Y = map(list, zip(*batch))
 
         batch_size = len(X)
 
@@ -106,13 +108,13 @@ class CollateFn:
         loss_scaler_ratio = (
             self.max_sequence_length * batch_size / np.sum(loss_scaler_np)
         )
-        loss_scaler_np = loss_scaler_np * loss_scaler_ratio
+        loss_scaler_np *= loss_scaler_ratio
 
         return X_np, y_np, loss_scaler_np
 
 
 def get_batch_generator(
-    dataloader,
+    dataloader: DataLoader,
     device_config=None,
 ):
     """Custom data generator for GSM8K dataset."""
@@ -122,8 +124,7 @@ def get_batch_generator(
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
 
     while True:
-        for batch in dataloader:
-            X_np, y_np, loss_scaler_np = batch
+        for X_np, y_np, loss_scaler_np in dataloader:
 
             X = ttml.autograd.Tensor.from_numpy(
                 X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
@@ -143,32 +144,38 @@ def get_batch_generator(
 
 def generate_text_tt(
     model,
-    tokenizer,
-    question,
-    max_sequence_length,
-    causal_mask,
-    temperature,
-    logits_mask_tensor,
-    max_gen_tokens=576,
-    pad_token_id=None,
-    return_with_prompt=False,
+    tokenizer: AutoTokenizer,
+    question: str,
+    max_sequence_length: int,
+    causal_mask: ttml.autograd.Tensor,
+    temperature: float,
+    logits_mask_tensor: ttml.autograd.Tensor,
+    max_gen_tokens: int = 576,
+    pad_token_id: int = None,
+    return_with_prompt: bool = False,
 ):
     """
     Greedy/temperature=0 generation that prints the *full* text once at the end.
     Uses a sliding window if prompt exceeds max_sequence_length.
+
+    model: TT model
+    tokenizer: HuggingFace tokenizer
+    question: input question string
+    max_sequence_length: maximum sequence length
+    causal_mask: causal mask tensor
+    temperature: sampling temperature (0.0 for greedy)
+    logits_mask_tensor: logits mask tensor (mask that keeps answer tokens)
+    max_gen_tokens: maximum number of tokens to generate
+    pad_token_id: padding token id
+    return_with_prompt: if True, return full text including prompt
     """
     model.eval()
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
-        ttml.autograd.GradMode.DISABLED
-    )
 
     # --- Tokenize once ---
     prompt_tokens = tokenizer.encode(question)
     if pad_token_id is None:
         # Try tokenizer.pad_token_id, else fall back to 0
-        pad_token_id = getattr(tokenizer, "pad_token_id", None)
-        if pad_token_id is None:
-            pad_token_id = 0
+        pad_token_id = getattr(tokenizer, "pad_token_id", None) or 0
 
     generated_tokens = []
 
@@ -179,75 +186,88 @@ def generate_text_tt(
     padded_prompt_tokens = np.full(
         (1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32
     )
-    for _ in range(max_gen_tokens):
-        # Sliding window for long prompts
-        if len(prompt_tokens) > max_sequence_length:
-            start_idx = len(prompt_tokens) - max_sequence_length
-            window = prompt_tokens[start_idx:]
-        else:
-            start_idx = 0
-            window = prompt_tokens
 
-        # Refill buffer (fully) to avoid stale ids
-        padded_prompt_tokens[...] = pad_token_id
-        padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(
-            window, dtype=np.uint32
-        )
+    with no_grad():
 
-        # [1,1,1,T] -> TT tensor
-        padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
-            padded_prompt_tokens, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
-        )
+        for _ in range(max_gen_tokens):
+            # Sliding window for long prompts
+            if len(prompt_tokens) > max_sequence_length:
+                start_idx = len(prompt_tokens) - max_sequence_length
+                window = prompt_tokens[start_idx:]
+            else:
+                start_idx = 0
+                window = prompt_tokens
 
-        # Forward: logits [1,1,T,V]
-        logits = model(padded_prompt_tensor, causal_mask)
+            # Refill buffer (fully) to avoid stale ids
+            padded_prompt_tokens[...] = pad_token_id
+            padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(
+                window, dtype=np.uint32
+            )
 
-        # Sample: next tokens for all positions [1,1,T,1]
-        # With temperature=0.0 this behaves like argmax/greedy.
-        next_token_tensor = ttml.ops.sample.sample_op(
-            logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
-        )
+            # [1,1,1,T] -> TT tensor
+            padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
+                padded_prompt_tokens, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+            )
 
-        # Take the token at the last active position in the current window
-        next_token_idx = (
-            max_sequence_length - 1
-            if len(prompt_tokens) > max_sequence_length
-            else len(window) - 1
-        )
-        next_token = int(
-            next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
-                next_token_idx
-            ][0]
-        )
+            # Forward: logits [1,1,T,V]
+            logits = model(padded_prompt_tensor, causal_mask)
 
-        if next_token == tokenizer.eos_token_id:
-            break
+            # Sample: next tokens for all positions [1,1,T,1]
+            # With temperature=0.0 this behaves like argmax/greedy.
+            next_token_tensor = ttml.ops.sample.sample_op(
+                logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
+            )
 
-        generated_tokens.append(next_token)
-        prompt_tokens.append(next_token)
+            # Take the token at the last active position in the current window
+            next_token_idx = (
+                max_sequence_length - 1
+                if len(prompt_tokens) > max_sequence_length
+                else len(window) - 1
+            )
+            next_token = int(
+                next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
+                    next_token_idx
+                ][0]
+            )
 
-    # Decode once at the end
-    out = tokenizer.decode(generated_tokens)
-    if return_with_prompt:
-        out = tokenizer.decode(prompt_tokens)
+            if next_token == tokenizer.eos_token_id:
+                break
 
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
-        ttml.autograd.GradMode.ENABLED
-    )
+            generated_tokens.append(next_token)
+            prompt_tokens.append(next_token)
+
+        # Decode once at the end
+        out = tokenizer.decode(prompt_tokens if return_with_prompt else generated_tokens)
+
+    model.train()
+
     return out
 
 
 def validate(
     tt_model,
-    tokenizer,
+    tokenizer: AutoTokenizer,
     val_batch_generator,
     testing_data,
     loss_fn,
-    causal_mask,
-    logits_mask_tensor,
-    max_sequence_length,
-    current_step,
+    causal_mask: ttml.autograd.Tensor,
+    logits_mask_tensor: ttml.autograd.Tensor,
+    max_sequence_length: int,
+    current_step: int,
 ):
+    """
+    Validation function that computes loss and generates answers for a few samples.
+    
+    tt_model: TT model
+    tokenizer: HuggingFace tokenizer
+    val_batch_generator: generator yielding validation batches (from get_batch_generator)
+    testing_data: tokenized testing dataset
+    loss_fn: loss function 
+    causal_mask: causal mask tensor
+    logits_mask_tensor: logits mask tensor (mask that keeps answer tokens)
+    max_sequence_length: maximum sequence length
+    current_step: current training step
+    """
     reduce = ttml.ops.ReduceType.NONE
 
     tt_model.eval()
@@ -301,6 +321,12 @@ def validate(
 
 
 class TokenizedDataset(torch.utils.data.Dataset):
+    """
+    A simple Dataset class for tokenized data.
+
+    X: list of tokenized questions
+    y: list of tokenized answers
+    """
     def __init__(self, X, y):
         self.X = X
         self.y = y
@@ -313,17 +339,25 @@ class TokenizedDataset(torch.utils.data.Dataset):
         return self.X[idx], self.y[idx]
 
 
-def tokenize_dataset(data, tokenizer):
+def tokenize_dataset(data, tokenizer: AutoTokenizer) -> TokenizedDataset:
+    """
+    Tokenizes the questions and answers in the dataset using the provided tokenizer.
+
+    data: dataset with "question" and "answer" fields
+    tokenizer: HuggingFace tokenizer
+    """
     X = [sample["question"] for sample in data]
     y = [sample["answer"] for sample in data]
 
-    X = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
-    y = tokenizer(y, return_tensors="np", add_special_tokens=False)["input_ids"]
-
-    return TokenizedDataset(X, y)
+    tok = lambda texts: tokenizer(texts, return_tensors="np", add_special_tokens=False)["input_ids"]  
+    return TokenizedDataset(tok(X), tok(y))  
 
 
 def train():
+    """
+    Main training loop for fine-tuning on GSM8K dataset.
+    """
+
     print("Loading tokenizer and config...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
@@ -491,7 +525,7 @@ def train():
         # Aggregate the true (unscaled) mean losses across micro-steps to report per optimizer step.
         micro_losses = []
 
-        for micro in range(accum_steps):
+        for _ in range(accum_steps):
             X, y, loss_scaler = next(train_batch_generator)
 
             # Forward
