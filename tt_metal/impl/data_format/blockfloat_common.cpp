@@ -84,7 +84,7 @@ uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t>& u32_vec, u
         BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp8 ||
         BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
         BfpFormat == tt::DataFormat::Bfp8_b);
-    constexpr int nums_in_dword = []() constexpr {
+    constexpr int nums_in_dword = []() {
         if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
             return 16;
         } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
