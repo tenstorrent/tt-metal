@@ -720,9 +720,9 @@ int main(int argc, char **argv) {
                 }
 
                 if (training_config.use_clip_grad_norm) {
-                    // if (device_config.enable_tp) {
-                    //     throw std::logic_error("Clip grad norm is not supported with TP");
-                    // }
+                    if (device_config.enable_tp) {
+                        throw std::logic_error("Clip grad norm is not supported with TP");
+                    }
                     ttml::core::clip_grad_norm(parameters, training_config.clip_grad_norm_max_norm);
                 }
                 optimizer->step();
