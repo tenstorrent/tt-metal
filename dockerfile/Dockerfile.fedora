@@ -6,6 +6,20 @@
 ARG FEDORA_VERSION=43
 FROM mirror.gcr.io/fedora:${FEDORA_VERSION} AS base
 
+# Configure dnf for reliable mirror selection and faster downloads
+# - fastestmirror: Tests mirrors and picks the fastest responding ones
+# - max_parallel_downloads: Allows parallel package downloads
+# - retries: Increase retries for transient failures
+# - timeout: Shorter timeout to quickly skip unresponsive mirrors
+# - minrate: Skip mirrors that are too slow
+RUN echo -e '\n\
+fastestmirror=1\n\
+max_parallel_downloads=10\n\
+retries=3\n\
+timeout=10\n\
+minrate=100k\n\
+' >> /etc/dnf/dnf.conf
+
 # Install uv early so all stages can use it
 RUN dnf install -y uv python3-devel && dnf clean all
 
