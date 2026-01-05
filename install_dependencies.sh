@@ -281,7 +281,14 @@ prep_ubuntu_system() {
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Add Kitware repository for latest CMake
+    # Ensure keyring directory exists and download the latest key
+    mkdir -p /usr/share/keyrings
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+    # Verify the key was created successfully
+    if [ ! -f /usr/share/keyrings/kitware-archive-keyring.gpg ]; then
+        echo "[ERROR] Failed to create Kitware GPG keyring"
+        exit 1
+    fi
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
 
     # Add GCC toolchain repository for specific g++ versions if needed
