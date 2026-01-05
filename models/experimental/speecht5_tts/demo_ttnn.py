@@ -69,7 +69,6 @@ def generate_speech_ttnn(
     max_steps=100,
     return_stats=False,
     warmup_mode=False,
-    enable_trace=False,
     generator=None,
     use_kv_cache=False,
     decoder_config=None,
@@ -89,9 +88,8 @@ def generate_speech_ttnn(
         max_steps: Maximum number of generation steps (default: 100)
         return_stats: If True, return statistics along with speech (default: False)
         warmup_mode: If True, skip vocoder and detailed timing for faster warm-up (default: False)
-        enable_trace: If True, use trace execution for decoder and postnet (default: False)
-        generator: SpeechT5Generator instance for trace support (required if enable_trace=True)
-        use_kv_cache: If True, use KV cache for faster autoregressive generation (default: False)
+        generator: SpeechT5Generator instance for trace support (enables trace when use_kv_cache=True)
+        use_kv_cache: If True, use KV cache for faster autoregressive generation
         decoder_config: TTNNDecoderConfig (required if use_kv_cache=True)
 
     Returns:
@@ -115,14 +113,24 @@ def generate_speech_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Encoder forward pass
+    # Trace enabled when KV cache is enabled and generator is provided
+    enable_trace = use_kv_cache and generator is not None
+
+    # Start timing for TTFT (Time To First Token/Frame)
+    generation_start = time.time()
+
+    # Encoder forward pass (encoder doesn't benefit much from trace, runs only once)
     encoder_start = time.time()
-    if enable_trace and generator is not None:
-        seq_len = ttnn_input_ids.shape[1]
-        encoder_output = generator._execute_encoder_trace(seq_len, ttnn_input_ids)
-    else:
-        encoder_output = ttnn_encoder(ttnn_input_ids)[0]
+    encoder_output = ttnn_encoder(ttnn_input_ids)[0]
     encoder_time = time.time() - encoder_start
+
+    # If using trace with generator, copy encoder output to pre-allocated tensor
+    if enable_trace:
+        generator.copy_encoder_output(encoder_output)
+        # Use generator's pre-allocated encoder_hidden_states for decoder
+        encoder_output_for_decoder = generator.encoder_hidden_states
+    else:
+        encoder_output_for_decoder = encoder_output
 
     # Initialize decoder sequence
     batch_size = token_ids.shape[0]
@@ -133,13 +141,20 @@ def generate_speech_ttnn(
     kv_cache = None
     cross_attn_cache = None
     if use_kv_cache and decoder_config is not None:
-        kv_cache, cross_attn_cache = init_kv_cache(
-            decoder_config,
-            device,
-            max_batch_size=batch_size,
-            max_seq_len=max_steps + 10,
-            encoder_seq_len=encoder_seq_len,
-        )
+        if enable_trace and generator is not None:
+            # Use generator's pre-allocated KV cache for trace stability
+            kv_cache = generator.kv_cache
+            cross_attn_cache = generator.cross_attn_cache
+            # Reset cross-attention cache validity for new generation
+            generator._invalidate_cross_attn_cache()
+        else:
+            kv_cache, cross_attn_cache = init_kv_cache(
+                decoder_config,
+                device,
+                max_batch_size=batch_size,
+                max_seq_len=max_steps + 10,
+                encoder_seq_len=encoder_seq_len,
+            )
 
     # Initial mel frame (zeros)
     output_sequence_ttnn = ttnn.from_torch(
@@ -151,10 +166,12 @@ def generate_speech_ttnn(
     )
 
     spectrogram_ttnn = None
+    spectrogram_frames_cpu = []  # For trace mode: accumulate on CPU to avoid device allocations
     steps_completed = 0
     total_decoder_time = 0.0
     total_postnet_time = 0.0
     current_seq_len = 1  # Track sequence length for stats
+    ttft = None  # Time To First Token/Frame - set after step 0 completes
 
     # For KV cache mode, track the current input frame
     current_input_ttnn = output_sequence_ttnn
@@ -171,53 +188,87 @@ def generate_speech_ttnn(
         # Decoder step
         decoder_start = time.time()
 
-        if enable_trace and generator is not None:
-            current_seq_len = output_sequence_ttnn.shape[1]
-            decoder_hidden_states = generator._execute_decoder_trace(
-                current_seq_len, output_sequence_ttnn, encoder_output, ttnn_speaker_embeddings
-            )
-        elif use_kv_cache and kv_cache is not None:
+        if use_kv_cache and kv_cache is not None:
             # KV cache mode: pass only the current frame (seq_len=1 after step 0)
-            # Create position tensor for cache update (must be in DRAM)
-            current_pos = ttnn.from_torch(
-                torch.tensor([step], dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
 
-            decoder_hidden_states = ttnn_decoder(
-                decoder_input_values=current_input_ttnn,
-                encoder_hidden_states=encoder_output,
-                speaker_embeddings=ttnn_speaker_embeddings,
-                kv_cache=kv_cache,
-                cross_attn_cache=cross_attn_cache,
-                cross_attn_cache_valid=(step > 0),  # Reuse cross-attn cache after first step
-                current_decode_pos=current_pos,
-                position_offset=step,  # Pass step as position for correct positional encoding
-            )
+            if enable_trace and generator is not None:
+                # WHISPER PATTERN: Preprocessing happens OUTSIDE trace capture
+                # 1. Call preprocess_decoder_inputs with position (PE + dropout)
+                # 2. Pass preprocessed hidden states to decoder (traced)
+
+                # Update decode position for trace
+                generator._reset_decode_pos(step, batch_size)
+
+                # Preprocess: run prenet + PE addition OUTSIDE trace
+                preprocessed_hidden_states = ttnn_decoder.preprocess_decoder_inputs(
+                    decoder_input_values=current_input_ttnn,
+                    position_offset=step,
+                )
+
+                # WHISPER PATTERN: Capture trace at step 0, execute starting step 1
+                if step == 0:
+                    # First iteration: non-traced to populate cross-attention cache
+                    decoder_hidden_states = ttnn_decoder(
+                        decoder_input_values=None,  # Not used when preprocessed_hidden_states provided
+                        encoder_hidden_states=encoder_output_for_decoder,
+                        speaker_embeddings=None,  # Pre-baked in prenet
+                        kv_cache=kv_cache,
+                        cross_attn_cache=cross_attn_cache,
+                        cross_attn_cache_valid=False,
+                        current_decode_pos=generator.current_decode_pos,
+                        preprocessed_hidden_states=preprocessed_hidden_states,
+                        encoder_attention_mask=generator.encoder_attention_mask,  # Mask for padding
+                    )
+                    # Cross-attention cache is now populated
+                    generator.cross_attn_cache_valid = True
+
+                    # Capture trace NOW (after first iteration), but use non-traced output
+                    if not generator.trace_compiled:
+                        generator._capture_decoder_trace(preprocessed_hidden_states)
+                else:
+                    # Step 1+: Execute trace (trace was captured at step 0)
+                    decoder_hidden_states = generator._execute_decoder_trace(preprocessed_hidden_states)
+            else:
+                # KV cache without trace
+                current_pos = ttnn.from_torch(
+                    torch.tensor([step], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+                decoder_hidden_states = ttnn_decoder(
+                    decoder_input_values=current_input_ttnn,
+                    encoder_hidden_states=encoder_output_for_decoder,
+                    speaker_embeddings=ttnn_speaker_embeddings,
+                    kv_cache=kv_cache,
+                    cross_attn_cache=cross_attn_cache,
+                    cross_attn_cache_valid=(step > 0),  # Reuse cross-attn cache after first step
+                    current_decode_pos=current_pos,
+                    position_offset=step,  # Pass step as position for correct positional encoding
+                )
         else:
             # Standard mode: pass full sequence
             decoder_hidden_states = ttnn_decoder(
                 decoder_input_values=output_sequence_ttnn,
-                encoder_hidden_states=encoder_output,
+                encoder_hidden_states=encoder_output_for_decoder,
                 speaker_embeddings=ttnn_speaker_embeddings,
             )
 
         decoder_time = time.time() - decoder_start
         total_decoder_time += decoder_time
 
-        # Postnet
+        # Postnet (not traced - runs only once per step, less benefit from tracing)
         postnet_start = time.time()
-
-        if enable_trace and generator is not None:
-            mel_before, mel_after, stop_logits = generator._execute_postnet_trace(decoder_hidden_states)
-        else:
-            mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
+        mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
 
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
+
+        # Capture TTFT after step 0's postnet (first mel frame produced)
+        if step == 0 and ttft is None:
+            ttft = time.time() - generation_start
 
         # Check stopping condition (fully device-side comparison)
         sigmoid_logits = ttnn.sigmoid(stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -244,13 +295,19 @@ def generate_speech_ttnn(
                 # Squeeze if 4D
                 new_frames_ttnn = ttnn.reshape(mel_after, [batch_size, mel_frames, num_mel_bins])
 
-            # Build spectrogram incrementally
-            if spectrogram_ttnn is None:
-                spectrogram_ttnn = new_frames_ttnn
+            # Build spectrogram - use CPU accumulation when trace is enabled to avoid
+            # device allocations that can corrupt trace memory
+            if enable_trace and generator is not None:
+                # Transfer to CPU immediately to avoid device allocations during trace
+                spectrogram_frames_cpu.append(ttnn.to_torch(new_frames_ttnn).clone())
             else:
-                spectrogram_ttnn = ttnn.concat(
-                    [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
-                )
+                # No trace: use device accumulation
+                if spectrogram_ttnn is None:
+                    spectrogram_ttnn = new_frames_ttnn
+                else:
+                    spectrogram_ttnn = ttnn.concat(
+                        [spectrogram_ttnn, new_frames_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
+                    )
 
             # Get the last frame for next iteration input
             last_frame_ttnn = ttnn.slice(
@@ -261,11 +318,8 @@ def generate_speech_ttnn(
             )
             current_input_ttnn = last_frame_ttnn
 
-            # Also update the full sequence for tracking
-            output_sequence_ttnn = ttnn.concat(
-                [output_sequence_ttnn, last_frame_ttnn], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            current_seq_len = output_sequence_ttnn.shape[1]
+            # Track sequence length
+            current_seq_len += 1
         else:
             # Standard mode: extract frames from full mel_after
             current_seq_len = output_sequence_ttnn.shape[1]
@@ -309,7 +363,11 @@ def generate_speech_ttnn(
     decoder_loop_time = time.time() - decoder_loop_start
 
     # Transfer final spectrogram from device to host
-    if spectrogram_ttnn is not None:
+    # For trace mode, we accumulated on CPU to avoid device allocations
+    if enable_trace and generator is not None and spectrogram_frames_cpu:
+        # Concatenate CPU frames (Whisper pattern - all accumulation on CPU)
+        final_spectrogram = torch.cat(spectrogram_frames_cpu, dim=1)
+    elif spectrogram_ttnn is not None:
         final_spectrogram = ttnn.to_torch(spectrogram_ttnn)
     else:
         final_spectrogram = torch.zeros(batch_size, 1, num_mel_bins)
@@ -331,7 +389,10 @@ def generate_speech_ttnn(
 
     if return_stats:
         # Calculate performance metrics
-        ttft = encoder_time
+        # TTFT was captured after step 0's postnet (first mel frame produced)
+        # If no steps completed, fall back to encoder_time
+        if ttft is None:
+            ttft = encoder_time
         avg_token_time = decoder_loop_time / max(steps_completed, 1) if steps_completed > 0 else 0
         token_per_sec = 1.0 / avg_token_time if avg_token_time > 0 else 0
 
@@ -355,8 +416,7 @@ def run_demo(
     texts,
     output_dir=".",
     max_steps=100,
-    enable_trace=False,
-    use_kv_cache=False,
+    use_kv_cache=True,
     speaker_id=0,
     mesh_device=None,
     model_location_generator=None,
@@ -495,26 +555,46 @@ def run_demo(
             postnet_config,
         )
 
-        # Create generator wrapper for trace support
-        generator = SpeechT5Generator(
-            encoder=ttnn_encoder,
-            decoder=ttnn_decoder,
-            postnet=ttnn_postnet,
+        # Create generator wrapper for trace support (auto-enabled when use_kv_cache=True)
+        # Generator is only created when KV cache is enabled for trace support
+        generator = None
+        if use_kv_cache:
+            # Estimate encoder sequence length based on typical text length
+            # Most texts will have < 100 tokens after processing
+            estimated_encoder_seq_len = 128
+            generator = SpeechT5Generator(
+                encoder=ttnn_encoder,
+                decoder=ttnn_decoder,
+                postnet=ttnn_postnet,
+                device=actual_device,
+                decoder_config=decoder_config,
+                max_steps=max_steps,
+                max_batch_size=1,
+                encoder_seq_len=estimated_encoder_seq_len,
+            )
+
+        # CRITICAL: Pre-compile postnet BEFORE any trace capture
+        # This prevents conv2d kernel recompilation while trace is active (causes hangs)
+        print("🔧 Pre-compiling postnet kernels...")
+        dummy_decoder_output = ttnn.from_torch(
+            torch.randn(1, 1, 1, decoder_config.hidden_size),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             device=actual_device,
-            max_steps=max_steps,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        _ = ttnn_postnet(dummy_decoder_output)
+        ttnn.deallocate(dummy_decoder_output)
+        print("   Postnet kernels compiled!")
 
         # Warm-up phase to compile TTNN operations (separate from timing)
         import time
 
         warmup_start_time = time.time()
-        if enable_trace:
-            print("🔥 Warming up TTNN operations with trace capture...")
-            print("   This may take ~2-3 minutes as TTNN captures traces for encoder, decoder and postnet")
-            print("   TTNN will pre-compile operations for all sequence lengths")
-            generator.warmup_encoder_traces()
-            generator.warmup_decode_traces()
-            print("   Performing final trace validation run...")
+        if use_kv_cache:
+            print("🔥 Warming up TTNN operations with KV cache...")
+            print("   This may take ~30-60 seconds as TTNN compiles kernels for optimal performance")
+            print("   KV cache will enable faster autoregressive generation")
         else:
             print("🔥 Warming up TTNN operations...")
             print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
@@ -533,17 +613,38 @@ def run_demo(
             actual_device,
             max_steps=max_steps,
             warmup_mode=True,
-            enable_trace=enable_trace,
-            generator=generator,  # Pass generator for trace support
+            generator=generator,
             use_kv_cache=use_kv_cache,
             decoder_config=decoder_config,
         )
         warmup_duration = time.time() - warmup_start_time
-        print(f"✅ Warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
-        if enable_trace:
-            print("   TTNN traces are now captured - subsequent inference will be much faster!")
-        else:
-            print("   TTNN kernels are now optimized - subsequent inference will be much faster!")
+        print(f"✅ Initial warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
+        if use_kv_cache:
+            print("   KV cache enabled - decoder reuses attention computations!")
+        print("   TTNN kernels are now compiled - subsequent inference will be faster!")
+
+        # Capture traces for ALL supported encoder sizes during warm-up
+        # This ensures any input length will have a matching trace ready
+        if generator is not None:
+            from models.experimental.speecht5_tts.tt.ttnn_speecht5_generator import SUPPORTED_ENCODER_SEQ_LENS
+
+            print(f"\n🔧 Capturing traces for all encoder sizes: {SUPPORTED_ENCODER_SEQ_LENS}")
+            all_traces_start = time.time()
+            generator.capture_all_traces(processor, batch_size=1)
+            all_traces_duration = time.time() - all_traces_start
+            print(f"✅ All traces captured in {all_traces_duration:.1f}s")
+
+            # Report trace status
+            compiled_sizes = [s for s in SUPPORTED_ENCODER_SEQ_LENS if generator.trace_compiled_per_size.get(s, False)]
+            print(f"   Compiled traces for encoder sizes: {compiled_sizes}")
+
+        # Keep traces after warm-up - trace captures decoder ops which are input-independent
+        # Only reset KV caches to clear warm-up values, traces will be reused
+        # Following simple_text_demo pattern: trace capture is "compile time", not inference time
+        if generator is not None:
+            # CRITICAL: Reset KV caches after warm-up to prevent stale values from corrupting inference
+            generator._reset_kv_caches()
+            print("   KV caches reset for fresh inference - ready for any input length!")
 
         # Generate speech for each input text
         results = []
@@ -568,7 +669,6 @@ def run_demo(
                 device,
                 max_steps=max_steps,
                 return_stats=True,
-                enable_trace=enable_trace,
                 generator=generator,
                 use_kv_cache=use_kv_cache,
                 decoder_config=decoder_config,
@@ -690,8 +790,7 @@ def test_demo(mesh_device, device_params, model_location_generator, request):
         texts=[input_text],
         output_dir=output_dir,
         max_steps=max_steps,
-        enable_trace=False,
-        use_kv_cache=True,  # KV cache enabled by default
+        use_kv_cache=True,  # KV cache enabled by default (also auto-enables trace)
         speaker_id=0,
         mesh_device=mesh_device,
         model_location_generator=model_location_generator,
@@ -712,14 +811,22 @@ def main(mesh_device=None):
     )
     parser.add_argument("--max_steps", type=int, default=100, help="Maximum number of generation steps (default: 100)")
     parser.add_argument(
-        "--enable_trace", action="store_true", help="Enable TTNN trace for faster inference (default: False)"
+        "--use_kv_cache",
+        action="store_true",
+        default=True,
+        help="Use KV cache for faster autoregressive generation (default: True, also auto-enables trace)",
     )
     parser.add_argument(
-        "--use_kv_cache", action="store_true", help="Use KV cache for faster autoregressive generation (default: False)"
+        "--no_kv_cache",
+        action="store_true",
+        help="Disable KV cache (and trace)",
     )
     parser.add_argument("--speaker_id", type=int, default=0, help="Speaker ID from CMU ARCTIC dataset (0-7456)")
 
     args = parser.parse_args()
+
+    # Handle no_kv_cache flag
+    use_kv_cache = not args.no_kv_cache
 
     # Call the core demo function
     # For main(), we don't have model_location_generator, so pass None
@@ -728,8 +835,7 @@ def main(mesh_device=None):
         texts=args.texts,
         output_dir=args.output_dir,
         max_steps=args.max_steps,
-        enable_trace=args.enable_trace,
-        use_kv_cache=args.use_kv_cache,
+        use_kv_cache=use_kv_cache,  # KV cache enabled by default, also auto-enables trace
         speaker_id=args.speaker_id,
         mesh_device=mesh_device,
         model_location_generator=None,

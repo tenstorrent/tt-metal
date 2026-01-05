@@ -294,6 +294,8 @@ class TTNNSpeechDecoderPrenet:
         decoder_input_values: ttnn.Tensor,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
         position_offset: int = 0,
+        precomputed_pe: Optional[ttnn.Tensor] = None,
+        precomputed_dropout_masks: Optional[List[ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         """
         Speech decoder prenet with comprehensive L1 memory management.
@@ -302,6 +304,11 @@ class TTNNSpeechDecoderPrenet:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             speaker_embeddings: [batch, speaker_embedding_dim] - optional
             position_offset: Offset for positional encoding (used in KV cache mode)
+            precomputed_pe: Pre-computed positional embedding [1, 1, hidden_size] for trace support.
+                           When provided, this is used directly instead of slicing from positional_encoding.
+                           This enables trace by avoiding dynamic slicing operations.
+            precomputed_dropout_masks: Pre-computed dropout masks for each prenet layer for trace support.
+                           List of tensors, one per layer. When provided, bypasses dynamic slicing.
 
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
@@ -325,14 +332,21 @@ class TTNNSpeechDecoderPrenet:
             # Apply HF's consistent dropout (L1 output)
             # Skip dropout if p=0.0 (dropout disabled for testing)
             if self.config.speech_decoder_prenet_dropout > 0.0:
-                # Use precomputed dropout mask for performance
-                mask = self.parameters["dropout_masks"][i]
-                # Slice mask to match current sequence length and position [seq_len, hidden_size]
-                # For KV cache mode, use position_offset to get correct dropout mask position
                 seq_len = hidden_states.shape[1]
-                mask_sliced = mask[position_offset : position_offset + seq_len, :]
-                # Expand mask to match batch dimension [batch, seq_len, hidden_size]
                 batch_size = hidden_states.shape[0]
+
+                if precomputed_dropout_masks is not None:
+                    # Use pre-computed dropout mask (for trace support)
+                    # precomputed_dropout_masks[i] is already sliced for this position
+                    mask_sliced = precomputed_dropout_masks[i]
+                else:
+                    # Use precomputed dropout mask for performance
+                    mask = self.parameters["dropout_masks"][i]
+                    # Slice mask to match current sequence length and position [seq_len, hidden_size]
+                    # For KV cache mode, use position_offset to get correct dropout mask position
+                    mask_sliced = mask[position_offset : position_offset + seq_len, :]
+
+                # Expand mask to match batch dimension [batch, seq_len, hidden_size]
                 mask_expanded = ttnn.unsqueeze(mask_sliced, 0)  # [1, seq_len, hidden_size]
                 mask_expanded = ttnn.repeat(mask_expanded, [batch_size, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
                 # Apply mask: hidden_states = (mask == 1) * hidden_states * scale
@@ -353,15 +367,24 @@ class TTNNSpeechDecoderPrenet:
         # PHASE 4: Add scaled positional encoding (ensure slice uses L1)
         # For KV cache mode, use position_offset to get correct positional encoding
         seq_len = hidden_states.shape[1]
-        start_pos = position_offset
-        end_pos = position_offset + seq_len
-        pe_slice = self.parameters["positional_encoding"][:, start_pos:end_pos, :]
-        pe_slice = ttnn.to_memory_config(pe_slice, ttnn.L1_MEMORY_CONFIG)  # Ensure sliced positional encoding is in L1
 
-        # Scale positional encoding (L1 output)
-        pe_scaled = ttnn.multiply(
-            pe_slice, self.parameters["encode_positions_alpha"], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        if precomputed_pe is not None:
+            # Use pre-computed positional embedding (for trace support)
+            # precomputed_pe is already scaled and in L1
+            pe_scaled = precomputed_pe
+        else:
+            # Standard path: slice positional encoding dynamically
+            start_pos = position_offset
+            end_pos = position_offset + seq_len
+            pe_slice = self.parameters["positional_encoding"][:, start_pos:end_pos, :]
+            pe_slice = ttnn.to_memory_config(
+                pe_slice, ttnn.L1_MEMORY_CONFIG
+            )  # Ensure sliced positional encoding is in L1
+
+            # Scale positional encoding (L1 output)
+            pe_scaled = ttnn.multiply(
+                pe_slice, self.parameters["encode_positions_alpha"], memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
         # Add positional encoding (L1 output)
         hidden_states = ttnn.add(hidden_states, pe_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -516,6 +539,7 @@ class TTNNSpeechT5Attention:
         cross_attn_cache: Optional[List[ttnn.Tensor]] = None,
         cross_attn_cache_valid: bool = False,
         current_decode_pos: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Multi-head attention with KV cache support.
@@ -528,6 +552,7 @@ class TTNNSpeechT5Attention:
             cross_attn_cache: [K_cache, V_cache] - cross-attention KV cache
             cross_attn_cache_valid: If True, use cached cross-attention K/V
             current_decode_pos: Current position tensor for cache update (must be in DRAM)
+            encoder_attention_mask: [batch, 1, 1, encoder_seq_len] - mask for cross-attention padding
 
         Returns:
             output: [batch, seq_len, hidden_size]
@@ -749,7 +774,12 @@ class TTNNSpeechT5Attention:
                 query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
             )
 
-            # Softmax (no mask for cross-attention)
+            # Apply encoder attention mask if provided (for padding)
+            # Mask shape: [B, 1, 1, encoder_seq_len], attn_weights: [B, H, query_len, encoder_seq_len]
+            if encoder_attention_mask is not None:
+                attn_weights = ttnn.add(attn_weights, encoder_attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            # Softmax
             attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             # Apply attention to values
@@ -860,6 +890,7 @@ class TTNNSpeechT5DecoderLayer:
         cross_attn_cache: Optional[List[ttnn.Tensor]] = None,
         cross_attn_cache_valid: bool = False,
         current_decode_pos: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decoder layer with KV cache support.
@@ -872,6 +903,7 @@ class TTNNSpeechT5DecoderLayer:
             cross_attn_cache: [K_cache, V_cache] - cross-attention KV cache for this layer
             cross_attn_cache_valid: If True, use cached cross-attention K/V
             current_decode_pos: Current position tensor for cache update
+            encoder_attention_mask: [batch, 1, 1, encoder_seq_len] - mask for padding in cross-attn
 
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
@@ -955,6 +987,7 @@ class TTNNSpeechT5DecoderLayer:
             key_value_states=encoder_hidden_states,  # Cross-attention
             cross_attn_cache=cross_attn_cache,
             cross_attn_cache_valid=cross_attn_cache_valid,
+            encoder_attention_mask=encoder_attention_mask,  # Mask for padding
         )
 
         # Dropout skipped for inference
@@ -1006,6 +1039,10 @@ class TTNNSpeechT5Decoder:
     2. Create causal mask for self-attention
     3. Pass through decoder layers (self-attn + cross-attn + FFN)
     4. Return hidden states
+
+    For trace support, preprocessing (prenet + PE) can be done separately via
+    preprocess_decoder_inputs() method. This allows PE addition to happen
+    OUTSIDE the traced decoder, following the Whisper pattern.
     """
 
     def __init__(self, device, parameters, config: TTNNDecoderConfig, max_sequence_length: int = 32):
@@ -1099,6 +1136,92 @@ class TTNNSpeechT5Decoder:
 
         return causal_mask_ttnn
 
+    def preprocess_decoder_inputs(
+        self,
+        decoder_input_values: ttnn.Tensor,
+        position_offset: int = 0,
+    ) -> ttnn.Tensor:
+        """
+        Preprocess decoder inputs OUTSIDE trace capture (following Whisper pattern).
+
+        This method runs the prenet (which includes position-dependent operations like
+        PE slicing and dropout mask slicing) BEFORE the traced decoder. This ensures
+        that position-dependent operations happen outside the trace.
+
+        Args:
+            decoder_input_values: [batch, seq_len, num_mel_bins] - mel frames
+            position_offset: Position for positional encoding (decode step number)
+
+        Returns:
+            hidden_states: [batch, seq_len, hidden_size] - ready for decoder layers
+        """
+        # Run prenet with position-dependent operations
+        # speaker_embeddings are pre-baked into prenet parameters, so None is passed
+        hidden_states = self.prenet(
+            decoder_input_values,
+            speaker_embeddings=None,  # Pre-baked into parameters
+            position_offset=position_offset,
+            precomputed_pe=None,  # Will slice based on position_offset
+            precomputed_dropout_masks=None,  # Will slice based on position_offset
+        )
+        return hidden_states
+
+    def decoder_layers_forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        encoder_hidden_states: ttnn.Tensor,
+        kv_cache: Optional[List] = None,
+        cross_attn_cache: Optional[List] = None,
+        cross_attn_cache_valid: bool = False,
+        current_decode_pos: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """
+        Forward pass through decoder layers only (for trace support).
+
+        This method is called AFTER preprocess_decoder_inputs() has run.
+        It contains NO position-dependent operations, making it safe for trace capture.
+
+        Args:
+            hidden_states: [batch, seq_len, hidden_size] - from preprocess_decoder_inputs
+            encoder_hidden_states: [batch, enc_seq_len, hidden_size]
+            kv_cache: List of [K_cache, V_cache] per layer for self-attention
+            cross_attn_cache: List of [K_cache, V_cache] per layer for cross-attention
+            cross_attn_cache_valid: If True, use cached cross-attention K/V
+            current_decode_pos: Current position tensor for cache update (must be in DRAM)
+            encoder_attention_mask: [batch, 1, 1, encoder_seq_len] - mask for padding in cross-attn
+
+        Returns:
+            hidden_states: [batch, seq_len, hidden_size]
+        """
+        # Ensure inputs are in L1
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+
+        seq_len = hidden_states.shape[1]
+
+        # For decode mode with seq_len=1, no causal mask needed
+        is_decode = kv_cache is not None and current_decode_pos is not None
+        if is_decode and seq_len == 1:
+            causal_mask = None
+        else:
+            causal_mask = self._create_causal_mask(seq_len)
+
+        # Pass through decoder layers
+        for i, layer in enumerate(self.layers):
+            hidden_states = layer(
+                hidden_states=hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_mask=causal_mask,
+                kv_cache=kv_cache[i] if kv_cache is not None else None,
+                cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
+                cross_attn_cache_valid=cross_attn_cache_valid,
+                current_decode_pos=current_decode_pos,
+                encoder_attention_mask=encoder_attention_mask,
+            )
+
+        return hidden_states
+
     def __call__(
         self,
         decoder_input_values: ttnn.Tensor,
@@ -1109,21 +1232,36 @@ class TTNNSpeechT5Decoder:
         cross_attn_cache_valid: bool = False,
         current_decode_pos: Optional[ttnn.Tensor] = None,
         position_offset: int = 0,
+        precomputed_pe: Optional[ttnn.Tensor] = None,
+        precomputed_dropout_masks: Optional[List[ttnn.Tensor]] = None,
+        preprocessed_hidden_states: Optional[ttnn.Tensor] = None,
         timing_details: bool = False,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
     ):
         """
         Forward pass with KV cache support.
 
+        For trace support, use preprocessed_hidden_states to bypass the prenet entirely.
+        This allows position-dependent operations to happen OUTSIDE trace capture.
+
         Args:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             encoder_hidden_states: [batch, enc_seq_len, hidden_size]
-            speaker_embeddings: [batch, speaker_embedding_dim] - optional
+            speaker_embeddings: [batch, speaker_embedding_dim] - optional (ignored if preprocessed_hidden_states provided)
             kv_cache: List of [K_cache, V_cache] per layer for self-attention
             cross_attn_cache: List of [K_cache, V_cache] per layer for cross-attention
             cross_attn_cache_valid: If True, use cached cross-attention K/V
             current_decode_pos: Current position tensor for cache update (must be in DRAM)
             position_offset: Offset for positional encoding (used in KV cache mode, typically same as step)
+            precomputed_pe: Pre-computed positional embedding [1, 1, hidden_size] for trace support.
+                           When provided, bypasses dynamic slicing in prenet (required for trace).
+            precomputed_dropout_masks: Pre-computed dropout masks for each prenet layer for trace support.
+                           List of tensors, one per layer. When provided, bypasses dynamic slicing.
+            preprocessed_hidden_states: [batch, seq_len, hidden_size] - If provided, skip prenet entirely.
+                           Use this for trace mode: call preprocess_decoder_inputs() outside trace,
+                           then pass result here during traced execution.
             timing_details: If True, return tuple (output, timing_dict)
+            encoder_attention_mask: [batch, 1, 1, encoder_seq_len] - mask for padding in cross-attn
 
         Returns:
             If timing_details=False:
@@ -1138,21 +1276,34 @@ class TTNNSpeechT5Decoder:
         # Check if we're in decode mode (KV cache enabled)
         is_decode = kv_cache is not None and current_decode_pos is not None
 
-        # PHASE 1: Ensure all inputs are in L1
-        start_time = time.time()
-        decoder_input_values = ttnn.to_memory_config(decoder_input_values, ttnn.L1_MEMORY_CONFIG)
-        encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
-        if speaker_embeddings is not None:
-            speaker_embeddings = ttnn.to_memory_config(speaker_embeddings, ttnn.L1_MEMORY_CONFIG)
-        timing["memory_input"] = time.time() - start_time
+        # TRACE MODE: Use preprocessed hidden states (prenet already run outside trace)
+        if preprocessed_hidden_states is not None:
+            start_time = time.time()
+            hidden_states = preprocessed_hidden_states
+            timing["prenet"] = 0.0  # Prenet was run outside
+            timing["memory_input"] = time.time() - start_time
+        else:
+            # STANDARD MODE: Run prenet inside decoder
+            # PHASE 1: Ensure all inputs are in L1
+            start_time = time.time()
+            decoder_input_values = ttnn.to_memory_config(decoder_input_values, ttnn.L1_MEMORY_CONFIG)
+            if speaker_embeddings is not None:
+                speaker_embeddings = ttnn.to_memory_config(speaker_embeddings, ttnn.L1_MEMORY_CONFIG)
+            timing["memory_input"] = time.time() - start_time
 
-        # PHASE 2: Prenet processing (L1 output)
-        # For KV cache mode, pass position_offset to get correct positional encoding
-        start_time = time.time()
-        hidden_states = self.prenet(
-            decoder_input_values, speaker_embeddings=speaker_embeddings, position_offset=position_offset
-        )
-        timing["prenet"] = time.time() - start_time
+            # PHASE 2: Prenet processing (L1 output)
+            start_time = time.time()
+            hidden_states = self.prenet(
+                decoder_input_values,
+                speaker_embeddings=speaker_embeddings,
+                position_offset=position_offset,
+                precomputed_pe=precomputed_pe,
+                precomputed_dropout_masks=precomputed_dropout_masks,
+            )
+            timing["prenet"] = time.time() - start_time
+
+        # Ensure encoder hidden states are in L1
+        encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         seq_len = hidden_states.shape[1]
 
@@ -1178,6 +1329,7 @@ class TTNNSpeechT5Decoder:
                 cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
                 cross_attn_cache_valid=cross_attn_cache_valid,
                 current_decode_pos=current_decode_pos,
+                encoder_attention_mask=encoder_attention_mask,
             )
             layer_times.append(time.time() - layer_start)
 
