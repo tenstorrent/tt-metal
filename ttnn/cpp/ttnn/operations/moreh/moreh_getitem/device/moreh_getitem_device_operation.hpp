@@ -86,17 +86,15 @@ struct MorehGetItemOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::vector<Tensor>& index_tensors,
-        const ttnn::SmallVector<uint32_t>& index_dims,
-        const std::optional<Tensor>& output,
-        // const CoreRange core_range,
-        const std::optional<MemoryConfig>& memory_config);
 };
+
 }  // namespace ttnn::operations::moreh::moreh_getitem
 
 namespace ttnn::prim {
-constexpr auto moreh_getitem = ttnn::
-    register_operation<"ttnn::prim::moreh_getitem", ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation>();
+ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_value_t moreh_getitem(
+    const Tensor& input,
+    const std::vector<Tensor>& index_tensors,
+    const ttnn::SmallVector<uint32_t>& index_dims,
+    const std::optional<Tensor>& output,
+    const std::optional<MemoryConfig>& memory_config);
 }

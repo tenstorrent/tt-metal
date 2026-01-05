@@ -13,7 +13,7 @@ https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html
 
 * useful for deterministic hang debug and pcc issues
 * simple example:
-    * include `debug/dprint.h` header in your kernel
+    * include `api/debug/dprint.h` header in your kernel
     * print variable from a kernel: `DPRINT << “my variable is ” << my_variable << ENDL();`
     * add `TT_METAL_DPRINT_CORES="(0,0)"`  to your pytest command to output dprints from the first core
 

@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <vector>
 
@@ -120,7 +119,7 @@ bool test_socket_send_recv(
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
-                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                if (mesh_core_coords.contains(connection.sender_core)) {
                     continue;
                 }
                 mesh_core_coords.insert(connection.sender_core);
@@ -236,11 +235,11 @@ bool test_socket_send_recv(
         }
         // Increment the source vector for the next iteration
         // This is to ensure that the data is different for each transaction
-        for (int i = 0; i < src_vec.size(); i++) {
-            src_vec[i]++;
+        for (unsigned int& val : src_vec) {
+            val++;
         }
-        for (int i = 0; i < src_vec_per_core.size(); i++) {
-            src_vec_per_core[i]++;
+        for (unsigned int& val : src_vec_per_core) {
+            val++;
         }
     }
     return is_data_match;

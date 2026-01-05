@@ -290,6 +290,9 @@ class RunTimeOptions {
     // Disable XIP dump
     bool disable_xip_dump = false;
 
+    // Dump JIT build commands to stdout for debugging
+    bool dump_build_commands = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -576,7 +579,7 @@ public:
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
-    uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     bool get_disable_dma_ops() const { return disable_dma_ops; }
@@ -639,6 +642,8 @@ public:
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
+    bool get_dump_build_commands() const { return dump_build_commands; }
+
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
     void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
@@ -676,9 +681,7 @@ private:
     const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
     const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
     std::set<std::string> watcher_disabled_features;
-    bool watcher_feature_disabled(const std::string& name) const {
-        return watcher_disabled_features.find(name) != watcher_disabled_features.end();
-    }
+    bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };
 
 // Function declarations for operation timeout and synchronization

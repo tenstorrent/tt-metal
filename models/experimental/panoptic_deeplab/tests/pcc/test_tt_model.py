@@ -19,7 +19,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     create_ttnn_model,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
-    skip_if_not_blackhole_130_cores,
+    skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
 )
 
@@ -39,11 +39,11 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             PANOPTIC_DEEPLAB,
             {
-                "semantic": {"pcc": 0.982, "abs_err": 1.4, "rel_err": 0.5},
-                "center": {"pcc": 0.811, "abs_err": 0.1, "rel_err": 2.4},
-                "offset": {"pcc": 0.984, "abs_err": 12.2, "rel_err": 0.7},
+                "semantic": {"pcc": 0.983, "abs_err": 1.4, "rel_err": 0.4},
+                "center": {"pcc": 0.8, "abs_err": 0.1, "rel_err": 2.2},
+                "offset": {"pcc": 0.987, "abs_err": 11.7, "rel_err": 0.7},
             },
-            skip_if_not_blackhole_130_cores,
+            skip_if_not_blackhole_110_cores,
         ),
         (
             DEEPLAB_V3_PLUS,
@@ -55,16 +55,16 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
         (
             DEEPLAB_V3_PLUS,
             {
-                "semantic": {"pcc": 0.982, "abs_err": 1.4, "rel_err": 0.5},
+                "semantic": {"pcc": 0.983, "abs_err": 1.4, "rel_err": 0.4},
             },
-            skip_if_not_blackhole_130_cores,
+            skip_if_not_blackhole_110_cores,
         ),
     ],
     ids=[
         "panoptic_deeplab_20_cores",
-        "panoptic_deeplab_130_cores",
+        "panoptic_deeplab_110_cores",
         "deeplab_v3_plus_20_cores",
-        "deeplab_v3_plus_130_cores",
+        "deeplab_v3_plus_110_cores",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)

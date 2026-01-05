@@ -8,6 +8,7 @@
 #include <cmath>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -381,9 +382,9 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
         if (in0_block_w % per_core_factor_k != 0) {
             continue;
         }
-        for (auto it = factors.crbegin(); it != factors.crend(); ++it) {
-            uint32_t per_core_factor_m = std::get<0>(it->second);
-            uint32_t per_core_factor_n = std::get<1>(it->second);
+        for (const auto& factor : std::ranges::reverse_view(factors)) {
+            uint32_t per_core_factor_m = std::get<0>(factor.second);
+            uint32_t per_core_factor_n = std::get<1>(factor.second);
 
             size = get_estimated_size_of_cbs(
                 per_core_factor_m,
