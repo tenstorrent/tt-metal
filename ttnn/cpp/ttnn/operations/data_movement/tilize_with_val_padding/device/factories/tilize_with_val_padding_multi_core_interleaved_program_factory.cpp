@@ -4,7 +4,7 @@
 
 #include "tilize_with_val_padding_multi_core_interleaved_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"

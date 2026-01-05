@@ -206,7 +206,11 @@ Tensor to_weight_special_padding_tile_layout(
     }
     // height padding
     uint32_t inner_dim = enable_activation_reuse ? w_shape[1] * w_shape[2] * w_shape[3] : w_shape[1] * w_shape[3];
-    assert(in1_block_h_datums >= inner_dim);
+    TT_FATAL(
+        in1_block_h_datums >= inner_dim,
+        "Block height {} must be >= inner dimension {}",
+        in1_block_h_datums,
+        inner_dim);
     uint32_t block_height_padding = enable_activation_reuse ? 0 : in1_block_h_datums - inner_dim;
     auto weight_matrix_rows =
         enable_activation_reuse ? in1_block_h_datums : ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
@@ -1178,6 +1182,9 @@ static Conv2dBlockConfig get_opt_block_config(
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
 
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, has_bias);
+
     return determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -1190,7 +1197,8 @@ static Conv2dBlockConfig get_opt_block_config(
         output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse);
+        conv_config.enable_activation_reuse,
+        conv_is_1d_depthwise);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {
@@ -1223,7 +1231,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto orig_stride = stride;
-    const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
+    const bool is_conv1d = is_1d_conv(kernel_size[0], input_height);
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_memory_config,
         input_layout,
@@ -1464,6 +1472,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         output_parallel_config,
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
+        input_height,
         input_width,
         mm_conv && (auto_shard || is_dram_conv),
         out_channels,
@@ -1479,23 +1488,25 @@ static ttnn::Tensor prepare_conv_weights_internal(
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
     Shape weight_shape = weight_tensor.logical_shape();
     // In case of 1D convolution and 3D weight tensor, reinterpret it as 4D tensor
-    if (weight_shape.rank() == 3 && params.input_width == 1) {
-        weight_tensor_ = ttnn::reshape(weight_tensor_, Shape({weight_shape[0], weight_shape[1], weight_shape[2], 1}));
+    if (weight_shape.rank() == 3 && params.input_height == 1) {
+        weight_tensor_ = ttnn::reshape(weight_tensor_, Shape({weight_shape[0], weight_shape[1], 1, weight_shape[2]}));
     }
     validate_host_conv_weights(weight_tensor_);
     log_trace(tt::LogOp, "Prepare Conv Weights with params: {}", params);
     const auto& original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
+    uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
-    const bool is_conv1d = is_1d_conv(original_weights_window_w, params.input_width);
-    const bool is_conv_1d_depthwise_conv = is_1d_deptwise_conv(
+    const bool is_conv1d = is_1d_conv(original_weights_window_h, params.input_height);
+    const bool is_conv_1d_depthwise_conv = is_1d_depthwise_conv(
         params.groups,
         original_weights_in_channels * params.groups,
         original_weights_out_channels,
+        original_weights_window_h,
         original_weights_window_w,
-        params.input_width,
+        params.input_height,
         params.has_bias);
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and params.groups > 1) {
@@ -1505,7 +1516,11 @@ static ttnn::Tensor prepare_conv_weights_internal(
         if (is_conv_1d_depthwise_conv) {
             weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(
                 weight_tensor_, params.act_block_h_ntiles, weight_tensor_.dtype());
-            params.weight_block_h_ntiles = params.act_block_h_ntiles;
+            // After depthwise conversion, in_channels = act_block_h_ntiles * TILE_HEIGHT
+            // inner_dim = in_channels * kernel_w = act_block_h_ntiles * TILE_HEIGHT * kernel_w
+            // weight_block_h_ntiles * TILE_HEIGHT must >= inner_dim
+            // So: weight_block_h_ntiles >= act_block_h_ntiles * kernel_w
+            params.weight_block_h_ntiles = params.act_block_h_ntiles * original_weights_window_w;
         } else {
             weight_tensor_ =
                 convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
@@ -1666,7 +1681,6 @@ ttnn::Tensor prepare_conv_weights(
     }
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     if (!conv_config.weights_dtype.has_value()) {
         log_warning(
@@ -1676,6 +1690,9 @@ ttnn::Tensor prepare_conv_weights(
             "conv_weights_dtype is set to the same dtype before calling prepare_bias.");
         conv_config.weights_dtype = weight_tensor.dtype();
     }
+
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        get_conv_default_compute_kernel_config(device, input_dtype, conv_config.weights_dtype.value()));
     // Use common setup function to get configuration parameters
     Conv2dWeightsBiasPrepConfig params = setup_conv_prep_config(
         input_memory_config,
@@ -1724,9 +1741,11 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
+
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
+        get_conv_default_compute_kernel_config(device, input_dtype, conv_config.weights_dtype.value()));
 
     // Use common setup function to get configuration parameters
     auto params = setup_conv_prep_config(

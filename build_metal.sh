@@ -51,7 +51,7 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
-    echo "  --bindings                       Set bindings type: 'nanobind' (EXPERIMENTAL_NANOBIND_BINDINGS=ON) or 'pybind' (EXPERIMENTAL_NANOBIND_BINDINGS=OFF)."
+    echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
 }
 
 clean() {
@@ -98,7 +98,7 @@ configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
-bindings=""
+enable_lto="OFF"
 
 declare -a cmake_args
 
@@ -138,7 +138,7 @@ configure-only
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
-bindings:
+enable-lto
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -202,8 +202,8 @@ while true; do
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
-        --bindings)
-            bindings="$2";shift;;
+        --enable-lto)
+            enable_lto="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -288,6 +288,7 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+echo "INFO: Enable LTO: $enable_lto"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -412,18 +413,8 @@ else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
 fi
 
-if [ "$bindings" != "" ]; then
-    if [ "$bindings" = "nanobind" ]; then
-        echo "INFO: Bindings: nanobind"
-        cmake_args+=("-DEXPERIMENTAL_NANOBIND_BINDINGS=ON")
-    elif [ "$bindings" = "pybind" ]; then
-        echo "INFO: Bindings: pybind"
-        cmake_args+=("-DEXPERIMENTAL_NANOBIND_BINDINGS=OFF")
-    else
-        echo "ERROR: Invalid bindings type '$bindings'. Allowed values are 'nanobind' or 'pybind'."
-        show_help
-        exit 1
-    fi
+if [ "$enable_lto" = "ON" ]; then
+    cmake_args+=("-DTT_ENABLE_LTO=ON")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother
