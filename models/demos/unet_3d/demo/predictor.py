@@ -105,7 +105,6 @@ class Predictor:
                         f"Unsupported performance metric: {metric_name}, only dice and mean_iou are supported"
                     )
                 result[metric_name] = metric_value
-                logger.info(f"{metric_name} score: {metric_value}")
 
             return result
 
