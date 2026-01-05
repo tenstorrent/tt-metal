@@ -183,6 +183,11 @@ enum class EnvVarID {
     // FABRIC CONFIGURATION
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
+
+    // ========================================
+    // JIT BUILD CONFIGURATION
+    // ========================================
+    TT_METAL_BACKEND_DUMP_RUN_CMD,  // Dump JIT build commands to stdout
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1224,6 +1229,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->disable_xip_dump = is_env_enabled(value);
             break;
         }
+
+        // TT_METAL_BACKEND_DUMP_RUN_CMD
+        // Dump JIT build commands to stdout for debugging kernel compilation.
+        // Default: false
+        // Usage: export TT_METAL_BACKEND_DUMP_RUN_CMD=1
+        case EnvVarID::TT_METAL_BACKEND_DUMP_RUN_CMD: this->dump_build_commands = is_env_enabled(value); break;
     }
 }
 
