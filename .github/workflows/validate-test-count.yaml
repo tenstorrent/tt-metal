@@ -40,16 +40,32 @@ jobs:
           # Create stub modules for tt-metal specific imports
           mkdir -p stub_modules
           
-          # Create ttnn stub
+          # Create ttnn stub with better handling of special methods
           cat > stub_modules/ttnn.py << 'EOF'
+          import sys
+          from types import ModuleType
+          
           class _Stub:
               def __getattr__(self, name):
                   return _Stub()
               def __call__(self, *args, **kwargs):
                   return _Stub()
+              def __iter__(self):
+                  return iter([])
+              def __bool__(self):
+                  return True
           
           def __getattr__(name):
-              return _Stub()
+              # Create sub-modules dynamically
+              mod = ModuleType(f'ttnn.{name}')
+              mod.__dict__.update({k: _Stub() for k in dir(_Stub)})
+              sys.modules[f'ttnn.{name}'] = mod
+              return mod
+          
+          # Pre-populate common submodules
+          for submod in ['device', 'operations', 'core']:
+              sys.modules[f'ttnn.{submod}'] = ModuleType(f'ttnn.{submod}')
+              sys.modules[f'ttnn.{submod}'].__dict__['__getattr__'] = lambda n: _Stub()
           EOF
           
           # Create tt_lib stub
