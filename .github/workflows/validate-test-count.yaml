@@ -37,6 +37,36 @@ jobs:
           # Install common dependencies that tests might import
           pip install torch numpy || true
           
+          # Create stub modules for tt-metal specific imports
+          mkdir -p stub_modules
+          
+          # Create ttnn stub
+          cat > stub_modules/ttnn.py << 'EOF'
+          class _Stub:
+              def __getattr__(self, name):
+                  return _Stub()
+              def __call__(self, *args, **kwargs):
+                  return _Stub()
+          
+          def __getattr__(name):
+              return _Stub()
+          EOF
+          
+          # Create tt_lib stub
+          cat > stub_modules/tt_lib.py << 'EOF'
+          class _Stub:
+              def __getattr__(self, name):
+                  return _Stub()
+              def __call__(self, *args, **kwargs):
+                  return _Stub()
+          
+          def __getattr__(name):
+              return _Stub()
+          EOF
+          
+          # Add to PYTHONPATH
+          echo "PYTHONPATH=$PWD/stub_modules:$PYTHONPATH" >> $GITHUB_ENV
+          
       - name: Count and compare tests
         run: |
           # Define locked directories to check
