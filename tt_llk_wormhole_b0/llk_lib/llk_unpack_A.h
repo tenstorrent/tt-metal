@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_unpack_common.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -218,6 +219,11 @@ inline void _llk_unpack_A_init_(
     {
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
+
+    if constexpr (BType != BroadcastType::NONE && unpack_to_dest)
+    {
+        _llk_unpack_dbg_feature_disable_();
+    }
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
@@ -271,6 +277,9 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Run MOP
     ckernel::ckernel_template::run();
 
+    // T6::SEMGET for context release
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
     if (unpack_to_dest)
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -278,9 +287,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             unpack_to_dest_tile_done(unp_cfg_context);
         }
     }
-
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
@@ -291,5 +297,4 @@ inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
     TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 }

@@ -46,6 +46,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     {
         _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(L1_ADDRESS(buffer_A[i]), formats.unpack_src, formats.unpack_dst);
     }
+    _llk_unpack_A_uninit_<BROADCAST_TYPE>(params->TEST_FACE_R_DIM);
 }
 
 #endif
@@ -85,6 +86,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(i, formats.math, formats.math);
     }
     _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
+    _llk_math_eltwise_unary_datacopy_uninit_<copy_type, BROADCAST_TYPE, unpack_to_dest>();
 }
 
 #endif

@@ -392,10 +392,6 @@ inline void configure_unpack_AB(
         reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
                                                                  // workaround for bug tenstorrent/budabackend#1948
     }
-    else
-    {
-        reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Unset debug feature disable
-    }
 
     // Clear context ID
     reset_config_context();

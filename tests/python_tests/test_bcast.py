@@ -7,7 +7,6 @@ from itertools import product
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -24,8 +23,22 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import generate_params, input_output_formats
+from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import run_test
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    ACC_TO_DEST,
+    BROADCAST_TYPE,
+    DISABLE_SRC_ZERO_FLAG,
+    NUM_FACES,
+    PARTIAL_FACE,
+    REUSE_DEST_TYPE,
+    STOCHASTIC_ROUNDING,
+    TEST_FACE_DIMS,
+    TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
+)
 from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
@@ -83,12 +96,11 @@ unpack_A_param_combinations = list(
 # Create unified parameter combinations
 # This combines the power of generate_params with unpack_A specific parameters
 all_params = []
-testname = ["unpack_A_test"]
-
 # Use generate_params for base parameter structure (like datacopy test)
+# Convert itertools.product to list
 base_params = list(
-    generate_params(testnames=testname, formats=test_formats)
-)  # Convert itertools.product to list
+    generate_params(testnames=["sources/unpack_A_test.cpp"], formats=test_formats)
+)
 
 # Extend base params with unpack_A specific parameters
 for base_param in base_params:
@@ -240,11 +252,8 @@ def test_unpack_bcast(
     within_face_16x16_transpose,
     num_faces,
     face_r_dim,
+    workers_tensix_coordinates,
 ):
-
-    # Compute unpack_to_dest based on format and accumulation mode
-    unpack_to_dest = formats.input_format.is_32_bit()
-
     # Note: All constraint validation has been done during parameter generation
     # No need for pytest.skip() calls - invalid combinations have been filtered out
 
@@ -257,10 +266,11 @@ def test_unpack_bcast(
         input_dimensions = [32, 32]
         partial_face = False
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format,
-        formats.input_format,
-        input_dimensions=input_dimensions,
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
         face_r_dim=face_r_dim,
         num_faces=num_faces,
     )
@@ -279,7 +289,6 @@ def test_unpack_bcast(
             src_A,
             formats.output_format,
             num_faces=num_faces,
-            tile_cnt=tile_cnt,
             face_r_dim=face_r_dim,
         )
     elif transpose_of_faces == Transpose.Yes:
@@ -362,49 +371,52 @@ def test_unpack_bcast(
                 src_A, formats.output_format, num_faces, input_dimensions, face_r_dim
             )
 
-    # BUILD THE COMPLETE TEST CONFIG
-    test_config = {
-        "formats": formats,
-        "testname": testname,
-        "tile_cnt": tile_cnt,
-        "input_dimensions": input_dimensions,
-        "broadcast_type": broadcast_type,
-        "acc_to_dest": acc_to_dest,
-        "reuse_dest": reuse_dest,
-        "unpack_to_dest": unpack_to_dest,
-        "stochastic_rnd": stochastic_rnd,
-        "dest_acc": dest_acc,
-        "disable_src_zero_flag": disable_src_zero,
-        "unpack_transpose_faces": transpose_of_faces,
-        "unpack_transpose_within_face": within_face_16x16_transpose,
-        "num_faces": num_faces,
-        "face_r_dim": face_r_dim,
-        "partial_face": partial_face,
-    }
-
-    res_address = write_stimuli_to_l1(
-        test_config,
-        src_A,
-        src_B,
-        formats.input_format,
-        formats.input_format,
-        tile_count_A=tile_cnt,
-        tile_count_B=tile_cnt,
-        num_faces=num_faces,
-    )
-
-    run_test(test_config)
-
-    # Collect and validate results
-    res_from_L1 = collect_results(
+    configuration = TestConfig(
+        testname,
         formats,
-        tile_count=tile_cnt,
-        address=res_address,
-        tile_dimensions=input_dimensions,
-        num_faces=num_faces,
-        face_r_dim=face_r_dim,
+        templates=[
+            STOCHASTIC_ROUNDING(stochastic_rnd),
+            BROADCAST_TYPE(broadcast_type),
+            ACC_TO_DEST(acc_to_dest),
+            REUSE_DEST_TYPE(reuse_dest),
+            PARTIAL_FACE(
+                partial_a=partial_face,
+                partial_face_pack=partial_face,
+                partial_b=partial_face,
+                partial_face_math=partial_face,
+            ),
+            DISABLE_SRC_ZERO_FLAG(disable_src_zero),
+        ],
+        runtimes=[
+            UNPACK_TRANS_FACES(transpose_of_faces),
+            UNPACK_TRANS_WITHIN_FACE(within_face_16x16_transpose),
+            NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+        ),
+        dest_acc=(DestAccumulation.Yes if acc_to_dest else DestAccumulation.No),
+        unpack_to_dest=(formats.input_format.is_32_bit()),
     )
-    assert len(res_from_L1) == len(golden_tensor)
+
+    res_from_L1 = configuration.run(workers_tensix_coordinates)
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
