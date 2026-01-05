@@ -142,8 +142,7 @@ ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::St
         .fused_activation = std::move(fused_activation),
         .output_mem_config = memory_config_mm,
         .compute_kernel_config = compute_kernel_config.value()};
-    ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync
-        ag_op{};  // just need to call the static function on this
+    ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync ag_op{};
 
     bool read_local_from_input = read_local_slice_from_input.value_or(false);
 
