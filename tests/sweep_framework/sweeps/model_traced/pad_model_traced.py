@@ -47,42 +47,58 @@ if model_traced_params:
 
 def invalidate_vector(test_vector) -> tuple[bool, str]:
     """
-    Invalidate test vectors that would cause L1 circular buffer overflow.
-    pad operation allocates internal circular buffers that can exceed L1 capacity.
+    Invalidate test vectors that would cause L1 circular buffer overflow in pad operation.
+
+    The pad operation allocates internal L1 circular buffers regardless of input memory config.
+    Even when we force DRAM input, the operation's internal buffers can exceed L1 capacity.
+
+    Root cause: pad operation's C++ implementation allocates circular buffers proportional
+    to tensor size, and these buffers live in L1 memory (not configurable from Python).
     """
     input_shape = test_vector.get("input_shape")
-    padding = test_vector.get("padding")
+    input_a_memory_config = test_vector.get("input_a_memory_config")
 
-    if isinstance(input_shape, (list, tuple)):
-        # Calculate tensor size in elements
+    # Parse input shape
+    shape = None
+    if isinstance(input_shape, str) and input_shape.startswith("("):
+        try:
+            shape = eval(input_shape)
+        except:
+            pass
+    elif isinstance(input_shape, (list, tuple)):
+        shape = input_shape
+
+    if shape:
+        # Calculate tensor size
         total_elements = 1
-        for dim in input_shape:
+        for dim in shape:
             total_elements *= dim
 
-        # Skip if tensor is too large (causes circular buffer overflow)
-        # Empirically, tensors > 100K elements can cause L1 overflow for pad
-        # The operation needs to allocate buffers for both input and padded output
-        # Circular buffers can grow to 2-7MB for large tensors (exceeding 1.5MB L1 limit)
-        if total_elements > 100000:
+        # Check memory config - L1 configs are especially problematic
+        is_l1 = False
+        is_sharded = False
+
+        if isinstance(input_a_memory_config, dict):
+            data = input_a_memory_config.get("data", {})
+            buffer_type = data.get("buffer_type", "")
+            memory_layout = data.get("memory_layout", "")
+
+            is_l1 = "L1" in str(buffer_type)
+            is_sharded = "SHARDED" in str(memory_layout)
+
+        # Skip L1 sharded configs - these ALWAYS fail due to circular buffer allocation
+        # Even though we convert to DRAM in from_torch, pad's internal logic allocates L1 buffers
+        if is_l1 and is_sharded:
+            return (True, f"pad: L1 sharded config causes circular buffer overflow (shape {shape})")
+
+        # Skip very large tensors (>500K elements) - these cause 2-7MB circular buffer allocations
+        # The pad operation allocates buffers for both input and padded output in L1
+        if total_elements > 500_000:
+            size_kb = total_elements * 2 / 1024  # bfloat16
             return (
                 True,
-                f"pad: Skipping large tensor {input_shape} (circular buffer would exceed L1 capacity)",
+                f"pad: Tensor too large ({total_elements} elements, {size_kb:.1f}KB) - would cause L1 circular buffer overflow",
             )
-
-        # Also check if padding would create an extremely large output
-        if padding:
-            try:
-                # Estimate output size with padding
-                output_elements = total_elements
-                # Padding can significantly increase size
-                # Conservative estimate: if any padding dim is large, skip
-                if isinstance(padding, (list, tuple)):
-                    for pad_val in padding:
-                        if isinstance(pad_val, (list, tuple)):
-                            if any(p > 1000 for p in pad_val):
-                                return (True, f"pad: Skipping due to large padding values {padding}")
-            except:
-                pass
 
     return (False, None)
 

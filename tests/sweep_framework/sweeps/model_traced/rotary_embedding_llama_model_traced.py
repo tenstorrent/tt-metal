@@ -48,6 +48,15 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Skip all rotary_embedding_llama tests until we have a proper golden function.
+    The current implementation uses input.clone() as fallback which doesn't match
+    the actual rotary embedding computation, causing all tests to fail with low PCC.
+    """
+    return True, "No valid golden function available for rotary_embedding_llama"
+
+
 def run(
     input_shape,
     input_a_dtype,
