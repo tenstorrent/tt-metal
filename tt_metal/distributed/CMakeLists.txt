@@ -65,7 +65,42 @@ elseif(ENABLE_DISTRIBUTED)
     # Try to find system MPI if distributed is enabled
     find_package(MPI QUIET COMPONENTS C)
     if(MPI_FOUND)
-        message(STATUS "ULFM MPI not found, using system MPI")
+        # Check if system MPI is OpenMPI with ULFM support (version 5+ has ULFM by default)
+        set(ULFM_AVAILABLE FALSE)
+        if(MPI_C_LIBRARY_VERSION_STRING MATCHES "Open MPI")
+            # Extract major version from the library version string
+            # Format is typically: "Open MPI vX.Y.Z, ..."
+            string(REGEX MATCH "Open MPI v([0-9]+)" _ompi_match "${MPI_C_LIBRARY_VERSION_STRING}")
+            if(_ompi_match)
+                set(OMPI_MAJOR_VERSION ${CMAKE_MATCH_1})
+                if(OMPI_MAJOR_VERSION GREATER_EQUAL 5)
+                    set(ULFM_AVAILABLE TRUE)
+                    message(
+                        STATUS
+                        "Using system OpenMPI ${OMPI_MAJOR_VERSION}.x with ULFM support (version 5+ has ULFM by default)"
+                    )
+                else()
+                    message(
+                        WARNING
+                        "System OpenMPI ${OMPI_MAJOR_VERSION}.x found but ULFM support requires version 5 or higher. "
+                        "Fault tolerance features may not be available."
+                    )
+                endif()
+            else()
+                message(
+                    WARNING
+                    "Could not determine OpenMPI version from: ${MPI_C_LIBRARY_VERSION_STRING}. "
+                    "ULFM support requires OpenMPI version 5 or higher."
+                )
+            endif()
+        else()
+            message(
+                WARNING
+                "Non-OpenMPI implementation found: ${MPI_C_LIBRARY_VERSION_STRING}. "
+                "ULFM fault tolerance requires OpenMPI version 5 or higher."
+            )
+        endif()
+
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
         list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
