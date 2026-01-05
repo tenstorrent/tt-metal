@@ -135,7 +135,6 @@ class DecoderBlock2DBase(DecoderBlockBase):
 
         # MLP norm
         mlp_norm_out = DistributedRMSNorm.forward_decode(x, cfg["mlp_norm"])
-        ttnn.deallocate(x)
 
         # MLP
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
