@@ -496,9 +496,14 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
             reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
-    string core_type_str = programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? "acteth"
-                           : programmable_core_type == HalProgrammableCoreType::IDLE_ETH ? "idleth"
-                                                                                         : "worker";
+    string core_type_str;
+    if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        core_type_str = "acteth";
+    } else if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
+        core_type_str = "idleth";
+    } else {
+        core_type_str = "worker";
+    }
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_coord.x,

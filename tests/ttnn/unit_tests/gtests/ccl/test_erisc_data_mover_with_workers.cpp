@@ -155,9 +155,14 @@ void generate_receiver_worker_kernels(
 
     // Just want a dummy DF
     uint32_t src0_cb_index = CBIndex::c_0;
-    tt::DataFormat df = page_size == 1024   ? tt::DataFormat::Bfp8
-                        : page_size == 2048 ? tt::DataFormat::Float16
-                                            : tt::DataFormat::Float32;
+    tt::DataFormat df;
+    if (page_size == 1024) {
+        df = tt::DataFormat::Bfp8;
+    } else if (page_size == 2048) {
+        df = tt::DataFormat::Float16;
+    } else {
+        df = tt::DataFormat::Float32;
+    }
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
@@ -275,9 +280,14 @@ void generate_sender_worker_kernels(
         log_info(tt::LogTest, "\t\t{}", arg);
     }
     // Just want a dummy DF
-    tt::DataFormat df = page_size == 1024   ? tt::DataFormat::Bfp8
-                        : page_size == 2048 ? tt::DataFormat::Float16
-                                            : tt::DataFormat::Float32;
+    tt::DataFormat df;
+    if (page_size == 1024) {
+        df = tt::DataFormat::Bfp8;
+    } else if (page_size == 2048) {
+        df = tt::DataFormat::Float16;
+    } else {
+        df = tt::DataFormat::Float32;
+    }
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
