@@ -18,9 +18,9 @@ A TT-NN operation is a function that takes in one or more input tensors and prod
 
 What steps are needed to add TT-NN operation in C++?
 ----------------------------------------------------
-1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
-   a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
-   b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
+1. There are 2 options for writing a new operation. Option ``a`` is to write a device operation and option ``b`` is to write an operation that calls other operations
+   a. Implement device operation in C++. Device operation is a struct that satisfies `DeviceOperationConcept` and specifies how to create output tensors and a program to run on the device.
+   b. Implement an operation in C++ that calls other operations. This type of operation simply defines an ``invoke()`` method that calls other operations.
 2. Register the struct using `ttnn::register_operation`.
 
 What steps are needed to add TT-NN operation in Python?
@@ -99,23 +99,23 @@ Step 1: Add Python binding
 
 In order to add a python binding for the operation, follow the directory structure shown below:
 
-`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_pybind.hpp`
-`ttnn/python/ttnn/operations/<category>/<category>_pybind.hpp`
+`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_nanobind.hpp`
+`ttnn/python/ttnn/operations/<category>/<category>_nanobind.hpp`
 
 A concrete example:
 
-.. literalinclude::  examples/example/example_pybind.hpp
+.. literalinclude::  examples/example/example_nanobind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/example/example_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/example/example_nanobind.hpp
 
 
-.. literalinclude::  examples/examples_pybind.hpp
+.. literalinclude::  examples/examples_nanobind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/examples_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/examples_nanobind.hpp
 
-Finally, call the module defined in `examples/example/example_pybind.hpp` wherever you want it to be added.
+Finally, call the module defined in `examples/example/example_nanobind.hpp` wherever you want it to be added.
 
 
 

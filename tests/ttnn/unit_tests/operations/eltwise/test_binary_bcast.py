@@ -17,6 +17,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 
+pytestmark = pytest.mark.use_module_device
+
 
 def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     pt = torch.rand(shape, dtype=torch.bfloat16) * (max - min) + min

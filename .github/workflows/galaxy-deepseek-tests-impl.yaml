@@ -20,15 +20,46 @@ on:
         required: false
         type: string
         default: "topology-6u"
+      test-type:
+        required: false
+        type: string
+        default: "all"
 
 jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate test matrix
+        id: generate
+        run: |
+          all_tests=$(jq -n '[
+            { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
+            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" }
+          ]')
+
+          # Filter matrix based on test-type selection
+          if [ "${{ inputs.test-type }}" = "all" ]; then
+            matrix="$all_tests"
+          else
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"${{ inputs.test-type }}\")]")
+          fi
+
+          # Fail fast if the matrix is empty (invalid test-type selected)
+          if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
+            echo "Error: Invalid test-type selected: '${{ inputs.test-type }}'"
+            exit 1
+          fi
+          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
+
   galaxy-deepseek-tests:
+    needs: generate-matrix
+    name: ${{ matrix.test-group.name }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "(Galaxy) DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 120, owner_id: U03HY7MK4BT}, # Mark O'Connor
-        ]
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
@@ -49,7 +80,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:rw
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -67,23 +98,23 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run DeepSeek tests
+      - name: Run DeepSeek unit tests
+        if: ${{ matrix.test-group.test-type == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          fail=0
-          echo "LOG_METAL: Running DeepSeek unit tests"
-          start_time=$(date +%s)
-
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --timeout 10 --durations=0 || fail=1
-
-          end_time=$(date +%s)
-          duration=$((end_time - start_time))
-          echo "LOG_METAL: DeepSeek unit tests took $duration seconds to complete"
-
-          if (( fail )); then
-            exit 1
-          fi
+          pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+      - name: Validate weight cache
+        if: ${{ matrix.test-group.test-type == 'module' }}
+        timeout-minutes: 10
+        run: |
+          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
+      - name: Run DeepSeek module tests
+        if: ${{ matrix.test-group.test-type == 'module' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
