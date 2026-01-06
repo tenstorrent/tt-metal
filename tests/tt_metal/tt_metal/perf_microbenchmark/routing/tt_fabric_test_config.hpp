@@ -458,8 +458,6 @@ private:
 
     void resolve_missing_params(ParsedTestConfig& test);
 
-    bool is_multi_mesh() const;
-
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
     std::mt19937& gen_;

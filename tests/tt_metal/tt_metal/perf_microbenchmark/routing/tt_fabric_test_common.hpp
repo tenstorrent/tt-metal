@@ -288,6 +288,38 @@ public:
         return freq;
     }
 
+    bool is_multi_mesh() const override {
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return mesh_graph.get_mesh_ids().size() > 1;
+    }
+
+    std::unordered_map<MeshId, std::vector<MeshId>> get_mesh_adjacency_map() const override {
+        std::unordered_map<MeshId, std::vector<MeshId>> mesh_adjacency_map;
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& global_nodes = get_global_node_ids();
+        const std::vector<RoutingDirection> directions = {
+            RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
+        for (const auto& src_node : global_nodes) {
+            MeshId src_mesh_id = src_node.mesh_id;
+            if (!mesh_adjacency_map.contains(src_mesh_id)) {
+                mesh_adjacency_map[src_mesh_id] = std::vector<MeshId>();
+            }
+            for (const auto& direction : directions) {
+                const auto& neighbors = control_plane.get_chip_neighbors(src_node, direction);
+                for (const auto& [neighbor_mesh_id, neighbor_chips] : neighbors) {
+                    if (neighbor_mesh_id != src_mesh_id && !neighbor_chips.empty()) {
+                        auto& adj_list = mesh_adjacency_map[src_mesh_id];
+                        if (std::find(adj_list.begin(), adj_list.end(), neighbor_mesh_id) == adj_list.end()) {
+                            adj_list.push_back(neighbor_mesh_id);
+                        }
+                    }
+                }
+            }
+        }
+        return mesh_adjacency_map;
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
