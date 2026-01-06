@@ -185,6 +185,14 @@ jobs:
               "cmd": "run_t3000_tt_dit_tests",
               "timeout": 20,
               "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+              "name": "t3k gpt-oss unit tests",
+              "model": "gpt-oss",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_gpt_oss_unit_tests",
+              "timeout": 10,
+              "owner_id": "U08TJ70UFRT" # Harry Andrews
             }
           ]')
 
