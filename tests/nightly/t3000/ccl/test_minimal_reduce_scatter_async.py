@@ -161,9 +161,13 @@ def run_reduce_scatter_impl(
                 dim=dim,
                 num_links=num_links,
                 memory_config=mem_config_rs,
+                intermediate_memory_config=mem_config_intermediate,
                 topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
             )
         else:
             logger.info(f"Using experimental reduce scatter")
