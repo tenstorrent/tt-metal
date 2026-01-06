@@ -698,13 +698,13 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     const bool no_stride,
     uint32_t write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-    bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
+    bool multicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>;
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value
+    uint32_t max_num_packed_sub_cmds = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>
                                            ? packed_write_max_unicast_sub_cmds
                                            : packed_write_max_multicast_sub_cmds;
     TT_FATAL(
@@ -778,13 +778,13 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
     const bool no_stride,
     uint32_t write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-    bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
+    bool multicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>;
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value
+    uint32_t max_num_packed_sub_cmds = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>
                                            ? packed_write_max_unicast_sub_cmds
                                            : packed_write_max_multicast_sub_cmds;
     TT_ASSERT(
