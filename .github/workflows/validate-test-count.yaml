@@ -1,9 +1,13 @@
 name: "Validate Test Count"
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ "kkabilar-APC-limit" ]
+  workflow_call:
+    inputs:
+      wheel-artifact-name:
+        required: true
+        type: string
+  # push:
+  #   branches: [ "kkabilar-APC-limit" ]
   pull_request:
     paths:
       - 'tests/ttnn/unit_tests/operations/eltwise/**'
@@ -18,25 +22,25 @@ on:
       - 'tests/ttnn/unit_tests/base_functionality/**'
       - 'tests/ttnn/unit_tests/benchmarks/**'
 jobs:
-  build:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: "22.04"
-      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-      # Cannot do a Sanitizer build as that's not compatible with the downstream test.
-      # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
-      # name clashes.
-      build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
-      build-wheel: true
-      publish-artifact: false
-      skip-tt-train: true
-      distributed: false
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+  # build:
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     version: "22.04"
+  #     toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+  #     # Cannot do a Sanitizer build as that's not compatible with the downstream test.
+  #     # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
+  #     # name clashes.
+  #     build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
+  #     build-wheel: true
+  #     publish-artifact: false
+  #     skip-tt-train: true
+  #     distributed: false
+  #     ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
   check-test-count:
-    needs: build
+    # needs: build
     runs-on: ubuntu-latest
     name: "Ensure no new tests added to locked directories"
     steps:
@@ -50,14 +54,14 @@ jobs:
           python-version: '3.10'
 
       - name: Download built wheel
-        if: ${{ needs.build.outputs.wheel-artifact-name != '' }}
+        if: ${{ inputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build.outputs.wheel-artifact-name }}
+          name: ${{ inputs.wheel-artifact-name }}
           path: ./wheels
 
       - name: Install tt-metal wheel and dependencies
-        if: ${{ needs.build.outputs.wheel-artifact-name != '' }}
+        if: ${{ inputs.wheel-artifact-name != '' }}
         run: |
           pip install pytest torch numpy
           # Install other common test dependencies
@@ -146,7 +150,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ **This PR adds new tests to locked directories.**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "These test directories are locked to maintain stable CI runtime." >> $GITHUB_STEP_SUMMARY
+            echo "These test directories are locked to maintain stable APC runtime." >> $GITHUB_STEP_SUMMARY
             echo "Please contact @tenstorrent/metalium-developers-infra for approval to add new tests." >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
@@ -163,5 +167,5 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '❌ **Test Count Validation Failed**\n\nThis PR adds new tests to the ttnn job in APC. These jobs have a fixed test count to maintain stable CI runtime.\n\nIf you need to add new tests, please:\n1. Contact @tenstorrent/metalium-developers-infra\n2. Explain why the new tests are necessary\n3. Consider adding tests to a different directory\n\nSee the workflow summary for details.'
+              body: '❌ **Test Count Validation Failed**\n\nThis PR adds new tests to the ttnn job in APC. These jobs have a fixed test count to maintain stable APC runtime.\n\nIf you need to add new tests, please:\n1. Please look through the current list of test and check if a lower priority test can be removed to add your new test. \n2. Contact @tenstorrent/metalium-developers-infra and explain why the new tests are necessary\n3. Consider adding tests to the ttnn/nightly directory to run in L2-nightly pipeline\n\nSee the workflow summary for details.'
             })
