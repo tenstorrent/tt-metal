@@ -474,9 +474,9 @@ inline bool DeviceData::validate_host(
     uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)];
 
     int fail_count = 0;
-    for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
+    for (unsigned int val : host_data.data) {
         validated_cores.insert(this->host_core);
-        if (host_data.data[data_index] != results[host_data_index] && fail_count < 20) {
+        if (val != results[host_data_index] && fail_count < 20) {
             if (!failed) {
                 log_fatal(tt::LogTest, "Data mismatch - First 20 host data failures: [idx] expected->read");
             }
@@ -485,7 +485,7 @@ inline bool DeviceData::validate_host(
                 tt::LogTest,
                 "  [{:02d}] 0x{:08x}->0x{:08x}",
                 host_data_index,
-                (unsigned int)host_data.data[data_index],
+                (unsigned int)val,
                 (unsigned int)results[host_data_index]);
 
             failed = true;
@@ -771,7 +771,7 @@ public:
     // Helper for random number generation in a range [min, max]
     template <typename T>
     T get_rand(T min, T max) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
+        static_assert(std::is_integral_v<T>, "T must be an integral type");
         std::uniform_int_distribution<T> dist(min, max);
         return dist(rng_);
     }

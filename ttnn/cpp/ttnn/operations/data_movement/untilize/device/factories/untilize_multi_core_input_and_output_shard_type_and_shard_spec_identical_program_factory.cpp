@@ -134,9 +134,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     // Run-time args
     auto cores =
         corerange_to_cores(shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        CoreCoord core = cores[i];
-
+    for (auto core : cores) {
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_core;
         std::vector<uint32_t> reader_run_time_args = {num_tiles_to_read};
