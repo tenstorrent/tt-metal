@@ -18,12 +18,23 @@ permissions:
 
 jobs:
   nightly-debug:
-    name: apc nightly debug run (${{ matrix.version }})
+    name: apc nightly debug run (${{ matrix.platform }})
     strategy:
       matrix:
-        version: ["22.04", "24.04"]
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04", "Fedora 43"]
+        include:
+          - platform: "Ubuntu 22.04"
+            distro: ubuntu
+            version: "22.04"
+          - platform: "Ubuntu 24.04"
+            distro: ubuntu
+            version: "24.04"
+          - platform: "Fedora 43"
+            distro: fedora
+            version: "43"
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
+      distro: ${{ matrix.distro }}
       version: ${{ matrix.version }}

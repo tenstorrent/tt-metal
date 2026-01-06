@@ -35,13 +35,15 @@ on:
         type: string
         default: "Custom test dispatch"
         required: false
-      version:
+      platform:
         required: false
         type: choice
-        default: "22.04"
+        default: "Ubuntu 22.04"
         options:
-            - "22.04"
-            - "24.04"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        description: "Platform to build and test"
       commit:
         required: false
         type: string
@@ -50,7 +52,24 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
+  # Parse platform dropdown to extract distro/version
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
   build-artifact:
+    needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -58,7 +77,8 @@ jobs:
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
-      version: ${{ inputs.version }}
+      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
   test-dispatch:

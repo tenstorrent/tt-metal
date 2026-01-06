@@ -14,14 +14,15 @@ on:
           - ASan
           - TSan
         default: Release
-      version:
-        description: "OS version"
+      platform:
+        description: "Platform to build and test"
         required: false
         type: choice
         options:
-          - "22.04"
-          - "24.04"
-        default: "22.04"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        default: "Ubuntu 22.04"
       tests-json:
         description: |
           JSON object specifying which tests to run.
@@ -63,8 +64,24 @@ jobs:
           TESTS=$(echo "$TESTS_JSON" | jq -r 'to_entries | map(select(.value == true) | .key) | join(",")')
           echo "tests_to_run=$TESTS" >> $GITHUB_OUTPUT
 
+  # Parse platform dropdown to extract distro/version
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
   build-artifact:
-    needs: parse-tests-json
+    needs: [parse-tests-json, parse-platform]
     if: ${{ always() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -74,7 +91,8 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: ${{ inputs.version || '22.04' }}
+      distro: ${{ needs.parse-platform.outputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || '22.04' }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
 

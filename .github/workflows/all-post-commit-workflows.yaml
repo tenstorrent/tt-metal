@@ -7,6 +7,10 @@ on:
         required: false
         default: Release
         type: string
+      distro:
+        required: false
+        type: string
+        default: "ubuntu"
       version:
         required: false
         default: "22.04"
@@ -23,13 +27,15 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      version:
+      platform:
         required: false
-        default: "22.04"
         type: choice
+        default: "Ubuntu 22.04"
         options:
-          - "22.04"
-          - "24.04"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+          - "Fedora 43"
+        description: "Platform to build and test"
       with-retries:
         default: false
         type: boolean
@@ -52,7 +58,26 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
+  # Parse platform dropdown to extract distro/version
+  parse-platform:
+    runs-on: ubuntu-latest
+    outputs:
+      distro: ${{ steps.parse.outputs.distro }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: parse
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+          distro: ${{ inputs.distro }}
+          version: ${{ inputs.version }}
+
   build-artifact:
+    needs: parse-platform
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -61,7 +86,8 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: ${{ inputs.version || '22.04' }}
+      distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
+      version: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
       skip-tt-train: false
 
   find-changed-files:
