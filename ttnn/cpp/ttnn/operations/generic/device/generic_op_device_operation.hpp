@@ -37,7 +37,6 @@ struct GenericOpDeviceOperation {
             shared_variables_t program_shared_variables;
         };
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<mesh_shared_variables_t>;
 
         static cached_mesh_workload_t create_mesh_workload(
@@ -46,7 +45,7 @@ struct GenericOpDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static cached_program_t create_at(
+        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const tt::tt_metal::ProgramDescriptor& program_descriptor,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

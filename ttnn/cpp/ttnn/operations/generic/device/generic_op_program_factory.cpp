@@ -34,7 +34,8 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(mesh_shared_variables)};
 }
 
-GenericOpDeviceOperation::GenericMeshProgram::cached_program_t GenericOpDeviceOperation::GenericMeshProgram::create_at(
+ttnn::device_operation::CachedProgram<GenericOpDeviceOperation::GenericMeshProgram::shared_variables_t>
+GenericOpDeviceOperation::GenericMeshProgram::create_at(
     const tt::tt_metal::ProgramDescriptor& program_descriptor,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
