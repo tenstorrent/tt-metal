@@ -322,10 +322,9 @@ int main(int argc, char **argv) {
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
-    // Change mode to tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
+    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
     // of model that doesn't fit in the memory of the device.
-    ttnn::ScopeGuard memory_usage_guard =
-        ttml::utils::MemoryUsageTracker::begin_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
@@ -754,6 +753,7 @@ int main(int argc, char **argv) {
                     is_everything_compiled = true;
                     ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
                     ttml::utils::MemoryUsageTracker::print_all_memory_usage();
+                    ttml::utils::MemoryUsageTracker::clear();
                 }
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
