@@ -197,26 +197,26 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket
         connections.push_back(convert_to_socket_connection(conn_config));
     }
 
-    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{
-        .socket_storage_type = tt::tt_metal::BufferType::L1,
-        .fifo_size = memory_config.fifo_size,
-    };
+    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config(
+        tt::tt_metal::BufferType::L1, memory_config.fifo_size);
 
-    tt::tt_metal::distributed::SocketConfig config{
-        .socket_connection_config = connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = test_socket_config.sender_rank,
-        .receiver_rank = test_socket_config.receiver_rank,
-        .distributed_context = distributed_context_};
+    tt::tt_metal::distributed::SocketConfig config(
+        connections,
+        socket_mem_config,
+        test_socket_config.sender_rank,
+        test_socket_config.receiver_rank,
+        distributed_context_);
 
     return config;
 }
 
 tt::tt_metal::distributed::SocketConnection MeshSocketTestContext::convert_to_socket_connection(
     const SocketConnectionConfig& connection_config) {
-    return tt::tt_metal::distributed::SocketConnection{
-        .sender_core = {connection_config.sender.mesh_coord, connection_config.sender.core_coord},
-        .receiver_core = {connection_config.receiver.mesh_coord, connection_config.receiver.core_coord}};
+    return tt::tt_metal::distributed::SocketConnection(
+        tt::tt_metal::distributed::MeshCoreCoord(
+            connection_config.sender.mesh_coord, connection_config.sender.core_coord),
+        tt::tt_metal::distributed::MeshCoreCoord(
+            connection_config.receiver.mesh_coord, connection_config.receiver.core_coord));
 }
 
 void MeshSocketTestContext::execute_socket_test(
