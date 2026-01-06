@@ -302,7 +302,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
  * Update packet header for next hop (1D Low Latency routing)
  *
  * ExtensionWords=0 (≤16 hops): Compiles to single shift instruction
- * ExtensionWords>0 (>16 hops): Includes refill logic with compile-time unrolled loops
+ * ExtensionWords>0 (>16 hops): Includes refill logic
  */
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
@@ -321,7 +321,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         // Refill from buffer[0]
         new_value = cached_routing_fields.route_buffer[0];
 
-// Shift buffer left (unrolled at compile time)
+// Shift buffer left
 #pragma unroll
         for (uint32_t i = 0; i < EXT - 1; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
@@ -337,7 +337,6 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         }
     }
 #endif
-    // ExtensionWords = 0 (or undefined): No refill code generated
 
     // Write new value (always happens)
     packet_header->routing_fields.value = new_value;

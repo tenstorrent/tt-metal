@@ -272,6 +272,9 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     this->tensix_enabled_ = (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
+    // Compute intermesh VC configuration (requires ControlPlane to be initialized)
+    // this->intermesh_vc_config_ = this->compute_intermesh_vc_config();
+
     builder_context_ = nullptr;
 }
 
