@@ -19,6 +19,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+// NOLINTBEGIN(bugprone-branch-clone)
+
 using std::vector;
 
 namespace tt::llrt {
@@ -1595,3 +1597,5 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
 }
 
 }  // namespace tt::llrt
+
+// NOLINTEND(bugprone-branch-clone)

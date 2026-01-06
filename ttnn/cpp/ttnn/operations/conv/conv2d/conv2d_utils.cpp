@@ -82,6 +82,7 @@ uint32_t get_input_channels_alignment(
         (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
+            // NOLINTNEXTLINE(bugprone-branch-clone)
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
                 return tt::constants::TILE_WIDTH;
             } else if (shard_width % 16 == 0) {

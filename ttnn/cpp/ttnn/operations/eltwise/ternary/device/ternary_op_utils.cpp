@@ -149,15 +149,15 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ReaderNoBcastTTT:
         case KernelName::ReaderOuterBcastTTT:
             return fmt::format(dataflow, root, "ternary_reader_nosubtilebcast_ttt.cpp");
-        case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
+        case KernelName::ReaderNoBcastTST:
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
-        case KernelName::ReaderOuterBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
+        case KernelName::ReaderOuterBcastTTS:
         case KernelName::ReaderOuterBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
-        case KernelName::ReaderScalarBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
+        case KernelName::ReaderScalarBcastTTS:
         case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderScalarBcastTTT: return fmt::format(dataflow, root, "ternary_reader_scalar_ttt.cpp");
         case KernelName::ReaderColBcastTTT: return fmt::format(dataflow, root, "ternary_reader_colbcast_ttt.cpp");
-        case KernelName::ReaderColBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
+        case KernelName::ReaderColBcastTTS:
         case KernelName::ReaderColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
         case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:

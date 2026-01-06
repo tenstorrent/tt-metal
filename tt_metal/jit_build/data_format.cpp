@@ -206,6 +206,7 @@ DataFormat get_single_pack_src_format(
             case DataFormat::RawUInt16: pack_src_format = DataFormat::Float16; break;
             default: pack_src_format = DataFormat::Lf8; break;
         }
+        // NOLINTNEXTLINE(bugprone-branch-clone)
     } else if (data_format == DataFormat::UInt16) {
         pack_src_format = data_format;
     } else if (data_format == DataFormat::Invalid) {

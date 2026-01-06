@@ -138,12 +138,10 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         uint32_t start_dim = operation_attributes.index_dims.front();
         uint32_t last_dim = operation_attributes.index_dims.back();
         for (uint32_t input_dim = 0; input_dim < input_rank; input_dim++) {
-            if (input_dim < start_dim) {
+            if (input_dim < start_dim || last_dim < input_dim) {
                 output_size_vec.push_back(input_shape[input_dim]);
             } else if (start_dim == input_dim) {
                 output_size_vec.push_back(index_size);
-            } else if (last_dim < input_dim) {
-                output_size_vec.push_back(input_shape[input_dim]);
             }
         }
 

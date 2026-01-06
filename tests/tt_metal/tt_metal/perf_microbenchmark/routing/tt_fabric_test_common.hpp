@@ -835,20 +835,12 @@ public:
             // Bottom-left corner (12): forward=13, backward=8
             forward_chip_id = src_node.chip_id + 1;
             backward_chip_id = src_node.chip_id - mesh_width;
-        } else if (row == 0) {
-            // Top row (not corners): forward=right, backward=left
+        } else if (row == 0 || row == mesh_height - 1) {
+            // Top or bottom row (not corners): forward=right, backward=left
             forward_chip_id = src_node.chip_id + 1;
             backward_chip_id = src_node.chip_id - 1;
-        } else if (col == mesh_width - 1) {
-            // Right column (not corners): forward=up, backward=down
-            forward_chip_id = src_node.chip_id - mesh_width;
-            backward_chip_id = src_node.chip_id + mesh_width;
-        } else if (row == mesh_height - 1) {
-            // Bottom row (not corners): forward=right, backward=left
-            forward_chip_id = src_node.chip_id + 1;
-            backward_chip_id = src_node.chip_id - 1;
-        } else if (col == 0) {
-            // Left column (not corners): forward=up, backward=down
+        } else if (col == mesh_width - 1 || col == 0) {
+            // Right or left column (not corners): forward=up, backward=down
             forward_chip_id = src_node.chip_id - mesh_width;
             backward_chip_id = src_node.chip_id + mesh_width;
         } else {
@@ -1303,13 +1295,7 @@ public:
                             current_direction);
                         current_direction = RoutingDirection::N;
                     }
-                } else if (current_direction == RoutingDirection::S) {
-                    if (current_coord[EW_DIM] == 0) {
-                        current_direction = RoutingDirection::E;
-                    } else {
-                        current_direction = RoutingDirection::W;
-                    }
-                } else if (current_direction == RoutingDirection::N) {
+                } else if (current_direction == RoutingDirection::S || current_direction == RoutingDirection::N) {
                     if (current_coord[EW_DIM] == 0) {
                         current_direction = RoutingDirection::E;
                     } else {
@@ -1909,10 +1895,10 @@ private:
 
     int32_t get_step_for_direction(RoutingDirection dir) const {
         switch (dir) {
-            case RoutingDirection::N: return -1;
-            case RoutingDirection::S: return 1;
-            case RoutingDirection::E: return 1;
+            case RoutingDirection::N:
             case RoutingDirection::W: return -1;
+            case RoutingDirection::S:
+            case RoutingDirection::E: return 1;
             default: return 0;
         }
     }

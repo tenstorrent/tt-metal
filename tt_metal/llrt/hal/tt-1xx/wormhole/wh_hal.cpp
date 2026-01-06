@@ -311,9 +311,9 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DispatchFeature::ETH_MAILBOX_API: return false;
+            case DispatchFeature::ETH_MAILBOX_API:
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
         }

@@ -42,7 +42,7 @@ uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     switch (arch) {
         case proto::Architecture::WORMHOLE_B0: return 2;
         case proto::Architecture::BLACKHOLE: return 3;
-        case proto::Architecture::INVALID_ARCHITECTURE: return 0;
+        case proto::Architecture::INVALID_ARCHITECTURE:
         default: return 0;
     }
 }

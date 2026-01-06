@@ -125,9 +125,8 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
     return std::visit(
         [](auto&& compute_kernel_config) -> MathFidelity {
             using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                return compute_kernel_config.math_fidelity;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            if constexpr (
+                std::is_same_v<T, GrayskullComputeKernelConfig> || std::is_same_v<T, WormholeComputeKernelConfig>) {
                 return compute_kernel_config.math_fidelity;
             } else {
                 TT_THROW("arch not supported");
