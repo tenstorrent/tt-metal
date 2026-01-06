@@ -63,7 +63,7 @@ inline void _llk_unpack_A_mop_config_(
         }
         else if (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
         {
-            const uint32_t outerloop     = BType == BroadcastType::ROW ? 2 : 1;
+            constexpr uint32_t outerloop     = BType == BroadcastType::ROW ? 2 : 1;
             constexpr uint32_t innerloop = 1;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
             tmp.program();
