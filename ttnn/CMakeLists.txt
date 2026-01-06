@@ -440,8 +440,9 @@ set_target_properties(
             TTNN
         PREFIX
             "_"
-        BUILD_RPATH
-            "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+        # Use INSTALL_RPATH during build so binaries are relocatable in CI tar artifacts
+        BUILD_WITH_INSTALL_RPATH
+            TRUE
         # INSTALL_RPATH for multiple installation layouts:
         # - $ORIGIN/build/lib      = wheel layout (ttnn/_ttnn.so -> ttnn/build/lib/)
         # - $ORIGIN/../../build/lib = tar artifact layout (ttnn/ttnn/_ttnn.so -> build/lib/)
@@ -668,8 +669,9 @@ if(WITH_PYTHON_BINDINGS)
                 Python
             PREFIX
                 "_"
-            BUILD_RPATH
-                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+            # Use INSTALL_RPATH during build so binaries are relocatable in CI tar artifacts
+            BUILD_WITH_INSTALL_RPATH
+                TRUE
             # INSTALL_RPATH for multiple installation layouts:
             # - $ORIGIN/build/lib      = wheel layout (ttnn/_ttnn.so -> ttnn/build/lib/)
             # - $ORIGIN/../../build/lib = tar artifact layout (ttnn/ttnn/_ttnn.so -> build/lib/)
