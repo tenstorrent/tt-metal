@@ -282,22 +282,21 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
                 *fabric_node_id.mesh_id);
             fabric_node_ids.push_back(fabric_node_id);
         }
-            auto mapped_devices_full_system_device_ids =
-                (*MetalContext::instance().global_distributed_context().size() > 1)
-                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
-                    : wrap_to_maybe_remote(supplied_ids);
-            return std::make_tuple(
-                std::make_shared<ScopedDevices>(
-                    mapped_devices_full_system_device_ids,
-                    wrap_to_maybe_remote(supplied_ids),
-                    l1_small_size,
-                    trace_region_size,
-                    num_command_queues,
-                    worker_l1_size,
-                    dispatch_core_config),
-                fabric_node_ids,
-                config.mesh_shape().value());
-
+        auto mapped_devices_full_system_device_ids =
+            (*MetalContext::instance().global_distributed_context().size() > 1)
+                ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                : wrap_to_maybe_remote(supplied_ids);
+        return std::make_tuple(
+            std::make_shared<ScopedDevices>(
+                mapped_devices_full_system_device_ids,
+                wrap_to_maybe_remote(supplied_ids),
+                l1_small_size,
+                trace_region_size,
+                num_command_queues,
+                worker_l1_size,
+                dispatch_core_config),
+            fabric_node_ids,
+            config.mesh_shape().value());
     }();
 
     // Make a copy because we std::move the scoped_devices when creating MeshDevice
@@ -435,7 +434,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
             return *offset;
         }
         return MeshCoordinate::zero_coordinate(submesh_shape.dims());
-
     }();
 
     tt::stl::SmallVector<uint32_t> end_coords;

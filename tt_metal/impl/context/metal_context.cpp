@@ -986,12 +986,11 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     }  // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, coord);
-        // Derive virtual coord in noc_index space.
-        CoreCoord virtual_coord = {
-            hal_->noc_coordinate(noc_index, grid_size.x, coord.x),
-            hal_->noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return virtual_coord;
+    coord = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, coord);
+    // Derive virtual coord in noc_index space.
+    CoreCoord virtual_coord = {
+        hal_->noc_coordinate(noc_index, grid_size.x, coord.x), hal_->noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return virtual_coord;
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
