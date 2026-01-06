@@ -22,12 +22,15 @@ void MAIN {
     constexpr uint32_t tokens_per_chunk = get_compile_time_arg_val(3);
     constexpr uint32_t total_chunks_cb_id = get_compile_time_arg_val(4);
 
+    compute_kernel_hw_startup(tilizer_input_cb_id, tilizer_output_cb_id);
+
     // Wait for writer to push total_chunks via CB
     cb_wait_front(total_chunks_cb_id, 1);
 
     // Read total_chunks from the CB
     uint32_t total_chunks = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(total_chunks_cb_id, 0));
 
+    fast_tilize_init(tilizer_input_cb_id, tiles_per_chunk, tilizer_output_cb_id);
     // Process each chunk
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
         // Wait for reader to push tokens_per_chunk pages (row-major data)
@@ -35,15 +38,13 @@ void MAIN {
         cb_wait_front(tilizer_input_cb_id, tokens_per_chunk);
         cb_reserve_back(tilizer_output_cb_id, tiles_per_chunk);
 
+        fast_tilize_block(tilizer_input_cb_id, tiles_per_chunk, tilizer_output_cb_id);
         // Pop input from reader (tokens_per_chunk pages)
         cb_pop_front(tilizer_input_cb_id, tokens_per_chunk);
 
-        // Reserve and push dummy output to keep writer in sync
-        // TODO: Proper tilization requires CB reconfiguration
         cb_push_back(tilizer_output_cb_id, tiles_per_chunk);
     }
-
-    // Pop the total_chunks CB page (cleanup)
+    fast_tilize_uninit(tilizer_input_cb_id, tilizer_output_cb_id);
     cb_pop_front(total_chunks_cb_id, 1);
 }
 }  // namespace NAMESPACE
