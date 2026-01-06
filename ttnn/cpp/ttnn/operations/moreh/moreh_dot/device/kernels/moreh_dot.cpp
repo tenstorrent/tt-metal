@@ -7,6 +7,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -15,9 +16,9 @@ void kernel_main() {
     constexpr int onetile = 1;
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    bool enable_reload = false;
+
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        bool last_out = block == (per_core_block_cnt - 1);
+        bool is_last = (block == per_core_block_cnt - 1);
 
         // elemwise-mul
         ACQ();
@@ -26,9 +27,7 @@ void kernel_main() {
 
         cb_reserve_back(tt::CBIndex::c_24, onetile);
         mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
-        // dst0 = c_in0 x c_in1
         mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-        // c_intermed0 = pack(dst0)
         pack_tile(0, tt::CBIndex::c_24);
         cb_push_back(tt::CBIndex::c_24, onetile);
 
@@ -36,31 +35,16 @@ void kernel_main() {
         cb_pop_front(tt::CBIndex::c_1, onetile);
         REL();
 
-        // reduce-w
-        ACQ();
-        if (enable_reload) {
-            cb_wait_front(tt::CBIndex::c_25, onetile);
-            copy_tile_to_dst_init_short(tt::CBIndex::c_25);
-            copy_tile(tt::CBIndex::c_25, 0, 0);
-            cb_pop_front(tt::CBIndex::c_25, onetile);
-        }
-
-        cb_wait_front(tt::CBIndex::c_24, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_24, tt::CBIndex::c_2, tt::CBIndex::c_16);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(tt::CBIndex::c_24, tt::CBIndex::c_2, 0, 0, 0);
-        cb_pop_front(tt::CBIndex::c_24, onetile);
-        reduce_uninit();
-
-        if (last_out) {
-            cb_reserve_back(tt::CBIndex::c_16, onetile);
-            pack_tile(0, tt::CBIndex::c_16);
-            cb_push_back(tt::CBIndex::c_16, onetile);
-        } else {
-            cb_reserve_back(tt::CBIndex::c_25, onetile);
-            pack_tile(0, tt::CBIndex::c_25);
-            cb_push_back(tt::CBIndex::c_25, onetile);
-        }
-        REL();
-        enable_reload = true;
+        compute_kernel_lib::reduce<
+            REDUCE_OP,
+            REDUCE_DIM,
+            compute_kernel_lib::ReduceInputMode::STREAMING,
+            compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
+            tt::CBIndex::c_24,
+            tt::CBIndex::c_2,
+            is_last ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
+            compute_kernel_lib::TileShape::single(),
+            {},
+            compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
     }
 }
