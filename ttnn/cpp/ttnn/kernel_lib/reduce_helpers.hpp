@@ -133,7 +133,7 @@ struct TileShape {
  * It compiles away completely due to inlining.
  */
 struct NoOp {
-    ALWI void operator()() const {}
+    ALWI void operator()(uint32_t = 0) const {}
 };
 
 // =============================================================================
@@ -167,7 +167,11 @@ struct NoOp {
  * - Use PRELOADED for asymmetric wait/pop (e.g., padding where you wait/pop more than TileShape).
  * - Use PERSISTENT for softmax patterns where tiles are reused in subsequent operations.
  *
- * @note post_reduce_op is only invoked for REDUCE_ROW dimension.
+ * POST-REDUCE OPERATIONS:
+ * - post_reduce_op callback receives dst_idx parameter indicating which DEST register to operate on
+ * - REDUCE_ROW: Called once per row with dst_idx=0 (single output in DST[0])
+ * - REDUCE_COL: Called once per column in current chunk with dst_idx in [0, current_chunk)
+ * - REDUCE_SCALAR: Not called (single reduction to DST[0])
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
@@ -234,10 +238,22 @@ struct NoOp {
  *       true, false>(
  *       cb_exps, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(Wt),
  *       compute_kernel_lib::TileLayout::contiguous(),
- *       []() {
+ *       [](uint32_t) {
  *           reduce_uninit();
  *           recip_tile_init();
  *           recip_tile(0);
+ *       });
+ *
+ * @example
+ *   // REDUCE_COL with post_reduce_op: apply recip_tile to each column result
+ *   // dst_idx indicates which DEST register contains the column result (0 to current_chunk-1)
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
+ *       cb_in, cb_scaler, cb_out,
+ *       compute_kernel_lib::TileShape::grid(Ht, Wt),
+ *       {},
+ *       [](uint32_t dst_idx) {
+ *           recip_tile_init();
+ *           recip_tile(dst_idx);
  *       });
  */
 template <
@@ -400,7 +416,7 @@ ALWI void reduce(
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
                 // User's lambda can include reduce_uninit() if needed before custom ops
-                post_reduce_op();
+                post_reduce_op(0);
 
                 // STREAMING/STREAMING_BATCHED/PERSISTENT: reserve per-row to avoid deadlock
                 if constexpr (
@@ -495,6 +511,12 @@ ALWI void reduce(
                         ++dst_idx;
                     }
                 }
+
+                // Post-reduce operation for each output tile in chunk
+                for (uint32_t i = 0; i < current_chunk; ++i) {
+                    post_reduce_op(i);
+                }
+
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < current_chunk; ++i) {

@@ -80,7 +80,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         reduce_dim,
         compute_kernel_lib::ReduceInputMode::PRELOADED,
         compute_kernel_lib::ReduceDataFormatReconfig::NONE>(
-        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols), {}, [&]() {
+        in0_cb, scale_cb, out_cb, compute_kernel_lib::TileShape::grid(rows, cols), {}, [&](uint32_t) {
             if (do_eltwise_max) {
                 // At this point, DST[0] contains the reduced value for the current row
                 copy_tile_to_dst_init_short(prev_cb);
