@@ -1084,7 +1084,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
         // write back to device - update rpos only
         std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
-        uint32_t offs = DebugPrintMemLayout().rpos_offs();
+        uint32_t offs = DebugPrintMemLayout::rpos_offs();
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             chip_id, virtual_core, rposbuf, base_addr + offs);
 
