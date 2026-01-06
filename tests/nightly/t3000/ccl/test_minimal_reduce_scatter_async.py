@@ -769,7 +769,7 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
-            True,
+            False,
             True,
             10,  # perf
         ),
@@ -786,7 +786,7 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            False,
+            True,
             False,
             1,  # check
         ),
@@ -821,7 +821,7 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            False,
+            True,
             False,
             1,  # check
         ),
@@ -938,7 +938,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            False,
+            True,
             True,
             10,  # perf
         ),
@@ -953,7 +953,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            True,
+            False,
             False,
             1,  # check
         ),
