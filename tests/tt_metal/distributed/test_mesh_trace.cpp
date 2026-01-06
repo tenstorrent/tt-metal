@@ -520,6 +520,37 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     mesh_device_->end_mesh_trace(0, trace_id);
 }
 
+TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
+    // Create a non-convex grid pattern by using non-contiguous device ranges
+    MeshCoordinateRange top_left_corner({0, 0}, {0, 1});      // Devices (0,0) to (0,1)
+    MeshCoordinateRange bottom_right_corner({1, 2}, {1, 3});  // Devices (1,2) to (1,3)
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        2, mesh_device_->compute_with_storage_grid_size(), 0);
+
+    auto mesh_workload = std::make_shared<MeshWorkload>();
+    mesh_workload->add_program(top_left_corner, std::move(*programs[0]));
+    mesh_workload->add_program(bottom_right_corner, std::move(*programs[1]));
+
+    // Compile workload first
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Capture trace with non-convex grid
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    mesh_device_->end_mesh_trace(0, trace_id);
+
+    // Replay trace multiple times to ensure it works correctly
+    for (int i = 0; i < 100; i++) {
+        mesh_device_->replay_mesh_trace(0, trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Cleanup
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
 // Sweep Tests on T3K and TG
 void run_heterogenous_trace_sweep(
     const std::shared_ptr<MeshDevice>& mesh_device,
