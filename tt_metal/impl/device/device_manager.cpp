@@ -881,12 +881,6 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
-    // TODO(MO): Remove when legacy non-mesh device is removed
-    for (const ChipId device_id : devices_to_close) {
-        IDevice* device = get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
-    }
-
     dispatch_firmware_active_ = false;
     teardown_fd(std::unordered_set<ChipId>(devices_to_close.begin(), devices_to_close.end()));
     // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
