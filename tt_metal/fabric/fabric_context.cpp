@@ -255,7 +255,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
 
     // Step 2: Derive topology (depends on: fabric_config_)
-    this->topology_ = this->get_topology_from_config(fabric_config);
+    this->topology_ = FabricContext::get_topology_from_config(fabric_config);
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
 
     // Step 3: Compute routing flags (depends on: topology_)
