@@ -1,0 +1,143 @@
+name: "TT-Transformers Demo Tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: 'Select device to test on'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - n150
+          - n300
+          - p150
+          - wh-quietbox
+          - bh-quietbox
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'llama3.1-8b'
+        type: choice
+        options:
+          - llama3.1-8b
+          - llama3.1-70b
+          - llama3.2-1b
+          - llama3.2-3b
+          - qwen2.5-7b
+          - mistral-7b
+      regenerate-ttnn-cache:
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      device:
+        required: false
+        type: string
+        default: 'all'
+      model:
+        required: false
+        type: string
+        default: 'llama3.1-8b'
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+
+  # N150 Tests (Wormhole single chip)
+  n150-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'n150' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'n150'
+      runner-label: 'N150'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'N150'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # N300 Tests (Wormhole dual chip)
+  n300-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'n300' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'n300'
+      runner-label: 'N300'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'N300'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P150 Tests (Blackhole single chip)
+  p150-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'p150' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'p150'
+      runner-label: 'P150'
+      arch: 'blackhole'
+      mesh-device-env: 'P150'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # WH QuietBox Tests (T3K - Wormhole 8 chips)
+  wh-quietbox-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'wh-quietbox' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'wh-quietbox'
+      runner-label: 'T3K'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'T3K'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # BH QuietBox Tests (Blackhole 8 chips)
+  bh-quietbox-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-quietbox' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'bh-quietbox'
+      runner-label: 'BH-QuietBox'
+      arch: 'blackhole'
+      mesh-device-env: 'P150x8'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}

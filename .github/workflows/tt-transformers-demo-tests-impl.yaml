@@ -1,0 +1,236 @@
+name: "[internal] TT-Transformers Demo Tests Implementation"
+
+on:
+  workflow_call:
+    inputs:
+      device-type:
+        required: true
+        type: string
+        description: "Device type: n150, n300, p150, wh-quietbox, bh-quietbox"
+      runner-label:
+        required: true
+        type: string
+        description: "GitHub runner label"
+      arch:
+        required: true
+        type: string
+        description: "Architecture: wormhole_b0 or blackhole"
+      mesh-device-env:
+        required: true
+        type: string
+        description: "MESH_DEVICE environment variable value"
+      model:
+        required: true
+        type: string
+        description: "Model to test"
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
+      extra-tag:
+        required: false
+        type: string
+        default: "pipeline-perf"
+        description: "Extra tag for runner selection"
+
+jobs:
+  generate-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Generate test matrix
+        id: generate
+        run: |
+          # Define model-specific HuggingFace paths and cache paths
+          case "${{ inputs.model }}" in
+            llama3.1-8b)
+              HF_MODEL="meta-llama/Llama-3.1-8B-Instruct"
+              CACHE_DIR="meta-llama/Llama-3.1-8B-Instruct"
+              ;;
+            llama3.1-70b)
+              HF_MODEL="meta-llama/Llama-3.1-70B-Instruct"
+              CACHE_DIR="meta-llama/Llama-3.1-70B-Instruct"
+              ;;
+            llama3.2-1b)
+              HF_MODEL="meta-llama/Llama-3.2-1B"
+              CACHE_DIR="meta-llama/Llama-3.2-1B"
+              ;;
+            llama3.2-3b)
+              HF_MODEL="meta-llama/Llama-3.2-3B"
+              CACHE_DIR="meta-llama/Llama-3.2-3B"
+              ;;
+            qwen2.5-7b)
+              HF_MODEL="Qwen/Qwen2.5-7B"
+              CACHE_DIR="Qwen/Qwen2.5-7B"
+              ;;
+            mistral-7b)
+              HF_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
+              CACHE_DIR="mistralai/Mistral-7B-Instruct-v0.3"
+              ;;
+            *)
+              echo "Unknown model: ${{ inputs.model }}"
+              exit 1
+              ;;
+          esac
+
+          # Determine cache path based on device type
+          if [[ "${{ inputs.arch }}" == "blackhole" ]]; then
+            CACHE_PATH="/localdev/blackhole_demos/huggingface_data/${CACHE_DIR}"
+          else
+            CACHE_PATH="/mnt/MLPerf/huggingface/tt_cache/${CACHE_DIR}"
+          fi
+
+          # Define test configurations
+          # Each test includes: name, test_key, extra_args, timeout, owner_id
+          tests='[
+            {
+              "name": "Batch-1 Performance",
+              "test_key": "performance and batch-1",
+              "extra_args": "",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "name": "Batch-32 Performance",
+              "test_key": "performance and batch-32",
+              "extra_args": "",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "name": "Long Context 16K",
+              "test_key": "long-context",
+              "extra_args": "--max_seq_len=16384",
+              "timeout": 45,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "name": "Long Context Performance",
+              "test_key": "performance and long",
+              "extra_args": "",
+              "timeout": 45,
+              "owner_id": "U03PUAKE719"
+            }
+          ]'
+
+          # Add HF_MODEL and CACHE_PATH to each test
+          matrix=$(echo "$tests" | jq -c --arg hf "$HF_MODEL" --arg cache "$CACHE_PATH" \
+            '[.[] | . + {"hf_model": $hf, "cache_path": $cache}]')
+
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
+  run-tests:
+    needs: generate-test-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJson(needs.generate-test-matrix.outputs.matrix) }}
+    name: "${{ inputs.device-type }} - ${{ inputs.model }} - ${{ matrix.test.name }}"
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ inputs.arch }}
+        MESH_DEVICE: ${{ inputs.mesh-device-env }}
+        HF_MODEL: ${{ matrix.test.hf_model }}
+        TT_CACHE_PATH: ${{ matrix.test.cache_path }}
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/hub' || '/mnt/MLPerf/huggingface/hub' }}
+        TT_CACHE_HOME: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/tt_cache' || '/mnt/MLPerf/huggingface/tt_cache' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ inputs.arch == 'blackhole' && format('/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') }}
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Run ${{ matrix.test.name }} test
+        timeout-minutes: ${{ matrix.test.timeout }}
+        run: |
+          echo "=========================================="
+          echo "Running: ${{ matrix.test.name }}"
+          echo "Device: ${{ inputs.device-type }}"
+          echo "Model: ${{ inputs.model }}"
+          echo "HF_MODEL: ${{ matrix.test.hf_model }}"
+          echo "TT_CACHE_PATH: ${{ matrix.test.cache_path }}"
+          echo "MESH_DEVICE: ${{ inputs.mesh-device-env }}"
+          echo "Test Key: ${{ matrix.test.test_key }}"
+          echo "Extra Args: ${{ matrix.test.extra_args }}"
+          echo "=========================================="
+
+          pytest models/tt_transformers/demo/simple_text_demo.py \
+            -k "${{ matrix.test.test_key }}" \
+            ${{ matrix.test.extra_args }} \
+            --timeout 1000
+
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ inputs.arch }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          fi
+
+      - name: Upload benchmark data artifact
+        if: ${{ !cancelled() && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-data-${{ inputs.device-type }}-${{ inputs.model }}-${{ matrix.test.name }}-${{ github.run_id }}
+          path: generated/benchmark_data
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          payload: |
+            {
+              "text": "❌ TT-Transformers Test Failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*TT-Transformers Demo Test Failed*\n*Device:* ${{ inputs.device-type }}\n*Model:* ${{ inputs.model }}\n*Test:* ${{ matrix.test.name }}\n*Branch:* ${{ github.ref }}\n*Commit:* ${{ github.sha }}\n*Actor:* ${{ github.actor }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
