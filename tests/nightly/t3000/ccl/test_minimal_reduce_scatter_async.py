@@ -252,7 +252,7 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers",
+    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
     [
         # Dim 0 tests
         (
@@ -265,6 +265,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [8, 2, 128, 128],
@@ -276,6 +279,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # check, barrier_without_persistent
         # Dim 1 tests
         (
@@ -288,6 +294,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [2, 16, 56, 56],
@@ -299,6 +308,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # check, barrier_without_persistent
         (
             [2, 8, 512, 512],
@@ -310,6 +322,9 @@ def run_reduce_scatter_impl(
             10,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # perf, no_barrier_with_persistent
         # Dim 2 tests
         (
@@ -322,6 +337,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # check, barrier_with_persistent
         (
             [4, 1, 1024, 340],
@@ -333,6 +351,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # perf, barrier_without_persistent
         (
             [1, 1, 512, 512],
@@ -344,6 +365,9 @@ def run_reduce_scatter_impl(
             1,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # check, no_barrier_with_persistent
         # Dim 3 tests
         (
@@ -356,6 +380,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [1, 1, 13, 512],
@@ -367,6 +394,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # check, barrier_without_persistent
         (
             [3, 1, 41, 512],
@@ -378,6 +408,9 @@ def run_reduce_scatter_impl(
             10,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # perf, no_barrier_with_persistent
         (
             [8, 1, 512, 2560],
@@ -389,6 +422,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # check, barrier_with_persistent
         (
             [4, 1, 1024, 2560],
@@ -400,6 +436,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # perf, barrier_without_persistent
         (
             [1, 1, 1024, 2560],
@@ -411,6 +450,9 @@ def run_reduce_scatter_impl(
             1,
             False,
             True,
+            None,
+            None,
+            None,
         ),  # check, no_barrier_with_persistent
         (
             [1, 1, 352, 2560],
@@ -422,6 +464,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # perf, barrier_with_persistent
         (
             [2, 1, 2048, 2560],
@@ -433,7 +478,10 @@ def run_reduce_scatter_impl(
             1,
             True,
             False,
-        ),  # check, barrier_without_persistent
+            2,
+            2,
+            8,
+        ),  # check, barrier_without_persistent_with_hyperparams
         (
             [1, 1, 4096, 2560],
             3,
@@ -444,7 +492,10 @@ def run_reduce_scatter_impl(
             10,
             False,
             True,
-        ),  # perf, no_barrier_with_persistent
+            2,
+            2,
+            8,
+        ),  # perf, no_barrier_with_persistent_with_hyperparams
         # Composite-RS tests
         (
             [1, 1, 1, 8],
@@ -456,6 +507,9 @@ def run_reduce_scatter_impl(
             1,
             True,
             True,
+            None,
+            None,
+            None,
         ),  # check, barrier_with_persistent
         (
             [2, 32, 2048, 64],
@@ -467,6 +521,9 @@ def run_reduce_scatter_impl(
             10,
             True,
             False,
+            None,
+            None,
+            None,
         ),  # perf, barrier_without_persistent
         (
             [1, 1, 1, 16],
@@ -478,7 +535,10 @@ def run_reduce_scatter_impl(
             1,
             False,
             True,
-        ),  # check, no_barrier_with_persistent
+            2,
+            2,
+            8,
+        ),  # check, no_barrier_with_persistent_with_hyperparams
         (
             [1, 1, 29, 32],
             3,
@@ -489,7 +549,10 @@ def run_reduce_scatter_impl(
             10,
             True,
             True,
-        ),  # perf, barrier_with_persistent
+            2,
+            2,
+            8,
+        ),  # perf, barrier_with_persistent_with_hyperparams
     ],
     ids=[
         "scatter_dim_0_test_one-perf-barrier_with_persistent",
@@ -507,12 +570,12 @@ def run_reduce_scatter_impl(
         "batch_4-perf-barrier_without_persistent",
         "batch_1_sd35_spatial-check-no_barrier_with_persistent",
         "batch_1_sd35_prompt-perf-barrier_with_persistent",
-        "batch_2-check-barrier_without_persistent",
-        "batch_1-perf-no_barrier_with_persistent",
+        "batch_2-check-barrier_without_persistent_with_hyperparams",
+        "batch_1-perf-no_barrier_with_persistent_with_hyperparams",
         "composite_rs_test_one-check-barrier_with_persistent",
         "composite_rs_test_two-perf-barrier_without_persistent",
-        "composite_rs_test_three-check-no_barrier_with_persistent",
-        "composite_rs_test_four-perf-barrier_with_persistent",
+        "composite_rs_test_three-check-no_barrier_with_persistent_with_hyperparams",
+        "composite_rs_test_four-perf-barrier_with_persistent_with_hyperparams",
     ],
 )
 @pytest.mark.parametrize(
@@ -552,6 +615,9 @@ def test_reduce_scatter_async(
     num_iters,
     use_barrier,
     use_persistent_buffers,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     mem_config_input,
     mem_config_rs,
     ones_tensor,
@@ -573,6 +639,9 @@ def test_reduce_scatter_async(
         ones_tensor=ones_tensor,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         use_new=use_new,
     )
 
