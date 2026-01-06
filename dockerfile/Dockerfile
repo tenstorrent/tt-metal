@@ -76,7 +76,7 @@ RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+RUN umask 000 && uv python install 3.10 && uv venv $PYTHON_ENV_DIR --python 3.10
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -212,7 +212,7 @@ RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+RUN uv python install 3.10 && uv venv $PYTHON_ENV_DIR --python 3.10
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
