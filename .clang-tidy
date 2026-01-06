@@ -109,7 +109,6 @@ Checks: >
   -performance-no-int-to-ptr,
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
-  -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
@@ -182,7 +181,7 @@ CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
   - key: readability-function-cognitive-complexity.Threshold
-    value: 339
+    value: 308
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch
