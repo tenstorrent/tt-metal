@@ -87,6 +87,7 @@ int main() {
         SetRuntimeArgs(
             program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, sem_id, semaphore_value});
         semaphore_value++;
+        l1_address += 1024;
     }
 
     workload.add_program(device_range, std::move(program));
