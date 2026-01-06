@@ -100,7 +100,6 @@ public:
         return routing_2d_buffer_size_;
     }
 
-    // Get all fabric defines for kernel compilation (used by tt_metal.cpp)
     // Returns empty map if routing mode is undefined
     std::map<std::string, std::string> get_fabric_kernel_defines() const;
 

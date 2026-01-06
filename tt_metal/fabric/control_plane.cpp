@@ -1964,6 +1964,14 @@ FabricContext& ControlPlane::get_fabric_context() const {
     return *this->fabric_context_;
 }
 
+std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() const {
+    if (this->fabric_context_ == nullptr) {
+        return {};
+    }
+
+    return this->fabric_context_->get_fabric_kernel_defines();
+}
+
 void ControlPlane::clear_fabric_context() {
     this->fabric_context_.reset(nullptr);
     asic_id_to_fabric_node_cache_.clear();

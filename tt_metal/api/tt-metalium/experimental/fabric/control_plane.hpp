@@ -186,6 +186,9 @@ public:
 
     FabricContext& get_fabric_context() const;
 
+    // Get all fabric defines for kernel compilation (used by tt_metal.cpp)
+    std::map<std::string, std::string> get_fabric_kernel_defines() const;
+
     void clear_fabric_context();
 
     // Initialize fabric tensix config (call after routing tables are configured)
