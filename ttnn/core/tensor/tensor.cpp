@@ -252,19 +252,6 @@ std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) con
     return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
 }
 
-template <typename T>
-T Tensor::item(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    TT_FATAL(
-        this->logical_shape().volume() == 1,
-        "tensor.item() requires tensor to have exactly one element, but got {} elements",
-        this->logical_shape().volume());
-
-    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
-    // by calling cpu() internally when needed
-    auto vector_data = this->to_vector<T>(cq_id);
-    return vector_data[0];
-}
-
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
@@ -374,13 +361,6 @@ template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_me
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-
-template float Tensor::item<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template bfloat16 Tensor::item<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template int32_t Tensor::item<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint8_t Tensor::item<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint16_t Tensor::item<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint32_t Tensor::item<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 
 Tensor Tensor::to_device(
     distributed::MeshDevice* mesh_device,
