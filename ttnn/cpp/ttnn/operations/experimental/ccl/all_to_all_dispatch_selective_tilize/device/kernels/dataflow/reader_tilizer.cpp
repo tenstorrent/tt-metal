@@ -437,10 +437,8 @@ void kernel_main() {
 
     // Wait for writer_tilizer (BRISC) to read the mapping tensor into the CB
     // The writer produces pages, we consume by waiting for them all to arrive
-    DPRINT << "Waiting for mapping tensor from writer" << ENDL();
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
     uint16_t* devices_for_experts = reinterpret_cast<uint16_t*>(get_read_ptr(mapping_tensor_cb_id));
-    DPRINT << "Mapping tensor ready" << ENDL();
 
     // Poll until all entries reach their ground truth values
     while (entries_matched < total_entries) {
