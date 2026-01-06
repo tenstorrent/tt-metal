@@ -84,15 +84,9 @@ std::vector<std::pair<std::string, L1UsagePerCore>> get_l1_usage_all();
 std::vector<std::string> get_trace_names();
 
 /**
- * @brief Print memory usage for a specific trace
- * @param name The name of the trace (default: "END_TRACE")
- */
-void print_memory_usage(const std::string& name = kDefaultTraceName);
-
-/**
  * @brief Print memory usage for all captured traces
  */
-void print_all_memory_usage();
+void print_memory_usage();
 
 /**
  * @brief Clear all stored traces

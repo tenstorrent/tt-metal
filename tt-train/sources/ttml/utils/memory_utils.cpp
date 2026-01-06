@@ -95,29 +95,7 @@ std::vector<std::string> get_trace_names() {
     return trace_order;
 }
 
-void print_memory_usage(const std::string& name) {
-    auto dram_usage = get_dram_usage(name);
-    auto l1_usage = get_l1_usage(name);
-
-    fmt::print("=== Memory Usage: {} ===\n", name);
-
-    // Print DRAM usage (note: "current" from trace is actually the change/delta)
-    fmt::print(
-        "DRAM: Peak {:.2f} MB, Allocations {:.2f} MB, Deallocations {:.2f} MB, Change {:.2f} MB\n",
-        dram_usage.peak / MB,
-        dram_usage.total_allocations / MB,
-        dram_usage.total_deallocations / MB,
-        dram_usage.total_allocations / MB - dram_usage.total_deallocations / MB);
-
-    // Print L1 usage
-    fmt::print(
-        "L1: Peak CB {:.2f} MB, Peak Buffer {:.2f} MB, Peak Total {:.2f} MB\n",
-        l1_usage.peak_cb / MB,
-        l1_usage.peak_l1 / MB,
-        l1_usage.peak_total / MB);
-}
-
-void print_all_memory_usage() {
+void print_memory_usage() {
     if (trace_order.empty()) {
         fmt::print("WARNING: No traces captured\n");
         return;

@@ -752,7 +752,7 @@ int main(int argc, char **argv) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
                     ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
-                    ttml::utils::MemoryUsageTracker::print_all_memory_usage();
+                    ttml::utils::MemoryUsageTracker::print_memory_usage();
                     ttml::utils::MemoryUsageTracker::clear();
                 }
             }

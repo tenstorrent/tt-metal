@@ -24,11 +24,11 @@ struct PeakMemoryUsagePerCore {
 };
 
 struct DRAMUsage {
-    /** peak memory usage in bytes between begin_capture and end_capture */
+    /** peak memory usage in bytes between begin_graph_capture and end_graph_capture */
     long long peak = 0;
-    /** total memory allocated in bytes between begin_capture and end_capture */
+    /** total memory allocated in bytes between begin_graph_capture and end_graph_capture */
     long long total_allocations = 0;
-    /** total memory deallocated in bytes between begin_capture and end_capture */
+    /** total memory deallocated in bytes between begin_graph_capture and end_graph_capture */
     long long total_deallocations = 0;
 };
 
