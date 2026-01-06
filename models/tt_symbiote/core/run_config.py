@@ -2,7 +2,7 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator
+from typing import Any, Dict, Iterator, List, Optional
 
 import torch
 from torch.utils._pytree import tree_map
@@ -100,6 +100,21 @@ def wrap_from_torch(e):
 
 class DispatchManager:
     timings: Dict[str, Any] = {}
+    _modules_in_progress: List[str] = []
+    current_module_name: Optional[str] = None
+
+    @staticmethod
+    def set_current_module_name(module_name: Optional[str]) -> None:
+        if module_name is None:
+            assert DispatchManager._modules_in_progress, "No module name to pop"
+            DispatchManager._modules_in_progress.pop()
+            if DispatchManager._modules_in_progress:
+                DispatchManager.current_module_name = DispatchManager._modules_in_progress[-1]
+            else:
+                DispatchManager.current_module_name = None
+        else:
+            DispatchManager._modules_in_progress.append(module_name)
+            DispatchManager.current_module_name = module_name
 
     @staticmethod
     def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
@@ -130,7 +145,15 @@ class DispatchManager:
             else:
                 func_res = func(*func_args, **func_kwargs)
             end = time.time()
-            DispatchManager.record_timing("Torch", "", func.name(), {}, end - begin)
+            DispatchManager.record_timing(
+                "Torch",
+                ""
+                if DispatchManager.current_module_name is None
+                else DispatchManager.current_module_name + f".{func.name()}",
+                func.name(),
+                {},
+                end - begin,
+            )
             rs = tree_map(wrap_from_torch, func_res)
         return rs
 
@@ -165,9 +188,10 @@ class DispatchManager:
         df = DispatchManager.get_timing_entries_stats()
         df.to_csv(file_name, index=True)
         pivot_table = df.pivot_table(
-            index="func_name", columns="backend", values="duration", aggfunc="sum", fill_value=0
+            index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
         )
-        pivot_table["Total_Duration"] = pivot_table["Torch"] + pivot_table["TTNN"]
+        columns = pivot_table.columns.tolist()
+        pivot_table["Total_Duration"] = pivot_table[columns].sum(axis=1)
 
         # Display or save
         pivot_table.to_csv(file_name.replace(".csv", "_pivot.csv"))
@@ -327,7 +351,15 @@ class NormalRun:
             result = _to_torch(self)
         self.elem = result if self.elem is None else self.elem
         end = time.time()
-        DispatchManager.record_timing("TTNN", "", "ttnn_to_torch", {}, end - begin)
+        DispatchManager.record_timing(
+            "TTNN",
+            ""
+            if DispatchManager.current_module_name is None
+            else DispatchManager.current_module_name + ".ttnn_to_torch",
+            "ttnn_to_torch",
+            {},
+            end - begin,
+        )
         return self.elem
 
     @staticmethod
@@ -358,7 +390,15 @@ class NormalRun:
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
         )
         end = time.time()
-        DispatchManager.record_timing("TTNN", "", "torch_to_ttnn", {}, end - begin)
+        DispatchManager.record_timing(
+            "TTNN",
+            ""
+            if DispatchManager.current_module_name is None
+            else DispatchManager.current_module_name + ".torch_to_ttnn",
+            "torch_to_ttnn",
+            {},
+            end - begin,
+        )
         return self.ttnn_tensor
 
     @staticmethod
@@ -371,6 +411,7 @@ class NormalRun:
         begin = time.time()
         self.preprocess_weights()
         end = time.time()
+        DispatchManager.set_current_module_name(self.module_name)
         DispatchManager.record_timing(
             "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
         )
@@ -382,9 +423,10 @@ class NormalRun:
         )
         begin = time.time()
         result = self.forward(*func_args, **func_kwargs)
+        result = tree_map(wrap_to_torch_ttnn_tensor, result)
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
-        result = tree_map(wrap_to_torch_ttnn_tensor, result)
+        DispatchManager.set_current_module_name(None)
         return result
 
 
