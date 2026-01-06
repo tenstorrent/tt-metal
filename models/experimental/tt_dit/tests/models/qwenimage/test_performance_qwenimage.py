@@ -8,7 +8,6 @@ import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
-from ....utils.diagnostic_timing import DiagnosticTimingCollector
 
 
 @pytest.mark.parametrize(
@@ -113,27 +112,23 @@ def test_qwenimage_pipeline_performance(
     # warmup run (not timed for performance metrics)
     # =========================================================================
     logger.info("Running warmup iteration...")
-    timer_warmup = DiagnosticTimingCollector(enable_sync_timing=True, enable_profiler=False)
-    pipeline.timing_collector = timer_warmup
-
-    images = pipeline(
-        prompts=[prompts[0]],
-        negative_prompts=[None],
-        num_inference_steps=num_inference_steps,
-        cfg_scale=4.0,
-        seed=0,
-        traced=True,
-    )
+    with benchmark_profiler("run", iteration=0):
+        images = pipeline(
+            prompts=[prompts[0]],
+            negative_prompts=[None],
+            num_inference_steps=num_inference_steps,
+            cfg_scale=4.0,
+            seed=0,
+            traced=True,
+        )
     images[0].save(f"qwenimage_{image_w}_{image_h}_warmup.png")
 
-    warmup_timing = timer_warmup.get_timing_data()
-    logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # =========================================================================
     # performance measurement runs
     # =========================================================================
     logger.info("Running performance measurement iterations...")
-    all_timings = []
     num_perf_runs = 1
 
     # optional tracy profiling (if available)
@@ -151,10 +146,6 @@ def test_qwenimage_pipeline_performance(
         for i in range(num_perf_runs):
             logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-            # create diagnostic timing collector for this run
-            timer = DiagnosticTimingCollector(enable_sync_timing=True, enable_profiler=(i == 0))
-            pipeline.timing_collector = timer
-
             # run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
 
@@ -166,12 +157,11 @@ def test_qwenimage_pipeline_performance(
                     cfg_scale=4.0,
                     seed=0,
                     traced=True,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
 
-            timing_data = timer.get_timing_data()
-            all_timings.append(timing_data)
-
-            logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s")
+            logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
             images[0].save(f"qwenimage_{image_w}_{image_h}_perf_run{i}.png")
 
@@ -183,16 +173,18 @@ def test_qwenimage_pipeline_performance(
     # =========================================================================
     # calculate statistics
     # =========================================================================
-    clip_times = [t.clip_encoding_time for t in all_timings]
-    t5_times = [t.t5_encoding_time for t in all_timings]
-    total_encoding_times = [t.total_encoding_time for t in all_timings]
-    vae_times = [t.vae_decoding_time for t in all_timings]
-    total_times = [t.total_time for t in all_timings]
+    total_encoding_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
 
     # calculate per-step denoising times
     all_denoising_steps = []
-    for timing in all_timings:
-        all_denoising_steps.extend(timing.denoising_step_times)
+    for i in range(num_perf_runs):
+        for j in range(num_inference_steps):
+            assert benchmark_profiler.contains_step(
+                f"denoising_step_{j}", i
+            ), f"All runs should have {num_inference_steps} denoising steps"
+            all_denoising_steps.append(benchmark_profiler.get_duration(f"denoising_step_{j}", i))
 
     cfg_factor = cfg[0]  # First element is always the factor
     sp_factor = sp[0]
@@ -225,8 +217,6 @@ def test_qwenimage_pipeline_performance(
             f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
         )
 
-    print_stats("CLIP Encoding", clip_times)
-    print_stats("T5 Encoding", t5_times)
     print_stats("Total Encoding", total_encoding_times)
     print_stats("Denoising (per step)", all_denoising_steps)
     print_stats("VAE Decoding", vae_times)
@@ -253,20 +243,10 @@ def test_qwenimage_pipeline_performance(
         print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
         print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
 
-    # validate that we got reasonable results
-    assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
-    assert all(t.total_time > 0 for t in all_timings), "All runs should have positive total time"
-    assert all(
-        len(t.denoising_step_times) == num_inference_steps for t in all_timings
-    ), f"All runs should have {num_inference_steps} denoising steps"
-
-    # clean up
-    pipeline.timing_collector = None
-
     # validate performance
+    avg_step_time = statistics.mean(all_denoising_steps) if all_denoising_steps else 0
+    total_denoising_time = avg_step_time * num_inference_steps
     measurements = {
-        "clip_encoding_time": statistics.mean(clip_times),
-        "t5_encoding_time": statistics.mean(t5_times),
         "total_encoding_time": statistics.mean(total_encoding_times),
         "denoising_steps_time": total_denoising_time,
         "vae_decoding_time": statistics.mean(vae_times),
@@ -274,8 +254,6 @@ def test_qwenimage_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "clip_encoding_time": 0.25,
-            "t5_encoding_time": 0.2,
             "total_encoding_time": 0.4,
             "denoising_steps_time": 110.0,
             "vae_decoding_time": 2.5,
@@ -283,8 +261,6 @@ def test_qwenimage_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "clip_encoding_time": 0.25,
-            "t5_encoding_time": 0.18,
             "total_encoding_time": 0.7,
             "denoising_steps_time": 36.0,
             "vae_decoding_time": 2.1,
@@ -297,29 +273,22 @@ def test_qwenimage_pipeline_performance(
         # in ci, dump a performance report
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
-            for step_name, measurement_value, target_value in [
-                ("total_encoding", measurements["total_encoding_time"], expected_metrics["total_encoding_time"]),
-                ("denoising", measurements["denoising_steps_time"], expected_metrics["denoising_steps_time"]),
-                ("vae", measurements["vae_decoding_time"], expected_metrics["vae_decoding_time"]),
-                ("run", measurements["total_time"], expected_metrics["total_time"]),
-            ]:
-                # Hack to add data to the profiler.
-                from datetime import datetime, timedelta
-                import pytz
-
-                current_time = datetime.now(tz=pytz.UTC)
-                benchmark_profiler.start_times[(iteration, step_name)] = current_time
-                benchmark_profiler.end_times[(iteration, step_name)] = current_time + timedelta(
-                    seconds=measurement_value
-                )
-
+            for step_name, target in zip(
+                ["encoder", "denoising", "vae", "run"],
+                [
+                    expected_metrics["total_encoding_time"],
+                    expected_metrics["denoising_steps_time"],
+                    expected_metrics["vae_decoding_time"],
+                    expected_metrics["total_time"],
+                ],
+            ):
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=iteration,
                     step_name=step_name,
                     name=step_name,
-                    value=measurement_value,
-                    target=target_value,
+                    value=benchmark_profiler.get_duration(step_name, iteration),
+                    target=target,
                 )
         device_name_map = {
             (2, 4): "WH_T3K",
@@ -359,6 +328,5 @@ def test_qwenimage_pipeline_performance(
         logger.warning("\n".join(assert_msgs))
 
     # synchronize all devices
-    ttnn.synchronize_device(mesh_device)
-
+    pipeline.synchronize_devices()
     logger.info("Performance test completed successfully!")
