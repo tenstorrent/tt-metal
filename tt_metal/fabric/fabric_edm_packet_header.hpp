@@ -702,7 +702,7 @@ struct LowLatencyRoutingFieldsT {
      * Copy routing fields to volatile destination (packet header).
      * Needed because router updates a cached copy then writes back to packet.
      */
-    inline void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
+    void copy_to(volatile LowLatencyRoutingFieldsT<ExtensionWords>* dest) const {
         dest->value = this->value;
         if constexpr (ExtensionWords > 0) {
             for (uint32_t i = 0; i < ExtensionWords; i++) {
@@ -715,7 +715,7 @@ struct LowLatencyRoutingFieldsT {
      * Initialize from buffer (used when unpacking encoder output).
      * Buffer layout: [value, route_buffer[0], route_buffer[1], ...]
      */
-    static inline LowLatencyRoutingFieldsT<ExtensionWords> from_buffer(const uint32_t* buffer) {
+    static LowLatencyRoutingFieldsT<ExtensionWords> from_buffer(const uint32_t* buffer) {
         LowLatencyRoutingFieldsT<ExtensionWords> result;
         result.value = buffer[0];
         if constexpr (ExtensionWords > 0) {
@@ -741,12 +741,12 @@ struct LowLatencyRoutingFieldsT<0> {
     /**
      * Copy to packet header (value only in 16-hop mode)
      */
-    inline void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
+    void copy_to(volatile LowLatencyRoutingFieldsT<0>* dest) const { dest->value = this->value; }
 
     /**
      * Initialize from buffer (ExtensionWords=0 specialization)
      */
-    static inline LowLatencyRoutingFieldsT<0> from_buffer(const uint32_t* buffer) {
+    static LowLatencyRoutingFieldsT<0> from_buffer(const uint32_t* buffer) {
         LowLatencyRoutingFieldsT<0> result;
         result.value = buffer[0];
         return result;
@@ -759,7 +759,7 @@ struct LowLatencyPacketHeaderT : public PacketHeaderBase<LowLatencyPacketHeaderT
     LowLatencyRoutingFieldsT<ExtensionWords> routing_fields;
 
     // Constexpr helpers for size calculation
-public:
+private:
     static constexpr size_t base_size() {
         // PacketHeaderBase: NocCommandFields(40) + payload_size_bytes(2) + noc_send_type(1) + src_ch_id(1)
         return sizeof(NocCommandFields) + sizeof(uint16_t) + sizeof(NocSendType) + sizeof(uint8_t);
@@ -811,7 +811,6 @@ public:
         return LowLatencyRoutingFieldsT<ExtensionWords>::from_buffer(buffer);
     }
 
-public:
     // Specialized implementations for LowLatencyPacketHeader
     void set_routing_fields(LowLatencyRoutingFieldsT<ExtensionWords>& fields) { this->routing_fields = fields; }
 
