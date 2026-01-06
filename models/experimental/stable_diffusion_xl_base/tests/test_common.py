@@ -22,9 +22,9 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 # For basic SDXL demo, L1 small size of 23000 is enough,
 # but for inpainting/img2img, we need larger L1 small due
 # to having an extra VAE encode call, which increases it.
-# For simplicity, increase both to 30500 as there's enough
+# For simplicity, increase both to 30800 as there's enough
 # space left in base variant as well.
-SDXL_L1_SMALL_SIZE = 30500
+SDXL_L1_SMALL_SIZE = 30800
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"

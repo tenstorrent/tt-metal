@@ -47,12 +47,11 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
-    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t tensor_id{INVALID_TENSOR_ID};
-
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
+
+    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -100,10 +99,10 @@ public:
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
     // The primary use case for this API is to interop with Python, where `MemoryPin` can be set to retain the lifetime
-    // of the Python object that owns the underlying data. For example, in pybind11:
+    // of the Python object that owns the underlying data. For example, in nanobind:
     //
-    // py::object py_tensor = ...;
-    // MemoryPin py_data_pin(std::make_shared<py::object>(py_tensor));
+    // nb::object py_tensor = ...;
+    // MemoryPin py_data_pin(std::make_shared<nb::object>(py_tensor));
     // Tensor tensor = Tensor::from_borrowed_data(buffer, shape, py_data_pin);
     //
     // This API can also be used to create file-backed Tensors by means of `mmap`:
@@ -259,21 +258,18 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
+    std::uint64_t get_id() const;
+
+    static std::uint64_t next_id();
+
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
     auto attribute_values() const {
         return std::forward_as_tuple(
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    static std::uint64_t get_tensor_id_counter();
-
-    static void set_tensor_id_counter(std::uint64_t id);
-
-    // TODO #32045: Remove this function since IDs are assigned in the constructor.
-    static std::uint64_t next_tensor_id();
-
 private:
-    static std::atomic<std::uint64_t> tensor_id_counter;
+    std::uint64_t id_{INVALID_TENSOR_ID};
 
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
@@ -328,8 +324,6 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
 void write_tensor(
     const Tensor& src, Tensor& dst, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
-
-Tensor set_tensor_id(const Tensor& tensor);
 
 namespace ops {
 Tensor view(
