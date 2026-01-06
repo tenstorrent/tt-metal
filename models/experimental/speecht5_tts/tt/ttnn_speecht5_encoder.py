@@ -65,11 +65,15 @@ class TTNNSpeechT5FeedForward:
     TTNN implementation of SpeechT5 Feed-Forward Network.
 
     Operations:
-    1. Linear: hidden_size -> ffn_dim
+    1. Linear: hidden_size -> ffn_dim (768 -> 3072)
     2. GELU activation
     3. Dropout (inference: skip)
-    4. Linear: ffn_dim -> hidden_size
+    4. Linear: ffn_dim -> hidden_size (3072 -> 768)
     5. Dropout (inference: skip)
+
+    Specialized configs based on tensor shapes:
+    - Intermediate: [seq_len, 768] @ [768, 3072] -> [seq_len, 3072]
+    - Output: [seq_len, 3072] @ [3072, 768] -> [seq_len, 768]
     """
 
     def __init__(self, device, parameters, config: TTNNEncoderConfig):
@@ -81,6 +85,13 @@ class TTNNSpeechT5FeedForward:
         # Memory configs for operations
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
+        # Pre-compute specialized configs
+        self.core_grid = get_encoder_core_grid(device)
+
+        # FFN intermediate: [seq_len, 768] @ [768, 3072]
+        # FFN output: [seq_len, 3072] @ [3072, 768]
+        self.ffn_compute_config = get_high_perf_compute_config(device)
+
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Feed-forward network with comprehensive L1 memory management.
@@ -91,13 +102,14 @@ class TTNNSpeechT5FeedForward:
         Returns:
             output: [batch, seq_len, hidden_size]
         """
-        # Op 1: Intermediate dense (high-performance compute kernel)
+        # Op 1: Intermediate dense (768 -> 3072) with specialized config
         hidden_states = ttnn.linear(
             hidden_states,
             self.parameters["intermediate_dense"]["weight"],
             bias=self.parameters["intermediate_dense"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.ffn_compute_config,
         )
 
         # Op 2: GELU activation (L1 output)
@@ -107,13 +119,14 @@ class TTNNSpeechT5FeedForward:
         # if self.training:
         #     hidden_states = ttnn.dropout(hidden_states, p=self.config.dropout)
 
-        # Op 4: Output dense (high-performance compute kernel)
+        # Op 4: Output dense (3072 -> 768) with specialized config
         hidden_states = ttnn.linear(
             hidden_states,
             self.parameters["output_dense"]["weight"],
             bias=self.parameters["output_dense"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.ffn_compute_config,
         )
 
         # Op 5: Dropout (skip in inference)
@@ -131,6 +144,7 @@ class TTNNSpeechT5Attention:
     - Query scaling: 1/sqrt(head_dim)
     - Relative position bias via Q projection
     - Reshape pattern: [B, S, H] -> [B*NH, S, HD]
+    - Specialized configs based on tensor shapes
 
     Operations:
     1-3. Q, K, V projections with query scaling
@@ -155,6 +169,17 @@ class TTNNSpeechT5Attention:
         # Memory configs for operations
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
+        # Pre-compute specialized configs for Q/K/V/out projections
+        # Shape: [seq_len, 768] @ [768, 768] -> [seq_len, 768]
+        self.core_grid = get_encoder_core_grid(device)
+        self.linear_compute_config = get_high_perf_compute_config(device)
+
+        # Attention matmul config (Q@K^T, attn@V)
+        # Will be computed dynamically based on seq_len
+        _, self.attn_compute_config = get_encoder_matmul_config(
+            device, M=1, K=self.head_dim, N=1  # Placeholder, actual shapes vary
+        )
+
     def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass with relative position bias.
@@ -170,13 +195,14 @@ class TTNNSpeechT5Attention:
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        # Ops 1-3: Project to Q, K, V with query scaling (high-performance compute kernel)
+        # Ops 1-3: Project to Q, K, V with query scaling (specialized configs)
         query_states = ttnn.linear(
             hidden_states,
             self.parameters["q_proj"]["weight"],
             bias=self.parameters["q_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.linear_compute_config,
         )
 
         # Scale query
@@ -187,7 +213,8 @@ class TTNNSpeechT5Attention:
             self.parameters["k_proj"]["weight"],
             bias=self.parameters["k_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.linear_compute_config,
         )
 
         value_states = ttnn.linear(
@@ -195,7 +222,8 @@ class TTNNSpeechT5Attention:
             self.parameters["v_proj"]["weight"],
             bias=self.parameters["v_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.linear_compute_config,
         )
 
         # PHASE 2: Reshape for multi-head attention (L1 outputs)
@@ -228,7 +256,7 @@ class TTNNSpeechT5Attention:
             value_states, [batch_size * self.num_heads, seq_len, self.head_dim], memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        # PHASE 3: Attention computation with high-performance compute kernel
+        # PHASE 3: Attention computation with specialized configs
         # Op 7: Compute attention scores: Q @ K^T
         # Need to transpose key_states: [batch*heads, seq, head_dim] -> [batch*heads, head_dim, seq]
         key_states_t = ttnn.permute(key_states, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -236,7 +264,8 @@ class TTNNSpeechT5Attention:
             query_states,
             key_states_t,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.attn_compute_config,
         )
 
         # PHASE 4: Add relative position bias (SpeechT5-specific)
@@ -256,7 +285,8 @@ class TTNNSpeechT5Attention:
                 reshape_q,
                 position_bias_t,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=get_high_perf_compute_config(),
+                core_grid=self.core_grid,
+                compute_kernel_config=self.attn_compute_config,
             )
 
             # Op 11: Transpose back
@@ -275,7 +305,8 @@ class TTNNSpeechT5Attention:
             attn_weights,
             value_states,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.attn_compute_config,
         )
 
         # PHASE 5: Reshape back to [batch, seq, hidden]
@@ -292,13 +323,14 @@ class TTNNSpeechT5Attention:
             attn_output, [batch_size, seq_len, self.hidden_size], memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        # Op 17: Final linear projection with high-performance compute kernel
+        # Op 17: Final linear projection with specialized configs
         output = ttnn.linear(
             attn_output,
             self.parameters["out_proj"]["weight"],
             bias=self.parameters["out_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            core_grid=self.core_grid,
+            compute_kernel_config=self.linear_compute_config,
         )
 
         return output
@@ -592,16 +624,102 @@ class TTNNSpeechT5Encoder:
 # ============================================================================
 
 
+def get_encoder_core_grid(device):
+    """
+    Get optimal core grid for encoder operations based on device.
+    N150 supports 8x8 grid.
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    return ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+
+def get_encoder_linear_config(device, M, K, N):
+    """
+    Get specialized program config for encoder linear operations.
+
+    Args:
+        device: TTNN device
+        M: Number of rows in input (seq_len for encoder)
+        K: Input dimension (hidden_size or ffn_dim)
+        N: Output dimension (hidden_size or ffn_dim)
+
+    Returns:
+        tuple: (core_grid, compute_kernel_config) for the linear operation
+
+    Tensor shapes in encoder:
+        Q/K/V projections: [seq_len, 768] @ [768, 768] (M=seq_len, K=768, N=768)
+        FFN intermediate: [seq_len, 768] @ [768, 3072] (M=seq_len, K=768, N=3072)
+        FFN output: [seq_len, 3072] @ [3072, 768] (M=seq_len, K=3072, N=768)
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+    # Compute kernel config - use HiFi4 for accuracy, enable packer L1 for bandwidth
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # FP32 accumulation for better accuracy
+        packer_l1_acc=False,  # Disable when using fp32_dest_acc
+    )
+
+    return core_grid, compute_kernel_config
+
+
+def get_encoder_matmul_config(device, M, K, N):
+    """
+    Get specialized config for encoder matmul operations (attention).
+
+    Args:
+        device: TTNN device
+        M: Rows in first matrix (typically num_heads * seq_len or seq_len)
+        K: Shared dimension
+        N: Columns in second matrix
+
+    Returns:
+        tuple: (core_grid, compute_kernel_config) for the matmul operation
+
+    Attention shapes:
+        Q @ K^T: [batch*heads, seq, head_dim] @ [batch*heads, head_dim, seq]
+        attn @ V: [batch*heads, seq, seq] @ [batch*heads, seq, head_dim]
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+    # For attention matmuls, use HiFi2 for speed (attention is less sensitive)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,  # Enable L1 accumulation for bandwidth
+    )
+
+    return core_grid, compute_kernel_config
+
+
 # ============================================================================
 # High-Performance Compute Kernel Configs - Maximum Core Utilization
 # ============================================================================
 
 
-def get_high_perf_compute_config():
+def get_high_perf_compute_config(device=None):
     """
     Get compute kernel config optimized for maximum core utilization and performance.
     Uses HiFi4 with default settings for accuracy while maintaining L1 memory optimizations.
+
+    Args:
+        device: Optional TTNN device. If provided, uses device.arch() for config.
     """
+    if device is not None:
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+    # Fallback for backward compatibility
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,

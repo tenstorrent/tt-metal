@@ -351,8 +351,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         layer_output = ttnn.permute(layer_output, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 5: Op 8: Residual connection (L1 output)
-        output = residual
-        # output = ttnn.add(residual, layer_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.add(residual, layer_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 6: Final output must be in L1
