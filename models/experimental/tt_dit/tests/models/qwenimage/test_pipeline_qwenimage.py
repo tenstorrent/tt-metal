@@ -38,8 +38,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        # pytest.param(True, id="encoder_cpu"),
-        pytest.param(False, id="encoder_device"),
+        pytest.param(True, id="encoder_cpu"),
+        # pytest.param(False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
