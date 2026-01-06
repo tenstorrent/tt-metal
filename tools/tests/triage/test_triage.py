@@ -161,7 +161,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
