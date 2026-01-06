@@ -54,16 +54,14 @@ RUN chmod +x /tmp/install-clang-build-analyzer.sh
 # Installation logic, version, and hash are all in install-clang-build-analyzer.sh
 RUN /tmp/install-clang-build-analyzer.sh
 
-# Enable RPM Fusion repositories for openh264 codec support
-# Reference: https://rpmfusion.org/Configuration
 # Install CI requirements - Fedora packages
 # ccache, doxygen, mold available as dnf packages
 # libxml2, libxslt, patch, which for build requirements
-# doxygen/graphviz require openh264 (from cisco repo, enabled via RPM Fusion above)
+# doxygen/graphviz have openh264 in dependency chain - exclude it explicitly
+# Reference: https://rpmfusion.org/Configuration
 RUN dnf install -y \
-    https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-    https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm && \
-    dnf config-manager setopt fedora-cisco-openh264.enabled=1 && \
+    https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm && \
+    dnf config-manager setopt fedora-cisco-openh264.enabled=0 && \
     dnf makecache --refresh && \
     dnf install -y \
     bc \
@@ -83,7 +81,7 @@ RUN dnf install -y \
     which \
     zstd \
     rpm-build \
-    && dnf install -y --setopt=install_weak_deps=False doxygen graphviz \
+    && dnf install -y --setopt=install_weak_deps=False --exclude=openh264* doxygen graphviz \
     && dnf clean all
 
 # Set up virtual environment using uv
