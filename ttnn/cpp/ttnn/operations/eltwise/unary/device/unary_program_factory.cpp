@@ -34,32 +34,41 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
+    const uint32_t num_pages = input.buffer()->num_pages();
+    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
     // For bitcast, use output format for input CB to avoid unpacker conversion
     // This ensures raw bit copying without conversion
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
+
+    // Set CB page size correctly based on layout (tile size for tile layout, buffer page size for row-major)
+    const uint32_t input_cb_page_size = is_row_major ? src_buffer->page_size() : single_tile_size;
+    const uint32_t output_cb_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
+
     tt::DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format_for_input}})
-            .set_page_size(src0_cb_index, single_tile_size);
+            num_input_tiles * input_cb_page_size, {{src0_cb_index, cb_data_format_for_input}})
+            .set_page_size(src0_cb_index, input_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
     if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
         ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
-            tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
-                .set_page_size(tmp0_cb_index, single_tile_size);
+            tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
+                .set_page_size(tmp0_cb_index, input_cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
     }
 
@@ -67,16 +76,13 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, single_tile_size_output);
+            num_output_tiles * output_cb_page_size, {{output_cb_index, cb_data_format_output}})
+            .set_page_size(output_cb_index, output_cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -92,7 +98,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
+        num_pages_per_core_group_1,  // per_core_block_cnt
         1,                           // per_core_block_size
     };
 
@@ -160,7 +166,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     auto eltwise_unary_kernel_group_2_id = 0;
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
+            num_pages_per_core_group_2,  // per_core_block_cnt
             1,                           // per_core_block_size
         };
 
@@ -178,27 +184,27 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 .defines = unary_defines});
     }
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, num_pages_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core = 0;
+        uint32_t num_pages_per_core = 0;
         auto kernel_id = eltwise_unary_kernel_group_1_id;
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            num_pages_per_core = num_pages_per_core_group_2;
             kernel_id = eltwise_unary_kernel_group_2_id;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
         tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+            program, unary_reader_kernel_id, core, {src_buffer->address(), num_pages_per_core, num_pages_written});
 
         tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_pages_per_core, num_pages_written});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, {packed_scalar1, packed_scalar2});
-        num_tiles_written += num_tiles_per_core;
+        num_pages_written += num_pages_per_core;
     }
 
     return cached_program_t{
@@ -322,7 +328,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
