@@ -261,7 +261,7 @@ FORCE_INLINE void fabric_fast_write(
     connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
-    noc_async_write_barrier();
+    noc_async_writes_flushed();
 }
 
 /**

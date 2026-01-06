@@ -2335,6 +2335,9 @@ void UDMFabricUnicastCommon(
     }
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+    // When two data movement kernels both write to fabric, we need to ensure packet ordering is preserved.
+    // Dynamic NOC mode forces both kernels to use the same NOC (NOC0) to maintain that ordering.
+    auto noc_mode = dual_risc ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -2488,6 +2491,7 @@ void UDMFabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
+            .noc_mode = noc_mode,
             .compile_args = sender_compile_time_args});
 
     // Create RISCV_1 sender kernel if dual_risc mode is enabled
@@ -2515,6 +2519,7 @@ void UDMFabricUnicastCommon(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
+                .noc_mode = noc_mode,
                 .compile_args = sender_compile_time_args_risc1});
     }
 
@@ -2539,6 +2544,7 @@ void UDMFabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
+            .noc_mode = noc_mode,
             .compile_args = receiver_compile_time_args});
 
     // Create RISCV_1 receiver kernel if dual_risc mode is enabled
@@ -2565,6 +2571,7 @@ void UDMFabricUnicastCommon(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
+                .noc_mode = noc_mode,
                 .compile_args = receiver_compile_time_args_risc1});
     }
 
@@ -2677,6 +2684,9 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     uint32_t num_packets = 1;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+    // When two data movement kernels both write to fabric, we need to ensure packet ordering is preserved.
+    // Dynamic NOC mode forces both kernels to use the same NOC (NOC0) to maintain that ordering.
+    auto noc_mode = dual_risc ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 
     // Get device info and create programs
     std::vector<FabricNodeId> fabric_node_ids;
@@ -2864,6 +2874,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
+                .noc_mode = noc_mode,
                 .compile_args = sender_compile_time_args});
 
         // Create RISC1 sender kernel if dual_risc mode is enabled
@@ -2891,6 +2902,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
+                    .noc_mode = noc_mode,
                     .compile_args = sender_compile_time_args_risc1});
         }
 
@@ -2931,6 +2943,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
+                .noc_mode = noc_mode,
                 .compile_args = receiver_compile_time_args});
 
         // Create RISC1 receiver kernel if dual_risc mode is enabled
@@ -2957,6 +2970,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
+                    .noc_mode = noc_mode,
                     .compile_args = receiver_compile_time_args_risc1});
         }
 
