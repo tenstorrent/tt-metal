@@ -192,7 +192,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
-    log_debug(tt::LogOp, "N: {}", local_N);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
 
@@ -420,14 +419,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
      */
-    auto sender_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
-    auto receiver_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
-    auto valid_semahpore_id = CreateSemaphore(program, core_grid, VALID);
+    auto sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
 
     // Append semaphore ids to reader compile-time args (must match reader kernel expectations)
-    reader_compile_time_args.push_back(sender_semahpore_id);
-    reader_compile_time_args.push_back(receiver_semahpore_id);
-    reader_compile_time_args.push_back(valid_semahpore_id);
+    reader_compile_time_args.push_back(sender_semaphore_id);
+    reader_compile_time_args.push_back(receiver_semaphore_id);
+    reader_compile_time_args.push_back(valid_semaphore_id);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -671,8 +670,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     };
 
     struct CoreWork {
-        CoreCoord logical_core{};
-        CoreCoord physical_core{};
+        CoreCoord logical_core;
+        CoreCoord physical_core;
         uint32_t global_q_start = 0;
         uint32_t global_q_count = 0;
         std::vector<CoreHeadWork> head_work;
@@ -746,7 +745,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             });
 
             if (!head_segments.empty()) {
-                uint32_t head_id = batch_idx * NH + head_idx;
+                uint32_t head_id = (batch_idx * NH) + head_idx;
                 if (head_id < head_segments.size()) {
                     head_segments[head_id].push_back(HeadSegmentRef{
                         .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
@@ -761,8 +760,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     }
 
     // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
-    for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
-        auto& segments = head_segments[head_id];
+    for (auto& segments : head_segments) {
         if (segments.size() < 2) {
             continue;
         }
