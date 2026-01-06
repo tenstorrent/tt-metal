@@ -66,7 +66,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     indirect=["device_params"],
     ids=[
         "fabric_linear",
-        # "fabric_manager_enabled_linear"# test removed due to issue 35320
+        # "fabric_manager_enabled_linear" # test removed due to issue 35320
     ],
 )
 @pytest.mark.parametrize("chunks_per_sync", [2])
