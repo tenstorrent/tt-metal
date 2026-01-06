@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
@@ -303,39 +304,13 @@ void kernel_main() {
 
         // Compute cb_dysum
         // Sum[dy]
-        tile_regs_acquire();
-        cb_wait_front(cb_dyadd, onetile);
-        cb_reserve_back(cb_dysum, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_dysum, cb_dyadd, cb_scaler);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_dyadd, cb_scaler, 0, 0, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_dysum);
-
-        cb_pop_front(cb_dyadd, onetile);
-        cb_push_back(cb_dysum, onetile);
-        tile_regs_release();
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_dyadd, cb_scaler, cb_dysum, compute_kernel_lib::TileShape::single());
 
         // Compute cb_ydysum
         // Sum[y * dy]
-        tile_regs_acquire();
-        cb_wait_front(cb_ydyadd, onetile);
-        cb_reserve_back(cb_ydysum, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_ydysum, cb_ydyadd, cb_scaler);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ydyadd, cb_scaler, 0, 0, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_ydysum);
-
-        cb_pop_front(cb_ydyadd, onetile);
-        cb_push_back(cb_ydysum, onetile);
-        tile_regs_release();
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_ydyadd, cb_scaler, cb_ydysum, compute_kernel_lib::TileShape::single());
 
         // Compute cb_recip_nrstd
         // rstd / n -> cb_tmp3
