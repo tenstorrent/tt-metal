@@ -1556,9 +1556,15 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
                     for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
                         const auto kernel = program.impl().get_kernel(kernel_id);
                         if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                            for (uint32_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                                dm_cores.erase(
-                                    static_cast<DataMovementProcessor>(kernel->get_kernel_processor_type(i)));
+                            TT_ASSERT(kernel->expected_num_binaries() == 1);
+                            const QuasarDataMovementConfig config =
+                                std::get<QuasarDataMovementConfig>(kernel->config());
+                            const uint32_t num_processors_in_use = config.num_processors_per_cluster;
+                            const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
+                            for (uint32_t i = start_processor_type; i < start_processor_type + num_processors_in_use;
+                                 i++) {
+                                TT_ASSERT(dm_cores.contains(static_cast<DataMovementProcessor>(i)));
+                                dm_cores.erase(static_cast<DataMovementProcessor>(i));
                             }
                         }
                     }
