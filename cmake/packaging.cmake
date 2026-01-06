@@ -1,5 +1,74 @@
 # TT-Metal CPack packaging configuration
 # Automatically detects distro type and includes appropriate DEB or RPM packaging
+#
+# =============================================================================
+# RPATH / RUNPATH and Library Layout
+# =============================================================================
+#
+# This project uses $ORIGIN-based RPATH to make binaries relocatable. $ORIGIN is
+# a special token in ELF binaries that the dynamic linker (ld.so) expands at
+# runtime to the directory containing the executable or library itself.
+#
+# For example, if /work/build/tt-train/tests/ttml_tests has RPATH=$ORIGIN/../../lib,
+# then at runtime $ORIGIN becomes /work/build/tt-train/tests, and the linker
+# searches /work/build/tt-train/tests/../../lib -> /work/build/lib for libraries.
+#
+# CI Tar Artifact Layout
+# ----------------------
+# When the CI tar artifact (ttm_any.tar.zst) is extracted to /work/:
+#
+#   /work/
+#   ├── ttnn/
+#   │   └── ttnn/
+#   │       ├── _ttnn.so          <- Python bindings (nanobind)
+#   │       └── _ttnncpp.so       <- C++ library with Python bindings
+#   │
+#   ├── build/
+#   │   ├── lib/
+#   │   │   ├── libtt_metal.so    <- Core TT-Metal library
+#   │   │   ├── libtracy.so       <- Tracy profiler (optional)
+#   │   │   └── ...
+#   │   │
+#   │   ├── tt-train/
+#   │   │   └── tests/
+#   │   │       └── ttml_tests    <- tt-train test executable
+#   │   │
+#   │   └── test/
+#   │       └── ...               <- Other test executables
+#   │
+#   └── runtime/
+#       └── ...                   <- Runtime files (kernels, firmware, etc.)
+#
+# Library Dependency Chain
+# ------------------------
+#   ttml_tests -> _ttnncpp.so (in ttnn/ttnn/) -> libtt_metal.so (in build/lib/)
+#
+# RPATH Configuration
+# -------------------
+# - _ttnncpp.so and _ttnn.so (in ttnn/ttnn/):
+#     INSTALL_RPATH = "$ORIGIN/../../build/lib;$ORIGIN"
+#     - $ORIGIN/../../build/lib resolves to build/lib/ from ttnn/ttnn/
+#     - $ORIGIN allows finding sibling libraries in the same directory
+#
+# - tt-train executables (in build/tt-train/tests/):
+#     CMAKE_INSTALL_RPATH includes:
+#     - $ORIGIN/../../lib           -> build/lib/ (for libtt_metal.so)
+#     - $ORIGIN/../../../ttnn/ttnn  -> ttnn/ttnn/ (for _ttnncpp.so)
+#
+# FHS Package Layout (DEB/RPM)
+# ----------------------------
+# For proper system packages, all libraries are installed to standard locations
+# (e.g., /usr/lib64/), so $ORIGIN alone is sufficient since libraries are
+# co-located in the same directory.
+#
+# Why $ORIGIN instead of LD_LIBRARY_PATH?
+# ---------------------------------------
+# - Embedded in the binary (no environment setup needed)
+# - Works in containers without special configuration
+# - Portable across different execution contexts
+# - More secure (controlled library search path)
+#
+# =============================================================================
 
 set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
 set(CMAKE_PROJECT_HOMEPAGE_URL "https://tenstorrent.com")

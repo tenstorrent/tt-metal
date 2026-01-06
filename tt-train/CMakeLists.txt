@@ -34,6 +34,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
+# RPATH settings for tt-train executables
+# When built as part of the main project (BUILD_TT_TRAIN=ON), the executables are at:
+#   build/tt-train/tests/ttml_tests
+# And they need to find shared libraries at:
+#   build/lib/libtt_metal.so ($ORIGIN/../../lib)
+#   ttnn/ttnn/_ttnncpp.so ($ORIGIN/../../../ttnn/ttnn)
+# For installed packages (FHS), libraries are in standard locations, so $ORIGIN/../lib suffices.
+set(CMAKE_BUILD_RPATH
+    "${CMAKE_BINARY_DIR}/lib" # Absolute path for build tree
+    "${CMAKE_BINARY_DIR}/../ttnn/ttnn" # Absolute path to ttnn pybinds
+)
+set(CMAKE_INSTALL_RPATH
+    "$ORIGIN/../lib" # Relative path for FHS installs
+    "$ORIGIN/../../../ttnn/ttnn" # Relative path for tar artifact layout
+    "$ORIGIN/../../lib" # Alternative relative path from tests/
+)
+
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
