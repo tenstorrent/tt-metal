@@ -6,9 +6,9 @@ Authors: Vishal Shenoy, Mohamed Bahnas
 - [ViT in TT-NN (Blackhole)](#vit-in-tt-nn-blackhole)
   - [Contents](#contents)
   - [1. Overview](#1-overview)
-  - [2. Blackhole-specific execution strategy (what changes vs. Grayskull)](#2-blackhole-specific-execution-strategy-what-changes-vs-grayskull)
-    - [2.1 Blackhole hardware notes relevant to TT-NN](#21-blackhole-hardware-notes-relevant-to-tt-nn)
-    - [2.2 Core-grid strategy used by the Blackhole ViT demo](#22-core-grid-strategy-used-by-the-blackhole-vit-demo)
+  - [2. Blackhole execution strategy and assumptions](#2-blackhole-execution-strategy-and-assumptions)
+    - [2.1 Device notes relevant to TT-NN](#21-device-notes-relevant-to-tt-nn)
+    - [2.2 Core-grid strategy used by the ViT implementation](#22-core-grid-strategy-used-by-the-vit-implementation)
     - [2.3 Shape padding assumptions (ViT seqL padding)](#23-shape-padding-assumptions-vit-seql-padding)
   - [3. ViT TT-NN Optimization Techniques (Blackhole)](#3-vit-tt-nn-optimization-techniques-blackhole)
     - [3.1 Sharding on all relevant ops (and minimizing inter-op data movement)](#31-sharding-on-all-relevant-ops-and-minimizing-inter-op-data-movement)
@@ -51,11 +51,11 @@ The TT-NN implementation focuses on:
 - Using **matmul sharding + multicast** patterns that fit the device grid and ViT’s shapes
 - Using lower precision datatypes (e.g. **BFLOAT8_B**) where acceptable for performance
 
-This document is intentionally **Blackhole-specific**: it highlights the places where the optimized flow differs from the earlier Grayskull-oriented writeup, especially around **core-grid selection**, **resharding**, and Blackhole-relevant memory/NoC constraints.
+This report describes the Blackhole implementation as the baseline target. All sharding, memory, and program configuration details are described with respect to running on Blackhole devices.
 
-## 2. Blackhole-specific execution strategy (what changes vs. Grayskull)
+## 2. Blackhole execution strategy and assumptions
 
-### 2.1 Blackhole hardware notes relevant to TT-NN
+### 2.1 Device notes relevant to TT-NN
 
 This report uses **repo-local** tech reports for Blackhole-relevant hardware constraints and software behavior:
 
@@ -63,21 +63,21 @@ This report uses **repo-local** tech reports for Blackhole-relevant hardware con
 - `tech_reports/memory/allocator.md`
 - `tech_reports/GEMM_FLOPS/GEMM_FLOPS.md`
 
-Key Blackhole differences that can influence TT-NN program configs and data movement:
+Key Blackhole device details that can influence TT-NN program configs and data movement:
 
 - **Compute grid size**: Blackhole exposes a larger Tensix grid; the bring-up guide lists **13×10 compute-available** cores (within a 14×10 total Tensix grid).
 - **DRAM topology**: Blackhole devices have **8 DRAM banks (~4GB each)** (vs. 12×~1GB on Wormhole); this affects allocator behavior and large-weight placement decisions.
 - **NoC alignment + multicast**: Blackhole has different NoC read alignment (64B) and supports additional multicast shapes (rectangular/strided/L-shaped). The bring-up guide also notes some older-kernel patterns required extra NoC flushes on BH during bring-up.
 
-### 2.2 Core-grid strategy used by the Blackhole ViT demo
+### 2.2 Core-grid strategy used by the ViT implementation
 
-The Blackhole ViT demo uses a **fixed 10×12 grid** (120 cores) for many block-sharded ops, and a **variable grid** derived from batch size for some attention internals and for the classifier.
+The ViT implementation uses a **fixed 10×12 grid** (120 cores) for many block-sharded ops, and a **variable grid** derived from batch size for some attention internals and for the classifier.
 
 Why `grid_x = 12` is convenient for ViT-Base:
 - For ViT-Base, `hidden_size = 768`, so `dim_t = 768/32 = 24` tiles.
 - With `grid_x = 12`, each core in X naturally maps to `dim_t__x = 24/12 = 2` tiles.
 
-The demo also includes explicit comments indicating that for Blackhole `grid_x` can be reduced (e.g. 6/4/3) for lower latency regimes, but the current optimized path defaults to `grid_x = 12`.
+The implementation also includes comments indicating that `grid_x` can be reduced (e.g. 6/4/3) for lower latency regimes, but the current path defaults to `grid_x = 12`.
 
 ### 2.3 Shape padding assumptions (ViT seqL padding)
 
@@ -91,7 +91,7 @@ Many sharded program configs are expressed in tiles and use these derived values
 
 ## 3. ViT TT-NN Optimization Techniques (Blackhole)
 
-This section summarizes the concrete optimization techniques used in the Blackhole ViT demo implementation (`ttnn_optimized_sharded_vit_bh.py`). Many techniques are shared with the earlier Grayskull writeup (sharding, mcast, fused QKV), but **Blackhole adds explicit grid/reshard/reallocate strategy** that is important to capture.
+This section summarizes the concrete optimization techniques used in the Blackhole ViT implementation. The main themes are: sharding to keep tensors in L1, selecting matmul program configs that match ViT shapes, and preprocessing weights to avoid runtime packing/transpose overheads.
 
 ### 3.1 Sharding on all relevant ops (and minimizing inter-op data movement)
 
@@ -100,7 +100,7 @@ This section summarizes the concrete optimization techniques used in the Blackho
   - `ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG` for most MLP + projection-style ops
   - `ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG` for attention BMM-style ops (QKᵀ and PV)
 
-**Blackhole-specific note (core-grid + reshard strategy)**:
+**Core-grid + reshard strategy**:
 - The demo uses a stable **10×12 grid** for many block-sharded ops (call it the “120-core grid”).
 - It then **reshards** tensors onto a **variable grid** (derived from batch size) where needed, and sometimes uses `ttnn.reallocate()` to avoid fragmentation/defragmentation issues in attention.
 - This makes the optimized BH flow explicitly a **multi-grid pipeline**, not “one grid everywhere”.
