@@ -616,39 +616,6 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
 }
 
-void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    ZoneScoped;
-    TT_FATAL(
-        (is_device_tensor(src) && is_cpu_tensor(dst)) ||    // device to host
-            (is_cpu_tensor(src) && is_device_tensor(dst)),  // host to device
-        "Unsupported data transfer direction; source storage type: {}, destination storage type: {}",
-        src.storage_type(),
-        dst.storage_type());
-
-    if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host(src, dst, blocking, cq_id);
-        return;
-    }
-
-    TT_FATAL(
-        src.logical_shape() == dst.logical_shape(),
-        "Source and destination tensors must have the same logical shape. Source: {}, Destination: {}",
-        src.logical_shape(),
-        dst.logical_shape());
-    TT_FATAL(
-        src.dtype() == dst.dtype(),
-        "Source and destination tensors must have the same data type. Source: {}, Destination: {}",
-        src.dtype(),
-        dst.dtype());
-    TT_FATAL(
-        src.tensor_spec().page_config() == dst.tensor_spec().page_config(),
-        "Source and destination tensors must have the same page configuration");
-
-    auto mesh_buffer = dst.device_storage().mesh_buffer;
-    TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device(src, dst, cq_id);
-}
-
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
