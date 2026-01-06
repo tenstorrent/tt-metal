@@ -195,6 +195,14 @@ jobs:
               "cmd": "run_t3000_mochi_tests",
               "timeout": 60,
               "owner_id": "U09ELB03XRU" # Stephen Osborne
+            },
+            {
+              "name": "t3k_gpt_oss_tests",
+              "model": "gpt-oss",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_gpt_oss_tests",
+              "timeout": 20,
+              "owner_id": "U08TJ70UFRT" # Harry Andrews
             }
           ]')
 

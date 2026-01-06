@@ -407,6 +407,31 @@ run_t3000_mochi_tests() {
   fi
 }
 
+run_t3000_gpt_oss_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  # Install gpt-oss requirements
+  pip install -r models/demos/gpt_oss/requirements.txt
+
+  # Test GPT-OSS 20B model
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  echo "LOG_METAL: GPT-OSS 20B tests completed"
+
+  # Test GPT-OSS 120B model
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8"
+  echo "LOG_METAL: GPT-OSS 120B tests completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gpt_oss_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run llama3 smaller tests (1B, 3B, 8B, 11B)
   run_t3000_llama3_tests
@@ -464,6 +489,9 @@ run_t3000_tests() {
 
   # Run mochi tests
   run_t3000_mochi_tests
+
+  # Run gpt-oss tests
+  run_t3000_gpt_oss_tests
 }
 
 fail=0

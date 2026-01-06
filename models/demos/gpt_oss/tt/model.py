@@ -149,7 +149,7 @@ class Model:
         # Create a dummy CCL manager for GPT-OSS
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device)
+        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
         # Create instance using direct initialization
         instance = cls.__new__(cls)
