@@ -6,7 +6,7 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <ttnn/tensor/tensor.hpp>
-#include "tt-metalium/mesh_socket.hpp"
+#include "tt-metalium/experimental/sockets/mesh_socket.hpp"
 
 namespace ttnn::distributed {
 
