@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
@@ -128,22 +129,9 @@ void kernel_main() {
         }
     }
 
-    // Compute cb_y
-    tile_regs_acquire();
-    cb_wait_front(cb_xpowadd, onetile);
-    cb_reserve_back(cb_y, onetile);
-
-    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_xpowadd, cb_one, cb_y);
-    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_xpowadd, cb_one, 0, 0, dst0);
-    reduce_uninit();
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile(dst0, cb_y);
-
-    cb_pop_front(cb_xpowadd, onetile);
-    cb_push_back(cb_y, onetile);
-    tile_regs_release();
+    // Compute cb_y - reduce single pre-accumulated tile to scalar
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+        cb_xpowadd, cb_one, cb_y, compute_kernel_lib::TileShape::single());
 
     cb_pop_front(cb_decimal, onetile);
     cb_pop_front(cb_one, onetile);
