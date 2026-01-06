@@ -6,7 +6,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -23,8 +23,6 @@ struct SocketPeerDescriptor {
     SocketConfig config;
     DeviceAddr config_buffer_address = 0;
     DeviceAddr data_buffer_address = 0;
-    std::vector<uint32_t> mesh_ids;
-    std::vector<uint32_t> chip_ids;
     multihost::Tag exchange_tag = multihost::Tag{0};
 };
 
@@ -41,7 +39,8 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint);
+    SocketEndpoint socket_endpoint,
+    const std::shared_ptr<MeshDevice>& peer_device = nullptr);
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
@@ -49,16 +48,61 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    const std::shared_ptr<const multihost::DistributedContext>& context);
+    const std::shared_ptr<const multihost::DistributedContext>& context,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const SocketPeerDescriptor& desc,
     SocketEndpoint socket_endpoint_type,
-    const std::shared_ptr<const multihost::DistributedContext>& context);
+    const std::shared_ptr<const multihost::DistributedContext>& context,
+    const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
-    const SocketPeerDescriptor& sender_descriptor,
-    const SocketPeerDescriptor& receiver_descriptor);
+    const std::shared_ptr<MeshDevice>& sender_device = nullptr,
+    const std::shared_ptr<MeshDevice>& receiver_device = nullptr);
+
+std::vector<multihost::Rank> get_ranks_for_mesh_id(
+    tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
+
+template <typename OperationType, typename... Args>
+void execute_with_timeout(OperationType&& operation, Args&&... args) {
+    const auto timeout = std::chrono::duration<float>(10.0f);
+
+    std::atomic<bool> completed{false};
+    std::atomic<bool> failed{false};
+    std::exception_ptr exception_ptr{nullptr};
+
+    std::thread thread([&]() {
+        try {
+            operation(std::forward<Args>(args)...);
+            completed = true;
+        } catch (...) {
+            exception_ptr = std::current_exception();
+            failed = true;
+        }
+    });
+
+    auto start = std::chrono::steady_clock::now();
+    while (!completed && !failed) {
+        std::this_thread::yield();
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration<float>(now - start).count();
+        if (elapsed >= timeout.count()) {
+            thread.detach();
+            TT_THROW(
+                "Timed out trying to establish a socket connection. Please ensure that the socket is being created on "
+                "all hosts mapped to the requested meshes.");
+        }
+    }
+
+    if (thread.joinable()) {
+        thread.join();
+    }
+
+    if (failed && exception_ptr) {
+        std::rethrow_exception(exception_ptr);
+    }
+}
 
 }  // namespace tt::tt_metal::distributed

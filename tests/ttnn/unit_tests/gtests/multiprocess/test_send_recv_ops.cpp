@@ -12,7 +12,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
 
@@ -62,31 +62,20 @@ void test_send_recv_async_(
     std::vector<distributed::SocketConnection> backward_socket_connections;
     backward_socket_connections.reserve(mesh_shape.mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
-        forward_socket_connections.push_back({
-            .sender_core = {coord, sender_logical_coord},
-            .receiver_core = {coord, recv_logical_coord},
-        });
-        backward_socket_connections.push_back({
-            .sender_core = {coord, sender_logical_coord},
-            .receiver_core = {coord, recv_logical_coord},
-        });
+        forward_socket_connections.push_back(distributed::SocketConnection(
+            distributed::MeshCoreCoord(coord, sender_logical_coord),
+            distributed::MeshCoreCoord(coord, recv_logical_coord)));
+        backward_socket_connections.push_back(distributed::SocketConnection(
+            distributed::MeshCoreCoord(coord, sender_logical_coord),
+            distributed::MeshCoreCoord(coord, recv_logical_coord)));
     }
 
-    distributed::SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = socket_buffer_type,
-        .fifo_size = socket_fifo_size,
-    };
+    distributed::SocketMemoryConfig socket_mem_config(socket_buffer_type, socket_fifo_size);
 
-    distributed::SocketConfig forward_socket_config = {
-        .socket_connection_config = forward_socket_connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = sender_rank,
-        .receiver_rank = receiver_rank};
-    distributed::SocketConfig backward_socket_config = {
-        .socket_connection_config = backward_socket_connections,
-        .socket_mem_config = socket_mem_config,
-        .sender_rank = receiver_rank,
-        .receiver_rank = sender_rank};
+    distributed::SocketConfig forward_socket_config(
+        forward_socket_connections, socket_mem_config, sender_rank, receiver_rank);
+    distributed::SocketConfig backward_socket_config(
+        backward_socket_connections, socket_mem_config, receiver_rank, sender_rank);
     auto forward_socket = distributed::MeshSocket(mesh_device, forward_socket_config);
     auto backward_socket = distributed::MeshSocket(mesh_device, backward_socket_config);
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
