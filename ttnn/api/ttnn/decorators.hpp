@@ -56,14 +56,6 @@ inline std::string python_fully_qualified_name(const std::string& cpp_fully_qual
 
 }  // namespace detail
 
-// Primitive operations map directly to device operations
-template <typename operation_t>
-concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<operation_t>;
-
-// Composite operation allows any code to be executed
-template <typename operation_t>
-concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
-
 template <typename Op, typename... Args>
 concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
@@ -71,8 +63,6 @@ concept HasInvoke = requires {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
-    static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
-
     // Get "add" from "ttnn::add"
     std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
 
@@ -104,17 +94,17 @@ private:
     }
 
     template <typename... args_t>
-        requires PrimitiveOperationConcept<operation_t>
+        requires device_operation::DeviceOperationConcept<operation_t>
     auto invoke(args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
-            "Primitive Operation must implement invoke() method to be invoked.");
+            "Device Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
     template <typename... args_t>
-        requires(CompositeOperationConcept<operation_t>)
+        requires(!device_operation::DeviceOperationConcept<operation_t>)
     auto invoke(args_t&&... args) const {
         return invoke_composite(std::forward<args_t>(args)...);
     }
@@ -141,38 +131,8 @@ struct set_operation_t : std::true_type {
     friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>) { return operation; }
 };
 
-constexpr reflect::fixed_string prim_namespace = "ttnn::prim";
-
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-consteval void assert_operation_in_correct_namespace() {
-    if constexpr (PrimitiveOperationConcept<operation_t>) {
-        if constexpr (cpp_fully_qualified_name.size() > prim_namespace.size()) {
-            constexpr auto namespace_substring =
-                tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
-            static_assert(
-                tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace),
-                "Primitive operations must be in the `ttnn::prim` namespace.");
-        } else {
-#ifndef DISABLE_NAMESPACE_STATIC_ASSERT
-            static_assert(false, "Primitive operations must be in the `ttnn::prim` namespace.");
-#endif
-        }
-    } else {
-        if constexpr (cpp_fully_qualified_name.size() > prim_namespace.size()) {
-            constexpr auto namespace_substring =
-                tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
-            static_assert(
-                not tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace),
-                "Composite operations must not be in the `ttnn::prim` namespace. You may have forgotten to implement "
-                "one of: validate_on_program_cache_hit, validate_on_program_cache_miss, create_output_tensors, or "
-                "select_program_factory.");
-        }
-    }
-}
-
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_impl() {
-    assert_operation_in_correct_namespace<cpp_fully_qualified_name, operation_t>();
     constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t>{};
     static_assert(
         not requires(operation_name_key_t<cpp_fully_qualified_name> key) { get(key); },

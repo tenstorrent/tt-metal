@@ -4,8 +4,8 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <string>
 #include <unordered_set>
@@ -83,11 +83,8 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
             for (int y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core_coord(x, y);
                 CoreCoord physical_core_coord = soc_desc.get_physical_tensix_core_from_logical(logical_core_coord);
-                EXPECT_TRUE(
-                    harvested_rows.find(
-                        tensix_harvest_axis == HalTensixHarvestAxis::ROW
-                            ? physical_core_coord.y
-                            : physical_core_coord.x) == harvested_rows.end());
+                EXPECT_TRUE(!harvested_rows.contains(
+                    tensix_harvest_axis == HalTensixHarvestAxis::ROW ? physical_core_coord.y : physical_core_coord.x));
             }
         }
     }

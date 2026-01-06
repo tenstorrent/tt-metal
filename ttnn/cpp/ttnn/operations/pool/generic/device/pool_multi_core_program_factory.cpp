@@ -522,11 +522,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
-    for (int i = 0; i < outputs.size(); ++i) {
+    for (const auto& output : outputs) {
         TT_FATAL(
-            outputs[i].memory_config().is_sharded(),
+            output.memory_config().is_sharded(),
             "Output memory config needs to be sharded, but got {}",
-            outputs[i].memory_config());
+            output.memory_config());
     }
 
     /**
@@ -722,7 +722,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         } else {
             total_out_nhw_processed = core_i * max_out_nhw_per_core;
         }
-        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, total_out_nhw - total_out_nhw_processed);
+        uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
         std::vector<uint32_t> args = {out_nhw_this_core};
 
         if (return_indices) {
@@ -744,7 +746,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     uint32_t l1_usage = calculate_L1_usage(
-        input,
+        input.dtype(),
         in_c,
         pad_h,
         pad_w,
