@@ -99,7 +99,6 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                     return nb::cast(std::move(result[0]));
                 }
                 return nb::cast(std::move(result));
-
             },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),

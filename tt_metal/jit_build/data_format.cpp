@@ -4,8 +4,8 @@
 
 #include "data_format.hpp"
 
-#include <tt_stl/assert.hpp>      // for tt_throw, TT_FATAL
-#include <base_types.hpp>  // for UnpackToDestMode
+#include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
+#include <base_types.hpp>     // for UnpackToDestMode
 #include <circular_buffer_constants.h>
 #include <functional>
 #include <iostream>       // for basic_ostream

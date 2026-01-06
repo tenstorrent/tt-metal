@@ -159,7 +159,6 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
             return MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
         }
         return input_memory_config;
-
     };
 
     // Just edit shape if shape has a 0 dimension

@@ -174,7 +174,8 @@ ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation::tensor_return_val
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::moreh::moreh_getitem::MorehGetItemOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{index_dims, memory_config.value_or(input.memory_config())};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{index_dims, memory_config.value_or(input.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{input, index_tensors, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

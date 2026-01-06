@@ -240,11 +240,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
             }
 
             resolved->subgraphs[child_name] = build_graph_instance_impl(
-                child_mapping.sub_instance(),
-                cluster_descriptor,
-                deployment_descriptor,
-                child_name,
-                node_templates);
+                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
         }
     }
 
@@ -332,8 +328,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates) {
-    return build_graph_instance_impl(
-        graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
+    return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
 }  // anonymous namespace
@@ -506,8 +501,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::UNKNOWN, "UNKNOWN"}};
 
     const std::unordered_map<tt::ARCH, std::string> speed_str = {
-        //TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the future.
-        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "400G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
+        // TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the
+        // future.
+        {tt::ARCH::WORMHOLE_B0, "400G"},
+        {tt::ARCH::BLACKHOLE, "400G"},
+        {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
@@ -782,7 +780,6 @@ CableLength calc_cable_length(
         tray_u_est_0 += (((4 - tray_id_0) * 1.25) + 1);
         tray_u_est_1 += (((4 - tray_id_1) * 1.25) + 1);
     }
-
 
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm

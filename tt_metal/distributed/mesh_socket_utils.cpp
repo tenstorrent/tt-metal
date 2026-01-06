@@ -69,7 +69,9 @@ uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
 void validate_fabric_config_for_sockets(
     tt_fabric::FabricConfig fabric_config, tt_fabric::FabricNodeId sender_node, tt_fabric::FabricNodeId recv_node) {
     if (sender_node != recv_node) {
-        TT_FATAL(fabric_config != tt_fabric::FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
+        TT_FATAL(
+            fabric_config != tt_fabric::FabricConfig::DISABLED,
+            "Can only create multi-device sockets with fabric enabled.");
     }
 
     static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
@@ -95,7 +97,8 @@ std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
 
     validate_fabric_config_for_sockets(fabric_config, sender_node_id, recv_node_id);
 
-    if (fabric_config == tt_fabric::FabricConfig::FABRIC_1D or fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
+    if (fabric_config == tt_fabric::FabricConfig::FABRIC_1D or
+        fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -299,13 +302,13 @@ void write_socket_configs(
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
-                config_data[md_offset++] = connections.size();                        // num_downstreams
-                config_data[md_offset++] = peer_descriptor.data_buffer_address;       // write_ptr
-                config_data[md_offset++] = 0;                                         // bytes_sent
-                config_data[md_offset++] = peer_config_buf_addr;                      // downstream_bytes_sent_addr
-                config_data[md_offset++] = peer_descriptor.data_buffer_address;       // downstream_fifo_addr
-                config_data[md_offset++] = config.socket_mem_config.fifo_size;        // downstream_fifo_total_size
-                config_data[md_offset++] = is_sender;                                 // is_sender
+                config_data[md_offset++] = connections.size();                   // num_downstreams
+                config_data[md_offset++] = peer_descriptor.data_buffer_address;  // write_ptr
+                config_data[md_offset++] = 0;                                    // bytes_sent
+                config_data[md_offset++] = peer_config_buf_addr;                 // downstream_bytes_sent_addr
+                config_data[md_offset++] = peer_descriptor.data_buffer_address;  // downstream_fifo_addr
+                config_data[md_offset++] = config.socket_mem_config.fifo_size;   // downstream_fifo_total_size
+                config_data[md_offset++] = is_sender;                            // is_sender
 
                 // Write downstream encodings for each receiver of this sender core
                 uint32_t enc_offset = (idx * sender_total_size_bytes + sender_size.md_size_bytes +
@@ -321,15 +324,16 @@ void write_socket_configs(
                             tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                         fabric_config,
                         SocketEndpoint::SENDER);
-                    auto recv_virtual_core = mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
+                    auto recv_virtual_core =
+                        mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
 
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
                         enc_offset + (receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t)));
-                    config_data[receiver_enc_offset] = *downstream_mesh_id;        // downstream_mesh_id
-                    config_data[receiver_enc_offset + 1] = downstream_chip_id;     // downstream_chip_id
-                    config_data[receiver_enc_offset + 2] = recv_virtual_core.y;    // downstream_noc_y
-                    config_data[receiver_enc_offset + 3] = recv_virtual_core.x;    // downstream_noc_x
+                    config_data[receiver_enc_offset] = *downstream_mesh_id;      // downstream_mesh_id
+                    config_data[receiver_enc_offset + 1] = downstream_chip_id;   // downstream_chip_id
+                    config_data[receiver_enc_offset + 2] = recv_virtual_core.y;  // downstream_noc_y
+                    config_data[receiver_enc_offset + 3] = recv_virtual_core.x;  // downstream_noc_x
                 }
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
@@ -350,7 +354,8 @@ void write_socket_configs(
                     mesh_device->get_fabric_node_id(recv_core.device_coord),
                     fabric_config,
                     SocketEndpoint::RECEIVER);
-                auto sender_virtual_core = mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
+                auto sender_virtual_core =
+                    mesh_device->worker_core_from_logical_core(connection.sender_core.core_coord);
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];

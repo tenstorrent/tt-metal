@@ -135,7 +135,10 @@ ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
     bool is_dram_interleaved =
         input_tensor.storage_type() == StorageType::DEVICE && input_tensor.memory_config().is_dram();
     auto operation_attributes = OperationType::operation_attributes_t{
-        .stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded, .is_dram_interleaved = is_dram_interleaved};
+        .stride_h = stride_h,
+        .stride_w = stride_w,
+        .is_sharded = is_sharded,
+        .is_dram_interleaved = is_dram_interleaved};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

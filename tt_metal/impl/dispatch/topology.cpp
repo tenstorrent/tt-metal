@@ -433,8 +433,6 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
             return single_chip_arch_2cq_dispatch_s;
         }
         return single_chip_arch_2cq;
-
-
     };
 
     if (remote_devices.empty()) {

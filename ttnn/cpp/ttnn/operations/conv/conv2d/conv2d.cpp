@@ -319,45 +319,45 @@ Result conv2d_L1(
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }  // Matmul expects inputs to be in Tile Layout
-        tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
+    tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
 
-        // run conv as matmul
-        std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
-        std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
+    // run conv as matmul
+    std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+    std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 
-        if (input_tensor_post_tm.is_sharded()) {
-            uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
-            program_config = determine_matmul_op_config_from_conv_op_config(
-                opt_conv_op_parallel_config,
-                opt_conv_op_block_config,
-                parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
-                conv_config.activation,
-                parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-                num_cores_c);
-            mm_output_memory_config = conv_out_memory_config;
-        }
+    if (input_tensor_post_tm.is_sharded()) {
+        uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
+        program_config = determine_matmul_op_config_from_conv_op_config(
+            opt_conv_op_parallel_config,
+            opt_conv_op_block_config,
+            parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
+            conv_config.activation,
+            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+            num_cores_c);
+        mm_output_memory_config = conv_out_memory_config;
+    }
 
-        ttnn::Tensor matmul_output = ttnn::linear(
-            input_tensor_post_tm,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
-            false,
-            false,
-            mm_output_memory_config,
-            output_dtype,
-            program_config,
-            // for sharded input, activation is set on program config
-            input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
-            compute_config);
+    ttnn::Tensor matmul_output = ttnn::linear(
+        input_tensor_post_tm,
+        weight_tensor_on_device,
+        bias_tensor_on_device,
+        false,
+        false,
+        mm_output_memory_config,
+        output_dtype,
+        program_config,
+        // for sharded input, activation is set on program config
+        input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
+        compute_config);
 
-        if (should_deallocate_act) {
-            input_tensor_post_tm.deallocate(/*force*/ true);
-        }
-        if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
-            matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
-        }
+    if (should_deallocate_act) {
+        input_tensor_post_tm.deallocate(/*force*/ true);
+    }
+    if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
+        matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
+    }
 
-        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
 ResultWithOptions result_to_result_with_options(
@@ -838,7 +838,8 @@ Result conv2d_DRAM(
         device);
 
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
-    ttnn::operations::op_slicing::run_sliced_op(input_tensor_on_device, output_tensors, &slice_attr, dram_slice_config_);
+    ttnn::operations::op_slicing::run_sliced_op(
+        input_tensor_on_device, output_tensors, &slice_attr, dram_slice_config_);
 
     if (should_deallocate_act) {
         input_tensor_on_device.deallocate(true);
@@ -929,7 +930,6 @@ ResultWithOptions Conv2dOperation::invoke(
         return_output_dim,
         return_weights_and_bias);
 }
-
 
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     uint32_t batch_size,

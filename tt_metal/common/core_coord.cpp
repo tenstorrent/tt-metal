@@ -671,7 +671,7 @@ namespace std {
 
 using tt::tt_metal::RelativeCoreCoord;
 
-std::size_t hash<RelativeCoreCoord>::operator()(RelativeCoreCoord const& o) const {
+std::size_t hash<RelativeCoreCoord>::operator()(const RelativeCoreCoord& o) const {
     std::size_t seed = 0;
     seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
     return seed;

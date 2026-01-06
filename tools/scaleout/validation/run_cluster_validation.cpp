@@ -109,9 +109,7 @@ cxxopts::Options create_validation_options() {
 }
 
 cxxopts::Options create_link_reset_options() {
-    cxxopts::Options options(
-        "run_cluster_validation link_reset",
-        "Restart a specific cable/link on the cluster.");
+    cxxopts::Options options("run_cluster_validation link_reset", "Restart a specific cable/link on the cluster.");
 
     options.add_options()("host", "Host name of the source ASIC", cxxopts::value<std::string>())(
         "tray-id", "Tray ID of the source ASIC", cxxopts::value<uint32_t>())(

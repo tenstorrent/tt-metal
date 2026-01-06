@@ -46,7 +46,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
             return program::ConcatS2STiledProgramFactory{};
 
         }  // Multi-tensor s2s case
-            return program::ConcatS2SMultiProgramFactory{};
+        return program::ConcatS2SMultiProgramFactory{};
 
     } else {
         // Sharded-to-interleaved (s2i) case
@@ -362,35 +362,35 @@ Tensor concat_impl(
                 "Current concat implementation requires aligned last dim when concatting on last dim");
         }
     }
-        // Determine target layout by checking all inputs
-        // Start with first input's layout, but may need to fall back to ROW_MAJOR
-        Layout target_layout = input_tensors[0].layout();
+    // Determine target layout by checking all inputs
+    // Start with first input's layout, but may need to fall back to ROW_MAJOR
+    Layout target_layout = input_tensors[0].layout();
 
-        // Check all inputs - if any ROW_MAJOR input cannot be tiled, use ROW_MAJOR for all
-        for (const auto& input_tensor : input_tensors) {
-            if (input_tensor.layout() == Layout::ROW_MAJOR) {
-                const auto& input_shape = input_tensor.padded_shape();
-                if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
-                    target_layout = Layout::ROW_MAJOR;
-                    break;
-                }
+    // Check all inputs - if any ROW_MAJOR input cannot be tiled, use ROW_MAJOR for all
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.layout() == Layout::ROW_MAJOR) {
+            const auto& input_shape = input_tensor.padded_shape();
+            if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
+                target_layout = Layout::ROW_MAJOR;
+                break;
             }
         }
+    }
 
-        // Format all inputs to target layout
-        std::vector<Tensor> formatted_tensors;
-        formatted_tensors.reserve(input_tensors.size());
+    // Format all inputs to target layout
+    std::vector<Tensor> formatted_tensors;
+    formatted_tensors.reserve(input_tensors.size());
 
-        for (const auto& input_tensor : input_tensors) {
-            if (input_tensor.layout() == target_layout) {
-                // Already in target layout
-                formatted_tensors.push_back(input_tensor);
-            } else {
-                formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
-            }
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.layout() == target_layout) {
+            // Already in target layout
+            formatted_tensors.push_back(input_tensor);
+        } else {
+            formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
         }
+    }
 
-        return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config);
+    return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement

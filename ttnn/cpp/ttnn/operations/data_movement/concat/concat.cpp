@@ -193,7 +193,6 @@ MassagedConcat build_non_aligned_last_dim_concat(
                 "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
                 " {}",
                 tensor.storage_type());
-
         });
     };
 

@@ -988,7 +988,6 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     return ConvT2dExecutionPath::DRAM;
 }
 
-
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
     uint32_t batch_size,
     uint32_t input_height,

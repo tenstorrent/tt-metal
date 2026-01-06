@@ -87,15 +87,15 @@ float get_scaler(const ReduceConfig& test_config) {
     if (test_config.reduce_type != ReduceType::AVG) {
         return 1.0f;
     }  // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
-        switch (test_config.reduce_dim) {
-            case ReduceDim::H: return (1.0f / H);
-            case ReduceDim::W: return (1.0f / W);
-            case ReduceDim::HW: return (1.0f / (H * W));
-            default: {
-                TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
-                break;
-            }
+    switch (test_config.reduce_dim) {
+        case ReduceDim::H: return (1.0f / H);
+        case ReduceDim::W: return (1.0f / W);
+        case ReduceDim::HW: return (1.0f / (H * W));
+        default: {
+            TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim);
+            break;
         }
+    }
 }
 
 void set_math_fid_masks_binary(

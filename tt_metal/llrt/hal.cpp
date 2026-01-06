@@ -128,11 +128,7 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
     uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
     uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
-    uint32_t jal_offset =
-        jal_offset_bit_20 |
-        jal_offset_bits_10_to_1 |
-        jal_offset_bit_11 |
-        jal_offset_bits_19_to_12;
+    uint32_t jal_offset = jal_offset_bit_20 | jal_offset_bits_10_to_1 | jal_offset_bit_11 | jal_offset_bits_19_to_12;
 
     return jal_offset | opcode;
 }

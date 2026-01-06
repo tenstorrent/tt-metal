@@ -57,16 +57,16 @@ struct ToMemoryConfig {
                     return ttnn::reshard(tensor, memory_config, output_tensor);
                 }  // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
-                    TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
-                    Tensor temp = ttnn::prim::sharded_to_interleaved(
-                        tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
-                    const bool keep_l1_aligned = false;
-                    return ttnn::interleaved_to_sharded(
-                        temp,
-                        memory_config,
-                        dtype.value_or(temp.dtype()),
-                        keep_l1_aligned,
-                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
+                TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
+                Tensor temp = ttnn::prim::sharded_to_interleaved(
+                    tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
+                const bool keep_l1_aligned = false;
+                return ttnn::interleaved_to_sharded(
+                    temp,
+                    memory_config,
+                    dtype.value_or(temp.dtype()),
+                    keep_l1_aligned,
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
 
             } else {
                 auto bbox = memory_config.shard_spec().value().grid.bounding_box();

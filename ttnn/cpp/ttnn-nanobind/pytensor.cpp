@@ -291,7 +291,6 @@ Tensor convert_python_tensor_to_tt_tensor(
             return Layout::TILE;
         }
         return optional_layout.value_or(Layout::ROW_MAJOR);
-
     }();
 
     // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a

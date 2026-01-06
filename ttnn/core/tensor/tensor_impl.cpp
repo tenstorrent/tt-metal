@@ -456,7 +456,6 @@ std::string to_string_impl(const Tensor& tensor) {
             return to_layout_impl<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         }
         return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
-
     };
 
     auto get_device_buffers = [&](const HostStorage& storage) {
@@ -649,7 +648,6 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
                     host_storage_shape,
                     mesh_device_shape);
                 return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
-
             },
             [](const auto& s) -> std::pair<DeviceStorage, TensorTopology> {
                 TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));

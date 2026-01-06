@@ -724,9 +724,7 @@ std::optional<uint32_t> CmdlineParser::get_master_seed() {
     return std::nullopt;
 }
 
-bool CmdlineParser::dump_built_tests() {
-    return test_args::has_command_option(input_args_, "--dump-built-tests");
-}
+bool CmdlineParser::dump_built_tests() { return test_args::has_command_option(input_args_, "--dump-built-tests"); }
 
 std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& default_file_name) {
     auto dump_file = test_args::get_command_option(input_args_, "--built-tests-dump-file", default_file_name);
@@ -799,7 +797,6 @@ MeshId YamlConfigParser::parse_mesh_id(const YAML::Node& yaml_node) {
     uint32_t mesh_id = yaml_node.as<uint32_t>();
     return MeshId{mesh_id};
 }
-
 
 ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const YAML::Node& params_yaml) {
     ParametrizationOptionsMap options;

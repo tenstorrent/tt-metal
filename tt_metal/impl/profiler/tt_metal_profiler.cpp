@@ -938,9 +938,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
 }
 
 void ReadDeviceProfilerResults(
-    IDevice* device,
-    ProfilerReadState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    IDevice* device, ProfilerReadState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -960,8 +958,7 @@ void ReadDeviceProfilerResults(
     try {
         mesh_device = device->get_mesh_device().get();
     } catch (const std::exception&) {
-        log_info(
-            tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
+        log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
     if (useFastDispatch(mesh_device, device)) {
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {

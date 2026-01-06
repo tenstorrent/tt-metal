@@ -271,7 +271,6 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;

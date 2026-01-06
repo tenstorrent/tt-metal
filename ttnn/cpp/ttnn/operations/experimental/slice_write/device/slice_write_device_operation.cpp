@@ -45,7 +45,6 @@ void SliceWriteDeviceOperation::validate_on_program_cache_hit(
 
 void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_args.output;
     const auto output_padded_shape = output_tensor.padded_shape();

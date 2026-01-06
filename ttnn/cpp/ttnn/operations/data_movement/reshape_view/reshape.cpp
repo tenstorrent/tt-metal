@@ -186,7 +186,6 @@ ttnn::Tensor reshape_tiled(
             return unsqueeze_shape_to_3D(shape);
         }
         return shape;
-
     };
 
     const auto input_tensor_shape_3d = transform_to_3d(tensor.logical_shape());

@@ -188,5 +188,4 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     return false;
 }
 
-
 }  // namespace tt::tt_fabric

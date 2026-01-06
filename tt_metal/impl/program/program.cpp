@@ -392,7 +392,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
 }
 
@@ -1266,33 +1266,32 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
             return sub_device_ids->second;
         }
         std::unordered_set<SubDeviceId> used_sub_device_ids;
-        auto find_sub_device_ids =
-            [&](HalProgrammableCoreType core_type) {
-                auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
-                if (core_type_index == -1) {
-                    return;
-                }
-                const auto& program_kgs =
-                    this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
-                uint32_t num_intersections = 0;
-                uint32_t num_cores = 0;
-                for (const auto& kg : program_kgs) {
-                    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                        const auto& sub_device_cores =
-                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
-                        auto intersection = sub_device_cores.intersection(kg->core_ranges);
-                        if (!intersection.empty()) {
-                            used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
-                            num_intersections += intersection.num_cores();
-                        }
+        auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
+            auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
+            if (core_type_index == -1) {
+                return;
+            }
+            const auto& program_kgs =
+                this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
+            uint32_t num_intersections = 0;
+            uint32_t num_cores = 0;
+            for (const auto& kg : program_kgs) {
+                for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+                    const auto& sub_device_cores =
+                        device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
+                    auto intersection = sub_device_cores.intersection(kg->core_ranges);
+                    if (!intersection.empty()) {
+                        used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
+                        num_intersections += intersection.num_cores();
                     }
-                    num_cores += kg->core_ranges.num_cores();
                 }
-                TT_FATAL(
-                    num_intersections == num_cores,
-                    "Kernel group cores do not match sub device cores for programmable core type {}",
-                    enchantum::to_string(core_type));
-            };
+                num_cores += kg->core_ranges.num_cores();
+            }
+            TT_FATAL(
+                num_intersections == num_cores,
+                "Kernel group cores do not match sub device cores for programmable core type {}",
+                enchantum::to_string(core_type));
+        };
         find_sub_device_ids(HalProgrammableCoreType::TENSIX);
         find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
         auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(

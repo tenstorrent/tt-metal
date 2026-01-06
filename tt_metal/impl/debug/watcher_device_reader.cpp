@@ -134,13 +134,13 @@ CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCo
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     }  // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
-        // the system this coordinate belongs to.
-        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
-        CoreCoord physical_coord = {
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-            device_id, physical_coord);
+    // the system this coordinate belongs to.
+    // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+    CoreCoord physical_coord = {
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+        device_id, physical_coord);
 }
 
 // Helper function to get string rep of noc target.

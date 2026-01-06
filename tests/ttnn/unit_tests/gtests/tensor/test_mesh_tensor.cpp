@@ -344,7 +344,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             return device_tensor;
         }
         return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
-
     }();
 
     EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
@@ -360,7 +359,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             return host_tensor;
         }
         return tensor_impl::to_host(device_tensor);
-
     }();
 
     EXPECT_EQ(output_host_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());

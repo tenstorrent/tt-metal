@@ -1003,10 +1003,15 @@ bool isGalaxyMMIODevice(distributed::MeshDevice* mesh_device, IDevice* device) {
 }
 
 bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device) {
-    return MetalContext::instance().device_manager()->is_dispatch_firmware_active() && !isGalaxyMMIODevice(mesh_device, device);
+    return MetalContext::instance().device_manager()->is_dispatch_firmware_active() &&
+           !isGalaxyMMIODevice(mesh_device, device);
 }
 
-void writeToCoreControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
+void writeToCoreControlBuffer(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const std::vector<uint32_t>& data) {
     ZoneScoped;
 
     const auto& hal = MetalContext::instance().hal();
@@ -1077,8 +1082,8 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(distributed::MeshDevice* mesh_device,
-    const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
+    distributed::MeshDevice* mesh_device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     TT_ASSERT(MetalContext::instance().device_manager()->is_dispatch_firmware_active());
@@ -1122,8 +1127,11 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
         kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
 }
 
-void DeviceProfiler::readL1DataBufferForCore(distributed::MeshDevice* mesh_device,
-    IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer) {
+void DeviceProfiler::readL1DataBufferForCore(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
     if (useFastDispatch(mesh_device, device)) {
         issueFastDispatchReadFromL1DataBuffer(mesh_device, virtual_core, core_l1_data_buffer);
@@ -1132,7 +1140,8 @@ void DeviceProfiler::readL1DataBufferForCore(distributed::MeshDevice* mesh_devic
     }
 }
 
-void DeviceProfiler::readL1DataBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::readL1DataBuffers(
+    distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     ZoneScoped;
 
     for (const CoreCoord& virtual_core : virtual_cores) {
@@ -1141,7 +1150,8 @@ void DeviceProfiler::readL1DataBuffers(distributed::MeshDevice* mesh_device, IDe
     }
 }
 
-void DeviceProfiler::readControlBufferForCore(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core) {
+void DeviceProfiler::readControlBufferForCore(
+    distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core) {
     ZoneScoped;
     const auto& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, virtual_core);
@@ -1170,14 +1180,16 @@ void DeviceProfiler::readControlBufferForCore(distributed::MeshDevice* mesh_devi
     }
 }
 
-void DeviceProfiler::readControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::readControlBuffers(
+    distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     ZoneScoped;
     for (const CoreCoord& virtual_core : virtual_cores) {
         readControlBufferForCore(mesh_device, device, virtual_core);
     }
 }
 
-void DeviceProfiler::resetControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+void DeviceProfiler::resetControlBuffers(
+    distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     ZoneScoped;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffer_resets;
     for (const CoreCoord& virtual_core : virtual_cores) {
