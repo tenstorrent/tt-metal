@@ -2682,7 +2682,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         GTEST_SKIP() << "Test requires at least 2 devices";
     }
 
-    uint32_t num_packets = 1;
+    uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     // When two data movement kernels both write to fabric, we need to ensure packet ordering is preserved.
     // Dynamic NOC mode forces both kernels to use the same NOC (NOC0) to maintain that ordering.
