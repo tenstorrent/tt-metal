@@ -158,6 +158,7 @@ def get_function_name():
     return frame.f_code.co_name
 
 
+@pytest.mark.skip_post_commit
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
@@ -179,6 +180,7 @@ def test_multi_op():
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@pytest.mark.skip_post_commit
 def test_multi_op_buffer_overflow():
     COMPUTE_OP_COUNT = 200
     DATA_MOVEMENT_OP_COUNT = 1000
@@ -277,6 +279,7 @@ def test_custom_cycle_count():
         assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
 
 
+@pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
     RISC_COUNT = 5
@@ -462,8 +465,6 @@ def test_dispatch_cores():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
         "Tensix CQ Prefetch": [9325],
-        "dispatch_total_cq_cmd_op_time": [223],
-        "dispatch_go_send_wait_time": [223],
     }
 
     verify_stats(
@@ -472,6 +473,17 @@ def test_dispatch_cores():
         allowedRange=8875,
         refCountDict=REF_COUNT_DICT,
     )
+
+
+@skip_for_blackhole()
+@pytest.mark.skip_post_commit
+def test_dispatch_cores_extended_worker():
+    REF_COUNT_DICT = {
+        "Tensix CQ Dispatch*": [9325],
+        "Tensix CQ Prefetch": [9325],
+        "dispatch_total_cq_cmd_op_time": [223],
+        "dispatch_go_send_wait_time": [223],
+    }
 
     verify_stats(
         run_device_profiler_test(
@@ -532,6 +544,7 @@ def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
+@pytest.mark.skip_post_commit
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     # Simple range check: both Dispatch and Prefetch should be within this range
