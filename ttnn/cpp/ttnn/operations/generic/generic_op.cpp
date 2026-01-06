@@ -15,12 +15,11 @@ Tensor GenericOp::invoke(
 
 Tensor GenericOp::invoke(
     const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
-    // Get mesh shape from the first tensor's device
     TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
     auto* mesh_device = io_tensors.front().device();
     TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");
 
-    // Create SPMD MeshProgramDescriptor that broadcasts the program to the entire mesh
+    // Create SPMD MeshProgramDescriptor; same program for the entire mesh
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
     mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
 

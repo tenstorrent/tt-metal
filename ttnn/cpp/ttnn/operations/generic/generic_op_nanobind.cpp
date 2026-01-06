@@ -37,10 +37,9 @@ void bind_generic_operation(nb::module_& mod) {
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
         )doc";
 
-    // Use concrete type for self (required by function_traits - generic lambdas don't work)
+    // Use concrete type for self
     using registered_operation_t = std::decay_t<decltype(ttnn::generic_op)>;
 
-    // Lambdas for each overload with concrete self type
     auto mesh_program_invoke = [](const registered_operation_t& self,
                                   const std::vector<Tensor>& io_tensors,
                                   const tt::tt_metal::experimental::MeshProgramDescriptor& desc) {

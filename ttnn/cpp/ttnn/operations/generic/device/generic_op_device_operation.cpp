@@ -95,18 +95,14 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     return hash;
 }
 
-tt::stl::hash::hash_t compute_mesh_program_descriptor_hash(
-    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    size_t hash = 0;
-    // for (const auto& mesh_program : mesh_program_descriptor.mesh_programs) {
-    //     ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(mesh_program.second));
-    // }
-    return hash;
-}
-
 tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return compute_mesh_program_descriptor_hash(operation_attributes);
+    size_t hash = 0;
+    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
+        ttsl::hash::hash_combine(hash, mesh_coord_range);
+        ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
+    }
+    return hash;
 }
 
 }  // namespace ttnn::operations::generic

@@ -51,17 +51,6 @@ GenericOpDeviceOperation::GenericMeshProgram::cached_program_t GenericOpDeviceOp
     return {std::move(program), std::move(shared_vars)};
 }
 
-const ProgramDescriptor* find_program_descriptor_for_coord(
-    const std::unordered_map<ttnn::MeshCoordinateRange, ProgramDescriptor>& mesh_programs,
-    const ttnn::MeshCoordinate& coord) {
-    for (const auto& [range, desc] : mesh_programs) {
-        if (range.contains(coord)) {
-            return &desc;
-        }
-    }
-    return nullptr;
-}
-
 void override_program_runtime_arguments(
     Program& program,
     GenericOpDeviceOperation::GenericMeshProgram::shared_variables_t& shared_vars,
