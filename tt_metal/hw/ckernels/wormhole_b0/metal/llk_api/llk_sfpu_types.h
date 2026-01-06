@@ -86,6 +86,7 @@ enum class SfpuType {
     div_int32_floor,
     div_int32_trunc,
     remainder_int32,
+    fmod_int32,
     lt,
     gt,
     ge,

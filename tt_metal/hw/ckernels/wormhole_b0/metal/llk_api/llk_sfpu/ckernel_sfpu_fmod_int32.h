@@ -11,7 +11,7 @@
 
 namespace ckernel::sfpu {
 
-sfpi_inline void calculate_remainder_int32_body(
+sfpi_inline void calculate_fmod_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
 
@@ -106,25 +106,46 @@ sfpi_inline void calculate_remainder_int32_body(
     v_elseif(r >= b) { r -= b; }
     v_endif;
 
-    // ---- Floor remainder fix (torch.remainder) ----
+    // ---- Trunc fmod fix (torch.fmod) ----
     sfpi::vInt a_signed = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
-    sfpi::vInt b_signed = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
+    // sfpi::vInt b_signed = __builtin_rvtt_sfpload(
+    //     4, sfpi::SFPLOAD_ADDR_MODE_NOINC,
+    //     sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
-    sfpi::vInt sign = a_signed ^ b_signed;
-    v_if(r != 0) {
-        v_if(sign < 0) {  // signs differ
-            v_if(a_signed < 0) { r = b_signed - r; }
-            v_else { r += b_signed; }
-            v_endif;
-        }
-        v_elseif(a_signed < 0 && b_signed < 0) {  // both negative
-            r = -r;
-        }
-        v_endif;
-    }
+    v_if(a_signed < 0) { r = -r; }
     v_endif;
+
+    // v_if((a_signed < 0) && (b_signed > 0) && (r != 0)) {
+    //     r = b_signed - r;
+    // }
+    // v_endif;
+    // v_if((a_signed > 0) && (b_signed < 0) && (r != 0)) {
+    //     r += b_signed;
+    // }
+    // v_endif;
+    // /* apply sign of b */
+    // v_if((a_signed < 0) && (b_signed < 0) && (r != 0)) {
+    //     r = -r;
+    // }
+    // v_endif;
+
+    // sfpi::vInt sign = a_signed ^ b_signed;
+    // v_if(r != 0) {
+    //     v_if (sign < 0) {  // signs differ
+    //         v_if (a_signed < 0) {
+    //             r = b_signed - r;
+    //         } v_else {
+    //             r += b_signed;
+    //         }
+    //         v_endif;
+    //     }
+    //     v_elseif (a_signed < 0 && b_signed < 0) {  // both negative
+    //         r = -r;
+    //     }
+    //     v_endif;
+    // }
+    // v_endif;
 
     // ---- Store remainder ----
     __builtin_rvtt_sfpstore(
@@ -132,16 +153,16 @@ sfpi_inline void calculate_remainder_int32_body(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_remainder_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
+        calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
-inline void remainder_int32_init() {
+inline void fmod_int32_init() {
     // Use the same initialization as div_floor_init since we're using the floor division kernel
     div_floor_init<APPROXIMATION_MODE>();
 }

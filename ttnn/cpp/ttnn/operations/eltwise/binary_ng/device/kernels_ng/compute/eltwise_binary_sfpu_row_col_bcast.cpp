@@ -17,6 +17,7 @@
 #include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
 #include "compute_kernel_api/remainder_int32.h"
+#include "compute_kernel_api/fmod_int32.h"
 #include "compute_kernel_api/quantization.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/gcd.h"

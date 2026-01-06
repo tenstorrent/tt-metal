@@ -52,6 +52,7 @@ struct OpConfig {
         DIV_FLOOR,
         DIV_TRUNC,
         REMAINDER,
+        FMOD,
         POWER,
         RSUB,
         GCD,
