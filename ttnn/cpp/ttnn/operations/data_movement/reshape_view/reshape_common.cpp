@@ -10,10 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt_stl/small_vector.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 tt::tt_metal::Shape infer_dims_for_reshape(const tt::tt_metal::Tensor& tensor, ttsl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.logical_volume();
@@ -24,7 +21,7 @@ tt::tt_metal::Shape infer_dims_for_reshape(const tt::tt_metal::Tensor& tensor, t
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
                 std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
-                for (auto& s : shape) {
+                for (const auto& s : shape) {
                     error_msg += std::to_string(s) + ",";
                 }
                 error_msg += ")";
@@ -40,7 +37,7 @@ tt::tt_metal::Shape infer_dims_for_reshape(const tt::tt_metal::Tensor& tensor, t
     }
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
-        for (auto& s : shape) {
+        for (const auto& s : shape) {
             error_msg += std::to_string(s) + ",";
         }
         error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";
@@ -59,7 +56,4 @@ tt::tt_metal::Shape infer_dims_for_reshape(const tt::tt_metal::Tensor& tensor, t
     return tt::tt_metal::Shape(std::move(new_shape));
 }
 
-}  // namespace detail
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement::detail
