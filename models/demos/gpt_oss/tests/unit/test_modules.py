@@ -234,7 +234,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         pytest test_modules.py --test-modules=attention,mlp
     """
     if mesh_shape[0] == 1 and seq_len > 128 and os.environ.get("CI"):
-        pytest.skip("Skip test for mesh_shape[0] == 1 and seq_len > 128 in CI due to known issue.")
+        pytest.skip("Skip test for mesh_shape[0] == 1 and seq_len > 128 in CI due to known issue (see #35313).")
 
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
