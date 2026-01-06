@@ -5,8 +5,8 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -88,8 +88,9 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     } else if (op_name == "tanh") {
         return bfloat16(std::tanh(static_cast<float>(input)));
     } else if (op_name == "sign") {
-        return bfloat16(
-            (0.0f < static_cast<float>(input)) ? 1.0f : ((static_cast<float>(input) < 0.0f) ? -1.0f : 0.0f));
+        float val = static_cast<float>(input);
+        float result = static_cast<float>((val > 0.0f) - (val < 0.0f));
+        return bfloat16(result);
     } else {
         TT_THROW("Unsupported op_name in test");
         return bfloat16(0.0f);

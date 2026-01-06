@@ -23,11 +23,14 @@ triage_home = os.path.join(metal_home, "tools", "triage")
 sys.path.insert(0, triage_home)
 
 
+import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
 
+
+triage.progress_disabled = True  # Disable progress bars for tests
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
@@ -141,6 +144,21 @@ def cause_hang_with_app(request):
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
                     "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+            },
+            20,
+        ),
+        (
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            HANG_APP_ADD_2_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
+                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },

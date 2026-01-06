@@ -40,7 +40,7 @@ public:
 
     // -- Comparison Operators ---
     constexpr bool operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); };
-    constexpr std::partial_ordering operator<=>(bfloat16 rhs) noexcept {
+    constexpr std::partial_ordering operator<=>(bfloat16 rhs) const noexcept {
         return static_cast<float>(*this) <=> static_cast<float>(rhs);
     }
 

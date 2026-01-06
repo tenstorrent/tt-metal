@@ -5,19 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "layernorm_dataflow_utils.h"
 
-template <typename T>
-void read_block_to_cb(
-    const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const uint32_t blk) {
-    cb_reserve_back(cb_id, blk);
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
-    for (uint32_t r = 0; r < blk; r++) {
-        noc_async_read_tile(offset + r, addr, l1_write_addr);
-        l1_write_addr += tile_bytes;
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_id, blk);
-}
+namespace generic = norm::kernel_util::generic;
+namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
+
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
@@ -63,29 +56,33 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // First pass
         // Calculate E[x] and Var[x]
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+        for (auto block : generic::blocks(Wt, blk)) {
+            layernorm_dataflow_utils::read_block_to_cb(
+                cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
-            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            layernorm_dataflow_utils::read_block_to_cb(
+                cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
 #endif
         }  // wt loop
 
         // Second pass
         // Calculate final output
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+        for (auto block : generic::blocks(Wt, blk)) {
+            layernorm_dataflow_utils::read_block_to_cb(
+                cb_id_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
-            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            layernorm_dataflow_utils::read_block_to_cb(
+                cb_id_in1, src_b, src1_tile_bytes, offs + block.start() + tile_offset, block);
 #endif
 #ifdef FUSE_GAMMA
             {
-                read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
             }
 #endif
 
 #ifdef FUSE_BETA
             {
-                read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
             }
 #endif
         }  // wt loop
