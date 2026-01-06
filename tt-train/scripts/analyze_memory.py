@@ -1,4 +1,6 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 """
 Memory usage analysis script for tt-train logs.
 Parses memory usage summaries and compares with expected model/optimizer/gradient sizes.
