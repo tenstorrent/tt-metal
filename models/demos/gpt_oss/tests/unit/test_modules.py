@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -231,8 +233,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
-    if mesh_shape[0] == 1 and seq_len > 128:
-        pytest.skip("Skip test for mesh_shape[0] == 1 and seq_len > 128")
+    if mesh_shape[0] == 1 and seq_len > 128 and os.environ.get("CI"):
+        pytest.skip("Skip test for mesh_shape[0] == 1 and seq_len > 128 in CI due to known issue.")
+
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
