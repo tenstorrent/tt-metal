@@ -724,12 +724,20 @@ class ModelArgs:
             self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=None: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
+                # We want 256 if seqlen >= 2048 else 64. BUT:
                 # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
-                q_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx % 256 == 0) else 64,
+                # Here (x & -x) is the highest power of 2 that divides x.
+                q_chunk_size=256 if seqlen >= 2048 and chunk_start_idx is None
+                        else 64 if seqlen < 2048 and chunk_start_idx is None
+                        else min(256, chunk_start_idx & -chunk_start_idx) if seqlen >= 2048
+                        else min(64, chunk_start_idx & -chunk_start_idx),
                 # Original:
                 # k_chunk_size=256 if seqlen >= 2048 else 64,
                 # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
-                k_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx % 256 == 0) else 64,
+                k_chunk_size=256 if seqlen >= 2048 and chunk_start_idx is None
+                        else 64 if seqlen < 2048 and chunk_start_idx is None
+                        else min(256, chunk_start_idx & -chunk_start_idx) if seqlen >= 2048
+                        else min(64, chunk_start_idx & -chunk_start_idx),
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
@@ -1838,7 +1846,7 @@ class ModelArgs:
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
-        # TODO: Support prefill caching with tracing
+        # TODO: Support prefix caching with tracing
         """
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens

@@ -144,15 +144,19 @@ def test_chunked_prefill_single_user(
     logger.info("Running reference model")
     ref_output = reference_model(pt_prefill_input, start_pos, mode="decode")
 
-    # Run TT model, collecting various last_token_idxs
+    # Run TT model for various last_token_idxs and start_pos values
+    # to test the chunked prefill and prefix caching functionalities.
+    # These are implemented together, primarily in
+    # Generator.prefill_forward_single_user_text(), both using chunked SDPA,
+    # and thus tested together here.
     logger.info("Running TT model")
     for last_token_idx in [
-        prefill_chunk_size - 10,
-        prefill_chunk_size - 1,
-        prefill_chunk_size,
-        prefill_chunk_size + 1,
-        seq_len - 10,
-        seq_len - 1,
+        prefill_chunk_size - 2,  # one chunk minus one token
+        prefill_chunk_size - 1,  # exactly one chunk
+        prefill_chunk_size,      # one chunk plus one token
+        prefill_chunk_size + 1,  # one chunk plus two tokens
+        seq_len - 10,            # less than seq_len (two chunks)
+        seq_len - 1,             # exactly seq_len (two chunks)
     ]:
         prefill_input_trimmed = tt_prefill_input[:, : last_token_idx + 1]
 

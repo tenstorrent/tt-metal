@@ -477,6 +477,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    last_token_idx=last_token_idx,
                     **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -505,6 +506,7 @@ class Generator:
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                last_token_idx=last_token_idx,
                 **kwargs,
             )
 

@@ -72,6 +72,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
+        start_pos = kwargs.get("start_pos", None)
+        assert (start_pos is None) or (isinstance(start_pos, list) and all(x == 0 for x in start_pos)), (
+            f"Prefix caching is not supported for DeepseekV3ForCausalLM, got start_pos: {start_pos}"
+        )
         assert self.model_run_config_prefill is not None, "Model run config prefill is not initialized"
 
         kwargs.pop("enable_trace", None)

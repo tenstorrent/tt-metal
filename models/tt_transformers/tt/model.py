@@ -172,7 +172,7 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
@@ -201,16 +201,18 @@ class Transformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix.shape[2]
-        assert mat_len >= S, f"Padded prefill sequence length {S} exceeds max seq len {mat_len}"
-        required_end = start_pos + S
+        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
+        seq_len = last_token_idx+1 if last_token_idx is not None else S
+        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
 
         # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
+        required_end = start_pos + S
         if required_end > mat_len:
             pad_len = required_end - mat_len
         else:
             pad_len = 0
 
-        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
+        # We set slice_end to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
         slice_start = 0 if trace_enabled else start_pos
         slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
         cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]

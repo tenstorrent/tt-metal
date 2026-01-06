@@ -179,6 +179,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         enable_trace,
         **kwargs,  # images for V0, pixel_values and image_grid_thw for V1,
     ):
+        start_pos = kwargs.get("start_pos", None)
+        assert (start_pos is None) or (isinstance(start_pos, list) and all(x == 0 for x in start_pos)), (
+            f"Prefix caching is not supported for Qwen2_5_VL, got start_pos: {start_pos}"
+        )
         # Must add this so that vLLM can call without errors
         enable_trace = False
         logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
