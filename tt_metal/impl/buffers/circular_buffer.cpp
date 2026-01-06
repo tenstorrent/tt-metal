@@ -21,9 +21,9 @@ static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
 
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
-CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_ranges, const CircularBufferConfig& config) :
+CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config) :
     id_(reinterpret_cast<uintptr_t>(this)),
-    core_ranges_(core_ranges),
+    core_ranges_(core_range_set),
     config_(config),
     locally_allocated_address_(std::nullopt) {
     this->validate_set_config_attributes();
