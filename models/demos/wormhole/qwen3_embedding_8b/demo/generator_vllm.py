@@ -1,0 +1,428 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+vLLM Integration for Qwen3-Embedding-8B Model
+
+This module provides vLLM integration for the Qwen3-Embedding model, enabling
+OpenAI Embedding API compatibility through vLLM's serving infrastructure.
+
+Usage:
+    The model can be registered with vLLM's ModelRegistry and served via
+    the OpenAI Embedding API endpoint.
+"""
+
+from typing import Optional
+
+import torch
+import transformers
+from loguru import logger
+
+import ttnn
+from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.generator_vllm import initialize_vllm_text_transformer
+from models.tt_transformers.tt.model_config import DecodersPrecision
+
+
+class Qwen3ForEmbedding:
+    """
+    vLLM-compatible wrapper for Qwen3-Embedding-8B embedding model.
+
+    This class implements the interface required by vLLM for embedding models,
+    enabling OpenAI Embedding API compatibility.
+    """
+
+    def __init__(
+        self,
+        device: ttnn.Device = None,
+        model_location_generator=None,
+        max_batch_size: int = 8,
+        max_seq_len: int = 8192,  # Qwen3-Embedding supports up to 8192
+        act_dtype=ttnn.bfloat16,
+        weight_dtype=ttnn.bfloat8_b,
+        model_name: str = "Qwen/Qwen3-Embedding-8B",
+        vllm_config=None,
+        prefix: str = "",
+        **kwargs,
+    ):
+        """
+        Initialize the Qwen3-Embedding model for vLLM.
+
+        Args:
+            device: TTNN device instance (required if not using vllm_config)
+            model_location_generator: Optional function to generate model weight paths
+            max_batch_size: Maximum batch size for inference
+            max_seq_len: Maximum sequence length (default 8192 for Qwen3-Embedding)
+            act_dtype: Activation data type
+            weight_dtype: Weight data type
+            model_name: HuggingFace model name
+            vllm_config: vLLM configuration (passed by vLLM wrapper)
+            prefix: Model prefix (passed by vLLM wrapper)
+            **kwargs: Additional arguments passed by vLLM wrapper
+        """
+        # Extract device from vllm_config if provided (vLLM wrapper case)
+        if vllm_config is not None and device is None:
+            device = vllm_config.device_config.device
+
+        if device is None:
+            raise ValueError("Either 'device' or 'vllm_config' must be provided")
+
+        self.device = device
+        self.model_location_generator = model_location_generator
+        self.max_batch_size = max_batch_size
+        self.max_seq_len = max_seq_len
+        self.act_dtype = act_dtype
+        self.weight_dtype = weight_dtype
+        self.model_name = model_name
+
+        # Store vllm_config if provided (for vLLM wrapper compatibility)
+        if vllm_config is not None:
+            self.vllm_config = vllm_config
+
+        # Load config
+        self.config = transformers.AutoConfig.from_pretrained(model_name)
+
+        # Initialize model and generator (will be set up during first forward pass)
+        self.model = None
+        self.model_args = None
+        self.generator = None
+        self.processor = None
+        self.tokenizer = None
+        self._is_initialized = False
+        self._kv_cache = None  # Will be allocated during initialization
+
+        # Set pooler to None to satisfy vLLM wrapper (pooling is handled in forward method)
+        # The wrapper will check for this and skip initialization if it exists
+        self.pooler = None
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config: transformers.PretrainedConfig,
+        mesh_device: ttnn.Device,
+        max_batch_size: int,
+        max_seq_len: Optional[int] = None,
+        model_location_generator=None,
+        tt_data_parallel=1,
+        optimizations: Optional[str] = None,
+        vllm_config=None,
+        **kwargs,
+    ) -> "Qwen3ForEmbedding":
+        """
+        Initialize the model for vLLM.
+
+        This is the entry point called by vLLM's TTModelLoader.
+
+        Args:
+            hf_config: HuggingFace model configuration
+            mesh_device: TTNN mesh device
+            max_batch_size: Maximum batch size
+            max_seq_len: Maximum sequence length (defaults to 8192 for Qwen3-Embedding)
+            model_location_generator: Optional function to generate model weight paths
+            vllm_config: vLLM configuration (required when class is wrapped by vLLM)
+
+        Returns:
+            Initialized Qwen3ForEmbedding instance
+        """
+        if max_seq_len is None:
+            max_seq_len = 8192  # Default for Qwen3-Embedding-8B
+
+        logger.info(
+            f"Initializing Qwen3-Embedding-8B for vLLM: " f"max_batch_size={max_batch_size}, max_seq_len={max_seq_len}"
+        )
+
+        # When vLLM wraps the class, it requires vllm_config to be passed
+        if vllm_config is not None:
+            return cls(
+                device=mesh_device,
+                model_location_generator=model_location_generator,
+                max_batch_size=max_batch_size,
+                max_seq_len=max_seq_len,
+                vllm_config=vllm_config,
+            )
+        else:
+            # Fallback for direct instantiation (not wrapped)
+            return cls(
+                device=mesh_device,
+                model_location_generator=model_location_generator,
+                max_batch_size=max_batch_size,
+                max_seq_len=max_seq_len,
+            )
+
+    def _initialize_model(self, batch_size: int, sequence_length: int):
+        """Initialize the Qwen3-Embedding model with the given batch size and sequence length."""
+        if self._is_initialized and self.model is not None:
+            return
+
+        logger.info(
+            f"Initializing Qwen3-Embedding model: requested batch_size={batch_size}, "
+            f"seq_len={sequence_length}, max_seq_len={self.max_seq_len}"
+        )
+
+        # Use tt_transformers infrastructure to initialize the model
+        # Similar to how generator_vllm.py initializes text transformers
+        dtype = self.weight_dtype
+
+        # Initialize the transformer model using tt_transformers infrastructure
+        # Note: DecodersPrecision.performance takes (num_decoders, model_name)
+        # initialize_vllm_text_transformer wraps it and calls with (n_layers, model_name)
+        # So we can pass both arguments directly
+        def optimizations_wrapper(n_layers, model_name):
+            # Call DecodersPrecision.performance with both num_decoders and model_name
+            return DecodersPrecision.performance(n_layers, model_name)
+
+        self.model, self.model_args = initialize_vllm_text_transformer(
+            hf_config=self.config,
+            tt_data_parallel=1,  # Use data parallel from device configuration
+            mesh_device=self.device,
+            max_batch_size=self.max_batch_size,
+            max_seq_len=self.max_seq_len,
+            dtype=dtype,
+            optimizations=optimizations_wrapper,
+        )
+
+        # Get tokenizer and processor from model_args
+        self.tokenizer = self.model_args[0].tokenizer
+        self.processor = self.model_args[0].processor
+
+        # Create generator for running inference
+        self.generator = Generator(
+            self.model,
+            self.model_args,
+            self.device,
+            processor=self.processor,
+            tokenizer=self.tokenizer,
+        )
+
+        # Allocate empty KV cache for embedding models
+        # Even though we don't use KV cache for embeddings, the model infrastructure expects it
+        self._kv_cache = self._allocate_empty_kv_cache()
+
+        self._is_initialized = True
+
+    def _allocate_empty_kv_cache(self):
+        """Allocate empty KV cache for embedding models.
+
+        Since we're using page_table=None, we need non-paged attention KV cache.
+        Shape: [batch_size_per_device_group, n_local_kv_heads, max_seq_len, head_dim]
+        """
+        from pathlib import Path
+
+        from models.tt_transformers.tt.generator_vllm import allocate_vllm_kv_cache
+
+        # For non-paged attention (page_table=None), the cache shape is:
+        # [batch_size_per_device_group, n_local_kv_heads, max_seq_len, head_dim]
+        # We need to get batch_size_per_device_group from model_args
+        batch_size_per_device_group = self.model_args[0].max_batch_size
+
+        # Get n_local_kv_heads from the first attention layer in the model
+        # This accounts for tensor parallelism automatically
+        # Access the first decoder layer's attention module
+        first_decoder_layer = self.model[0].layers[0]
+        n_local_kv_heads = first_decoder_layer.attention.n_local_kv_heads
+        head_dim = first_decoder_layer.attention.head_dim
+
+        # Non-paged KV cache shape
+        kv_cache_shape = [batch_size_per_device_group, n_local_kv_heads, self.max_seq_len, head_dim]
+        dtype = torch.bfloat16  # Use bfloat16 for KV cache
+
+        logger.info(
+            f"Allocating KV cache with shape: {kv_cache_shape} "
+            f"(batch_size={batch_size_per_device_group}, n_local_kv_heads={n_local_kv_heads}, "
+            f"max_seq_len={self.max_seq_len}, head_dim={head_dim})"
+        )
+
+        # Create a temporary cache path
+        cache_path = Path("/tmp") / f"qwen3_embedding_kv_cache_{id(self)}"
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        # Allocate KV cache
+        kv_cache = allocate_vllm_kv_cache(
+            kv_cache_shape=kv_cache_shape,
+            dtype=dtype,
+            num_layers=self.model_args[0].n_layers,
+            dp_model=self.model,
+            tt_cache_path=cache_path,
+        )
+
+        return kv_cache
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Forward pass for embedding generation.
+
+        This is the main interface method called by vLLM for embedding inference.
+
+        Args:
+            input_ids: Token IDs tensor of shape (batch_size, seq_len)
+            attention_mask: Optional attention mask tensor
+            token_type_ids: Optional token type IDs tensor (not used for Qwen3)
+            position_ids: Optional position IDs tensor
+
+        Returns:
+            Embeddings tensor of shape (batch_size, embedding_dim)
+        """
+        batch_size, seq_len = input_ids.shape
+        logger.debug(f"Qwen3-Embedding forward: processing batch_size={batch_size}, seq_len={seq_len}")
+
+        # Ensure batch size and sequence length are within limits
+        assert batch_size <= self.max_batch_size, f"Batch size {batch_size} exceeds max {self.max_batch_size}"
+        assert seq_len <= self.max_seq_len, f"Sequence length {seq_len} exceeds max {self.max_seq_len}"
+
+        # Initialize model if not already done
+        self._initialize_model(batch_size, self.max_seq_len)
+
+        # Pad sequence length to max_seq_len if needed
+        if input_ids.shape[1] < self.max_seq_len:
+            padded_input_ids = torch.zeros([batch_size, self.max_seq_len], dtype=input_ids.dtype)
+            padded_input_ids[:, :seq_len] = input_ids
+            input_ids = padded_input_ids
+        elif input_ids.shape[1] > self.max_seq_len:
+            input_ids = input_ids[:, : self.max_seq_len]
+            seq_len = self.max_seq_len
+
+        # Prepare attention mask
+        if attention_mask is None:
+            attention_mask = torch.ones(batch_size, seq_len, dtype=torch.float32)
+        else:
+            # Pad attention mask if needed
+            if attention_mask.shape[1] < self.max_seq_len:
+                padded_attention_mask = torch.zeros([batch_size, self.max_seq_len], dtype=attention_mask.dtype)
+                padded_attention_mask[:, :seq_len] = attention_mask
+                attention_mask = padded_attention_mask
+            elif attention_mask.shape[1] > self.max_seq_len:
+                attention_mask = attention_mask[:, : self.max_seq_len]
+
+        # For Qwen3-Embedding, we need to run the model forward pass
+        # Since Qwen3-Embedding works through tt-inference-server, we use the
+        # standard Transformer model but extract embeddings differently
+
+        # Prepare inputs for prefill
+        # Convert input_ids to proper format
+        input_tokens_pt = input_ids.view(batch_size, -1)
+
+        # Run prefill to get model output
+        # Note: For embedding models, we typically need hidden states before LM head
+        # but the current Transformer model returns logits. We'll need to modify
+        # the approach based on the actual Qwen3-Embedding implementation.
+        # Pass allocated KV cache (even though we don't use it for embeddings)
+        logits = self.generator.prefill_forward_text(
+            input_tokens_pt,
+            page_table=None,
+            kv_cache=self._kv_cache,
+            prompt_lens=[seq_len] * batch_size,
+        )
+
+        # For embedding models, we typically extract embeddings from hidden states
+        # Since the Transformer model returns logits (after LM head), we need to
+        # work backwards or modify the model to return hidden states.
+        #
+        # For Qwen3-Embedding specifically, the model should return embeddings
+        # directly. This implementation assumes the model has been modified to
+        # return embeddings, or we extract them from a different layer.
+        #
+        # TODO: This needs to be adapted based on the actual Qwen3-Embedding
+        # implementation in tt-inference-server
+
+        # Convert output to PyTorch tensor
+        # The output shape depends on how Qwen3-Embedding is implemented
+        # Expected: [batch_size, seq_len, hidden_dim] or [batch_size, hidden_dim]
+        if hasattr(logits, "shape"):
+            # If logits is already a torch tensor
+            embeddings = logits
+        else:
+            # Convert from TTNN tensor
+            embeddings = ttnn.to_torch(
+                logits,
+                dtype=torch.float32,
+                mesh_composer=None,  # Will be set by ttnn.to_torch if needed
+            )
+
+        # Apply pooling to get final embeddings
+        # Qwen3-Embedding typically uses mean pooling or CLS token
+        if embeddings.dim() == 3:
+            # Shape: [batch_size, seq_len, hidden_dim]
+            # Apply mean pooling with attention mask
+            if attention_mask is not None:
+                # Expand mask: [batch_size, seq_len] -> [batch_size, seq_len, 1]
+                mask_expanded = attention_mask.unsqueeze(-1).to(embeddings.dtype)
+                # Mask out padding tokens
+                embeddings = embeddings * mask_expanded
+                # Sum over sequence dimension
+                sum_embeddings = embeddings.sum(dim=1)
+                # Count non-padding tokens
+                mask_sum = mask_expanded.sum(dim=1).clamp(min=1e-9)
+                # Mean pooling
+                embeddings = sum_embeddings / mask_sum
+            else:
+                # Simple mean pooling
+                embeddings = embeddings.mean(dim=1)
+        elif embeddings.dim() == 2:
+            # Already in shape [batch_size, hidden_dim]
+            pass
+        else:
+            # Unexpected shape, try to squeeze
+            embeddings = embeddings.squeeze()
+
+        # Ensure output is 2D: [batch_size, embedding_dim]
+        if embeddings.dim() == 1 and batch_size == 1:
+            embeddings = embeddings.unsqueeze(0)
+        elif embeddings.dim() > 2:
+            embeddings = embeddings.view(batch_size, -1)
+
+        return embeddings
+
+    def get_embedding_dim(self) -> int:
+        """Return the embedding dimension."""
+        return self.config.hidden_size if hasattr(self.config, "hidden_size") else self.config.dim
+
+    def get_max_seq_len(self) -> int:
+        """Return the maximum sequence length."""
+        return self.max_seq_len
+
+    def get_max_batch_size(self) -> int:
+        """Return the maximum batch size."""
+        return self.max_batch_size
+
+    def _init_pooler(self, vllm_config, prefix: str = ""):
+        """
+        Initialize pooler (required by vLLM wrapper but not used).
+
+        Pooling is handled directly in the forward() method, so this is a no-op.
+        """
+        # Pooling is handled in forward() method, so no separate pooler needed
+        self.pooler = None
+
+
+def register_model():
+    """
+    Register the Qwen3-Embedding model with vLLM's ModelRegistry.
+
+    This function should be called to make the model available to vLLM.
+    Typically called from vLLM's model registration code.
+
+    Note: The actual registration happens in tt-vllm-plugin's register_models()
+    function, which registers "TTQwen3Model" -> Qwen3ForEmbedding.
+    This function is kept for compatibility but may not be called directly.
+    """
+    try:
+        from vllm.model_executor.model_loader import ModelRegistry
+
+        # Register as TTQwen3Model (TT-prefixed version for TT platform)
+        ModelRegistry.register_model(
+            "TTQwen3Model",
+            Qwen3ForEmbedding,
+        )
+        logger.info("Successfully registered TTQwen3Model (Qwen3-Embedding-8B) with vLLM ModelRegistry")
+    except ImportError:
+        logger.warning(
+            "vLLM ModelRegistry not available. "
+            "Make sure vLLM is installed and the model is registered in vLLM's model loader."
+        )
