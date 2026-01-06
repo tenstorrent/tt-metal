@@ -37,6 +37,9 @@ ttnn::ScopeGuard begin_capture(tt::tt_metal::IGraphProcessor::RunMode mode) {
 
 void end_capture(const std::string& name) {
     if (is_capture_active) {
+        if (traces.find(name) != traces.end()) {
+            fmt::print("WARNING: Trace '{}' already exists, overwriting\n", name);
+        }
         auto trace = graph_processor->end_graph_capture();
         traces[name] = trace;
         trace_order.push_back(name);
@@ -47,6 +50,10 @@ void end_capture(const std::string& name) {
 void snapshot(const std::string& name) {
     if (!is_capture_active) {
         throw std::runtime_error("MemoryUsageTracker: Cannot snapshot - capture is not active");
+    }
+
+    if (traces.find(name) != traces.end()) {
+        fmt::print("WARNING: Snapshot '{}' already exists, overwriting\n", name);
     }
 
     // End current capture and save with the given name
