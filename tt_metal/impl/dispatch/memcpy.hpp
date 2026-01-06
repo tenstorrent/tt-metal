@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/aligned_allocator.hpp>
 #include <umd/device/driver_atomics.hpp>
@@ -13,14 +14,35 @@
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <emmintrin.h>
+#if TT_METAL_ENABLE_AVX
+#include <immintrin.h>
+#endif
 #endif
 
+#if defined(__x86_64__) || defined(__i386__)
+#if TT_METAL_ENABLE_AVX
+#define TT_MEMCPY_HAS_AVX 1
+#else
+#define TT_MEMCPY_HAS_AVX 0
+#endif
+#else
+#define TT_MEMCPY_HAS_AVX 0
+#endif
+#if TT_MEMCPY_HAS_AVX
 #define LOAD_STREAM_32()                                                               \
     do {                                                                               \
         _mm256_stream_si256((__m256i*)dst8, _mm256_loadu_si256((const __m256i*)src8)); \
         src8 += sizeof(__m256i);                                                       \
         dst8 += sizeof(__m256i);                                                       \
     } while (0)
+#else
+#define LOAD_STREAM_32()             \
+    do {                             \
+        std::memcpy(dst8, src8, 32); \
+        src8 += 32;                  \
+        dst8 += 32;                  \
+    } while (0)
+#endif
 
 #define LOAD_STREAM_16()                                                         \
     do {                                                                         \
@@ -54,6 +76,14 @@ namespace tt::tt_metal {
 #if defined(__x86_64__) || defined(__i386__)
 template <bool debug_sync = false>
 void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
+    if constexpr (!TT_MEMCPY_HAS_AVX) {
+        std::memcpy(dst, src, n);
+        if constexpr (debug_sync) {
+            tt_driver_atomics::sfence();
+        }
+        return;
+    }
+
     // Ensure destination is properly aligned for optimal SIMD performance
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
 
