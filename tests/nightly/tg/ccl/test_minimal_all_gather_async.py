@@ -53,7 +53,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
         #        "trace_region_size": 90112,
         #    },
         #    ttnn.Topology.Linear,
-        # ),# test removed due to issue 35320
+        # ),  # test removed due to issue 35320
     ],
     indirect=["device_params"],
     ids=[
