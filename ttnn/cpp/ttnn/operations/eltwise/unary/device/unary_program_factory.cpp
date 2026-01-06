@@ -142,7 +142,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
+    auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -375,7 +375,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
+    auto path = fmt::format("{}/{}", compute_root, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -393,9 +393,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     uint32_t tile_start_id = 0;
     auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        CoreCoord core = cores[i];
-
+    for (auto core : cores) {
         tt::tt_metal::SetRuntimeArgs(
             program, unary_reader_kernel_id, core, {src_buffer->address(), ntiles_per_core, tile_start_id});
 

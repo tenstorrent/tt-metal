@@ -166,15 +166,8 @@ run_vgg_func() {
 }
 
 run_bert_tiny_func() {
-  fail=0
 
-  $PYTEST_CMD models/demos/bert_tiny/demo/demo.py || fail=1
-
-  $PYTEST_CMD models/demos/wormhole/bert_tiny/demo/demo.py || fail=1
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest models/demos/wormhole/bert_tiny/demo/demo.py
 
 }
 
@@ -209,15 +202,8 @@ run_sdxl_func() {
 }
 
 run_distilbert_func() {
-  fail=0
 
-  $PYTEST_CMD models/demos/distilbert/demo/demo.py || fail=1
-
-  $PYTEST_CMD models/demos/wormhole/distilbert/demo/demo.py || fail=1
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest models/demos/wormhole/distilbert/demo/demo.py
 
 }
 

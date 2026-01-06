@@ -24,6 +24,14 @@ The following models have been traced and their configurations are available in 
 | meta-llama/Llama-3.2-1B-Instruct | Small instruction-tuned model | `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
 
+**T3K Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| google/gemma-3-27b-it | Instruction-tuned model | `HF_MODEL=google/gemma-3-27b-it python model_tracer/generic_ops_tracer.py models/demos/gemma3/demo/vision_demo.py` |
+
 These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
 
 *Last updated: December 10, 2025*
@@ -82,16 +90,30 @@ parameters = {
 
 ### 1. Trace a Model
 
+The tracer automatically detects whether to run as pytest or standalone Python script:
+
 ```bash
-# Basic usage
+# Pytest test (with ::test_name or if pytest test cases detected)
 python model_tracer/generic_ops_tracer.py /path/to/model/test.py::test_function
 
-# Example
+# Standalone Python script (if no pytest test cases detected)
+python model_tracer/generic_ops_tracer.py /path/to/model/demo.py
+
+# Examples - Pytest
 python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
+
+# Examples - Standalone scripts
+python model_tracer/generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
+python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inference.py
 
 # Keep trace files (default: auto-deleted after adding to master)
 python model_tracer/generic_ops_tracer.py <test_path> --store
 ```
+
+**Detection Logic:**
+- If path contains `::` → runs as pytest
+- Otherwise, uses `pytest --collect-only` to detect test cases
+- If no pytest tests found → runs as standalone Python script
 
 **Captures:**
 - Operation names (e.g., `sigmoid_accurate`, `add`)
@@ -99,6 +121,7 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 - Data types (e.g., `BFLOAT8_B`, `BFLOAT16`)
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
+- Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`

@@ -145,22 +145,6 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  # FD C++ Unit Tests
-  cpp-unit-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/cpp-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      gtest_filter: ${{ contains(inputs.runner-label, 'P100') && '*' || '*-*NIGHTLY_*' }}
   models-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit

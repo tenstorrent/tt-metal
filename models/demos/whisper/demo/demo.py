@@ -28,6 +28,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
+    WHISPER_BATCH_SIZE,
     WHISPER_L1_SMALL_SIZE,
     WHISPER_TRACE_REGION_SIZE,
     convert_to_ttnn,
@@ -108,7 +109,7 @@ def load_conditional_generation_ref_model(model_repo, language, task):
 
 
 def init_conditional_generation_tt_model(
-    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=1, max_seq_len=512
+    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=WHISPER_BATCH_SIZE, max_seq_len=512
 ):
     model = hf_ref_model.model
     linear_weight = hf_ref_model.proj_out.weight
@@ -136,6 +137,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
 ):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
@@ -155,7 +157,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         model_repo, generation_params.language, generation_params.task
     )
     parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper
+        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper, max_batch_size=batch_size_per_device
     )
 
     # Create WhisperGenerator instance with persistent trace support
@@ -172,6 +174,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         weights_mesh_mapper=weights_mesh_mapper,
         kv_cache=kv_cache,
         cross_attn_cache=cross_attn_cache,
+        max_batch_size=batch_size_per_device,
     )
 
     def _model_pipeline(
@@ -202,7 +205,7 @@ def run_demo_whisper_for_audio_classification_inference(
     input_path,
     mesh_device,
     num_inputs,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     label=False,
     dataset=None,
 ):
@@ -299,7 +302,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     num_inputs,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
     torch.manual_seed(0)
@@ -308,6 +311,7 @@ def run_demo_whisper_for_conditional_generation_inference(
         mesh_device,
         model_repo,
         generation_params,
+        batch_size_per_device=batch_size_per_device,
     )
 
     # load data
@@ -373,7 +377,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
     torch.manual_seed(0)
@@ -382,6 +386,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
         model_repo,
         generation_params,
+        batch_size_per_device=batch_size_per_device,
     )
 
     # load data
@@ -450,7 +455,7 @@ def run_demo_whisper_for_translation_dataset(
     model_repo,
     num_inputs,
     generation_params: Optional[GenerationParams] = None,
-    batch_size_per_device=1,
+    batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
     torch.manual_seed(0)
@@ -487,6 +492,7 @@ def run_demo_whisper_for_translation_dataset(
         mesh_device,
         model_repo,
         generation_params,
+        batch_size_per_device=batch_size_per_device,
     )
 
     logger.info(f"Loading FLEURS dataset for {generation_params.language} (code: {source_lang_code_full})")
@@ -611,7 +617,7 @@ def run_demo_whisper_for_translation_dataset(
 
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(1, 1)],
+    [(1, WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "input_path",
@@ -642,7 +648,7 @@ def test_demo_for_audio_classification_inference(
 
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(1, 1)],
+    [(1, WHISPER_BATCH_SIZE)],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
@@ -671,8 +677,12 @@ def test_demo_for_audio_classification_dataset(
 
 
 @pytest.mark.parametrize(
-    "num_inputs,batch_size_per_device",
-    [(2, 1)],
+    "num_inputs",
+    [2],
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [1, 2],
 )
 @pytest.mark.parametrize(
     "model_repo",
@@ -736,6 +746,14 @@ def test_demo_for_conditional_generation(
     prompt,
     request,
 ):
+    # Skip test in CI when using generate_kwargs
+    if (
+        is_ci_env
+        and model_repo == "openai/whisper-large-v3"
+        and (compression_ratio_threshold is not None or batch_size_per_device == 2)
+    ):
+        pytest.skip("Skipping test in CI since it provides redundant testing")
+
     generation_params = GenerationParams(
         temperatures=temperatures,
         compression_ratio_threshold=compression_ratio_threshold,
@@ -756,26 +774,23 @@ def test_demo_for_conditional_generation(
         stream=stream,
     )
 
-    # Skip test in CI when using generate_kwargs
-    if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
-        pytest.skip("Skipping test in CI since it provides redundant testing")
-
     if (
         is_ci_env
         and model_repo == "distil-whisper/distil-large-v3"
+        and batch_size_per_device == 1
         and mesh_device.get_num_devices() == available_devices
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
-            2: {"prefill_time_to_token": 0.19, "decode_t/s/u": 130.0},
-            8: {"prefill_time_to_token": 0.22, "decode_t/s/u": 105.0},
-            32: {"prefill_time_to_token": 0.28, "decode_t/s/u": 80.0},
+            2: {"prefill_time_to_token": 0.13, "decode_t/s/u": 124.0},
+            8: {"prefill_time_to_token": 0.14, "decode_t/s/u": 105.0},
+            32: {"prefill_time_to_token": 0.20, "decode_t/s/u": 80.0},
         }
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_time_to_token": 0.080, "decode_t/s/u": 265.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.06, "decode_t/s/u": 310.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.070, "decode_t/s/u": 290.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.05, "decode_t/s/u": 330.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
@@ -806,7 +821,7 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device",
-    [(1)],
+    [(WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -902,7 +917,7 @@ def test_demo_for_conditional_generation_dataset(
 )
 @pytest.mark.parametrize(
     "num_inputs,batch_size_per_device",
-    [(1, 1)],
+    [(1, WHISPER_BATCH_SIZE)],
 )
 @pytest.mark.parametrize(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",

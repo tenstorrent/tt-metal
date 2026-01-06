@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
@@ -21,18 +21,17 @@ void kernel_main() {
     // Generate both scalar tiles in scalars_cb
     // Tile 0: epsilon
     // Tile 1: reduction scalar (1/sqrt(num_elements))
-    cb_reserve_back(scalars_cb, 2);
+    cb_reserve_back(scalars_cb, 1);
     volatile tt_l1_ptr uint16_t* epsilon_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(scalars_cb));
     epsilon_ptr[0] = epsilon;
     cb_push_back(scalars_cb, 1);
 
     generate_reduce_scaler<tiny_tile>(scalars_cb, scalar);
-    cb_push_back(scalars_cb, 1);
 
     // Signal that input and gamma buffers are ready (backed by L1 shards)
-    cb_reserve_back(input_cb, num_tiles);
-    cb_push_back(input_cb, num_tiles);
     cb_reserve_back(gamma_cb, num_tiles);
     cb_push_back(gamma_cb, num_tiles);
+    cb_reserve_back(input_cb, num_tiles);
+    cb_push_back(input_cb, num_tiles);
 }

@@ -5,12 +5,12 @@
 #pragma once
 
 #include "core_config.h"
-#include "risc_attribs.h"
-#include "dataflow_api.h"
+#include "internal/risc_attribs.h"
+#include "api/dataflow/dataflow_api.h"
 #include "cq_helpers.hpp"
 
-#include "debug/sanitize.h"
-#include "debug/assert.h"
+#include "internal/debug/sanitize.h"
+#include "api/debug/assert.h"
 #include <limits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface

@@ -11,17 +11,20 @@ Options:
 
 Description:
     Read important variables from fast dispatch kernels.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script, log_check
+from ttexalens.memory_access import MemoryAccess, RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.elf import MemoryAccess
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
@@ -169,6 +172,10 @@ def read_wait_globals(
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
 
+    # Skipping because we cannot read NCRISC private memory on wormhole
+    if risc_name == "ncrisc" and location.device.is_wormhole():
+        return None
+
     # If no kernel loaded, nothing to read
     dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
@@ -176,7 +183,7 @@ def read_wait_globals(
     assert dispatcher_core_data.kernel_name is not None
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
-    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    loc_mem_access = RiscDebugMemoryAccess(location.noc_block.get_risc_debug(risc_name), ensure_halted_access=False)
     is_dispatcher_kernel = (
         dispatcher_core_data.kernel_name == "cq_dispatch"
         or dispatcher_core_data.kernel_name == "cq_dispatch_subordinate"

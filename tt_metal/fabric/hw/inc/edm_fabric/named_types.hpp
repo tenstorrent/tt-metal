@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 
 namespace tt::tt_fabric {
 

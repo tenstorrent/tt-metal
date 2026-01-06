@@ -18,8 +18,6 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlo
 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
-    prepare_gn_beta_gamma,
-    prepare_gn_mask,
 )
 
 
@@ -139,9 +137,7 @@ class TtUNet2DConditionModel(LightweightModule):
                     debug_mode=debug_mode,
                 )
             )
-            self.up_blocks.append(
-                TtUpBlock2D(device, state_dict, "up_blocks.3", model_config, debug_mode=debug_mode, dram_groupnorm=True)
-            )
+            self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.3", model_config, debug_mode=debug_mode))
         else:
             self.down_blocks.append(
                 TtDownBlock2D(
@@ -248,16 +244,23 @@ class TtUNet2DConditionModel(LightweightModule):
             self.conv2_config.weights_dtype,
         )
 
-        self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-5
 
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(
-            device, norm_weights_out, norm_bias_out, self.norm_core_grid.y
+        (
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+        ) = model_config.get_groupnorm_params(
+            f"{module_path}.norm", norm_weights_out, norm_bias_out, self.norm_groups, device
         )
-        self.input_mask = prepare_gn_mask(
-            self.device, norm_weights_out.shape[0], self.norm_groups, self.norm_core_grid.y
-        )
+        assert (
+            self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
     def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape
@@ -348,24 +351,26 @@ class TtUNet2DConditionModel(LightweightModule):
 
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 
-        grid_coord = ttnn.CoreCoord(self.norm_core_grid.x - 1, self.norm_core_grid.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_shape = B * H * W // self.norm_core_grid.x, C // self.norm_core_grid.y
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-        sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-        sample = ttnn.to_memory_config(sample, sharded_mem_config)
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=sample.shape,
+                core_grid=self.groupnorm_config["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
 
+        sample = ttnn.to_memory_config(sample, mem_cfg)
         sample = ttnn.group_norm(
             sample,
             num_groups=self.norm_groups,
             input_mask=self.input_mask,
+            negative_mask=self.input_negative_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=sharded_mem_config,
-            core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
+            memory_config=sample.memory_config(),
+            **self.groupnorm_config,
         )
 
         sample = ttnn.silu(sample)

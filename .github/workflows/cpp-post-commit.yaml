@@ -79,15 +79,7 @@ jobs:
           requested_cpp_tests=$(jq --argjson nightly_run "${{ inputs.nightly-run }}" '[.[] | select(.nightly == $nightly_run)]' <<< "$requested_cpp_tests")
           echo "[info] after filtering for requested workflow tests: $requested_cpp_tests"
 
-          # Filter for merge-gate-call: only keep CCL tests
-          if [[ "${{ inputs.merge-gate-call }}" == "true" ]]; then
-            requested_cpp_tests=$(jq '[.[] | select(.name == "CCL")]' <<< "$requested_cpp_tests")
-            echo "[info] after filtering for merge-gate-call (CCL only): $requested_cpp_tests"
-          # Exclude CCL if both nightly-run and merge-gate-call are false
-          elif [[ "${{ inputs.nightly-run }}" == "false" && ( "${{ inputs.runner-label }}" == "N150" || "${{ inputs.runner-label }}" == "N300" ) ]]; then
-            requested_cpp_tests=$(jq '[.[] | select(.name != "CCL")]' <<< "$requested_cpp_tests")
-            echo "[info] after filtering out CCL for regular post-commit: $requested_cpp_tests"
-          fi
+          # If a test needs to run in merge-gate, filter will be added to include only those tests here
 
           # Check that we have a valid test list that's not empty
           echo "$requested_cpp_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"

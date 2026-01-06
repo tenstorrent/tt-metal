@@ -465,19 +465,19 @@ def to_conv2d_config(configuration: Conv2dConfiguration):
     parameters_from_sharding_configuration = sharding_strategy_to_conv2d_config(configuration.sharding_strategy)
     return ttnn.Conv2dConfig(
         weights_dtype=configuration.weights_dtype,
-        shard_layout=configuration.sharding_strategy.get_tensor_memory_layout(),
-        deallocate_activation=configuration.deallocate_activation,
-        enable_act_double_buffer=configuration.enable_act_double_buffer,
         activation=configuration.activation,
-        output_layout=configuration.output_layout,
+        deallocate_activation=configuration.deallocate_activation,
+        reallocate_halo_output=configuration.reallocate_halo_output,
+        config_tensors_in_dram=configuration.config_tensors_in_dram,
         reshard_if_not_optimal=(
             configuration.sharding_strategy.reshard_if_not_optimal
             if not isinstance(configuration.sharding_strategy, AutoShardedStrategyConfiguration)
-            else None
+            else False
         ),
-        reallocate_halo_output=configuration.reallocate_halo_output,
+        shard_layout=configuration.sharding_strategy.get_tensor_memory_layout(),
+        enable_act_double_buffer=configuration.enable_act_double_buffer,
+        output_layout=configuration.output_layout,
         enable_weights_double_buffer=configuration.enable_weights_double_buffer,
-        config_tensors_in_dram=configuration.config_tensors_in_dram,
         **parameters_from_sharding_configuration,
     )
 

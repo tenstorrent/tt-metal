@@ -197,15 +197,23 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         return IntermeshVCConfig::disabled();
     }
 
-    // Check if intermesh connections exist
-    const auto& intermesh_connections = mesh_graph.get_requested_intermesh_connections();
-    if (intermesh_connections.empty()) {
+    // Check if intermesh connections exist (use inter_mesh_connectivity which has actual parsed connections)
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+
+    // Count total intermesh connections across all meshes
+    size_t total_intermesh_connections = 0;
+    for (const auto& mesh_connections : inter_mesh_connectivity) {
+        for (const auto& chip_connections : mesh_connections) {
+            total_intermesh_connections += chip_connections.size();
+        }
+    }
+
+    if (total_intermesh_connections == 0) {
         return IntermeshVCConfig::disabled();
     }
 
     // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
     bool has_z_routers = false;
-    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
     for (const auto& mesh_connections : inter_mesh_connectivity) {
         for (const auto& chip_connections : mesh_connections) {
             for (const auto& [dst_mesh_id, router_edge] : chip_connections) {

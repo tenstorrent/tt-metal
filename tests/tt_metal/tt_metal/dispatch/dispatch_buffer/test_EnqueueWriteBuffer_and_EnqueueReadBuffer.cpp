@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
-#include <stdlib.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
@@ -399,8 +399,8 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
         uint32_t buf_size = num_pages * config.page_size;
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-        for (uint32_t i = 0; i < src.size(); i++) {
-            src[i] = rand();
+        for (unsigned int& val : src) {
+            val = rand();
         }
 
         BufferType buftype = BufferType::DRAM;
