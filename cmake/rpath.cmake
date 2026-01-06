@@ -31,12 +31,15 @@ function(tt_set_runtime_rpath TARGET)
     endif()
 
     # Calculate relative path from output dir to build/lib/
-    file(RELATIVE_PATH LIB_REL_PATH "${OUTPUT_DIR}" "${PROJECT_BINARY_DIR}/lib")
+    # Use CMAKE_BINARY_DIR (top-level build dir) not PROJECT_BINARY_DIR
+    # because subprojects with their own project() would have different PROJECT_BINARY_DIR
+    file(RELATIVE_PATH LIB_REL_PATH "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/lib")
     set(RPATH_ENTRIES "$ORIGIN/${LIB_REL_PATH}")
 
     # If TTNN flag is set, also add path to ttnn/ttnn/ (for _ttnncpp.so, _ttnn.so)
+    # Use CMAKE_SOURCE_DIR (top-level source dir) for the same reason
     if(ARG_TTNN)
-        file(RELATIVE_PATH TTNN_REL_PATH "${OUTPUT_DIR}" "${PROJECT_SOURCE_DIR}/ttnn/ttnn")
+        file(RELATIVE_PATH TTNN_REL_PATH "${OUTPUT_DIR}" "${CMAKE_SOURCE_DIR}/ttnn/ttnn")
         list(APPEND RPATH_ENTRIES "$ORIGIN/${TTNN_REL_PATH}")
     endif()
 
