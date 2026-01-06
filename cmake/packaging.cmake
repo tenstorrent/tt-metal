@@ -13,8 +13,10 @@
 # then at runtime $ORIGIN becomes /work/build/tt-train/tests, and the linker
 # searches /work/build/tt-train/tests/../../lib -> /work/build/lib for libraries.
 #
-# CI Tar Artifact Layout
-# ----------------------
+# There are THREE different directory layouts that RPATH must support:
+#
+# 1. CI Tar Artifact Layout
+# -------------------------
 # When the CI tar artifact (ttm_any.tar.zst) is extracted to /work/:
 #
 #   /work/
@@ -26,6 +28,7 @@
 #   ├── build/
 #   │   ├── lib/
 #   │   │   ├── libtt_metal.so    <- Core TT-Metal library
+#   │   │   ├── libtt_stl.so      <- STL library
 #   │   │   ├── libtracy.so       <- Tracy profiler (optional)
 #   │   │   └── ...
 #   │   │
@@ -39,27 +42,55 @@
 #   └── runtime/
 #       └── ...                   <- Runtime files (kernels, firmware, etc.)
 #
+#   RPATH needed: $ORIGIN/../../build/lib (from ttnn/ttnn/ -> build/lib/)
+#
+# 2. Python Wheel Layout
+# ----------------------
+# When building a pip wheel, libraries are bundled INSIDE the ttnn package:
+#
+#   {wheel}/
+#   └── ttnn/
+#       ├── _ttnn.so              <- Python bindings (at package root)
+#       ├── build/
+#       │   └── lib/
+#       │       ├── libtt_metal.so
+#       │       ├── libtt_stl.so
+#       │       └── ...
+#       └── runtime/
+#           └── ...
+#
+#   RPATH needed: $ORIGIN/build/lib (from ttnn/ -> ttnn/build/lib/)
+#
+# 3. FHS Package Layout (DEB/RPM)
+# -------------------------------
+# For proper system packages, all libraries are installed to standard locations:
+#
+#   /usr/lib64/
+#   ├── _ttnn.so
+#   ├── libtt_metal.so
+#   ├── libtt_stl.so
+#   └── ...
+#
+#   RPATH needed: $ORIGIN (all libs co-located in same directory)
+#
+# Combined RPATH Solution
+# -----------------------
+# To support all three layouts, INSTALL_RPATH includes multiple paths:
+#
+#   INSTALL_RPATH = "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
+#
+#   - $ORIGIN/build/lib       -> wheel layout
+#   - $ORIGIN/../../build/lib -> tar artifact layout
+#   - $ORIGIN                 -> FHS packages
+#
 # Library Dependency Chain
 # ------------------------
-#   ttml_tests -> _ttnncpp.so (in ttnn/ttnn/) -> libtt_metal.so (in build/lib/)
+#   ttml_tests -> _ttnncpp.so -> libtt_metal.so -> libtt_stl.so
 #
-# RPATH Configuration
-# -------------------
-# - _ttnncpp.so and _ttnn.so (in ttnn/ttnn/):
-#     INSTALL_RPATH = "$ORIGIN/../../build/lib;$ORIGIN"
-#     - $ORIGIN/../../build/lib resolves to build/lib/ from ttnn/ttnn/
-#     - $ORIGIN allows finding sibling libraries in the same directory
-#
-# - tt-train executables (in build/tt-train/tests/):
-#     CMAKE_INSTALL_RPATH includes:
-#     - $ORIGIN/../../lib           -> build/lib/ (for libtt_metal.so)
-#     - $ORIGIN/../../../ttnn/ttnn  -> ttnn/ttnn/ (for _ttnncpp.so)
-#
-# FHS Package Layout (DEB/RPM)
-# ----------------------------
-# For proper system packages, all libraries are installed to standard locations
-# (e.g., /usr/lib64/), so $ORIGIN alone is sufficient since libraries are
-# co-located in the same directory.
+# tt-train executables (in build/tt-train/tests/):
+#   CMAKE_INSTALL_RPATH includes:
+#   - $ORIGIN/../../lib           -> build/lib/ (for libtt_metal.so)
+#   - $ORIGIN/../../../ttnn/ttnn  -> ttnn/ttnn/ (for _ttnncpp.so)
 #
 # Why $ORIGIN instead of LD_LIBRARY_PATH?
 # ---------------------------------------

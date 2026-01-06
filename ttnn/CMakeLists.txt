@@ -442,11 +442,12 @@ set_target_properties(
             "_"
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-        # INSTALL_RPATH for tar artifact layout: ttnn/ttnn/_ttnncpp.so needs to find build/lib/libtt_metal.so
-        # $ORIGIN/../../build/lib = from ttnn/ttnn/ go up to root, then into build/lib
-        # $ORIGIN = same directory (for FHS package installs where all libs are in /usr/lib64/)
+        # INSTALL_RPATH for multiple installation layouts:
+        # - $ORIGIN/build/lib      = wheel layout (ttnn/_ttnn.so -> ttnn/build/lib/)
+        # - $ORIGIN/../../build/lib = tar artifact layout (ttnn/ttnn/_ttnn.so -> build/lib/)
+        # - $ORIGIN                 = FHS packages (all libs in /usr/lib64/)
         INSTALL_RPATH
-            "$ORIGIN/../../build/lib;$ORIGIN"
+            "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
         CXX_VISIBILITY_PRESET
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
@@ -669,11 +670,12 @@ if(WITH_PYTHON_BINDINGS)
                 "_"
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            # INSTALL_RPATH for tar artifact layout: ttnn/ttnn/_ttnn.so needs to find build/lib/libtt_metal.so
-            # $ORIGIN/../../build/lib = from ttnn/ttnn/ go up to root, then into build/lib
-            # $ORIGIN = same directory (for FHS package installs where all libs are in /usr/lib64/)
+            # INSTALL_RPATH for multiple installation layouts:
+            # - $ORIGIN/build/lib      = wheel layout (ttnn/_ttnn.so -> ttnn/build/lib/)
+            # - $ORIGIN/../../build/lib = tar artifact layout (ttnn/ttnn/_ttnn.so -> build/lib/)
+            # - $ORIGIN                 = FHS packages (all libs in /usr/lib64/)
             INSTALL_RPATH
-                "$ORIGIN/../../build/lib;$ORIGIN"
+                "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
             CXX_VISIBILITY_PRESET
                 "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
             ADDITIONAL_CLEAN_FILES
