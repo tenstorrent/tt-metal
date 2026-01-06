@@ -1581,7 +1581,7 @@ private:
         auto arch = tt::tt_metal::hal::get_arch();
         switch (arch) {
             case tt::ARCH::WORMHOLE_B0: return 1000;
-            case tt::ARCH::BLACKHOLE: return 1000;
+            case tt::ARCH::BLACKHOLE: return 1350;
             default: TT_THROW("Unsupported architecture for performance testing: {}", arch);
         }
     }
