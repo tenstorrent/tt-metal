@@ -25,7 +25,7 @@ template <typename ValueType>
 bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float atol = 0.001f) {
     float af = 0.0f;
     float bf = 0.0f;
-    if constexpr (std::is_integral<ValueType>::value or std::is_floating_point<ValueType>::value) {
+    if constexpr (std::is_integral_v<ValueType> or std::is_floating_point_v<ValueType>) {
         af = static_cast<float>(a);
         bf = static_cast<float>(b);
     } else {

@@ -416,8 +416,8 @@ void generate_runtime_args_cmds(
     bool no_stride,
     enum DispatchWriteOffsets write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
 
     thread_local static auto get_runtime_payload_sizeB =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast, bool no_stride) {
@@ -440,7 +440,7 @@ void generate_runtime_args_cmds(
         return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
     };
 
-    constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
+    constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
     DeviceCommandCalculator calculator;
