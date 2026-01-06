@@ -244,8 +244,6 @@ class ModelArgs:
             return state_dict
 
     def weight_cache_path(self, dtype):
-        if self.mesh_device.shape[0] == 1:
-            raise ValueError
         """Return weight cache path for the model"""
         cache_dir = os.getenv("TT_CACHE_PATH")
         if cache_dir:
