@@ -61,7 +61,7 @@ jobs:
         run: |
           pip install pytest torch numpy
           # Install other common test dependencies
-          pip install multiprocess psutil loguru
+          pip install multiprocess psutil loguru transformers
           pip install ./wheels/*.whl
 
       - name: Create stub modules for collection
@@ -74,12 +74,29 @@ jobs:
           # Create stub utility_functions with minimal implementations
           cat > models/common/utility_functions.py << 'EOF'
           """Stub module for pytest collection - not used during collection"""
+          import pytest
+          
+          # Comparison functions
           def comp_pcc(*args, **kwargs): pass
           def comp_allclose(*args, **kwargs): pass
           def comp_ulp(*args, **kwargs): pass
           def comp_equal(*args, **kwargs): pass
           def divup(*args, **kwargs): pass
           def roundup(*args, **kwargs): pass
+          
+          # Random/tensor functions
+          def torch_random(*args, **kwargs): pass
+          def torch2tt_tensor(*args, **kwargs): pass
+          def tt2torch_tensor(*args, **kwargs): pass
+          def ttl_complex_2_torch_complex(*args, **kwargs): pass
+          
+          # Device check functions
+          def is_wormhole_b0(*args, **kwargs): return False
+          def is_blackhole(*args, **kwargs): return False
+          
+          # Stub decorator
+          def skip_for_slow_dispatch(func):
+              return func
           EOF
 
       - name: Count and compare tests
