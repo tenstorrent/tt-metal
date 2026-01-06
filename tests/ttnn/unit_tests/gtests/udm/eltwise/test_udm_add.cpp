@@ -8,9 +8,9 @@
 #include "tests/ttnn/unit_tests/gtests/udm/test_udm_utils.hpp"
 #include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
 
-#include "tt_metal/udm/mesh_kernel.hpp"
-#include "tt_metal/udm/mesh_utils.hpp"
-#include "tt_metal/udm/mesh_circular_buffer.hpp"
+#include "tt_metal/experimental/udm/mesh_kernel.hpp"
+#include "tt_metal/experimental/udm/mesh_utils.hpp"
+#include "tt_metal/experimental/udm/mesh_circular_buffer.hpp"
 
 namespace tt::tt_metal::experimental::udm_tests {
 namespace {

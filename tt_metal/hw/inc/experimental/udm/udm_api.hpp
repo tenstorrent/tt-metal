@@ -8,8 +8,8 @@
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
-#include "udm/accessor/mesh_gcore_accessor.h"
-#include "udm/accessor/mesh_tensor_accessor.h"
+#include "experimental/udm/accessor/mesh_gcore_accessor.h"
+#include "experimental/udm/accessor/mesh_tensor_accessor.h"
 #include <type_traits>
 #include "api/debug/dprint.h"
 

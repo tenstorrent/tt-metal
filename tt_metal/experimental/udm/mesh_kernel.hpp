@@ -6,8 +6,8 @@
 
 #include <string>
 #include <set>
-#include "tt_metal/udm/types.hpp"
-#include "tt_metal/udm/mesh_program.hpp"
+#include "tt_metal/experimental/udm/types.hpp"
+#include "tt_metal/experimental/udm/mesh_program.hpp"
 #include "tt_metal/api/tt-metalium/kernel_types.hpp"
 
 namespace tt::tt_metal::experimental::udm {

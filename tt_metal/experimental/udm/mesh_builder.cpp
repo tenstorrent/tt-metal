@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/udm/mesh_builder.hpp"
-#include "tt_metal/udm/mesh_utils.hpp"
+#include "tt_metal/experimental/udm/mesh_builder.hpp"
+#include "tt_metal/experimental/udm/mesh_utils.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>

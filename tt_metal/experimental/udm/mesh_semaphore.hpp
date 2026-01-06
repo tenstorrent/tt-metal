@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#include "tt_metal/udm/types.hpp"
-#include "tt_metal/udm/mesh_builder.hpp"
+#include "tt_metal/experimental/udm/types.hpp"
+#include "tt_metal/experimental/udm/mesh_builder.hpp"
 #include "tt_metal/api/tt-metalium/global_semaphore.hpp"
 
 namespace tt::tt_metal::experimental::udm {

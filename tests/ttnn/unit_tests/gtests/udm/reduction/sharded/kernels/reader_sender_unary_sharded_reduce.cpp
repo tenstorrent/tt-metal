@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "tt_metal/hw/inc/udm/udm_api.hpp"
+#include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 /**

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/udm/mesh_kernel.hpp"
-#include "tt_metal/udm/mesh_builder.hpp"
+#include "tt_metal/experimental/udm/mesh_kernel.hpp"
+#include "tt_metal/experimental/udm/mesh_builder.hpp"
 #include "tt_metal/api/tt-metalium/host_api.hpp"
 #include <tt_stl/assert.hpp>
 

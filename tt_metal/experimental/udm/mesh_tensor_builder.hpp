@@ -8,7 +8,7 @@
 #include <vector>
 #include <optional>
 #include <utility>
-#include "tt_metal/udm/types.hpp"
+#include "tt_metal/experimental/udm/types.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 

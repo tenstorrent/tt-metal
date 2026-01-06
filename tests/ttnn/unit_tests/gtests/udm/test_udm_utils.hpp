@@ -18,10 +18,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
 
-#include "tt_metal/udm/mesh_program.hpp"
-#include "tt_metal/udm/mesh_builder.hpp"
-#include "tt_metal/udm/mesh_tensor_builder.hpp"
-#include "tt_metal/udm/mesh_utils.hpp"
+#include "tt_metal/experimental/udm/mesh_program.hpp"
+#include "tt_metal/experimental/udm/mesh_builder.hpp"
+#include "tt_metal/experimental/udm/mesh_tensor_builder.hpp"
+#include "tt_metal/experimental/udm/mesh_utils.hpp"
 
 namespace tt::tt_metal::experimental::udm_tests {
 

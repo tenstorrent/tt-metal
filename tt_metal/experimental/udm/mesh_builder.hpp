@@ -8,7 +8,7 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
-#include "tt_metal/udm/types.hpp"
+#include "tt_metal/experimental/udm/types.hpp"
 #include "tt_metal/common/core_coord.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>

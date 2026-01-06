@@ -19,8 +19,8 @@
 #include <cstdint>
 #include <array>
 #include "api/dataflow/dataflow_api.h"
-#include "udm/accessor/mesh_tensor_accessor.h"
-#include "tt_metal/hw/inc/udm/udm_api.hpp"
+#include "experimental/udm/accessor/mesh_tensor_accessor.h"
+#include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 

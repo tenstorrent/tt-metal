@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/udm/types.hpp"
+#include "tt_metal/experimental/udm/types.hpp"
 #include "tt_metal/api/tt-metalium/program.hpp"
 
 namespace tt::tt_metal::experimental::udm {
