@@ -9,7 +9,7 @@ Before you start, please read the example test in models/demos/deepseek_v3/tests
 Example test command for test_mla.py:
 ```
 source ../setup_metal.sh
-export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" && export DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" && export TT_METAL_RUNTIME_ROOT=/proj_sw/user_dev/jrock/tt-metal && export MESH_DEVICE=TG &&  pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass -k "decode" 2>&1 | tee /proj_sw/user_dev/jrock/tt-metal/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log
+export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" && export DEEPSEEK_V3_CACHE="/proj_sw/user_dev/deepseek-v3-cache2" && export TT_METAL_RUNTIME_ROOT=/proj_sw/user_dev/jrock/tt-metal && export MESH_DEVICE=TG && pytest /proj_sw/user_dev/jrock/tt-metal/models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass -k "decode" 2>&1 | tee /proj_sw/user_dev/jrock/tt-metal/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log
 ```
 
 Follow these steps to add a new fused op unit test:
@@ -38,8 +38,17 @@ Follow these steps to add a new fused op unit test:
     1. Run the device perf test of the fused op unit test for prefill (shortest seqlen in fused op unit test) and decode, copy the generated csv files into a newly created folder.
     2. Run the module test with 1 iteration, both for prefill (same seqlen as in fused op unit test csv) and decode, copy the generated csv files into the same folder as in the last step.
     3. Compare for each op that all properties are identical, i.e. fused op unit test and module test match in terms of op input/output properties both for prefill and for decode. Take a look at example_compare_fused_wqkva_configs.py to see how that was done for an example fused op unit test.
-10. Print the summary for all verification steps clearly representing the results and the links to logs for all successful verification steps.
-11. List anything that was unexpected and/or any workarouds you needed to make the fused op unit test work.
+10. Add a single device test
+    1. Create a new pytest in the file with the same name + "_single_device"
+    2. If the sequence of ops contains a CCL, skip the single device test with an appropriate skip message. The following points only affect tests that can be executed on single device
+    3. The test takes the first device from the mesh_device fixture and runs the ops only on that device
+    4. The input shape to the single device test is the chunk of the input from the multi device test that resides on the first device, hence the chunk that is processed but the first device. In order to find the correct shape, run the device perf test (multi device) and extract the input shape to the first op from the generated ops_perf_report, this is already the per device shape. Do the same for all matmul input_tensor_b shapes.
+    5. Restructure the existing code to maintain a clean test that re-uses common parts of the code. Be very careful not to change any functionality in the existing test.
+    6. Run the single device test and verify that both the PCC and the perf are the same as for the multi device test.
+11. Add a single device test for device performance, see step 10 for how to do that.
+12. *Verify* the single device tests by running the single device, device perf test that generated the csv file and compare it to the multi device perf csv. All shapes must match, create a helper script to verify that.
+13. Print the summary for all verification steps clearly representing the results and the links to logs for all successful verification steps.
+14. List anything that was unexpected and/or any workarouds you needed to make the fused op unit test work.
 
 Notes on performance measurements:
 - Performance measurements use three metrics: e2e_duration, kernel_duration, op_to_op_latency

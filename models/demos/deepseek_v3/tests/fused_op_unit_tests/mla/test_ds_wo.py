@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     dequantize_state_dict,
@@ -107,6 +107,115 @@ def _measure_perf_us(
     return profiler.get("ds_wo_perf") * 1e6
 
 
+def _run_ds_wo_test(
+    mesh_device: ttnn.MeshDevice,
+    run_config: dict,
+    torch_v_out: torch.Tensor,
+    ref_output: torch.Tensor,
+    expected_pcc: float,
+    expected_atol: float,
+    expected_rtol: float,
+    expected_perf_us: float,
+    trace_mode: bool,
+    program_cache_enabled: bool,
+    step_prefix: str,
+):
+    tt_v_out = ttnn.from_torch(
+        torch_v_out,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = ds_wo_ttnn(tt_v_out, run_config)
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+    )[0]
+    if tt_output_torch.dim() == 3:
+        tt_output_torch = tt_output_torch.unsqueeze(1)
+
+    _compare_with_reference(tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol)
+
+    if os.getenv(DEVICE_PERF_ENV_VAR) is None:
+        perf_profiler = BenchmarkProfiler()
+        benchmark_data = BenchmarkData()
+        trace_suffix = "trace" if trace_mode else "no_trace"
+        cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
+        step_name = f"{step_prefix}_{trace_suffix}_{cache_suffix}"
+
+        perf_profiler.start("run")
+        perf_profiler.start(step_name)
+        perf_us = _measure_perf_us(
+            mesh_device,
+            lambda: ds_wo_ttnn(tt_v_out, run_config),
+            PERF_WARMUP_ITERS,
+            PERF_MEASURE_ITERS,
+            trace_mode=trace_mode,
+        )
+        logger.info(f"Perf avg: {perf_us:.3f} us over {PERF_MEASURE_ITERS} iters (warmup {PERF_WARMUP_ITERS})")
+        perf_profiler.end(step_name)
+        perf_profiler.end("run")
+
+        benchmark_data.add_measurement(
+            perf_profiler,
+            0,
+            step_name,
+            f"{step_name}-avg_us",
+            perf_us,
+            step_warm_up_num_iterations=PERF_WARMUP_ITERS,
+            target=expected_perf_us if expected_perf_us > 0 and trace_mode and program_cache_enabled else None,
+        )
+        benchmark_data.save_partial_run_json(
+            perf_profiler,
+            run_type="deepseek_v3_fused_ops",
+            ml_model_name="deepseek-v3",
+            batch_size=torch_v_out.shape[2],
+            input_sequence_length=torch_v_out.shape[1],
+        )
+        if expected_perf_us > 0 and trace_mode and program_cache_enabled:
+            perf_margin = 0.2
+            assert perf_us <= expected_perf_us * (
+                1 + perf_margin
+            ), f"Perf regression: {perf_us:.3f}us exceeds expected {expected_perf_us:.3f}us"
+        elif expected_perf_us == 0 and trace_mode and program_cache_enabled:
+            logger.warning("TODO: Set expected_perf_us using a measured baseline.")
+    else:
+        logger.info("Skipping e2e perf measurement during device-perf profiling.")
+        from tracy import signpost
+
+        def op_fn():
+            return ds_wo_ttnn(tt_v_out, run_config)
+
+        for _ in range(PERF_WARMUP_ITERS):
+            output = op_fn()
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(output)
+
+        ttnn.synchronize_device(mesh_device)
+        if trace_mode:
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            output = op_fn()
+            ttnn.deallocate(output)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            signpost("start")
+            for _ in range(DEVICE_PERF_ITERS):
+                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            signpost("stop")
+            ttnn.release_trace(mesh_device, trace_id)
+        else:
+            signpost("start")
+            for _ in range(DEVICE_PERF_ITERS):
+                output = op_fn()
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(output)
+            signpost("stop")
+
+
 def _merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
     block_by_device = defaultdict(list)
 
@@ -165,6 +274,11 @@ def _merge_device_rows_for_perf(df: pd.DataFrame) -> pd.DataFrame:
         global_index += 1
 
     return pd.DataFrame(merged_blocks)
+
+
+def _get_chunk_slice(dim_size: int, num_chunks: int, chunk_idx: int) -> slice:
+    chunk_size = even_int_div(dim_size, num_chunks)
+    return slice(chunk_size * chunk_idx, chunk_size * (chunk_idx + 1))
 
 
 def _collect_device_perf(
@@ -227,7 +341,7 @@ def _collect_device_perf(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
         # TODO: Replace expected_perf_us with a target derived from theoretical numbers.
-        ("decode", 1, 0.9997654281943276, 0.2, 0.2, 260.661),
+        ("decode", 1, 0.9997630856393128, 0.2, 0.2, 260.661),
     ],
 )
 @pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
@@ -297,101 +411,119 @@ def test_ds_wo(
     v_head_dim = hf_config_short.v_head_dim
 
     torch_v_out = torch.randn(1, 1, bsz, num_heads * v_head_dim, dtype=torch.bfloat16)
-    tt_v_out = ttnn.from_torch(
+    ref_output = ds_wo_reference(torch_v_out, o_proj_weight, o_proj_bias)
+    _run_ds_wo_test(
+        mesh_device,
+        run_config,
         torch_v_out,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
+        ref_output,
+        expected_pcc,
+        expected_atol,
+        expected_rtol,
+        expected_perf_us,
+        trace_mode,
+        program_cache_enabled,
+        f"ds_wo_{mode}_seq{seq_len}",
     )
 
-    tt_output = ds_wo_ttnn(tt_v_out, run_config)
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
-    )[0]
-    if tt_output_torch.dim() == 3:
-        tt_output_torch = tt_output_torch.unsqueeze(1)
 
-    ref_output = ds_wo_reference(torch_v_out, o_proj_weight, o_proj_bias)
-    _compare_with_reference(tt_output_torch, ref_output, expected_pcc, expected_atol, expected_rtol)
-
-    if os.getenv(DEVICE_PERF_ENV_VAR) is None:
-        perf_profiler = BenchmarkProfiler()
-        benchmark_data = BenchmarkData()
-        trace_suffix = "trace" if trace_mode else "no_trace"
-        cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
-        step_name = f"ds_wo_{mode}_seq{seq_len}_{trace_suffix}_{cache_suffix}"
-
-        perf_profiler.start("run")
-        perf_profiler.start(step_name)
-        perf_us = _measure_perf_us(
-            mesh_device,
-            lambda: ds_wo_ttnn(tt_v_out, run_config),
-            PERF_WARMUP_ITERS,
-            PERF_MEASURE_ITERS,
-            trace_mode=trace_mode,
-        )
-        logger.info(f"Perf avg: {perf_us:.3f} us over {PERF_MEASURE_ITERS} iters (warmup {PERF_WARMUP_ITERS})")
-        perf_profiler.end(step_name)
-        perf_profiler.end("run")
-
-        benchmark_data.add_measurement(
-            perf_profiler,
-            0,
-            step_name,
-            f"{step_name}-avg_us",
-            perf_us,
-            step_warm_up_num_iterations=PERF_WARMUP_ITERS,
-            target=expected_perf_us if expected_perf_us > 0 and trace_mode and program_cache_enabled else None,
-        )
-        benchmark_data.save_partial_run_json(
-            perf_profiler,
-            run_type="deepseek_v3_fused_ops",
-            ml_model_name="deepseek-v3",
-            batch_size=bsz,
-            input_sequence_length=seq_len,
-        )
-        if expected_perf_us > 0 and trace_mode and program_cache_enabled:
-            perf_margin = 0.2
-            assert perf_us <= expected_perf_us * (
-                1 + perf_margin
-            ), f"Perf regression: {perf_us:.3f}us exceeds expected {expected_perf_us:.3f}us"
-        elif expected_perf_us == 0 and trace_mode and program_cache_enabled:
-            logger.warning("TODO: Set expected_perf_us using a measured baseline.")
+@pytest.mark.parametrize(
+    "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
+    [
+        # TODO: Replace expected_perf_us with a target derived from theoretical numbers.
+        ("decode", 1, 0.9997630856393128, 0.2, 0.2, 260.661),
+    ],
+)
+@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
+@pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 4194304,
+        }
+    ],
+    indirect=True,
+)
+def test_ds_wo_single_device(
+    mode,
+    seq_len,
+    expected_pcc,
+    expected_atol,
+    expected_rtol,
+    expected_perf_us,
+    program_cache_enabled,
+    trace_mode,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    if mode == "decode":
+        assert seq_len == 1, "Decode only supports seq_len=1"
     else:
-        logger.info("Skipping e2e perf measurement during device-perf profiling.")
-        from tracy import signpost
+        raise ValueError(f"Unsupported mode {mode}; decode-only op.")
 
-        def op_fn():
-            return ds_wo_ttnn(tt_v_out, run_config)
+    if trace_mode and not program_cache_enabled:
+        pytest.skip("Trace mode requires program cache enabled.")
 
-        for _ in range(PERF_WARMUP_ITERS):
-            output = op_fn()
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(output)
+    if mesh_device.get_num_devices() == 1:
+        single_device_mesh = mesh_device
+    else:
+        single_device_mesh = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))[0]
 
-        ttnn.synchronize_device(mesh_device)
-        if trace_mode:
-            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            output = op_fn()
-            ttnn.deallocate(output)
-            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(mesh_device)
-            signpost("start")
-            for _ in range(DEVICE_PERF_ITERS):
-                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-                ttnn.synchronize_device(mesh_device)
-            signpost("stop")
-            ttnn.release_trace(mesh_device, trace_id)
-        else:
-            signpost("start")
-            for _ in range(DEVICE_PERF_ITERS):
-                output = op_fn()
-                ttnn.synchronize_device(mesh_device)
-                ttnn.deallocate(output)
-            signpost("stop")
+    if not program_cache_enabled:
+        single_device_mesh.disable_and_clear_program_cache()
+
+    module_path = "model.layers.0.self_attn"
+    module_state_dict = sub_state_dict(state_dict, module_path + ".")
+    dequant_state_dict = dequantize_state_dict(module_state_dict, hf_config_short)
+    o_proj_weight = dequant_state_dict["o_proj.weight"]
+    o_proj_bias = dequant_state_dict.get("o_proj.bias")
+
+    mesh_shape = mesh_device.shape
+    full_bsz = USERS_PER_ROW * mesh_shape[0]
+    output_slice = _get_chunk_slice(o_proj_weight.shape[0], mesh_shape[1], 0)
+    o_proj_weight_chunk = o_proj_weight[output_slice, :]
+    tt_o_proj_weight = ttnn.from_torch(
+        o_proj_weight_chunk.transpose(-2, -1),
+        device=single_device_mesh,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    run_config = {
+        "wo": {
+            "input_tensor_b": tt_o_proj_weight,
+            "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            "program_config": None,
+        }
+    }
+
+    bsz = USERS_PER_ROW
+    num_heads = hf_config_short.num_attention_heads
+    v_head_dim = hf_config_short.v_head_dim
+
+    torch_v_out_full = torch.randn(1, 1, full_bsz, num_heads * v_head_dim, dtype=torch.bfloat16)
+    torch_v_out = torch_v_out_full[:, :, :bsz, :]
+    ref_output_full = ds_wo_reference(torch_v_out_full, o_proj_weight, o_proj_bias)
+    ref_output = ref_output_full[:, :, :bsz, output_slice]
+    _run_ds_wo_test(
+        single_device_mesh,
+        run_config,
+        torch_v_out,
+        ref_output,
+        expected_pcc,
+        expected_atol,
+        expected_rtol,
+        expected_perf_us,
+        trace_mode,
+        program_cache_enabled,
+        f"ds_wo_single_device_{mode}_seq{seq_len}",
+    )
 
 
 @pytest.mark.parametrize(
@@ -472,5 +604,85 @@ def test_ds_wo_device_perf(mode, seq_len):
         run_type="deepseek_v3_fused_ops_device_perf",
         ml_model_name="deepseek-v3",
         batch_size=batch_size,
+        input_sequence_length=seq_len,
+    )
+
+
+@pytest.mark.parametrize(
+    "mode, seq_len",
+    [
+        ("decode", 1),
+    ],
+)
+def test_ds_wo_single_device_device_perf(mode, seq_len):
+    assert mode == "decode", "Decode-only op."
+    assert seq_len == 1, "Decode only supports seq_len=1"
+
+    requested_system_name = os.getenv("MESH_DEVICE")
+    if requested_system_name is None:
+        raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
+
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"ds_wo_single_device_device_perf_{mode}_seq{seq_len}"
+    test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_wo.py"
+    trace_filter = "trace" if mode == "decode" else "eager"
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len}"
+    command = f'pytest {test_path}::test_ds_wo_single_device -k "{expr}"'
+
+    profiler.start("run")
+    profiler.start(step_name)
+    os.environ[DEVICE_PERF_ENV_VAR] = "1"
+    op_stats, total_kernel_ns, total_op_to_op_ns = _collect_device_perf(
+        command,
+        subdir="deepseek_v3_fused_ops_device_perf",
+        warmup_iters=0,
+        use_signposts=True,
+    )
+    os.environ.pop(DEVICE_PERF_ENV_VAR, None)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    assert op_stats, "No device perf stats captured."
+    total_kernel_us = total_kernel_ns / 1000.0
+    total_op_to_op_us = total_op_to_op_ns / 1000.0
+    logger.info(f"Device perf per-op averages (ns): {json.dumps(op_stats, indent=2)}")
+    logger.info(f"Device perf totals: kernel={total_kernel_us:.3f} us, op_to_op={total_op_to_op_us:.3f} us")
+    assert total_kernel_ns > 0, "Total kernel duration must be positive."
+    assert total_op_to_op_ns >= 0, "Total op-to-op latency must be non-negative."
+    targets = DEVICE_PERF_TARGETS_US.get((mode, seq_len))
+    if targets is None:
+        logger.warning("No device perf targets configured; skipping perf assertions.")
+    else:
+        kernel_target_us = targets["kernel"]
+        op_to_op_target_us = targets["op_to_op"]
+        kernel_limit_us = kernel_target_us * (1 + DEVICE_PERF_MARGIN)
+        op_to_op_limit_us = op_to_op_target_us * (1 + DEVICE_PERF_MARGIN)
+        assert (
+            total_kernel_us <= kernel_limit_us
+        ), f"Kernel perf regression: {total_kernel_us:.3f}us exceeds {kernel_target_us:.3f}us (+{DEVICE_PERF_MARGIN:.0%})"
+        assert (
+            total_op_to_op_us <= op_to_op_limit_us
+        ), f"Op-to-op perf regression: {total_op_to_op_us:.3f}us exceeds {op_to_op_target_us:.3f}us (+{DEVICE_PERF_MARGIN:.0%})"
+
+    benchmark_data.add_measurement(
+        profiler,
+        0,
+        step_name,
+        "total_kernel_duration_us",
+        total_kernel_us,
+    )
+    benchmark_data.add_measurement(
+        profiler,
+        0,
+        step_name,
+        "total_op_to_op_latency_us",
+        total_op_to_op_us,
+    )
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="deepseek_v3_fused_ops_device_perf",
+        ml_model_name="deepseek-v3",
+        batch_size=USERS_PER_ROW,
         input_sequence_length=seq_len,
     )
