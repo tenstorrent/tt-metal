@@ -15,7 +15,7 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
 def run_neighbor_pad_impl(
-    t3k_mesh_device,
+    mesh_device,
     input_shape,
     halo_shard_dim,
     other_shard_dim,
@@ -35,7 +35,7 @@ def run_neighbor_pad_impl(
     torch.manual_seed(0)
 
     ##### All gather setup #####
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
@@ -47,17 +47,15 @@ def run_neighbor_pad_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = t3k_mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    t3k_mesh_device.load_sub_device_manager(sub_device_manager)
-    t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     barrier_semaphore_handles = [
-        ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
     ##### Neighbor pad input setup #####
@@ -69,17 +67,16 @@ def run_neighbor_pad_impl(
 
     # Make sure input shape is padded
     input_shape[halo_shard_dim] = (
-        math.ceil(input_shape[halo_shard_dim] / t3k_mesh_device.shape[cluster_axis])
-        * t3k_mesh_device.shape[cluster_axis]
+        math.ceil(input_shape[halo_shard_dim] / mesh_device.shape[cluster_axis]) * mesh_device.shape[cluster_axis]
     )
     input_shape[other_shard_dim] = (
-        math.ceil(input_shape[other_shard_dim] / t3k_mesh_device.shape[1 - cluster_axis])
-        * t3k_mesh_device.shape[1 - cluster_axis]
+        math.ceil(input_shape[other_shard_dim] / mesh_device.shape[1 - cluster_axis])
+        * mesh_device.shape[1 - cluster_axis]
     )
 
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
-        num_chunks = t3k_mesh_device.shape[cluster_axis]
+        num_chunks = mesh_device.shape[cluster_axis]
         chunks = torch.chunk(input_tensor, num_chunks, halo_shard_dim)
         np_output_tensor = []
         # pad left
@@ -121,11 +118,11 @@ def run_neighbor_pad_impl(
         dims[1 - cluster_axis] = other_shard_dim
         input_tensor_mesh = ttnn.from_torch(
             input_tensor,
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=layout,
             dtype=input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensor2dMesh(t3k_mesh_device, mesh_shape=tuple(t3k_mesh_device.shape), dims=dims),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -153,20 +150,20 @@ def run_neighbor_pad_impl(
     if enable_trace:
         # Compile the op
         tt_neighbor_pad_out_tensor = run_op(0)
-        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")
 
         # Capture the trace
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_neighbor_pad_out_tensor = run_op(0)
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done capturing trace")
 
         # Execute trace
         for i in range(num_iters):
-            ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             tt_neighbor_pad_out_tensor_list.append(tt_neighbor_pad_out_tensor)
         logger.info(f"Done executing trace")
     else:
@@ -175,7 +172,7 @@ def run_neighbor_pad_impl(
             tt_neighbor_pad_out_tensor_list.append(tt_neighbor_pad_out_tensor)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
@@ -188,14 +185,14 @@ def run_neighbor_pad_impl(
         dims[1 - cluster_axis] = other_shard_dim
         tt_np_out = ttnn.to_torch(
             tt_np_out,
-            mesh_composer=ConcatMesh2dToTensor(t3k_mesh_device, mesh_shape=tuple(t3k_mesh_device.shape), dims=dims),
+            mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
         )
         eq, output = comp_pcc(tt_np_out, torch_np_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED np: {output}"
 
-    t3k_mesh_device.reset_sub_device_stall_group()
-    t3k_mesh_device.clear_loaded_sub_device_manager()
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")

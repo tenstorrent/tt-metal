@@ -39,7 +39,8 @@ class Emb(torch.nn.Module):
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expected_top1, expected_top5):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_model_inference(mesh_device, reset_seeds, iterations, expected_top1, expected_top5):
     # TODO Currently topk test is supporting decode-only mode. Add prefill support.
 
     dtype = ttnn.bfloat8_b
@@ -51,14 +52,14 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expec
     running_top5 = 0
     inputs_file = "models/demos/t3000/mixtral8x7b/demo/input_data.json"
 
-    model_args = TtModelArgs(t3k_mesh_device, max_batch_size=batch, max_seq_len=max_seq_len)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch, max_seq_len=max_seq_len)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Prepare inputs
     input_prompts = load_inputs(inputs_file, 32)
     input_tokens_tt, max_prompt_len, input_mask, input_tokens_pt, input_mask_pt = preprocess_inputs(
-        input_prompts, tokenizer, model_args, dtype, False, t3k_mesh_device
+        input_prompts, tokenizer, model_args, dtype, False, mesh_device
     )
 
     # Load reference model
@@ -72,7 +73,7 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expec
 
     # Load TTNN model
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -99,7 +100,7 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expec
         tt_out = tt_model(decode_input, [start_pos] * batch)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
             .squeeze(1)
             .view(32, seqlen, -1)
             .detach()

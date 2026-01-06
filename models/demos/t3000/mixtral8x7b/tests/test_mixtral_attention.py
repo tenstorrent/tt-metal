@@ -16,14 +16,15 @@ from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_attention_inference(mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     batch = 32
     seq_len = 1  # Decode one token at a time
 
     # Update the model batch size to 32 and max_seq_len to 16384 to fit on device.
-    model_args = TtModelArgs(t3k_mesh_device, max_batch_size=batch, max_seq_len=16384)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch, max_seq_len=16384)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -32,8 +33,8 @@ def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds):
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_ccl = TT_CCL(t3k_mesh_device)
-    tt_model = TtMixtralAttention(t3k_mesh_device, tt_ccl, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_ccl = TT_CCL(mesh_device)
+    tt_model = TtMixtralAttention(mesh_device, tt_ccl, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
@@ -62,9 +63,7 @@ def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds):
         )
 
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
-            .squeeze(2)
-            .view(batch, 1, -1)
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0].squeeze(2).view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
         positions = torch.LongTensor([start_pos_ids[0]])
         freqs_cis_i = precompute_freqs_cis(model_args.head_dim, 128_000)[positions]
