@@ -205,7 +205,7 @@ Tensor ExecuteDiv::invoke(
 
     if (is_int32) {
         TT_FATAL(
-            ((use_legacy == false || use_legacy == std::nullopt) && !fast_and_approximate_mode),
+            (!use_legacy.value_or(false) && !fast_and_approximate_mode),
             "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
             use_legacy,
             fast_and_approximate_mode);
@@ -238,7 +238,7 @@ Tensor ExecuteDiv::invoke(
         } else {
             // round_mode = None
             TT_FATAL(
-                (output_dtype == std::nullopt || output_dtype == DataType::FLOAT32),
+                (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
                 "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
                 "ttnn.float32");
             return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
@@ -336,7 +336,7 @@ Tensor ExecuteDiv::invoke(
 
     if (is_int32) {
         TT_FATAL(
-            ((use_legacy == false || use_legacy == std::nullopt) && !fast_and_approximate_mode),
+            (!use_legacy.value_or(false) && !fast_and_approximate_mode),
             "Integer Division does not support use_legacy=true {} or fast_and_approximate_mode=true {}",
             use_legacy,
             fast_and_approximate_mode);
@@ -369,7 +369,7 @@ Tensor ExecuteDiv::invoke(
         } else {
             // round_mode = None
             TT_FATAL(
-                (output_dtype == std::nullopt || output_dtype == DataType::FLOAT32),
+                (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
                 "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
                 "ttnn.float32");
             return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
