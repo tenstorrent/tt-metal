@@ -32,6 +32,12 @@ on:
         required: false
         type: boolean
         default: false
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'models/tt_transformers/**'
+      - '.github/workflows/tt-transformers-demo-tests*.yaml'
   workflow_call:
     inputs:
       device:
@@ -58,8 +64,10 @@ jobs:
       version: 22.04
 
   # N150 Tests (Wormhole single chip)
+  # For PR triggers: only runs N150 by default
+  # For manual/workflow_call triggers: runs based on device input
   n150-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'n150' }}
+    if: ${{ github.event_name == 'pull_request' || inputs.device == 'all' || inputs.device == 'n150' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
