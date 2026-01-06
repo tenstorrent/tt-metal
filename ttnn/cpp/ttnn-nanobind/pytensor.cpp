@@ -36,6 +36,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <ttnn/operations/data_movement/untilize/untilize.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -396,18 +397,32 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         TT_THROW("Unreachable");
     };
 
+    auto extract_buffer_from_host_storage = [](const HostStorage& storage) -> HostBuffer {
+        std::vector<HostBuffer> buffers;
+        storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+        TT_FATAL(
+            buffers.size() == 1,
+            "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+            "composer "
+            "to concatenate multi-device shards.",
+            storage.buffer().shape());
+        return buffers.front();
+    };
+
     return convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [](const HostStorage& storage) {
-                std::vector<HostBuffer> buffers;
-                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
-                    "to concatenate multi-device shards.",
-                    storage.buffer().shape());
-                return buffers.front();
+            [&extract_buffer_from_host_storage](const HostStorage& storage) -> HostBuffer {
+                return extract_buffer_from_host_storage(storage);
+            },
+            [&tt_tensor, &extract_buffer_from_host_storage](const DeviceStorage& storage) {
+                const bool tilizable = (tt_tensor.physical_volume() % tt::constants::TILE_HW) == 0;
+
+                auto host_tensor =
+                    ((tilizable && (Layout::TILE == tt_tensor.layout())) ? ttnn::untilize(tt_tensor) : tt_tensor).cpu();
+
+                return tt::tt_metal::host_buffer::get_host_buffer(host_tensor);
+                // const auto& host_storage = std::get<HostStorage>(host_tensor.storage());
+                // return extract_buffer_from_host_storage(host_storage);
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(

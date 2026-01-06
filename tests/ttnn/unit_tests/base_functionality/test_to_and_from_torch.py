@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn import ShardTensorToMesh
 
 pytestmark = pytest.mark.use_module_device
 
@@ -136,3 +137,77 @@ def test_to_for_01_rank_on_device(device, shape, layout, dtype, pad_value):
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch_input_tensor.shape == torch_output_tensor.shape
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+# Regression test for issue #31136: to_torch with mesh_composer=None on device-sharded tensor
+# Issue: https://github.com/tenstorrent/tt-metal/issues/31136
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 3, 3),
+        #        (1, 1, 32, 32),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_to_torch_with_mesh_composer_none(shape, layout):
+    """Regression test for issue #31136: to_torch with mesh_composer=None on device-sharded tensor"""
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape((1, 1)))
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    torch_output_tensor = ttnn_tensor.to_torch(mesh_composer=None)
+
+    assert torch.equal(torch_input_tensor, torch_output_tensor), "to_torch mismatch on device-sharded tensor"
+    #    assert torch.allclose(torch_input_tensor, torch_output_tensor)
+    ttnn.close_mesh_device(mesh_device)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        #        (1, 1, 3, 3),
+        #        (1, 1, 16, 16),
+        (1, 1, 32, 32),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_tilize_untilize(shape, layout):
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape((1, 1)))
+
+    ttnn_tensor1 = ttnn.from_torch(
+        torch_input_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+    )
+    ttnn_tensor2 = ttnn.from_torch(
+        torch_input_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    if ttnn_tensor1.layout == ttnn.TILE_LAYOUT:
+        ttnn_tensor1 = ttnn.tilize(ttnn.untilize(ttnn_tensor1))
+    else:
+        ttnn_tensor1 = ttnn.untilize(ttnn.tilize(ttnn_tensor1))
+
+    # Element-wise equality comparison on device
+    comparison_result = ttnn.eq(ttnn_tensor1, ttnn_tensor2)
+    # Bring to host and verify all elements match
+    comparison_torch = ttnn.to_torch(comparison_result)
+    assert torch.all(comparison_torch), "Tensors are not equal"
+
+    ttnn.close_mesh_device(mesh_device)
