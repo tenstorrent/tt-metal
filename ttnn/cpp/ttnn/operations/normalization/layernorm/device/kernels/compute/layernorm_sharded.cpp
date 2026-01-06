@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
+    constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
 
@@ -150,12 +151,11 @@ void kernel_main() {
         cb_ex_partial,
         compute_kernel_lib::TileShape::grid(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::TileLayout::with_row_stride(block_w));
-
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex);
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -163,7 +163,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external, 1);
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
                     cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external, 1);
             }
@@ -176,7 +176,7 @@ void kernel_main() {
             pack_tile(dst0, cb_ex);
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<FP32_DEST_ACC>();
         cb_push_back(cb_ex, num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
     }
@@ -265,7 +265,7 @@ void kernel_main() {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external2, cb_scaler_global, cb_ex2);
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -274,7 +274,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_wait_front(cb_ex_external2, 1);
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
                     cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
                 cb_pop_front(cb_ex_external2, 1);
             }
@@ -287,7 +287,7 @@ void kernel_main() {
             pack_tile(dst0, cb_ex2);
             tile_regs_release();
         }
-        reduce_uninit();
+        reduce_uninit<FP32_DEST_ACC>();
         cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
 
         if (enable_sqrt) {

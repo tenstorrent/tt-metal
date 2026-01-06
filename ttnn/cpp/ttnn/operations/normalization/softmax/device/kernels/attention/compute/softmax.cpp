@@ -264,7 +264,13 @@ void kernel_main() {
         // PERSISTENT: waits for all tiles upfront, uses indexed access, tiles persist for reuse
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
-                cb_exps, cb_bcast_scaler, cb_recipsumexps, compute_kernel_lib::TileShape::row(Wt), {}, []() {
+                cb_exps,
+                cb_bcast_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::TileShape::row(Wt),
+                {},
+                {},
+                [](uint32_t) {
                     recip_tile_init();
                     recip_tile(0);
                 });
