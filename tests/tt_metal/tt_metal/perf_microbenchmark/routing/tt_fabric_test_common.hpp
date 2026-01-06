@@ -94,7 +94,7 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
 
 public:
     bool validate_device_frequencies_for_performance_tests() {
-        // Skip if already validated - device frequencies are cached for the lifetime of the test context
+        // Skip if already validated - device frequencies are cached for the lifetime of the fixture
         if (frequency_validated_) {
             return true;
         }

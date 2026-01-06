@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // Validate device frequencies for performance tests. Validation runs once per test context
+        // Validate device frequencies for performance tests. Validation runs only once
         // since device frequencies are cached in TestFixture for its lifetime.
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
             if (!fixture->validate_device_frequencies_for_performance_tests()) {
