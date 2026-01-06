@@ -249,6 +249,7 @@ jobs:
 
       - name: Upload CodeChecker reports
         uses: actions/upload-artifact@v4
+        if: always()
         timeout-minutes: 10
         with:
           name: CodeChecker-Static-Analysis-Reports
