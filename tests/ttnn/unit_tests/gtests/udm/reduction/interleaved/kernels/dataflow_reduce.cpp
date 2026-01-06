@@ -25,6 +25,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "udm/accessor/mesh_tensor_accessor.h"
 #include "tt_metal/hw/inc/udm/udm_api.hpp"
+#include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "api/debug/dprint.h"
@@ -49,36 +50,17 @@ void kernel_main() {
     constexpr uint32_t cb_out = 2;     // Output tiles (1 reduced tile per row)
 
     // ==================== Get Runtime Arguments ====================
-    // General ND iteration format (same as add kernel):
-    // - rank: number of dimensions
-    // - For each dimension: (num_pages, offset, stride)
-    uint32_t rank = get_arg_val<uint32_t>(0);
-
-    constexpr uint32_t MAX_RANK = 8;
-    std::array<uint32_t, MAX_RANK> dim_pages = {0};
-    std::array<uint32_t, MAX_RANK> dim_offsets = {0};
-    std::array<uint32_t, MAX_RANK> dim_strides = {0};
-
-    uint32_t arg_idx = 1;
-    for (uint32_t d = 0; d < rank; ++d) {
-        dim_pages[d] = get_arg_val<uint32_t>(arg_idx++);
-        dim_offsets[d] = get_arg_val<uint32_t>(arg_idx++);
-        dim_strides[d] = get_arg_val<uint32_t>(arg_idx++);
-    }
+    NDIterArgs<> iter_args;
+    uint32_t arg_idx = iter_args.parse(0);
 
     // Read output strides for each row dimension (all dims except width)
-    std::array<uint32_t, MAX_RANK> output_strides = {0};
-    for (uint32_t d = 0; d < rank - 1; ++d) {
+    std::array<uint32_t, iter_args.max_rank> output_strides = {0};
+    for (uint32_t d = 0; d < iter_args.rank - 1; ++d) {
         output_strides[d] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    // Calculate total number of rows (product of all dims except last which is width)
-    uint32_t num_rows = 1;
-    for (uint32_t d = 0; d < rank - 1; ++d) {
-        num_rows *= dim_pages[d];
-    }
-    // Width tiles to reduce per row (last dimension)
-    uint32_t input_width_tiles = dim_pages[rank - 1];
+    uint32_t num_rows = iter_args.total_rows();
+    uint32_t input_width_tiles = iter_args.last_dim_pages();
 
     // Early exit for non-workers
     if (num_rows == 0 || input_width_tiles == 0) {
@@ -98,20 +80,16 @@ void kernel_main() {
     cb_push_back(cb_scaler, 1);
 
     // ==================== Compute Initial Page IDs ====================
-    // Input page_id from offsets and strides
-    uint32_t input_page_id = 0;
-    for (uint32_t d = 0; d < rank; ++d) {
-        input_page_id += dim_offsets[d] * dim_strides[d];
-    }
+    uint32_t input_page_id = iter_args.initial_page_id();
 
     // Output page_id: use output strides from mesh_tensor_shape
     uint32_t output_page_id = 0;
-    for (uint32_t d = 0; d < rank - 1; ++d) {
-        output_page_id += dim_offsets[d] * output_strides[d];
+    for (uint32_t d = 0; d < iter_args.rank - 1; ++d) {
+        output_page_id += iter_args.dim_offsets[d] * output_strides[d];
     }
 
     // ==================== Initialize Row Indices ====================
-    std::array<uint32_t, MAX_RANK> row_indices = {0};
+    std::array<uint32_t, iter_args.max_rank> row_indices = {0};
 
     // ==================== Process Each Row ====================
     for (uint32_t row = 0; row < num_rows; ++row) {
@@ -120,7 +98,7 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_in0);
 
         for (uint32_t col = 0; col < input_width_tiles; ++col) {
-            uint32_t tile_page_id = input_page_id + col * dim_strides[rank - 1];
+            uint32_t tile_page_id = input_page_id + col * iter_args.dim_strides[iter_args.rank - 1];
             tt::tt_fabric::experimental::udm::async_read(input_accessor, tile_page_id, l1_write_addr, page_size);
             l1_write_addr += page_size;
         }
@@ -139,16 +117,16 @@ void kernel_main() {
 
         // Increment row indices and update page_ids for next row
         // We iterate over all dims except the last (width) which we reduce
-        for (int d = rank - 2; d >= 0; --d) {
-            input_page_id += dim_strides[d];
+        for (int d = iter_args.rank - 2; d >= 0; --d) {
+            input_page_id += iter_args.dim_strides[d];
             output_page_id += output_strides[d];
-            if (++row_indices[d] < dim_pages[d]) {
+            if (++row_indices[d] < iter_args.dim_pages[d]) {
                 break;  // No carry needed
             }
             // Carry: reset this dimension
             row_indices[d] = 0;
-            input_page_id -= dim_pages[d] * dim_strides[d];
-            output_page_id -= dim_pages[d] * output_strides[d];
+            input_page_id -= iter_args.dim_pages[d] * iter_args.dim_strides[d];
+            output_page_id -= iter_args.dim_pages[d] * output_strides[d];
         }
     }
 
