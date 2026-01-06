@@ -490,9 +490,6 @@ class MLP(AbstractModule):
         # All gather
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
-        # # TODO: File issue on AG not being able to do this internally (Issue #26672)
-        # x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
-
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
@@ -511,8 +508,6 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Add reduce-scatter
-        # w2_out = ttnn.to_memory_config(w2_out, ttnn.L1_MEMORY_CONFIG)
-        # # TODO: File issue on RS not being able to run sharded memory config
         output = ttnn.experimental.reduce_scatter_minimal_async(
             w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
         )

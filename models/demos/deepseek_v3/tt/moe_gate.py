@@ -137,9 +137,6 @@ class MoEGate(AbstractModule):
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
 
-            USERS_PER_ROW = 32
-            HIDDEN_SIZE = hf_config.hidden_size
-
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),

@@ -473,9 +473,6 @@ class MLA1D(AbstractModule):
         kv_rope_out_reshard_config = ReshardConfig(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        kv_rope_slice_config = SliceConfig(
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
 
         # KV concat
         kv_concat_config = ConcatConfig(
