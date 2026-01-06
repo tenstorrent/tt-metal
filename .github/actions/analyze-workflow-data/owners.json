@@ -445,7 +445,7 @@
     { "job-name-component": "profiler-tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } },
     { "job-name-component": "quick-6u-quick", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "t3000-fast-tests", "owner": { "id": "U06LRK6JDGB", "name": "Saad Jameel" } },
-    { "job-name-component": "tt-train-cpp-unit-tests", "owner": { "id": "U07ASPTGJTS", "name": "Denys" } },
+    { "job-name-component": "tt-train-cpp-unit-tests", "owner": { "id": "U08CDEY47EE", "name": "Joe Malone" } },
     { "job-name-component": "ttnn", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
     { "job-name-component": "ttnn-conv-tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
     { "job-name-component": "ttnn-data_movement-tests", "owner": { "id": "U084DDYSWCW", "name": "Adrian Morrison" } },

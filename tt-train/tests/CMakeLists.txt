@@ -106,3 +106,36 @@ endif()
 
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
+
+# Add NIGHTLY labels to tests for nightly CI runs
+# These tests are specifically configured for extended nightly testing
+set_tests_properties(
+    "ttml_tests.NanoGPTTest.NIGHTLY_NoParallel"
+    "ttml_tests.NanoGPTMultiDeviceTest.NIGHTLY_DDP"
+    "ttml_tests.LinearRegressionDDPTest.Full"
+    PROPERTIES
+        LABELS
+            "NIGHTLY"
+)
+
+set_tests_properties(
+    "ttml_tests.NanoGPTMultiDeviceTest.NIGHTLY_DDP"
+    PROPERTIES
+        LABELS
+            "MULTIHOST"
+)
+
+set_tests_properties(
+    "ttml_tests.NanoGPTMultiDeviceTest.NIGHTLY_DDP"
+    "ttml_tests.LinearRegressionDDPTest.Full"
+    PROPERTIES
+        LABELS
+            "WORMHOLE"
+)
+
+set_tests_properties(
+    "ttml_tests.NanoGPTTest.NIGHTLY_NoParallel"
+    PROPERTIES
+        LABELS
+            "BLACKHOLE"
+)

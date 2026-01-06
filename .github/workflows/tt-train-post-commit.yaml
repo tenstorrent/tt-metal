@@ -64,7 +64,6 @@ jobs:
         TT_METAL_RUNTIME_ROOT: /work
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -101,7 +100,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07ASPTGJTS # Denys
+          owner: U08CDEY47EE # Joe Malone
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

@@ -20,11 +20,16 @@
 #include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 namespace {
-/*
-Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
-or setting 'is_nigthly_tt_train_tests_enabled' variable to true.
-*/
-constexpr bool is_nigthly_tt_train_tests_enabled = false;
+
+[[nodiscard]] bool is_blackhole() {
+    static bool arch_is_blackhole = []() {
+        auto shape = tt::tt_metal::distributed::MeshShape(1, 1);
+        ttml::core::MeshDevice device(shape, {});
+
+        return device.get_device().arch() == tt::ARCH::BLACKHOLE;
+    }();
+    return arch_is_blackhole;
+}
 
 [[nodiscard]] bool is_wormhole_b0() {
     static bool arch_is_wormhole_b0 = []() {
@@ -38,18 +43,22 @@ constexpr bool is_nigthly_tt_train_tests_enabled = false;
 
 [[nodiscard]] bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
-    bool is_whb0 = is_wormhole_b0();
-    bool is_ci = env_var && is_nigthly_tt_train_tests_enabled;
-    return is_whb0 && is_ci;
+    // Only run on blackhole
+    bool is_blackhole_arch = is_blackhole();
+    bool nightly_enabled = env_var && (std::string(env_var) == "1");
+    return is_blackhole_arch && nightly_enabled;
 }
 
 [[nodiscard]] bool should_run_multi_device_tests() {
-    bool enable_nightly = should_run_nightly_tests();
+    const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
+    // Only run on wormhole
+    bool is_wormhole_arch = is_wormhole_b0();
+    bool nightly_enabled = env_var && (std::string(env_var) == "1");
     bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
-    return enable_nightly && sufficient_devices;
+    return nightly_enabled && is_wormhole_arch && sufficient_devices;
 }
 }  // namespace
-class NanoLlamaTest : public ::testing::Test {
+class NanoGPTTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (should_run_nightly_tests()) {
@@ -65,7 +74,7 @@ protected:
     }
 };
 
-class NanoLlamaMultiDeviceTest : public ::testing::Test {
+class NanoGPTMultiDeviceTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (should_run_multi_device_tests()) {
@@ -116,7 +125,7 @@ using DataLoader = ttml::datasets::DataLoader<
 
 // test training with MorehAdamW, nanollama config, memory efficient runner
 // no clip grad norm
-void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
+void train_test(bool use_tensor_parallel = false, bool use_ddp = false, bool is_nightly_test = false) {
     if (use_tensor_parallel && use_ddp) {
         throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
     }
@@ -343,23 +352,23 @@ If one of these tests fails, it means one (or more) of the following:
 - loss values changed (regression in ops accuracy)
 */
 
-TEST_F(NanoLlamaTest, NIGHTLY_Default) {
+TEST_F(NanoGPTTest, NIGHTLY_NoParallel) {
     if (!should_run_nightly_tests()) {
         GTEST_SKIP() << "Skipping Nightly test.";
     }
-    train_test();
+    train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/false, /*is_nightly_test=*/true);
 }
 
-TEST_F(NanoLlamaMultiDeviceTest, DISABLED_NIGHTLY_TensorParallel) {
+TEST_F(NanoGPTMultiDeviceTest, DISABLED_NIGHTLY_TensorParallel) {
     if (!should_run_multi_device_tests()) {
         GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
     train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
 }
 
-TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
+TEST_F(NanoGPTMultiDeviceTest, NIGHTLY_DDP) {
     if (!should_run_multi_device_tests()) {
         GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
-    train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
+    train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true, /*is_nightly_test=*/true);
 }

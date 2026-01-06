@@ -1,0 +1,38 @@
+name: "(tt-train) nightly training tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      wormhole:
+        description: "Run Wormhole architecture tests"
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        description: "Run Blackhole architecture tests"
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    # Daily at 2am UTC (offset from other nightly jobs to avoid resource conflicts)
+    - cron: "0 2 * * *"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+
+  tt-train-nightly-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/tt-train-nightly-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      blackhole: ${{ github.event.inputs.blackhole == 'true' || github.event_name == 'schedule' }}
+      wormhole: ${{ github.event.inputs.wormhole == 'true' || github.event_name == 'schedule' }}

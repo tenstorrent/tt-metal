@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
@@ -53,7 +54,7 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
-TEST_F(LinearRegressionDDPTest, Full) {
+void run_ddp_training() {
     const size_t training_samples_count = 1000;
     const size_t num_features = 64;
     const size_t num_targets = 32;
@@ -73,7 +74,7 @@ TEST_F(LinearRegressionDDPTest, Full) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [device](std::vector<DatasetSample>&& samples) {
+        [device, num_features, num_targets](std::vector<DatasetSample>&& samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
             std::vector<float> targets;
@@ -119,4 +120,8 @@ TEST_F(LinearRegressionDDPTest, Full) {
             ttml::autograd::ctx().reset_graph();
         }
     }
+}
+
+TEST_F(LinearRegressionDDPTest, Full) {
+    run_ddp_training();
 }

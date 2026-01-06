@@ -1,0 +1,254 @@
+name: "[internal] tt-train nightly training tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      blackhole:
+        required: false
+        type: boolean
+        default: true
+      wormhole:
+        required: false
+        type: boolean
+        default: true
+      multihost:
+        required: false
+        type: boolean
+        default: true
+      timeout:
+        required: false
+        type: number
+        default: 20
+
+jobs:
+  # NanoGPT Basic Training on Blackhole
+  blackhole:
+    if: inputs.blackhole
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: nanogpt-basic-blackhole,
+            arch: blackhole,
+            runner-label: "P150",
+            cmd: "ctest -L 'BLACKHOLE' -LE 'MULTIHOST' -L 'NIGHTLY' --no-tests=error --output-on-failure --output-junit generated/test_reports/nanogpt_nightly_report.xml"
+          }
+        ]
+    name: ${{ matrix.test-group.name }}
+    runs-on: ["cloud-virtual-machine", "in-service", "P150", "pipeline-functional"]
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        ENABLE_NIGHTLY_TT_TRAIN_TESTS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          auto-triage: true
+
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          cd /work/build/tt-train
+          mkdir -p generated/test_reports
+          ldd tests/ttml_tests || true
+          echo "Running NanoGPT nightly test on Blackhole..."
+          ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08CDEY47EE # Joe Malone
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/build/tt-train/generated/test_reports/
+          prefix: "nanogpt_nightly_test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  # LinearRegression DDP on N300
+  wormhole:
+    if: inputs.wormhole
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: linear-regression-ddp-wormhole,
+            arch: wormhole,
+            runner-label: "N300",
+            cmd: "ctest -L 'WORMHOLE' -LE 'MULTIHOST' -L 'NIGHTLY' --no-tests=error --output-on-failure --output-junit generated/test_reports/linear_regression_nightly_report.xml"
+          }
+        ]
+    name: ${{ matrix.test-group.name }}
+    runs-on: ["cloud-virtual-machine", "in-service", "N300", "pipeline-functional"]
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        ENABLE_NIGHTLY_TT_TRAIN_TESTS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          auto-triage: true
+
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          cd /work/build/tt-train
+          mkdir -p generated/test_reports
+          ldd tests/ttml_tests || true
+          echo "Running LinearRegression DDP nightly test on Wormhole..."
+          ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08CDEY47EE # Joe Malone
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/build/tt-train/generated/test_reports/
+          prefix: "linear_regression_nightly_test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  # NanoGPT Multihost 3-Tier on Wormhole
+  multihost-wormhole:
+    if: inputs.wormhole
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: nanogpt-multihost-wormhole,
+            arch: wormhole,
+            runner-label: "topology-6u",
+            cmd: "cd sources/examples/nano_gpt/3tier && python run_3tier_demo.py -c ../../configs/model_configs/gpt2s_3tier.yaml --workers 2 --aggregators 1 --optimizers 1 --dry-run"
+          }
+        ]
+    name: ${{ matrix.test-group.name }}
+    runs-on:
+      - topology-6u
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        PYTHONPATH: /work/build/lib:/work/python
+        ENABLE_NIGHTLY_TT_TRAIN_TESTS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          auto-triage: true
+
+      - name: Verify NanoGPT Config Files
+        run: |
+          # Verify the NanoGPT config files exist before running the test
+          ls -la /work/sources/examples/nano_gpt/3tier/run_3tier_demo.py || echo "Demo script not found"
+          ls -la /work/configs/model_configs/gpt2s_3tier.yaml || echo "Model config file not found"
+          ls -la /work/build/sources/examples/nano_gpt/nano_gpt || echo "nano_gpt binary not found"
+          ls -la /work/build/sources/examples/nano_gpt/nano_gpt_aggregator || echo "nano_gpt_aggregator binary not found"
+          ls -la /work/build/sources/examples/nano_gpt/nano_gpt_optimizer || echo "nano_gpt_optimizer binary not found"
+
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          echo "Running NanoGPT 3-tier multihost nightly test on Wormhole..."
+          # Test runs in dry-run mode first to verify setup
+          ${{ matrix.test-group.cmd }}
+
+          # Run actual training (removing --dry-run)
+          cd sources/examples/nano_gpt/3tier
+          python run_3tier_demo.py -c ../../configs/model_configs/gpt2s_3tier.yaml --workers 2 --aggregators 1 --optimizers 1
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08CDEY47EE # Joe Malone
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/sources/examples/nano_gpt/3tier/logs/
+          prefix: "nanogpt_nightly_logs_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
