@@ -291,6 +291,8 @@ void kernel_main() {
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t e_d_buffer_id = get_named_compile_time_arg_val("e_d_buffer_id");
 
+    DPRINT << "e_d buffer address: " << get_read_ptr(e_d_buffer_id) << ENDL();
+
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
     constexpr uint32_t mapping_pages = get_named_compile_time_arg_val("mapping_pages");

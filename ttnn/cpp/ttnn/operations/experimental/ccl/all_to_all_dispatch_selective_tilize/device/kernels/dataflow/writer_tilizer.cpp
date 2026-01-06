@@ -126,6 +126,7 @@ void poll_ed_table_loop(volatile tt_l1_ptr uint32_t* ed_table, uint32_t lineariz
 }
 
 void kernel_main() {
+    DPRINT << "Writer tilizer started" << ENDL();
     constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
@@ -187,6 +188,7 @@ void kernel_main() {
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
 
     uint32_t ed_addr = get_read_ptr(e_d_buffer_id);
+    DPRINT << "E-D buffer address: " << ed_addr << ENDL();
     uint32_t rt_args_idx = 0;
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);           // 0
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);         // 1
@@ -208,12 +210,14 @@ void kernel_main() {
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
 
     // read in the mapping tensor
+    DPRINT << "Reading mapping tensor (" << mapping_pages << " pages)" << ENDL();
     for (uint32_t mapping_page = 0; mapping_page < mapping_pages; mapping_page++) {
         cb_reserve_back(mapping_tensor_cb_id, 1);
         noc_async_read_page(mapping_page, mapping_tensor_addr_gen, get_write_ptr(mapping_tensor_cb_id));
         noc_async_read_barrier();
         cb_push_back(mapping_tensor_cb_id, 1);
     }
+    DPRINT << "Mapping tensor read complete" << ENDL();
 
     uint16_t* devices_for_experts = (uint16_t*)get_read_ptr(mapping_tensor_cb_id);
     // l1_alignment is in bytes, but ed_table is uint32_t*, so we need to divide by sizeof(uint32_t)
@@ -223,8 +227,10 @@ void kernel_main() {
     // POST-PROCESSING STAGE:
     // Only drain_tilizer_cores do the ground truth computation, matching the reader_tilizer
     // which only pushes CB pages for drain cores after waiting for the all-gather semaphore.
+    DPRINT << "is_drain_tilizer_core=" << (uint32_t)is_drain_tilizer_core << ENDL();
 
     if (is_drain_tilizer_core) {
+        DPRINT << "Starting drain core ground truth computation" << ENDL();
         // Read in metadata into indices cb and update the ground truth E-D table offset into the second half of the
         // E-D buffer. We iterate through all source devices' metadata, counting how many tokens will arrive at each
         // local expert from each source device.
@@ -238,7 +244,10 @@ void kernel_main() {
             uint32_t indices_page = 0;
 
             while (tokens_processed < tokens_per_device) {
+                DPRINT << "Waiting for indices page (dev " << device_id << ", tokens=" << tokens_processed << ")"
+                       << ENDL();
                 cb_wait_front(indices_tensor_cb_id, 1);
+                DPRINT << "Got indices page" << ENDL();
                 uint16_t* indices_ptr = (uint16_t*)get_read_ptr(indices_tensor_cb_id);
 
                 // Process tokens within this tile, but don't exceed tokens_per_device
@@ -262,6 +271,8 @@ void kernel_main() {
             }
         }
 
+        DPRINT << "Ground truth computation complete" << ENDL();
+
         // Set local semaphore and multicast to signal E-D table computation is complete
         uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
         volatile tt_l1_ptr uint32_t* ed_computed_sem_ptr =
@@ -271,6 +282,7 @@ void kernel_main() {
         // Only multicast if there are other tilizer cores to send to
         // When num_tilizer_cores == 1 (only drain core), loopback_src will hang
         if constexpr (num_tilizer_cores > 1) {
+            DPRINT << "Multicasting E-D table to other tilizer cores" << ENDL();
             // Multicast the E-D table data to all tilizer cores
             uint32_t ed_table_size = experts_per_device * dispatch_devices * l1_alignment;
 
@@ -294,11 +306,14 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         // When num_tilizer_cores == 1, data is already local, no multicast needed
+        DPRINT << "Drain core done with ground truth" << ENDL();
     }
 
     // Tilizer cores wait for the E-D table computation to be complete
+    DPRINT << "Waiting for ed_table_computed semaphore" << ENDL();
     uint32_t ed_computed_sem_addr = get_semaphore(ed_table_computed_semaphore_id);
     noc_semaphore_wait((uint32_t*)ed_computed_sem_addr, 1);
+    DPRINT << "ed_table_computed semaphore signaled" << ENDL();
 
     // iterate through the ground truth E-D table and compute how many chunks are processed total to know the total
     // number of loops
@@ -312,10 +327,28 @@ void kernel_main() {
                             tokens_per_chunk;
         }
     }
+    DPRINT << "total_chunks=" << total_chunks << ENDL();
 
-    // temporary for synchronization with reader.
+    // Pass total_chunks to compute kernel via CB
+    constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
+    DPRINT << "Pushing total_chunks to compute via CB" << ENDL();
+    cb_reserve_back(total_chunks_cb_id, 1);
+    volatile tt_l1_ptr uint32_t* total_chunks_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(total_chunks_cb_id));
+    *total_chunks_ptr = total_chunks;
+    cb_push_back(total_chunks_cb_id, 1);
+    DPRINT << "total_chunks pushed" << ENDL();
+
+    // Wait for compute kernel to push tilized output
+    constexpr uint32_t tilizer_output_cb_id = get_named_compile_time_arg_val("tilizer_output_cb_id");
+    constexpr uint32_t tiles_per_chunk = get_named_compile_time_arg_val("tiles_per_chunk");
+    DPRINT << "Starting output loop (tiles_per_chunk=" << tiles_per_chunk << ")" << ENDL();
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
-        cb_wait_front(tilizer_input_cb_id, tokens_per_chunk);
-        cb_pop_front(tilizer_input_cb_id, tokens_per_chunk);
+        DPRINT << "Waiting for tilized chunk " << chunk << ENDL();
+        cb_wait_front(tilizer_output_cb_id, tiles_per_chunk);
+        // TODO: Write tilized tiles to output/matmul cores here
+        cb_pop_front(tilizer_output_cb_id, tiles_per_chunk);
+        DPRINT << "Processed chunk " << chunk << ENDL();
     }
+    DPRINT << "Writer tilizer complete" << ENDL();
 }

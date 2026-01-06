@@ -179,8 +179,12 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t scores_tensor_cb_id = tt::CBIndex::c_5;
     // E-D buffer
     uint32_t e_d_buffer_id = tt::CBIndex::c_6;
-    // Tilizer input buffer for tokens to be tilized
+    // Tilizer input buffer for tokens to be tilized (row-major from reader)
     uint32_t tilizer_input_cb_id = tt::CBIndex::c_7;
+    // Tilizer output buffer for tilized tokens (from compute to writer)
+    uint32_t tilizer_output_cb_id = tt::CBIndex::c_8;
+    // Sync CB for passing total_chunks from writer to compute
+    uint32_t total_chunks_cb_id = tt::CBIndex::c_9;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
     log_debug(
@@ -333,59 +337,84 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // For simplicity, we pass the NOC 0 ordering (start < end) and the kernel will use NOC 0
 
     // Create circular buffers
-
-    // Store subtokens of the input tensor in a circular buffer
+    // IMPORTANT: E-D buffer MUST be created FIRST on BOTH core ranges so it's at the SAME L1 base
+    // address on both sender and tilizer cores. The sender cores send NOC writes to the tilizer
+    // cores' E-D table using their own CB address, so both must match.
+    // Creating on separate non-overlapping ranges avoids the CB allocator intersection issues.
     tt::tt_metal::create_cb(
-        input_tensor_cb_id, program, full_grid, max_subtoken_size, buffering_factor, input_data_format);
+        e_d_buffer_id,
+        program,
+        sender_core_grid,
+        experts_per_device * dispatch_devices * l1_alignment,  // E-D table page size
+        3,  // Page 0: ed_table (incremented), Page 1: ground truth table, Page 2: temp buffer for mcast
+        tt::DataFormat::UInt32);
+    tt::tt_metal::create_cb(
+        e_d_buffer_id,
+        program,
+        selective_tilize_core_range_set,
+        experts_per_device * dispatch_devices * l1_alignment,  // E-D table page size
+        3,  // Page 0: ed_table (incremented), Page 1: ground truth table, Page 2: temp buffer for mcast
+        tt::DataFormat::UInt32);
+
+    // Store subtokens of the input tensor in a circular buffer (sender cores only)
+    tt::tt_metal::create_cb(
+        input_tensor_cb_id, program, sender_core_grid, max_subtoken_size, buffering_factor, input_data_format);
 
     // Store entire indices tensor in a circular buffer
+    // Create separately on each core range to avoid allocator intersection issues
     tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
-        full_grid,
+        sender_core_grid,
+        aligned_indices_page_size,
+        buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
+        indices_data_format);
+    tt::tt_metal::create_cb(
+        indices_tensor_cb_id,
+        program,
+        selective_tilize_core_range_set,
         aligned_indices_page_size,
         buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
         indices_data_format);
 
-    // Store entire scores tensor in a circular buffer
+    // Store entire scores tensor in a circular buffer (sender cores only)
     tt::tt_metal::create_cb(
         scores_tensor_cb_id,
         program,
-        full_grid,
+        sender_core_grid,
         aligned_indices_page_size,
         buffering_factor * max_indices_pages_per_packet,  // double buffer buffer packets
         scores_data_format);
 
     // Store entire mapping tensor in a circular buffer
+    // Create separately on each core range to avoid allocator intersection issues
     tt::tt_metal::create_cb(
-        mapping_tensor_cb_id, program, full_grid, aligned_mapping_page_size, mapping_pages, mapping_data_format);
+        mapping_tensor_cb_id, program, sender_core_grid, aligned_mapping_page_size, mapping_pages, mapping_data_format);
+    tt::tt_metal::create_cb(
+        mapping_tensor_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        aligned_mapping_page_size,
+        mapping_pages,
+        mapping_data_format);
 
-    // Store send preparation buffer in a circular buffer
+    // Store send preparation buffer in a circular buffer (sender cores only)
     tt::tt_metal::create_cb(
         send_preparation_buffer_id,
         program,
-        full_grid,
+        sender_core_grid,
         tokens_per_device * sizeof(uint8_t),
         num_devices,
         tt::DataFormat::UInt8);
 
-    // Store packet header buffer in a circular buffer
+    // Store packet header buffer in a circular buffer (sender cores only)
     tt::tt_metal::create_cb(
         packet_header_cb_id,
         program,
-        full_grid,
+        sender_core_grid,
         packet_header_size_bytes,
         num_packet_headers,
         tt::DataFormat::RawUInt32);
-
-    tt::tt_metal::create_cb(
-        e_d_buffer_id,
-        program,
-        full_grid,
-        experts_per_device * dispatch_devices * l1_alignment,  // E-D table page size
-        3,  // Page 0: ed_table (incremented), Page 1: ground truth table, Page 2: temp buffer for mcast
-        tt::DataFormat::UInt32);  // E-D buffer where each element is 16B aligned to ensure each semaphore increment is
-                                  // 16B aligned
 
     // Tilizer input buffer: holds subtokens for tokens_per_chunk tokens, double-buffered
     // Each tilizer core reads its subtoken portion of incoming tokens
@@ -394,8 +423,36 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         program,
         selective_tilize_core_range_set,
         max_tilizer_subtoken_size,
-        operation_attributes.tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
+        operation_attributes.tokens_per_chunk * 1,  // double-buffered tokens_per_chunk
         input_data_format);
+
+    // Tilizer output buffer: holds tilized output from compute kernel
+    // page_size is the tile size, num_pages is tiles_per_chunk (based on max subtoken size)
+    // Tile dimensions: height = tokens_per_chunk, width = 32
+    // tile_width_bytes = TILE_WIDTH * element_size
+    // tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes
+    constexpr uint32_t TILE_WIDTH = 32;
+    uint32_t element_size = input_tensor.element_size();
+    uint32_t tile_size_bytes = operation_attributes.tokens_per_chunk * TILE_WIDTH * element_size;
+    uint32_t tile_width_bytes = TILE_WIDTH * element_size;
+    uint32_t tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes;
+    tt::tt_metal::create_cb(
+        tilizer_output_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        tile_size_bytes,
+        tiles_per_chunk * buffering_factor,  // double-buffered
+        input_data_format);
+
+    // Sync CB for passing total_chunks from writer to compute
+    // One page with one uint32_t value, aligned to l1_alignment
+    tt::tt_metal::create_cb(
+        total_chunks_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        l1_alignment,  // page_size: minimum L1 alignment
+        1,             // just one page
+        tt::DataFormat::UInt32);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
@@ -481,6 +538,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"ed_buffer_ready_semaphore_id", ed_buffer_ready_semaphore_id},
         {"ed_table_computed_semaphore_id", ed_table_computed_semaphore_id},
         {"tokens_per_chunk", operation_attributes.tokens_per_chunk},
+        {"tilizer_output_cb_id", tilizer_output_cb_id},
+        {"tiles_per_chunk", tiles_per_chunk},
+        {"total_chunks_cb_id", total_chunks_cb_id},
     };
 
     std::vector<uint32_t> compile_time_args = {};
@@ -512,6 +572,24 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         "writer_tilizer.cpp",
         selective_tilize_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(selective_tilize_compile_time_args, {}, named_compile_time_args));
+
+    // Compute kernel compile-time args for tilization
+    // These are positional args: tilizer_input_cb_id, tilizer_output_cb_id, tiles_per_chunk,
+    //   tokens_per_chunk, total_chunks_cb_id
+    std::vector<uint32_t> compute_tilizer_compile_time_args = {
+        tilizer_input_cb_id,
+        tilizer_output_cb_id,
+        tiles_per_chunk,
+        operation_attributes.tokens_per_chunk,
+        total_chunks_cb_id,
+    };
+
+    tt::tt_metal::KernelHandle compute_tilizer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_selective_tilize/device/kernels/compute/"
+        "compute_tilizer.cpp",
+        selective_tilize_core_range_set,
+        tt::tt_metal::ComputeConfig{.compile_args = compute_tilizer_compile_time_args});
 
     std::map<std::string, std::string> reader_defines = {};
 
@@ -687,6 +765,7 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {.ternary_reader_kernel_id = ternary_reader_kernel_id,
          .binary_writer_kernel_id = binary_writer_kernel_id,
          .selective_tilize_kernel_id = selective_tilize_kernel_id,
+         .compute_tilizer_kernel_id = compute_tilizer_kernel_id,
          .cores = sender_cores,
          .selective_tilize_cores = selective_tilize_cores,
          .init_semaphore = init_semaphore,
