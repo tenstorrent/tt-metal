@@ -2301,7 +2301,7 @@ void kernel_main() {
     POSTCODE(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
-    asm volatile("nop");  // Allow hardware register write to propagate
+    asm volatile("nop");
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
@@ -2548,11 +2548,11 @@ void kernel_main() {
             *sender7_worker_semaphore_ptr = 0;
         }
     }
-    asm volatile("nop");  // Allow all semaphore writes to be visible to other cores
+    asm volatile("nop");
 
     POSTCODE(tt::tt_fabric::EDMStatus::STARTED);
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
-    asm volatile("nop");  // Allow status write to be visible to other cores
+    asm volatile("nop");
 
     //////////////////////////////
     //////////////////////////////
@@ -2889,7 +2889,7 @@ void kernel_main() {
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
-        asm volatile("nop");  // Allow status write to be visible before host signal check
+        asm volatile("nop");
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
