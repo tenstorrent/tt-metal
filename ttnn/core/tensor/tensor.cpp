@@ -494,16 +494,6 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     return output;
 }
 
-Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    return create_device_tensor(
-        TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config)), device);
-}
 
 void memcpy(
     distributed::MeshCommandQueue& queue,
