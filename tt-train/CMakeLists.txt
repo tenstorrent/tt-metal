@@ -38,17 +38,21 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 # When built as part of the main project (BUILD_TT_TRAIN=ON), the executables are at:
 #   build/tt-train/tests/ttml_tests
 # And they need to find shared libraries at:
-#   build/lib/libtt_metal.so ($ORIGIN/../../lib)
-#   ttnn/ttnn/_ttnncpp.so ($ORIGIN/../../../ttnn/ttnn)
-# For installed packages (FHS), libraries are in standard locations, so $ORIGIN/../lib suffices.
+#   build/lib/libtt_metal.so
+#   ttnn/ttnn/_ttnncpp.so
+#
+# NOTE: tt-train is built as a subdirectory, so CMAKE_BINARY_DIR is build/tt-train,
+# not the top-level build/. We must go up one level to reach the correct paths.
+# The tar artifact is created directly from build/ without cmake --install, so
+# BUILD_RPATH is what gets embedded in the binaries (not INSTALL_RPATH).
 set(CMAKE_BUILD_RPATH
-    "${CMAKE_BINARY_DIR}/lib" # Absolute path for build tree
-    "${CMAKE_BINARY_DIR}/../ttnn/ttnn" # Absolute path to ttnn pybinds
+    "${CMAKE_BINARY_DIR}/../lib" # build/tt-train/../lib = build/lib
+    "${CMAKE_BINARY_DIR}/../../ttnn/ttnn" # build/tt-train/../../ttnn/ttnn = ttnn/ttnn
 )
 set(CMAKE_INSTALL_RPATH
-    "$ORIGIN/../lib" # Relative path for FHS installs
-    "$ORIGIN/../../../ttnn/ttnn" # Relative path for tar artifact layout
-    "$ORIGIN/../../lib" # Alternative relative path from tests/
+    "$ORIGIN/../lib" # FHS: /usr/libexec/tt-train/tests/../lib = /usr/lib64
+    "$ORIGIN/../../lib" # From tests/ -> lib/
+    "$ORIGIN/../../../ttnn/ttnn" # Tar artifact: build/tt-train/tests/../../../ttnn/ttnn
 )
 
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
