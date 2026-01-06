@@ -450,7 +450,8 @@ void ComputeMeshRouterBuilder::configure_connection(
     peer_compute.establish_connections_to_router(*this, intra_mesh_filter);
 
     // Configure NOC VC based on link index (must be same for both routers)
-    auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
+    auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
+                      (link_idx % tt::tt_fabric::FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
     erisc_builder_->config.edm_noc_vc = edm_noc_vc;
     peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
 

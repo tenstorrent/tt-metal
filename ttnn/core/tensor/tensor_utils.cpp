@@ -6,10 +6,6 @@
 
 #include <tt_stl/overloaded.hpp>
 
-#include "tt-metalium/distributed_host_buffer.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include <tracy/Tracy.hpp>
@@ -88,24 +84,9 @@ std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_
     return volume;
 }
 
-bool is_arch_gs(const tt::ARCH& arch) { return arch == tt::ARCH::GRAYSKULL; }
-
-bool is_arch_whb0(const tt::ARCH& arch) { return arch == tt::ARCH::WORMHOLE_B0; }
-
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
-
-ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
-    const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
-    const auto last_shard_height =
-        shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
-    const auto num_shards_width = tt::div_up(shape.width(), shard_shape.width());
-    const auto last_shard_width =
-        shape.width() % shard_shape.width() > 0 ? shape.width() % shard_shape.width() : shard_shape.width();
-
-    return ShardDivisionSpec{num_shards_height, last_shard_height, num_shards_width, last_shard_width};
-};
 
 CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor) {
     TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to automatically create a CBDescriptor");

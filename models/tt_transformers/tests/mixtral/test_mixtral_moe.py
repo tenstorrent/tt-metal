@@ -40,12 +40,13 @@ def convert2ref(state_dict):
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
-    t3k_mesh_device.disable_and_clear_program_cache()
-    model_args = ModelArgs(t3k_mesh_device)
+    mesh_device.disable_and_clear_program_cache()
+    model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
     model_args.n_layers = 1
     layer_num = 0
@@ -62,12 +63,12 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
 
     reference_model = MixtralSparseMoeBlock(hf_config)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
-    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtMoeLayer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         experts=TtMixtralMLP(
-            mesh_device=t3k_mesh_device,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=model_args,
             layer_num=layer_num,
@@ -107,7 +108,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
                 pt_decode_input,
                 dtype=ttnn.bfloat16,  # or your desired dtype
                 layout=ttnn.TILE_LAYOUT,
-                device=t3k_mesh_device,
+                device=mesh_device,
                 memory_config=memory_config,
             )
 
@@ -116,7 +117,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
                 pt_decode_input,
                 dtype=ttnn.bfloat16,  # or your desired dtype
                 layout=ttnn.TILE_LAYOUT,
-                device=t3k_mesh_device,
+                device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -124,7 +125,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
         logger.info(f"Starting TT Mixtral MOE {mode}")
         tt_out = tt_model(tt_decode_input, mode)
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))[0]
             .squeeze(0)
             .view(seqlen, batch, -1)
         )
