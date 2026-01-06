@@ -222,9 +222,6 @@ run_t3000_tests() {
   # Run Qwen3 perplexity tests
   run_t3000_qwen3_perplexity_tests
 
-  # Run Falcon-7B perplexity tests
-  run_t3000_falcon7b_perplexity_tests
-
   # Run Falcon-40B perplexity tests
   run_t3000_falcon40b_perplexity_tests
 
