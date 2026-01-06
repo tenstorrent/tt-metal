@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -243,6 +244,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         // specs
         return program::UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
     }
+
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
     uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
 
@@ -256,32 +258,17 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
 
     size_t grid_area = grid_size.x * grid_size.y;
-    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(num_tiles_per_col) / grid_area);
-    const uint32_t num_compute_cores =
-        nblocks_per_core == 0 ? num_tiles_per_col : std::ceil(static_cast<float>(num_tiles_per_col) / nblocks_per_core);
+    auto [num_compute_cores, nblocks_per_core] = compute_ncores(grid_area, num_tiles_per_col);
 
     constexpr uint32_t threshold_row_block = 32;
     if (!input_is_sharded and !output_is_sharded) {
-        if (num_tiles_per_row > threshold_row_block) {
-            if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                                            (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
-
-                // Compute grid area and initial blocks-per-core using integer math.
-                uint32_t nblocks_per_core_wh = (grid_area == 0) ? 1 : (num_blocks_block + grid_area - 1) / grid_area;
-
-                // Adjust nblocks_per_core_wh and determine the optimal block size.
-                auto [adjusted_nblocks_per_core, single_block_size] =
-                    closest_square_larger_than_b(nblocks_per_core_wh, num_tiles_per_row, num_tiles_per_col, grid_area);
-                nblocks_per_core_wh = adjusted_nblocks_per_core;
-
-                const uint32_t total_blocks_width = tt::div_up(num_tiles_per_row, single_block_size);
-                const uint32_t total_blocks_height = tt::div_up(num_tiles_per_col, single_block_size);
-                const uint32_t total_blocks = total_blocks_width * total_blocks_height;
-                const uint32_t ncores_block = (nblocks_per_core_wh == 0) ? num_blocks_block : total_blocks;
-                if (num_compute_cores < ncores_block) {
-                    return program::UntilizeMultiCoreBlockProgramFactory{};
-                }
+        if (num_tiles_per_row > threshold_row_block and
+            (num_tiles_per_col > threshold_row_block or num_tiles_per_row > num_tiles_per_col)) {
+            uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
+                                        (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+            if (num_compute_cores < ncores_wh.ncores) {
+                return program::UntilizeMultiCoreBlockProgramFactory{};
             }
         }
     }
@@ -295,30 +282,6 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     }
     // Default multi core implementation
     return program::UntilizeMultiCoreProgramFactory{};
-}
-
-std::tuple<UntilizeDeviceOperation::operation_attributes_t, UntilizeDeviceOperation::tensor_args_t>
-UntilizeDeviceOperation::invoke(
-    const Tensor& input,
-    tt::tt_metal::MemoryConfig output_mem_config,
-    bool use_multicore,
-    bool use_pack_untilize,
-    bool fp32_dest_acc_en,
-    std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
-    bool enough_space_height,
-    uint32_t pf_type) {
-    return {
-        UntilizeDeviceOperation::operation_attributes_t{
-            .output_mem_config = std::move(output_mem_config),
-            .use_multicore = use_multicore,
-            .use_pack_untilize = use_pack_untilize,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .sub_core_grids = std::move(sub_core_grids),
-            .enough_space_width = enough_space_width,
-            .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
-        UntilizeDeviceOperation::tensor_args_t{.input = input}};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
@@ -351,3 +314,29 @@ UntilizeDeviceOperation::create_op_performance_model(
 }
 
 }  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+    const Tensor& input,
+    tt::tt_metal::MemoryConfig output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    std::optional<CoreRangeSet> sub_core_grids,
+    bool enough_space_width,
+    bool enough_space_height,
+    uint32_t pf_type) {
+    using OperationType = ttnn::operations::data_movement::UntilizeDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .output_mem_config = std::move(output_mem_config),
+            .use_multicore = use_multicore,
+            .use_pack_untilize = use_pack_untilize,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .sub_core_grids = std::move(sub_core_grids),
+            .enough_space_width = enough_space_width,
+            .enough_space_height = enough_space_height,
+            .pf_type = pf_type},
+        OperationType::tensor_args_t{.input = input});
+}
+}  // namespace ttnn::prim

@@ -18,7 +18,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTenso
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+    const std::optional<std::array<Tensor, 3>>& optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     TT_FATAL(
         input_tensor_q.padded_shape()[3] % num_q_heads == 0,

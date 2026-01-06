@@ -5,8 +5,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
-#include <stddef.h>
-#include <string.h>
+#include <cstddef>
+#include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
@@ -416,8 +416,8 @@ void generate_runtime_args_cmds(
     bool no_stride,
     enum DispatchWriteOffsets write_offset_index) {
     static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd> or
+        std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
 
     thread_local static auto get_runtime_payload_sizeB =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast, bool no_stride) {
@@ -440,7 +440,7 @@ void generate_runtime_args_cmds(
         return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
     };
 
-    constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
+    constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
     DeviceCommandCalculator calculator;
@@ -2667,8 +2667,7 @@ void set_core_go_message_mapping_on_device(
         MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
-    for (size_t i = 0; i < core_go_message_mapping.size(); ++i) {
-        const auto& [core_range_set, go_msg_offset] = core_go_message_mapping[i];
+    for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
         for (const auto& core_range : core_range_set.ranges()) {
             CoreCoord virtual_start = device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
             CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);

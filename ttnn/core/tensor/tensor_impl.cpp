@@ -285,7 +285,7 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 
 template <typename T>
 inline void print_datum(std::ostream& ss, T datum, bool use_scientific = false) {
-    if (std::is_integral<T>::value) {
+    if (std::is_integral_v<T>) {
         ss << std::setw(5) << datum;
     } else {
         int precision = TTNN_PRINT_OPTIONS.precision;
