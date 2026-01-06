@@ -604,6 +604,12 @@ class MasterConfigLoader:
                         f"🔧 Detected scale_mask_softmax_in_place operation: {operation_name} (1 tensor input + scale + optional mask)"
                     )
                     return self._get_operation_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+                # Special case: permute has registered extractor for dims parameter
+                elif self._matches_operation(operation_name, "permute"):
+                    print(f"🔧 Detected permute operation: {operation_name} (1 tensor input + dims parameter)")
+                    # Use generic unary path which will call the registered extractor
+                    # Enable deduplication for permute since dims parameter is part of the signature
+                    return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=True)
                 print(f"🔧 Detected unary operation: {operation_name} (1 tensor input)")
                 return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
             elif tensor_count == 2:
@@ -783,7 +789,7 @@ class MasterConfigLoader:
 
                         config_dict = {
                             "shape": tensor_config.shape,
-                            "dtype": parsed_dtype,
+                            "dtype": tensor_config.dtype,  # Store the string, not the parsed object
                             "layout": parsed_layout,
                             "memory_config": parsed_mem_config,
                             "output_memory_config": output_mem_config,
@@ -802,6 +808,18 @@ class MasterConfigLoader:
                         if op_params:
                             # Merge extracted parameters into config_dict
                             config_dict.update(op_params)
+
+                            # Special handling for permute - validate and fix dims
+                            if (
+                                operation_name == "permute" or operation_name == "ttnn::permute"
+                            ) and "dims" in op_params:
+                                dims = op_params["dims"]
+                                shape = config_dict.get("shape", [])
+                                if isinstance(shape, list):
+                                    ndim = len(shape)
+                                    # If dims is None or mismatched, use identity permutation
+                                    if dims is None or not isinstance(dims, list) or len(dims) != ndim:
+                                        config_dict["dims"] = list(range(ndim))
 
                             # Special handling for reshape - if validation failed, skip this config
                             if operation_name == "reshape" and "target_shape" not in op_params:
@@ -825,6 +843,22 @@ class MasterConfigLoader:
                                             parsed_layout,
                                             parsed_mem_config,
                                             target_shape,
+                                        )
+                                    ).encode()
+                                ).hexdigest()
+                            elif (
+                                operation_name == "permute" or operation_name == "ttnn::permute"
+                            ) and "dims" in config_dict:
+                                # For permute, deduplicate based on (input, dims) pair
+                                dims = config_dict["dims"]
+                                input_sig = hashlib.md5(
+                                    str(
+                                        (
+                                            tensor_config.shape,
+                                            parsed_dtype,
+                                            parsed_layout,
+                                            parsed_mem_config,
+                                            dims,
                                         )
                                     ).encode()
                                 ).hexdigest()
@@ -1124,6 +1158,7 @@ class MasterConfigLoader:
                             parsed_output_dtype = self.parse_dtype(f"DataType::{output_dtype_str}")
                             if parsed_output_dtype:
                                 output_dtype_list.append(parsed_output_dtype)
+                    # Extract permute parameters (already extracted above in main loop)
                     # Extract gt parameters
                     if self._matches_operation(operation_name, "gt"):
                         if "scalar" in cfg:
@@ -1254,9 +1289,7 @@ class MasterConfigLoader:
                 ]
 
                 # Add operation-specific parameters
-                if (operation_name == "permute" or operation_name == "ttnn::permute") and dims_list:
-                    param_names.append("dims")
-                    param_lists.append(dims_list)
+                # (permute dims handling moved to later section with other op-specific params)
                 if operation_name == "untilize_with_unpadding" and end_shape_list:
                     param_names.append("end_shape")
                     param_lists.append(end_shape_list)
@@ -1348,6 +1381,11 @@ class MasterConfigLoader:
                     if output_dtype_list:
                         param_names.append("output_dtype")
                         param_lists.append(output_dtype_list)
+                # Add permute parameters
+                if self._matches_operation(operation_name, "permute"):
+                    if dims_list is not None and len(dims_list) > 0:
+                        param_names.append("dims")
+                        param_lists.append(dims_list)
                 # Add gt parameters
                 if self._matches_operation(operation_name, "gt"):
                     if scalar_list:

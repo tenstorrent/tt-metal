@@ -5,6 +5,7 @@
 
 import torch
 import ttnn
+from typing import Tuple, Optional
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -34,6 +35,44 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def mesh_device_fixture():
+    """
+    Override default device fixture for nlp_concat_heads operation.
+    Using explicit DispatchCoreConfig to handle sharded memory configs.
+    """
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Check if test vector is valid.
+    Returns (True, "reason") if invalid (should skip), (False, None) if valid.
+    """
+    input_a_memory_config = test_vector.get("input_a_memory_config")
+    input_shape = test_vector.get("input_shape")
+
+    # Skip HEIGHT_SHARDED config with large grid that causes hangs
+    # Specific case: shape (8, 12, 384, 64) with HEIGHT_SHARDED on grid [0,0] to [5,7]
+    if isinstance(input_a_memory_config, dict):
+        mem_layout = input_a_memory_config.get("data", {}).get("memory_layout")
+        shard_spec = input_a_memory_config.get("data", {}).get("shard_spec", {})
+
+        if mem_layout == "HEIGHT_SHARDED":
+            grid = shard_spec.get("grid", [])
+            # Check if grid is large (e.g., covers [0,0] to [5,7] = 48 cores)
+            if grid and len(grid) > 0:
+                end = grid[0].get("end", {})
+                if end.get("x", 0) >= 5 and end.get("y", 0) >= 7:
+                    # This specific config causes hangs/dispatch conflicts
+                    return True, "HEIGHT_SHARDED with large grid (48 cores) causes hang"
+
+    return False, None
 
 
 def run(

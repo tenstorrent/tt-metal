@@ -608,6 +608,9 @@ class OperationParameterExtractors:
 
                     # Handle direct list
                     if isinstance(dims_data, list):
+                        # Check if list contains non-integer elements (unparsable)
+                        if any(isinstance(d, str) and ("unsupported" in d or "std::" in d) for d in dims_data):
+                            return None
                         # Validate all elements are integers
                         if all(isinstance(d, int) for d in dims_data):
                             return dims_data
@@ -633,6 +636,13 @@ class OperationParameterExtractors:
             return None
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_permute_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for permute operation"""
+        dims = OperationParameterExtractors._extract_permute_dims(config)
+        # Always return dims (None is fine, will be inferred by loader based on shape)
+        return {"dims": dims}
 
     @staticmethod
     def _extract_shape_parameter(config: List, arg_name: str = "arg1") -> Optional[List[int]]:
@@ -782,17 +792,7 @@ class OperationParameterExtractors:
         return None
 
     # Unary operation extractors
-    @staticmethod
-    def _extract_permute_parameters(config: List) -> Optional[Dict]:
-        """Extract parameters for permute operation"""
-        try:
-            dims = OperationParameterExtractors._extract_permute_dims(config)
-            if dims:
-                return {"dims": dims}
-            # Fallback to default if extraction fails
-            return {"dims": [0, 1, 3, 2]}  # N, C, W, H -> N, C, H, W
-        except Exception:
-            return None
+    # (permute extractor moved to earlier in file near _extract_permute_dims)
 
     @staticmethod
     def _extract_untilize_with_unpadding_parameters(config: List) -> Optional[Dict]:
@@ -3469,6 +3469,14 @@ def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
 # Register group_norm extractor
 OperationParameterExtractors.register_extractor("group_norm", extract_func=_extract_group_norm_parameters)
 OperationParameterExtractors.register_extractor("ttnn::group_norm", extract_func=_extract_group_norm_parameters)
+
+# Register permute extractor
+OperationParameterExtractors.register_extractor(
+    "permute", extract_func=OperationParameterExtractors._extract_permute_parameters
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::permute", extract_func=OperationParameterExtractors._extract_permute_parameters
+)
 
 
 if __name__ == "__main__":

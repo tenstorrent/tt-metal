@@ -27,7 +27,7 @@ parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
         "input_shape": [(1, 1, 32, 32)],
-        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.int32],  # plus_one requires INT32 or UINT32
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],  # plus_one requires ROW_MAJOR
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -38,6 +38,7 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     # Override layout to ROW_MAJOR as required by plus_one operation
+    # Keep the original dtypes from traced configs (they should be INT32/UINT32)
     if "input_a_layout" in model_traced_params:
         model_traced_params["input_a_layout"] = [ttnn.ROW_MAJOR_LAYOUT] * len(model_traced_params["input_a_layout"])
     parameters["model_traced"] = model_traced_params
