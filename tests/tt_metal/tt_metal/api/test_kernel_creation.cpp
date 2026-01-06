@@ -23,7 +23,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
@@ -32,8 +32,7 @@ using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
 TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
-    for (unsigned int id = 0; id < this->devices_.size(); id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -56,9 +55,8 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
     if (this->IsSlowDispatch()) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }
-    for (unsigned int id = 0; id < this->devices_.size(); id++) {
-        auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+    for (const auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->get_devices()[0];
 
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);

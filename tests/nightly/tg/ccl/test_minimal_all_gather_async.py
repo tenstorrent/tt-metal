@@ -39,10 +39,24 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_linear", "fabric_manager_enabled_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
@@ -376,7 +390,7 @@ def test_all_gather_async_quad_host_mesh(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 190112,
             },
@@ -392,7 +406,7 @@ def test_all_gather_async_quad_host_mesh(
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_2d_dynamic_linear", "fabric_linear"],
+    ids=["fabric_2d_linear", "fabric_linear"],
 )
 @pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
 def test_all_gather_4x32_sanity(

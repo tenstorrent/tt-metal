@@ -48,7 +48,7 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
     expected_perf = expected_perf if is_wormhole_b0() else 0
     expected_inference_time = 1 / (expected_perf * (1 - margin))
 
-    command = f"pytest models/demos/sentence_bert/tests/pcc/{pcc_file}.py::{function_name}"
+    command = f"pytest models/demos/wormhole/sentence_bert/tests/pcc/{pcc_file}.py::{function_name}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

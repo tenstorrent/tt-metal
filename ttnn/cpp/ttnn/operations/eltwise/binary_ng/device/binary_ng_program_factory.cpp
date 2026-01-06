@@ -118,8 +118,7 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     }
 
     // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape()) &&
-        (a.memory_config().memory_layout() == b->memory_config().memory_layout())) {
+    if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
         if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
             return false;
         }
@@ -249,6 +248,12 @@ public:
         return current_shape;
     }
 };
+
+std::uint32_t* copy_common_runtime_args(const tt::tt_metal::Buffer& buffer, std::uint32_t* dst) {
+    const auto src = tt::tt_metal::TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+                         .get_common_runtime_args();
+    return std::copy(src.begin(), src.end(), dst);
+}
 
 template <typename F>
 void set_or_update_runtime_arguments(
@@ -653,7 +658,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
-        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op) {
+        bool is_integer_division =
+            (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
+             b_dtype == DataType::INT32);
+
+        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op and !is_integer_division) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
@@ -764,13 +773,16 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = KernelName::WriterNoBcastNg;
     }
     std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
+    std::vector<uint32_t> writer_common_runtime_args;
+    tt::tt_metal::TensorAccessorArgs(*c_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
+    tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -836,14 +848,19 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     // READER KERNEL
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(b_buffer != nullptr ? *b_buffer : *a_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> reader_common_runtime_args;
+    tt::tt_metal::TensorAccessorArgs(*a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
+    tt::tt_metal::TensorAccessorArgs(
+        b_buffer != nullptr ? *b_buffer : *a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op, is_where_op),
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
+    tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
@@ -872,6 +889,21 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& c) {
+    auto& program = cached_program.program;
+    auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+
+    {
+        auto* a_buffer = tensor_args.input_tensor_a.buffer();
+        auto* b_buffer = tensor_args.input_tensor_b ? tensor_args.input_tensor_b->buffer() : a_buffer;
+        auto* c_buffer = c.buffer();
+        auto* args = GetCommonRuntimeArgs(program, reader_kernel_id).data();
+        args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*a_buffer, args);
+        CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*b_buffer, args);
+        args = GetCommonRuntimeArgs(program, writer_kernel_id).data();
+        CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*c_buffer, args);
+    }
+
     auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         auto& all_args = GetRuntimeArgs(program, kernel_id);
         auto& core_args = all_args.at(core.x).at(core.y);
@@ -879,9 +911,9 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     };
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        cached_program.program,
-        cached_program.shared_variables.reader_kernel_id,
-        cached_program.shared_variables.writer_kernel_id,
+        program,
+        reader_kernel_id,
+        writer_kernel_id,
         cached_program.shared_variables.compute_kernel_id,
         cached_program.shared_variables.cb_src_a,
         cached_program.shared_variables.cb_src_b,

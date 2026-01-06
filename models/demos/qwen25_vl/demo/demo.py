@@ -272,6 +272,9 @@ def test_demo(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    if mesh_device.get_num_devices() == 1 and "Qwen2.5-VL-7B" in os.environ.get("HF_MODEL", ""):
+        pytest.skip("Qwen2.5-VL-7B does not support running on N150")
+
     logger.info(f"mesh_device: {mesh_device}")
     use_tt_vision = True
     enable_trace = True  # Use tracing for better perf
@@ -481,10 +484,14 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        argmax_on_device = model._supports_on_device_sampling
         if argmax_on_device:
+            logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
+            logger.info(
+                f"Using host sampling with temperature={sampling_params['temperature']}, top_p={sampling_params['top_p']}"
+            )
             device_sampling_params = None
 
         users_decoding = True
@@ -510,7 +517,7 @@ def test_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Run decode forward
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
@@ -624,15 +631,9 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if (
-        is_ci_env
-        and "bert-score" in test_id
-        and "Qwen2.5-VL-3B" not in model_args.base_model_name
-        and "Qwen2.5-VL-7B" not in model_args.base_model_name
-    ):
-        # todo)) fix this issue before enabling BERTScore check for 3B and 7B models:
-        #        https://github.com/tenstorrent/tt-metal/issues/28442
-        assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
+    if is_ci_env and "bert-score" in test_id and "Qwen2.5-VL-7B" not in model_args.base_model_name:
+        # todo: fix this issue before enabling BERTScore check for 7B model:
+        #        https://github.com/tenstorrent/tt-metal/issues/34167
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 
@@ -831,6 +832,8 @@ def load_expected_text(model_name):
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_72B.txt"
     elif "Qwen2.5-VL-32B" in model_name:
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_32B.txt"
+    elif "Qwen2.5-VL-7B" in model_name:
+        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_7B.txt"
     elif "Qwen2.5-VL-3B" in model_name:
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_3B.txt"
     else:

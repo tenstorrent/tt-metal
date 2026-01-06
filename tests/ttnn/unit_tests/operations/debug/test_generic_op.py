@@ -12,11 +12,8 @@ from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Not tested / built for Blackhole")
-def test_eltwise_exp(device):
-    num_tiles = 4
-    src_bank_id = 0
-    dst_bank_id = 0
-
+@pytest.mark.parametrize("num_tiles", [1, 12, 64, 128])
+def test_eltwise_exp(device, num_tiles):
     shape = [1, num_tiles, 32, 32]
     data = torch.rand(shape).to(torch.bfloat16)
 
@@ -39,8 +36,12 @@ def test_eltwise_exp(device):
     )
     io_tensors = [input_tensor, output_tensor]
 
-    core = ttnn.CoreCoord(0, 0)
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    max_core = ttnn.CoreCoord(7, 7)
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), max_core)])
+    (_, core_grid, core_group_1, core_group_2, work_per_core1, _) = ttnn.split_work_to_cores(all_cores, num_tiles)
+    assert (
+        len(core_group_2.ranges()) == 0
+    ), "tt_metal/kernels/compute/eltwise_sfpu.cpp kernel has number of tiles to compile as compile time arg, does not support 2 core groups"
 
     input_cb_data_format = ttnn.bfloat16  # this will be mapped tt::DataFormat::Float16_b
     cb_total_size = 2 * 2 * 1024  # tt::DataFormat::Float16_b hard coded to have size 2 * 1024
@@ -72,16 +73,24 @@ def test_eltwise_exp(device):
     reader_compile_time_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     writer_compile_time_args = [out_cb]
     writer_compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    compute_compile_time_args = [num_tiles, 1]
-    reader_rt_args = [input_tensor.buffer_address(), num_tiles, 0]
-    writer_rt_args = [output_tensor.buffer_address(), num_tiles, 0]
+    compute_compile_time_args = [work_per_core1, 1]
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    current_tile = 0
+    for core_range in core_group_1.ranges():
+        for x in range(core_range.start.x, core_range.end.x + 1):
+            for y in range(core_range.start.y, core_range.end.y + 1):
+                reader_rt_args[x][y] = [input_tensor.buffer_address(), work_per_core1, current_tile]
+                writer_rt_args[x][y] = [output_tensor.buffer_address(), work_per_core1, current_tile]
+                current_tile += work_per_core1
 
     reader_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=reader_compile_time_args,
-        runtime_args=[[reader_rt_args]],
+        runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer_kernel_descriptor = ttnn.KernelDescriptor(
@@ -89,7 +98,7 @@ def test_eltwise_exp(device):
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=writer_compile_time_args,
-        runtime_args=[[writer_rt_args]],
+        runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
 
@@ -100,7 +109,7 @@ def test_eltwise_exp(device):
         core_ranges=core_grid,
         compile_time_args=compute_compile_time_args,
         defines=sfpu_defines,
-        runtime_args=[[[]]],
+        runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(),
     )
 

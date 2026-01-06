@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -43,6 +43,7 @@ constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 18;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -54,7 +55,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.cache_producer_noc_addr();
+    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -128,7 +129,7 @@ void forward_data(
         }
     }
 
-    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
         worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 
@@ -223,7 +224,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
             bool all_channels_drained = true;

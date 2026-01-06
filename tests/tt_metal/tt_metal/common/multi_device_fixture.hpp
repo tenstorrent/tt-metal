@@ -7,8 +7,7 @@
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
 
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
@@ -25,7 +24,7 @@ namespace tt::tt_metal {
 class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
@@ -112,7 +111,7 @@ protected:
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
 
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }

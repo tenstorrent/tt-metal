@@ -125,14 +125,6 @@ class WanAttention:
             packer_l1_acc=True,
         )
 
-        self.rmsnorm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Should be fp32
-            packer_l1_acc=True,
-        )
-
     def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
@@ -198,6 +190,12 @@ class WanAttention:
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
+        if rope_cos is not None:
+            # If ROPE is given, this is self-attention
+            assert rope_sin is not None
+            assert trans_mat is not None
+            assert prompt_1BLP is None
+
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -211,8 +209,12 @@ class WanAttention:
         v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
-        q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-        k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
+        q_BHNE = self.norm_q(
+            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+        )
+        k_BHNE = self.norm_k(
+            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+        )
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -223,22 +225,9 @@ class WanAttention:
             )
             return out
 
-        q_BHNE = create_heads(q_1BNF)
-        k_BHNE = create_heads(k_1BNF)
         v_BHNE = create_heads(v_1BNF)
 
         # Rope
-        if rope_cos is not None:
-            assert rope_sin is not None
-            assert trans_mat is not None
-            assert prompt_1BLP is None
-
-            q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
-            k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
 
         if prompt_1BLP is None:
             # Self attention

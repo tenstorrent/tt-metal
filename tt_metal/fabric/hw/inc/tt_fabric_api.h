@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 #include <hostdevcommon/common_values.hpp>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "noc_overlay_parameters.h"
-#include "ethernet/dataflow_api.h"
+#include "internal/ethernet/dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
-#include "tt_metal/hw/inc/tt-1xx/risc_common.h"
+#include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
@@ -20,14 +20,13 @@ using namespace tt::tt_fabric;
 namespace tt::tt_fabric {
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
-            routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
+            routing_table->intra_mesh_direction_table.get_original_direction(dst_dev_id));
     } else {
         return static_cast<eth_chan_directions>(
-            routing_table->inter_mesh_routing_table.get_original_direction(dst_mesh_id));
+            routing_table->inter_mesh_direction_table.get_original_direction(dst_mesh_id));
     }
 }
 
@@ -116,8 +115,7 @@ void fabric_set_mcast_route(
     uint32_t mcast_branch = 0;
     packet_header->routing_fields.value = 0;
     if constexpr (!called_from_router) {
-        tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-            reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
         packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
         packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                          ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
@@ -199,11 +197,10 @@ bool fabric_set_unicast_route(
         packet_header->is_mcast_active = 0;
     }
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
-    auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
-        tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table[dst_mesh_id];
         dst_mesh_id = routing_table->my_mesh_id;
     }
     bool ok = false;
@@ -263,6 +260,9 @@ bool fabric_set_unicast_route(
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
         }
+    } else if (ns_hops > 0) {
+        packet_header->routing_fields.branch_east_offset = turn_point;
+        packet_header->routing_fields.branch_west_offset = turn_point;
     } else if (ns_hops == 0 && ew_hops > 0) {
         // East/West only routing: branch offset is set at position 1 (start_hop + 1)
         if (ew_direction) {
@@ -296,7 +296,7 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
 #endif
         auto* routing_info =
             reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(ROUTING_PATH_BASE_1D);
-        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
         if constexpr (target_as_dev) {
             uint16_t my_device_id = routing_table->my_device_id;
             uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;

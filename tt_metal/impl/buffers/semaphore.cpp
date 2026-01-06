@@ -3,15 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "semaphore.hpp"
-#include <stdint.h>
+#include <cstdint>
 
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 Semaphore::Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value) :
     core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(CoreType::WORKER) {}
@@ -36,6 +34,4 @@ uint32_t Semaphore::offset() const {
     return offset;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

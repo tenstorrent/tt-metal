@@ -377,7 +377,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bfloat16 identity
     auto golden = tt_metal::select_columns(tensor.get_values(), M, K, N);
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto
         [workload,
          mm_reader_kernel_sender,
@@ -478,9 +478,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast::
-                        matmul_multi_core_multi_dram_inX_mcast(devices_.at(id), 0));
+                        matmul_multi_core_multi_dram_inX_mcast(device, 0));
     }
 }
 
@@ -490,9 +490,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast::
-                        matmul_multi_core_multi_dram_inX_mcast(devices_.at(id), 1));
+                        matmul_multi_core_multi_dram_inX_mcast(device, 1));
     }
 }
 

@@ -24,7 +24,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["learning_rate"].as<float>();
+    config.learning_rate = training_config["lr"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
@@ -39,12 +39,19 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    if (config.model_type == "gpt2") {
-        config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
-    } else if (config.model_type == "llama") {
-        config.transformer_config = ttml::models::llama::read_config(training_config["transformer_config"]);
+    if (!yaml_config["model_config"]) {
+        throw std::runtime_error("Missing required field: model_config\n Please specify the path to the model configuration YAML file.");
+    }
+
+    auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
+    std::string model_type = model_yaml["model_type"].as<std::string>();
+
+    if (model_type == "gpt2") {
+        config.transformer_config = ttml::models::gpt2::read_config(model_yaml);
+    } else if (model_type == "llama") {
+        config.transformer_config = ttml::models::llama::read_config(model_yaml);
     } else {
-        throw std::runtime_error("Unknown model type: " + config.model_type);
+        throw std::runtime_error("Unknown model type: " + model_type);
     }
 
     auto multihost_config = yaml_config["multihost_config"];
@@ -69,9 +76,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-    std::string text;
 
-    auto tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
 
     auto sequence_length = std::visit(
         [&](auto &&arg) {
@@ -84,18 +89,50 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         },
         config.transformer_config);
 
-    auto dataset = ttml::datasets::InMemoryTokenDataset(tokens_vector, sequence_length);
+    std::variant<std::string, YAML::Node> text_or_tokens;
+
+    try {
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            auto yaml_data = YAML::LoadFile(config.data_path);
+            yaml_data["sequence_length"] = sequence_length;
+            text_or_tokens = yaml_data;
+        }
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        exit(-1);
+    }
+
+    auto create_dataset =
+        [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, auto &train_config) {
+            if (tokenizer_type == "char") {
+                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<std::string>(data_source), seq_len);
+
+                return std::make_tuple(dataset, tokenizer->get_vocab_size());
+            }
+            else if (tokenizer_type == "bpe") {
+
+                auto& yaml_node = std::get<YAML::Node>(data_source);
+
+                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+
+                uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
+
+                return std::make_tuple(dataset, vocab_size);
+            }
+            else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
+
+    auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
+    fmt::print("Dataset size: {}\n", dataset.get_size());
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-
-    auto get_vocab_size = [](const auto& training_config) {
-        return std::visit([](const auto& cfg) {
-            return cfg.vocab_size;
-        }, training_config.transformer_config);
-    };
-
-    auto vocab_size = get_vocab_size(config);
 
     return {steps_per_dataset, vocab_size};
 }

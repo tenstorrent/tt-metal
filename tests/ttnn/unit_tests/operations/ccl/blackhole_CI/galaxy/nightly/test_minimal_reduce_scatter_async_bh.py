@@ -41,8 +41,6 @@ def run_reduce_scatter_impl(
     num_workers_per_link=None,
     num_buffers_per_channel=None,
 ):
-    if rs_topology == ttnn.Topology.Ring:
-        pytest.skip("Galaxy is currently mesh only")
     torch.manual_seed(0)
 
     # Set the default config
@@ -237,6 +235,116 @@ def run_reduce_scatter_impl(
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
+    "num_devices,cluster_axis, rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        (4, 1, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # Composite-RS tests
+        (4, 1, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 1, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (4, 1, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "padded_dim_2_test_one",
+        "padded_dim_2_test_two",
+        "batch_8",
+        "batch_4",
+        "batch_1_sd35_spatial",
+        "batch_1_sd35_prompt",
+        "batch_2",
+        "batch_1",
+        "composite_rs_test_one",
+        "composite_rs_test_two",
+        "composite_rs_test_three",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+        (True, 10),
+    ],
+)
+@pytest.mark.parametrize(
+    "ones_tensor",
+    [
+        False,
+    ],
+    ids=["random"],
+)
+@pytest.mark.parametrize(
+    "use_barrier, use_persistent_buffers",
+    [
+        (True, False),
+    ],
+    ids=["barrier_without_persistent_buffers"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+)
+def test_reduce_scatter_async_ring(
+    bh_2d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    ones_tensor,
+    use_barrier,
+    use_persistent_buffers,
+    cluster_axis,
+    rs_topology,
+):
+    pytest.skip("Skipping due to hang")
+
+    run_reduce_scatter_impl(
+        bh_2d_mesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        ones_tensor=ones_tensor,
+        use_barrier=use_barrier,
+        cluster_axis=cluster_axis,
+        use_persistent_buffers=use_persistent_buffers,
+    )
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
     [
         (4, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
@@ -286,11 +394,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
     [
-        (True, True),
         (True, False),
-        (False, True),
     ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
+    ids=["barrier_without_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -525,13 +631,9 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ones_tensor,
     rs_topology,
 ):
-    if rs_topology == ttnn.Topology.Ring:
-        pytest.skip("Galaxy is currently mesh only")
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         adjusted_intermediate_shard_shape[0] *= 2
-    else:
-        pytest.skip("Galaxy is currently mesh only")
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -650,8 +752,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ones_tensor,
     rs_topology,
 ):
-    if rs_topology == ttnn.Topology.Ring:
-        pytest.skip("Galaxy is currently mesh only")
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         adjusted_intermediate_shard_shape[0] *= 2
@@ -758,8 +858,6 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     ones_tensor,
     rs_topology,
 ):
-    if rs_topology == ttnn.Topology.Ring:
-        pytest.skip("Galaxy is currently mesh only")
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,

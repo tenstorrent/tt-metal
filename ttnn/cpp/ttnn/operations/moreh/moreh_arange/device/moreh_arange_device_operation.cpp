@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
 void MorehArangeOperation::validate_inputs(
@@ -83,32 +84,30 @@ MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_
     if (tensor_args.output.has_value()) {
         return tensor_args.output.value();
     }
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.any.device());
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), operation_attributes.mesh_device);
 }
 
-std::tuple<MorehArangeOperation::operation_attributes_t, MorehArangeOperation::tensor_args_t>
-MorehArangeOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_arange
+
+namespace ttnn::prim {
+
+ttnn::operations::moreh::moreh_arange::MorehArangeOperation::tensor_return_value_t moreh_arange(
     float start,
     float end,
     float step,
-    const Tensor& any,
+    ttnn::MeshDevice* mesh_device,
     const std::optional<Tensor>& output,
     bool untilize_out,
-    const std::optional<DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config) {
-    return {
-        operation_attributes_t{
-            start,
-            end,
-            step,
-            untilize_out,
-            dtype.value_or(any.dtype()),
-            memory_config.value_or(any.memory_config()),
-        },
-        tensor_args_t{
-            any,
-            output,
-        },
-    };
+    const DataType& dtype,
+    const MemoryConfig& memory_config) {
+    using OperationType = ttnn::operations::moreh::moreh_arange::MorehArangeOperation;
+
+    auto operation_attributes =
+        OperationType::operation_attributes_t{start, end, step, untilize_out, mesh_device, dtype, memory_config};
+    auto tensor_args = OperationType::tensor_args_t{output};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_arange
+
+}  // namespace ttnn::prim

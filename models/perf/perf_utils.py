@@ -61,7 +61,9 @@ def process_perf_results(fname, expected_cols):
     return cols, merge_res
 
 
-def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_precision=4, threshold=0.80):
+def check_perf_results(
+    fname, expected_cols, check_cols, table_width=110, float_precision=4, lower_threshold=0.80, upper_threshold=1.0
+):
     red_color_code = "\033[91m"
     green_color_code = "\033[92m"
     reset_color_code = "\033[0m"
@@ -93,13 +95,15 @@ def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_
             model_expected_col = float(dict_info[f"Expected {col}"])
             model_measured_col = float(dict_info[col])
             low_tolerance = (
-                model_expected_col * threshold
+                model_expected_col * lower_threshold
             )  # fail if model is too fast so we can update the expected values
+            high_tolerance = model_expected_col * upper_threshold  # upper bound for regression
 
-            if model_measured_col > model_expected_col:
+            if model_measured_col > high_tolerance:
                 slow_measured[col].append((model_name, model_measured_col, model_expected_col))
+                regression_pct = ((model_measured_col - model_expected_col) / model_expected_col) * 100
                 print(
-                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} > {model_expected_col:.{float_precision}f} (performance regression){reset_color_code}"
+                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} > {high_tolerance:.{float_precision}f} ({regression_pct:.1f}% worse than expected - performance regression){reset_color_code}"
                 )
                 highlight = True
             elif model_measured_col < low_tolerance:
@@ -111,7 +115,7 @@ def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_
                 highlight = True
             else:
                 print(
-                    f"  PASS {col}: {model_measured_col:.{float_precision}f} (within tolerance: {low_tolerance:.{float_precision}f} - {model_expected_col:.{float_precision}f})"
+                    f"  PASS {col}: {model_measured_col:.{float_precision}f} (within tolerance: {low_tolerance:.{float_precision}f} - {high_tolerance:.{float_precision}f})"
                 )
 
         if highlight:
@@ -129,9 +133,10 @@ def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_
             all_passed = False
             print(f"{red_color_code}{fail_label} The following models failed '{col}' checks:{reset_color_code}")
             for model_name, measured, expected in slow_measured[col]:
-                tolerance_range = f"[{expected * threshold:.{float_precision}f}, {expected:.{float_precision}f}]"
-                if measured > expected:
-                    status = "regression"
+                tolerance_range = f"[{expected * lower_threshold:.{float_precision}f}, {expected * upper_threshold:.{float_precision}f}]"
+                if measured > expected * upper_threshold:
+                    regression_pct = ((measured - expected) / expected) * 100
+                    status = f"{regression_pct:.1f}% regression"
                 else:
                     improvement_pct = ((expected - measured) / expected) * 100
                     status = f"{improvement_pct:.1f}% improvement"

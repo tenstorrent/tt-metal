@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with input data
 constexpr auto cb_input_idx = tt::CBIndex::c_0;  // X[r, p_block]
@@ -21,20 +21,6 @@ constexpr auto cb_y_idx = tt::CBIndex::c_10;  // Final Y[r, c_block]
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
-
-// TODO(maciek): Move all write_cb_block to common utils file, and reuse them in other
-// operations. See tracking issue #31125 for more details.
-template <typename AddrGen>
-inline void write_cb_block_to_dram(
-    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t current_block_size, uint32_t tile_bytes) {
-    uint32_t l1_read_addr = get_read_ptr(cb_idx);
-
-    // Wait for a full block in CB, but only write as many as are valid in the tail
-    for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
-        noc_async_write_tile(start_idx + block_idx, addr_gen, l1_read_addr);
-        l1_read_addr += tile_bytes;
-    }
-}
 
 void kernel_main() {
     uint32_t ra = 0;
@@ -60,15 +46,12 @@ void kernel_main() {
         // Loop over output columns in blocks - matches compute kernel order
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t current_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
-
-            // Wait for and write Y[r, c_block] - this becomes available after compute kernel finishes processing all
-            // k_blocks for this (r, c_block) combination
-            cb_wait_front(cb_y_idx, block_size);
             // Calculate starting tile index for Y. We write Y in row-major order, so the offset equals
             const uint32_t start_tile_idx = (r * Wt) + c_block_start;
-            write_cb_block_to_dram(cb_y_idx, y_address_generator, start_tile_idx, current_block_size, tile_bytes);
-            noc_async_write_barrier();
-            cb_pop_front(cb_y_idx, block_size);
+            // Wait for and write Y[r, c_block] - this becomes available after compute kernel finishes processing all
+            // k_blocks for this (r, c_block) combination
+            write_tiles_by_row(
+                cb_y_idx, y_address_generator, start_tile_idx, current_block_size, tile_bytes, block_size);
         }
     }
 }

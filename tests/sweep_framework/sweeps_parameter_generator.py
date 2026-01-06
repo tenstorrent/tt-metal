@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import sys
-import importlib
-import pathlib
 import datetime
-import os
 import hashlib
+import importlib
 import json
+import os
+import pathlib
 import random
+import sys
 
-from framework.permutations import *
+from framework.permutations import permutations
 from framework.serialize import serialize_structured
-from framework.statuses import VectorValidity, VectorStatus
+from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
@@ -280,14 +280,24 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name, skip_modules=None):
+def generate_tests(module_name, skip_modules=None, model_traced_only=False):
     skip_modules_set = set()
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
     if not module_name:
-        for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
+        # Determine which directory to search based on model_traced_only flag
+        if model_traced_only:
+            search_dir = SWEEP_SOURCES_DIR / "model_traced"
+            logger.info("Generating test vectors for model_traced operations only.")
+            # Only search directly in model_traced directory, not subdirectories
+            glob_pattern = "*.py"
+        else:
+            search_dir = SWEEP_SOURCES_DIR
+            glob_pattern = "**/*.py"
+
+        for file_name in sorted(search_dir.glob(glob_pattern)):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3].replace("/", ".")
             if module_name in skip_modules_set:
                 logger.info(f"Skipping module {module_name} (in skip list).")
@@ -329,7 +339,7 @@ if __name__ == "__main__":
         "--dump-file",
         required=False,
         action="store_true",
-        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Elasticsearch support has been removed. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
+        help="[DEPRECATED - will be removed in a future version] This flag is now the default behavior. Vectors are always dumped to disk in JSON format. This flag is ignored and will be removed.",
     )
     parser.add_argument(
         "--randomize",
@@ -342,14 +352,20 @@ if __name__ == "__main__":
         required=False,
         help="Comma-separated list of module names to skip during generation",
     )
+    parser.add_argument(
+        "--model-traced",
+        required=False,
+        action="store_true",
+        help="If set, only generate test vectors for operations in sweeps/model_traced directory",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
-    # Elasticsearch support has been removed. Vectors are always dumped to disk.
+    # Vectors are always dumped to disk in JSON format.
     if args.dump_file:
         logger.warning(
             "The --dump-file flag is deprecated and will be removed in a future version. "
-            "Elasticsearch support has been removed. Vectors are now always dumped to disk in JSON format by default. "
+            "Vectors are now always dumped to disk in JSON format by default. "
             "Please remove this flag from your scripts."
         )
 
@@ -372,4 +388,4 @@ if __name__ == "__main__":
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
 
-    generate_tests(args.module_name, args.skip_modules)
+    generate_tests(args.module_name, args.skip_modules, args.model_traced)

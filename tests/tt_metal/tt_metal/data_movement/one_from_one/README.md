@@ -51,7 +51,7 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Kernels:

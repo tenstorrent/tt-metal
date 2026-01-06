@@ -23,6 +23,14 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
 
 jobs:
   triage-tests:
@@ -45,19 +53,27 @@ jobs:
     runs-on: >-
       ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
             pip install -r tools/triage/requirements.txt
-            pytest ./tools/tests/triage/
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

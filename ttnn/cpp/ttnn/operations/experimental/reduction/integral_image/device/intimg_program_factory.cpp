@@ -7,7 +7,6 @@
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -28,9 +27,8 @@ enum class IntImgCB : uint32_t {
     CUMSUM_STAGE_2,
     CUMSUM_STAGE_3,
     OUTPUT,
-    AXIS_2_BUFFER,    // memoizing last tile (for the "deeper" block) for propagation along axis 2
-    AXIS_3_BUFFER_0,  // memoizing upper 32 tiles for propagation along axis 3
-    AXIS_3_BUFFER_1,  // dual channel
+    AXIS_2_BUFFER,  // memoizing last tile (for the "deeper" block) for propagation along axis 2
+    AXIS_3_BUFFER,  // memoizing upper 32 tiles for propagation along axis 3
 };
 
 CBHandle create_cb(
@@ -80,12 +78,12 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    constexpr uint32_t BLOCK_DEPTH = 32;
+    constexpr uint32_t BLOCK_DEPTH = 48;
 
     Program program{};
 
-    auto src_buffer{input_tensor.buffer()};
-    auto dst_buffer{output_tensor.buffer()};
+    auto* src_buffer{input_tensor.buffer()};
+    auto* dst_buffer{output_tensor.buffer()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(input_tensor.dtype())};
     const bool fp32_dest_acc_en{
@@ -94,18 +92,23 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    constexpr uint32_t TILES_NUM = 48;
+    const uint32_t tiles_num_per_full_block_depth_cb = BLOCK_DEPTH;
+    const uint32_t tiles_num_per_small_cb = 2;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
-    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, TILES_NUM);
+    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_small_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_small_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_small_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_full_block_depth_cb);
+    // create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, tiles_num_per_cb);
 
     std::vector<uint32_t> compute_compile_time_args{
         static_cast<uint32_t>(IntImgCB::START),
@@ -116,8 +119,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_2),
         static_cast<uint32_t>(IntImgCB::OUTPUT),
         static_cast<uint32_t>(IntImgCB::AXIS_2_BUFFER),
-        static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_0),
-        static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_1),
+        static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER),
         tile_spec.get_height(),
         tile_spec.get_width(),
         BLOCK_DEPTH,

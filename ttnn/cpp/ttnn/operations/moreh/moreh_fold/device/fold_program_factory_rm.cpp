@@ -17,7 +17,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;
 
     auto output_size = operation_attributes.output_size;
     auto kernel_size = operation_attributes.kernel_size;
@@ -130,8 +130,10 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     };
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
+    const auto* const reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
+    const auto* const writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
 
     const auto reader_kernel_id =
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);

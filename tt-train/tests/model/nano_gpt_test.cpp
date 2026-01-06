@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
+#include <fstream>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"

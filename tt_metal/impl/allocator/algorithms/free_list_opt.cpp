@@ -36,11 +36,7 @@ inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregate
     return std::clamp(count, ssize_t{2}, max_count);
 }
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace allocator {
+namespace tt::tt_metal::allocator {
 
 FreeListOpt::FreeListOpt(
     DeviceAddr max_size_bytes,
@@ -338,8 +334,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 
     for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
-        for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
-            size_t block_index = free_blocks_segregated_by_size_[i][j];
+        for (size_t block_index : free_blocks_segregated_by_size_[i]) {
             if (block_size_[block_index] >= alloc_size) {
                 addresses.push_back(
                     {block_address_[block_index] + offset_bytes_,
@@ -445,16 +440,16 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
             out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i))
                 << " - inf) blocks: ";
         }
-        for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
-            out << free_blocks_segregated_by_size_[i][j] << " ";
+        for (size_t block_id : free_blocks_segregated_by_size_[i]) {
+            out << block_id << " ";
         }
 
         out << std::endl;
     }
 
     out << "Free slots in block table: ";
-    for (size_t i = 0; i < free_meta_block_indices_.size(); i++) {
-        out << free_meta_block_indices_[i] << " ";
+    for (unsigned long free_meta_block_index : free_meta_block_indices_) {
+        out << free_meta_block_index << " ";
     }
     out << std::endl;
 
@@ -670,6 +665,4 @@ void FreeListOpt::update_lowest_occupied_address(DeviceAddr address) {
     }
 }
 
-}  // namespace allocator
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::allocator

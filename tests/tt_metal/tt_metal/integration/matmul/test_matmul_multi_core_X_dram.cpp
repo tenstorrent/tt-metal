@@ -241,7 +241,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             out_subblock_h,
             out_subblock_w);
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program_ = workload.get_programs().at(device_range);
@@ -611,9 +611,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        ASSERT_TRUE(
-            unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(devices_.at(id)));
+    for (const auto& device : devices_) {
+        ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(device));
     }
 }
 

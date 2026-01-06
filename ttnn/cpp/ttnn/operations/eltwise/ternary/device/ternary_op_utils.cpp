@@ -43,15 +43,15 @@ struct KernelConfigEntry {
 static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookupKeyHash> kernel_config_map = {
     // TTT configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
-     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterColBcastTTT}},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
-     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -83,27 +83,27 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
 
     // TTT configurations for LERP - same kernels, different compute operation
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
-     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterColBcastTTT}},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
-     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTT configurations for ADDCMUL
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
-     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
-     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterColBcastTTT}},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcmul, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -146,8 +146,9 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     constexpr std::string_view compute = "{}/compute/{}";
 
     switch (kernel_name) {
-        case KernelName::ReaderNoBcastTTT: return fmt::format(dataflow, root, "ternary_reader_nobcast_ttt.cpp");
-        case KernelName::ReaderOuterBcastTTT: return fmt::format(dataflow, root, "ternary_reader_outerbcast_ttt.cpp");
+        case KernelName::ReaderNoBcastTTT:
+        case KernelName::ReaderOuterBcastTTT:
+            return fmt::format(dataflow, root, "ternary_reader_nosubtilebcast_ttt.cpp");
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderOuterBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
@@ -161,14 +162,9 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:
         case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
-
+        case KernelName::WriterNoBcastTernary:
         case KernelName::WriterNoBcast:
-            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                   "writer_unary_interleaved_start_id.cpp";
-        case KernelName::WriterColBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                   "writer_unary_interleaved_start_id.cpp";
-
+        case KernelName::WriterColBcastTTT: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "ternary_sfpu_no_bcast_ttt.cpp");
         case KernelName::ComputeBcastTTT: return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_ttt.cpp");
         case KernelName::ComputeRowBcastTTT: return fmt::format(compute, root, "ternary_sfpu_row_bcast_ttt.cpp");
@@ -494,6 +490,37 @@ TernaryBroadcastType get_broadcast_type(
     }
 
     return TernaryBroadcastType::INVALID_BCAST;
+}
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    auto ret = shard_spec;
+
+    // Calculate volume of all dimensions EXCEPT the last (width)
+    // This is the "collapsed height" for sharding purposes
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+
+    const int rank = std::max(from_shape.rank(), to_shape.rank());
+
+    // Accumulate all dimensions except the last
+    for (int i = 0; i < rank - 1; ++i) {
+        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        from_volume_except_width *= from_dim;
+        to_volume_except_width *= to_dim;
+    }
+
+    // Get width dimensions
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+
+    // Adjust shard shape based on full volume ratios
+    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
+    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    return ret;
 }
 
 }  // namespace ttnn::operations::ternary

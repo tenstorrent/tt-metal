@@ -18,9 +18,9 @@ A TT-NN operation is a function that takes in one or more input tensors and prod
 
 What steps are needed to add TT-NN operation in C++?
 ----------------------------------------------------
-1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
-   a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
-   b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
+1. There are 2 options for writing a new operation. Option ``a`` is to write a device operation and option ``b`` is to write an operation that calls other operations
+   a. Implement device operation in C++. Device operation is a struct that satisfies `DeviceOperationConcept` and specifies how to create output tensors and a program to run on the device.
+   b. Implement an operation in C++ that calls other operations. This type of operation simply defines an ``invoke()`` method that calls other operations.
 2. Register the struct using `ttnn::register_operation`.
 
 What steps are needed to add TT-NN operation in Python?
@@ -99,23 +99,23 @@ Step 1: Add Python binding
 
 In order to add a python binding for the operation, follow the directory structure shown below:
 
-`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_pybind.hpp`
-`ttnn/python/ttnn/operations/<category>/<category>_pybind.hpp`
+`ttnn/python/ttnn/operations/<category>/<operation_name>/<operation_name>_nanobind.hpp`
+`ttnn/python/ttnn/operations/<category>/<category>_nanobind.hpp`
 
 A concrete example:
 
-.. literalinclude::  examples/example/example_pybind.hpp
+.. literalinclude::  examples/example/example_nanobind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/example/example_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/example/example_nanobind.hpp
 
 
-.. literalinclude::  examples/examples_pybind.hpp
+.. literalinclude::  examples/examples_nanobind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/cpp/ttnn/operations/examples/examples_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/examples_nanobind.hpp
 
-Finally, call the module defined in `examples/example/example_pybind.hpp` wherever you want it to be added.
+Finally, call the module defined in `examples/example/example_nanobind.hpp` wherever you want it to be added.
 
 
 
@@ -165,3 +165,52 @@ Add the following code in a python file:
 
 .. note::
    `ttnn.example` is the name of the operation in Python because the operation was registered as `ttnn::example` in C++.
+
+
+Step 3: (Optional) Add example usage to docs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is good practice to include an example demonstrating how to use the new function.
+The simplest method is to add an **Example** section directly in the documentation passed to the ``bind_registered_operation`` function. However, this approach makes it difficult to keep the example up to date and prevents the snippet from being tested.
+
+A better approach is to place the example code in a test file and have it included automatically during the documentation build process.
+
+In the file
+`examples_mapping.py <https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/docs_examples/examples_mapping.py>`_,
+each function is mapped to an example usage snippet that will appear in its documentation.
+
+Add the new operation to the ``FUNCTION_TO_EXAMPLES_MAPPING_DICT`` dictionary, as shown below:
+
+.. code-block:: python
+
+    FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
+        ...
+        "ttnn.example": example.test_example,
+        ...
+    }
+
+Place the example usage function in a new file named ``test_example_examples.py`` (or an existing file, if appropriate).
+Make sure the file is imported at the top of ``examples_mapping.py``:
+
+.. code-block:: python
+
+    # ...
+    from . import test_data_movement_examples as data_movement
+    from . import test_core_examples as core
+
+    # Import the new file
+    from . import test_example_examples as example
+    # ...
+
+Implement the example as a standard ``ttnn`` pytest:
+
+.. code-block:: python
+
+    def test_example(device):
+        # Create tensor
+        tensor = ttnn.rand((2, 3), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+        # Call the new operation
+        output_tensor = ttnn.example(tensor)
+
+This ensures that all example code snippets are executed and validated in the TT-NN CI pipeline.

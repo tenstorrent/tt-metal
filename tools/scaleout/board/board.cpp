@@ -110,7 +110,7 @@ Board::Board(
     for (const auto& [port_type, port_mapping] : ports) {
         for (const auto& [port_id, asic_channels] : port_mapping) {
             for (const auto& asic_channel : asic_channels) {
-                if (found_asic_channels.find(asic_channel) != found_asic_channels.end()) {
+                if (found_asic_channels.contains(asic_channel)) {
                     throw std::runtime_error("Duplicate ASIC channel found");
                 }
                 found_asic_channels.insert(asic_channel);
@@ -159,6 +159,8 @@ Board::Board(
 tt::ARCH Board::get_arch() const { return arch_; }
 
 BoardType Board::get_board_type() const { return board_type_; }
+
+const std::unordered_set<uint32_t>& Board::get_asic_locations() const { return asic_locations_; }
 
 const std::vector<PortId>& Board::get_available_port_ids(PortType port_type) const {
     auto it = available_port_ids_.find(port_type);

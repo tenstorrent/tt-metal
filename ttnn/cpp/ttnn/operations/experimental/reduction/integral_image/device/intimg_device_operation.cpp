@@ -23,7 +23,10 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         input_shape.rank());
     TT_FATAL(input_shape[0] == 1, "intimg supports only one batch, found {} instead", input_shape[0]);
     TT_FATAL(input_layout == Layout::TILE, "only tile layout is supported, {} was provided instead", input_layout);
-    TT_FATAL(input_dtype == DataType::BFLOAT16, "only bf16 dtype is supported, {} was provided instead", input_dtype);
+    TT_FATAL(
+        input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
+        "only bf16 and fp32 dtypes are supported, {} was provided instead",
+        input_dtype);
 }
 
 void IntImgDeviceOperation::validate_on_program_cache_hit(
@@ -45,8 +48,18 @@ IntImgDeviceOperation::tensor_return_value_t IntImgDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-IntImgDeviceOperation::invocation_result_t IntImgDeviceOperation::invoke(const Tensor& input_tensor) {
-    return {operation_attributes_t{}, tensor_args_t{input_tensor}};
+}  // namespace ttnn::operations::experimental::reduction
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::reduction::IntImgDeviceOperation::tensor_return_value_t intimg(
+    const Tensor& input_tensor) {
+    using OperationType = ttnn::operations::experimental::reduction::IntImgDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::prim

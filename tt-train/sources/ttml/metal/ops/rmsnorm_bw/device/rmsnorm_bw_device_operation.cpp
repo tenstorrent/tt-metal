@@ -4,9 +4,10 @@
 
 #include "rmsnorm_bw_device_operation.hpp"
 
-#include "rmsnorm_bw_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
+
+#include "rmsnorm_bw_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
@@ -23,12 +24,11 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_hit(
 void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "RMSNormBackward operation requires {} to be on Device. Input storage type: {}",
             name,
-            static_cast<int>(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(
             tensor.buffer() != nullptr,
@@ -39,20 +39,20 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "RMSNormBackward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
-            static_cast<int>(tensor.layout()));
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "RMSNormBackward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
-            static_cast<int>(tensor.dtype()));
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "RMSNormBackward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;
@@ -135,8 +135,11 @@ ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<RMSNormBackwardDeviceOperation::operation_attributes_t, RMSNormBackwardDeviceOperation::tensor_args_t>
-RMSNormBackwardDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::rmsnorm_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
@@ -144,18 +147,19 @@ RMSNormBackwardDeviceOperation::invoke(
     float epsilon,
     const std::optional<ttnn::Tensor>& preallocated_da,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components) {
-    return {
-        operation_attributes_t{
-            .epsilon = epsilon,
-        },
-        tensor_args_t{
-            .input = input_tensor,
-            .gamma = gamma_tensor,
-            .rms = rms_tensor,
-            .dL_dout = dL_dout_tensor,
-            .preallocated_da = preallocated_da,
-            .preallocated_dgamma_components = preallocated_dgamma_components,
-        }};
+    using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{.epsilon = epsilon};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .gamma = gamma_tensor,
+        .rms = rms_tensor,
+        .dL_dout = dL_dout_tensor,
+        .preallocated_da = preallocated_da,
+        .preallocated_dgamma_components = preallocated_dgamma_components,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::rmsnorm_bw::device
+}  // namespace ttnn::prim

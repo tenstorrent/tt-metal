@@ -12,6 +12,12 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_equal
 
+torch_dtype_to_ttnn_dtype = {
+    torch.int32: ttnn.int32,
+    torch.bfloat16: ttnn.bfloat16,
+    torch.float32: ttnn.float32,
+}
+
 
 @pytest.mark.parametrize(
     "input_shape",
@@ -26,11 +32,9 @@ from tests.ttnn.utils_for_testing import assert_equal
     [3, -1],
 )
 def test_full_int(device, input_shape, fill_value):
-    torch_any = torch.randint(0, 100, (input_shape), dtype=torch.int32)
     torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 
-    any = ttnn.from_torch(torch_any, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_output = ttnn.moreh_full(input_shape, fill_value, any)
+    tt_output = ttnn.moreh_full(input_shape, fill_value, device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 
@@ -71,11 +75,9 @@ def test_full_int(device, input_shape, fill_value):
     ],
 )
 def test_full_float(device, input_shape, fill_value, dtype, layout):
-    torch_any = torch.rand((input_shape), dtype=dtype)
-
     torch_output = torch.full(input_shape, fill_value, dtype=dtype)
-    any = ttnn.from_torch(torch_any, device=device, layout=layout)
-    tt_output = ttnn.moreh_full(input_shape, fill_value, any)
+    ttnn_dtype = torch_dtype_to_ttnn_dtype[dtype]
+    tt_output = ttnn.moreh_full(input_shape, fill_value, device, dtype=ttnn_dtype, layout=layout)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 
@@ -101,11 +103,10 @@ def test_full_float(device, input_shape, fill_value, dtype, layout):
 )
 def test_full_callback(device, input_shape, fill_value, layout):
     for i in range(2):
-        torch_any = torch.randint(0, 100, (input_shape), dtype=torch.int32)
         torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 
-        any = ttnn.from_torch(torch_any, device=device, layout=layout)
-        tt_output = ttnn.moreh_full(input_shape, fill_value, any)
+        ttnn_dtype = torch_dtype_to_ttnn_dtype[torch.int32]
+        tt_output = ttnn.moreh_full(input_shape, fill_value, device, dtype=ttnn_dtype, layout=layout)
         assert ttnn.is_tensor_storage_on_device(tt_output)
         tt_output_cpu = ttnn.to_torch(tt_output)
         torch_dummy = torch.randn([32, 32])
@@ -145,12 +146,10 @@ def test_full_callback(device, input_shape, fill_value, layout):
     ],
 )
 def test_big_full(device, input_shape, fill_value, dtype, layout):
-    torch_any = torch.rand((input_shape), dtype=dtype)
-
     torch_output = torch.full(input_shape, fill_value, dtype=dtype)
-    any = ttnn.from_torch(torch_any, device=device, layout=layout)
+    ttnn_dtype = torch_dtype_to_ttnn_dtype[dtype]
     for i in range(10):
-        tt_output = ttnn.moreh_full(input_shape, fill_value, any)
+        tt_output = ttnn.moreh_full(input_shape, fill_value, device, dtype=ttnn_dtype, layout=layout)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 

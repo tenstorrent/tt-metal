@@ -10,9 +10,9 @@
 #include <memory>
 #include <random>
 #include <set>
-#include <stdlib.h>
+#include <cstdlib>
 #include <string>
-#include <string.h>
+#include <cstring>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -57,13 +57,11 @@
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -169,16 +167,15 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
 
 void initialize_dummy_semaphores(
     Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values) {
-    for (uint32_t i = 0; i < init_values.size(); i++) {
-        CreateSemaphore(program, core_ranges, init_values[i]);
+    for (unsigned int init_value : init_values) {
+        CreateSemaphore(program, core_ranges, init_value);
     }
 }
 
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -203,7 +200,7 @@ bool cb_config_successful(
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
@@ -215,10 +212,10 @@ bool cb_config_successful(
                 cb_config_vector);
 
             uint32_t cb_addr = l1_unreserved_base;
-            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
-                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
-                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
-                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+            for (const auto& config : program_config.cb_config_vector) {
+                const uint32_t index = config.cb_id * sizeof(uint32_t);
+                const uint32_t cb_num_pages = config.num_pages;
+                const uint32_t cb_size = cb_num_pages * config.page_size;
                 const bool addr_match = cb_config_vector.at(index) == cb_addr;
                 const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -238,7 +235,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto eth_noc_xy = mesh_device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
@@ -352,7 +349,7 @@ bool test_dummy_EnqueueProgram_with_sems(
     distributed::EnqueueMeshWorkload(cq, workload, is_blocking_op);
     Finish(cq);
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
@@ -415,7 +412,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -527,7 +524,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -912,7 +909,7 @@ bool test_increment_runtime_args_sanity(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     Program program;
     bool pass = true;
 
@@ -1039,7 +1036,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     constexpr uint32_t k_LoopPerDev = 100;
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     log_info(tt::LogTest, "Running On Device {} CQ{}", mesh_device->id(), cq_id);
 
     log_info(tt::LogTest, "Running On Device {} CQ{}", device->id(), cq_id);

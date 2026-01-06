@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -121,7 +121,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
 
 void BinaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
+
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
@@ -403,16 +403,20 @@ bool BinaryDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
-BinaryDeviceOperation::invoke(
+}  // namespace ttnn::operations::binary
+
+namespace ttnn::prim {
+
+ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
-    BinaryOpType binary_op_type,
+    ttnn::operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::EltwiseFusedActivations> activations,
-    std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
+    std::optional<ttnn::operations::unary::EltwiseFusedActivations> activations,
+    std::optional<ttnn::operations::unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
+    using OperationType = ttnn::operations::binary::BinaryDeviceOperation;
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().dtype(),
@@ -436,7 +440,7 @@ BinaryDeviceOperation::invoke(
     // TODO #13655: Note that the current program ingfrastructure still only supports a single sub-device per program
     if (input_tensor_a_arg.is_sharded()) {
         const auto& input_grid = input_tensor_a_arg.shard_spec().value().grid;
-        auto device = input_tensor_a_arg.device();
+        auto* device = input_tensor_a_arg.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(input_grid)) {
@@ -445,7 +449,7 @@ BinaryDeviceOperation::invoke(
         }
     } else if (input_tensor_b_arg.is_sharded()) {
         const auto& input_grid = input_tensor_b_arg.shard_spec().value().grid;
-        auto device = input_tensor_b_arg.device();
+        auto* device = input_tensor_b_arg.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(input_grid)) {
@@ -454,7 +458,7 @@ BinaryDeviceOperation::invoke(
         }
     } else if (optional_output_tensor.has_value() && optional_output_tensor->is_sharded()) {
         const auto& output_grid = optional_output_tensor->shard_spec().value().grid;
-        auto device = optional_output_tensor->device();
+        auto* device = optional_output_tensor->device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(output_grid)) {
@@ -462,38 +466,39 @@ BinaryDeviceOperation::invoke(
             }
         }
     } else {
-        auto device = input_tensor_a_arg.device();
+        auto* device = input_tensor_a_arg.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             worker_grid = worker_grid.merge(sub_device_workers);
         }
     }
 
-    return {
-        operation_attributes_t{
-            binary_op_type,
-            std::move(activations),
-            std::move(input_tensor_a_activation),
-            std::nullopt,
-            memory_config.value_or(
-                optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
-                                                   : input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.dtype()),
-            std::move(worker_grid),
-            std::nullopt},
-        tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        binary_op_type,
+        std::move(activations),
+        std::move(input_tensor_a_activation),
+        std::nullopt,
+        memory_config.value_or(
+            optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                               : input_tensor_a_arg.memory_config()),
+        output_dtype.value_or(input_tensor_a_arg.dtype()),
+        std::move(worker_grid),
+        std::nullopt};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
-BinaryDeviceOperation::invoke(
+ttnn::operations::binary::BinaryDeviceOperation::tensor_return_value_t binary(
     const Tensor& input_tensor_a_arg,
     float scalar,
-    BinaryOpType binary_op_type,
+    ttnn::operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::EltwiseFusedActivations> activations,
-    std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
+    std::optional<ttnn::operations::unary::EltwiseFusedActivations> activations,
+    std::optional<ttnn::operations::unary::EltwiseUnaryWithParam> input_tensor_a_activation) {
+    using OperationType = ttnn::operations::binary::BinaryDeviceOperation;
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype.value() == optional_output_tensor.value().dtype(),
@@ -502,17 +507,18 @@ BinaryDeviceOperation::invoke(
 
     // Currently unused/unsupported
     CoreRangeSet worker_grid = CoreRangeSet();
-    return {
-        operation_attributes_t{
-            binary_op_type,
-            std::move(activations),
-            std::move(input_tensor_a_activation),
-            scalar,
-            memory_config.value_or(input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.dtype()),
-            std::move(worker_grid),
-            std::nullopt},
-        tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor}};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        binary_op_type,
+        std::move(activations),
+        std::move(input_tensor_a_activation),
+        scalar,
+        memory_config.value_or(input_tensor_a_arg.memory_config()),
+        output_dtype.value_or(input_tensor_a_arg.dtype()),
+        std::move(worker_grid),
+        std::nullopt};
+    auto tensor_args = OperationType::tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::binary
+}  // namespace ttnn::prim

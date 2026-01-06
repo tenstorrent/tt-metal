@@ -7,7 +7,6 @@
 #include <optional>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
 #include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
@@ -42,7 +41,7 @@ Tensor MorehClipGradNorm::invoke(
             "`error_if_nonfinite=False`",
             norm_type);
     }
-    auto device = inputs.at(0).device();
+    auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 

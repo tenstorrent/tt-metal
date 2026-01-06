@@ -208,10 +208,10 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                               const std::vector<ttnn::Tensor>& input_tensors,
                                               const std::vector<std::optional<const ttnn::Tensor>>&,
                                               const std::vector<ttnn::Tensor>& output_tensors) {
-        auto src_dram_buffer_a = input_tensors.at(0).buffer();
-        auto src_dram_buffer_b = input_tensors.at(1).buffer();
+        auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+        auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
         uint32_t num_blocks_read = 0;
         for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
@@ -238,11 +238,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     return {std::move(program), override_runtime_args_callback};
 }
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
@@ -321,8 +317,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
         out_buffer);
 }
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

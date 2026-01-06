@@ -14,11 +14,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 struct Tile;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -28,7 +26,7 @@ class GlobalCircularBuffer;
 
 class CircularBuffer {
 public:
-    CircularBuffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
+    CircularBuffer(const CoreRangeSet& core_ranges, const CircularBufferConfig& config);
     CircularBuffer(
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
