@@ -74,14 +74,14 @@ inline void _llk_unpack_A_mop_config_(
         }
         else if (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
         {
-            const uint32_t outerloop     = BType == BroadcastType::ROW ? 2 : 1;
+            constexpr uint32_t outerloop = BType == BroadcastType::ROW ? 2 : 1;
             constexpr uint32_t innerloop = 1;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
             tmp.program();
         }
         else if (BType == BroadcastType::COL)
         {
-            const uint32_t outerloop     = 2;
+            constexpr uint32_t outerloop = 2;
             constexpr uint32_t innerloop = 1;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest_column);
             tmp.program();
@@ -121,7 +121,7 @@ inline void _llk_unpack_A_mop_config_(
     else if constexpr (BType == BroadcastType::SCALAR)
     {
         static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
-        const uint32_t outerloop     = 1;
+        constexpr uint32_t outerloop = 1;
         constexpr uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
         // ELWADD used in datacopy due to WH broadcast bug, use zerosrca regardless of acc_to_dest
