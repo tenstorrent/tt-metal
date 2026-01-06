@@ -272,3 +272,120 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         EXPECT_EQ(l1_usage.peak_total, expected_peak_total);
     }
 }
+
+TEST_F(MemoryUtilsTest, SnapshotFeature) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->disable_and_clear_program_cache();
+
+    // Prepare data for different operations
+    std::vector<float> data_small(64 * 64, 1.0F);
+    std::vector<float> data_medium(128 * 64, 2.0F);
+    std::vector<float> data_large(256 * 256, 3.0F);
+
+    auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
+    // Snapshot 1: Simple add operation with small DRAM tensors
+    auto shape1 = ttnn::Shape({64, 64});
+    ttnn::TensorSpec spec1(
+        shape1,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+
+    auto tensor1 = ttnn::Tensor::from_vector(data_small, spec1, device);
+    auto tensor2 = ttnn::Tensor::from_vector(data_small, spec1, device);
+    auto result1 = ttnn::add(tensor1, tensor2);
+
+    ttml::utils::MemoryUsageTracker::snapshot("add_operation");
+
+    // Snapshot 2: Matmul operation with DRAM tensors
+    auto shape2a = ttnn::Shape({128, 64});
+    auto shape2b = ttnn::Shape({64, 128});
+
+    ttnn::TensorSpec spec2a(
+        shape2a,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    ttnn::TensorSpec spec2b(
+        shape2b,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+
+    auto tensor3 = ttnn::Tensor::from_vector(data_medium, spec2a, device);
+    auto tensor4 = ttnn::Tensor::from_vector(data_medium, spec2b, device);
+    auto result2 = ttnn::matmul(tensor3, tensor4);
+
+    ttml::utils::MemoryUsageTracker::snapshot("matmul_operation");
+
+    // Snapshot 3: L1 operation
+    auto shape3 = ttnn::Shape({256, 256});
+    ttnn::TensorSpec spec3(
+        shape3,
+        ttnn::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            ttnn::PageConfig(ttnn::Layout::TILE),
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+
+    auto tensor5_dram = ttnn::Tensor::from_vector(data_large, spec3, device);
+    auto tensor6_dram = ttnn::Tensor::from_vector(data_large, spec3, device);
+
+    // Move to L1 for operation
+    auto tensor5 = ttnn::to_memory_config(tensor5_dram, ttnn::L1_MEMORY_CONFIG);
+    auto tensor6 = ttnn::to_memory_config(tensor6_dram, ttnn::L1_MEMORY_CONFIG);
+    auto result3 = ttnn::multiply(tensor5, tensor6);
+
+    ttml::utils::MemoryUsageTracker::end_capture("multiply_l1_operation");
+
+    // Verify that all three snapshots were captured
+    auto trace_names = ttml::utils::MemoryUsageTracker::get_trace_names();
+    ASSERT_EQ(trace_names.size(), 3);
+    EXPECT_EQ(trace_names[0], "add_operation");
+    EXPECT_EQ(trace_names[1], "matmul_operation");
+    EXPECT_EQ(trace_names[2], "multiply_l1_operation");
+
+    // Get all DRAM and L1 usage
+    auto all_dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage_all();
+    auto all_l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage_all();
+
+    ASSERT_EQ(all_dram_usage.size(), 3);
+    ASSERT_EQ(all_l1_usage.size(), 3);
+
+    // Verify individual snapshots have captured memory usage with exact values
+    // Snapshot 1: Add operation
+    auto dram_usage_1 = ttml::utils::MemoryUsageTracker::get_dram_usage("add_operation");
+    // 2 inputs + output have size of 64*64*sizeof(bfloat16) + 12288 bytes of program cache
+    // 36864 = 3 * (64 * 64) * sizeof(bfloat16) + 12288
+    EXPECT_EQ(dram_usage_1.peak, 36864);
+    EXPECT_EQ(dram_usage_1.total_allocations, 36864);
+    EXPECT_EQ(dram_usage_1.total_deallocations, 12288);
+
+    // Snapshot 2: Matmul operation
+    auto dram_usage_2 = ttml::utils::MemoryUsageTracker::get_dram_usage("matmul_operation");
+    EXPECT_EQ(dram_usage_2.peak, 86016);
+    EXPECT_EQ(dram_usage_2.total_allocations, 86016);
+    EXPECT_EQ(dram_usage_2.total_deallocations, 20480);
+
+    // Snapshot 3: L1 multiply operation
+    auto dram_usage_3 = ttml::utils::MemoryUsageTracker::get_dram_usage("multiply_l1_operation");
+    auto l1_usage_3 = ttml::utils::MemoryUsageTracker::get_l1_usage("multiply_l1_operation");
+    EXPECT_EQ(dram_usage_3.peak, 274432);
+    // Total DRAM allocations = (256 * 256 * sizeof(bfloat16) * 2) /*DRAM inputs*/ + 20480 /*program cache*/
+    EXPECT_EQ(dram_usage_3.total_allocations, 282624);
+    EXPECT_EQ(dram_usage_3.total_deallocations, 20480);
+    // peak_l1 = (256 * 256 * sizeof(bfloat16)) * 2 /*DRAM inputs*/ + (256 * 256 * sizeof(bfloat16)) /*L1 output*/
+    EXPECT_EQ(l1_usage_3.peak_l1, 393216);
+
+    // Verify get_dram_usage_all and get_l1_usage_all return correct pairs
+    EXPECT_EQ(all_dram_usage[0].first, "add_operation");
+    EXPECT_EQ(all_dram_usage[1].first, "matmul_operation");
+    EXPECT_EQ(all_dram_usage[2].first, "multiply_l1_operation");
+
+    EXPECT_EQ(all_l1_usage[0].first, "add_operation");
+    EXPECT_EQ(all_l1_usage[1].first, "matmul_operation");
+    EXPECT_EQ(all_l1_usage[2].first, "multiply_l1_operation");
+}
