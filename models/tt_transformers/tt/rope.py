@@ -387,15 +387,19 @@ class RotarySetup(LightweightModule):
     ) -> None:
         super().__init__()
         self.use_qk_fused = use_qk_fused
-        self.batch_size = batch_size * 2 if use_qk_fused else batch_size
+        self.original_batch_size = batch_size
+
+        # NOTE: If qk fused ops (rotary embedding + paged cache update) are used
+        # we need to double the batch size in order to replicate the transformation matrix on double the batch size number of cores
+        self.doubled_batch_size = self.original_batch_size * 2 if use_qk_fused else self.original_batch_size
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
+            self.batch_size_per_device_group = max(self.doubled_batch_size // list(device.shape)[1], 1)
         else:
-            self.batch_size_per_device_group = self.batch_size
+            self.batch_size_per_device_group = self.doubled_batch_size
         self.core_grid = (
             ttnn.CoreCoord(8, 8) if ttnn.get_arch_name() == "blackhole" else device.compute_with_storage_grid_size()
         )
@@ -410,13 +414,13 @@ class RotarySetup(LightweightModule):
             datatype=datatype,
         )
 
-        self.batch_grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
+        self.batch_grid = ttnn.num_cores_to_corerangeset(self.doubled_batch_size, self.core_grid, row_wise=True)
 
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
             1,
-            self.batch_size,
+            self.doubled_batch_size,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
