@@ -1,38 +1,57 @@
-name: "(T3K) T3000 unit tests"
+name: "TT-Transformers Demo Tests"
 
 on:
   workflow_dispatch:
     inputs:
-      model:
-        description: "Select model to test"
+      device:
+        description: 'Select device to test on'
         required: true
-        default: all
+        default: 'all'
         type: choice
         options:
           - all
-          - falcon7b
-          - falcon40b
-          - llama3-small
-          - llama3.2-11b
-          - llama3.2-11b-vision
-          - n300 mesh llama3.2-11b-vision
-          - llama3.2-90b-vision
-          # - llama3.1-70b
-          - llama3.2-90b
-          - mistral
-          - mixtral
-          - grok
-          - unet shallow
-          - qwen25_vl
-          - gemma3-small
-          - dits
-          - gpt-oss
-  schedule:
-    - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
-
-permissions:
-  packages: write
-  contents: write
+          - n150
+          - n300
+          - p150
+          - wh-quietbox
+          - bh-quietbox
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'llama3.1-8b'
+        type: choice
+        options:
+          - llama3.1-8b
+          - llama3.1-70b
+          - llama3.2-1b
+          - llama3.2-3b
+          - qwen2.5-7b
+          - mistral-7b
+      regenerate-ttnn-cache:
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
+        required: false
+        type: boolean
+        default: false
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'models/tt_transformers/**'
+      - '.github/workflows/tt-transformers-demo-tests*.yaml'
+  workflow_call:
+    inputs:
+      device:
+        required: false
+        type: string
+        default: 'all'
+      model:
+        required: false
+        type: string
+        default: 'llama3.1-8b'
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-artifact:
@@ -43,12 +62,90 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  t3000-unit-tests:
+
+  # N150 Tests (Wormhole single chip)
+  # For PR triggers: only runs N150 by default
+  # For manual/workflow_call triggers: runs based on device input
+  n150-tests:
+    if: ${{ github.event_name == 'pull_request' || inputs.device == 'all' || inputs.device == 'n150' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
     with:
+      device-type: 'n150'
+      runner-label: 'N150'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'N150'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.model || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # N300 Tests (Wormhole dual chip)
+  n300-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'n300' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'n300'
+      runner-label: 'N300'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'N300'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P150 Tests (Blackhole single chip)
+  p150-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'p150' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'p150'
+      runner-label: 'P150'
+      arch: 'blackhole'
+      mesh-device-env: 'P150'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # WH QuietBox Tests (T3K - Wormhole 8 chips)
+  wh-quietbox-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'wh-quietbox' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'wh-quietbox'
+      runner-label: 'T3K'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'T3K'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # BH QuietBox Tests (Blackhole 8 chips)
+  bh-quietbox-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-quietbox' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'bh-quietbox'
+      runner-label: 'BH-QuietBox'
+      arch: 'blackhole'
+      mesh-device-env: 'P150x8'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}

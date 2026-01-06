@@ -1,8 +1,28 @@
-name: "[internal] T3000 unit tests impl"
+name: "[internal] TT-Transformers Demo Tests Implementation"
 
 on:
   workflow_call:
     inputs:
+      device-type:
+        required: true
+        type: string
+        description: "Device type: n150, n300, p150, wh-quietbox, bh-quietbox"
+      runner-label:
+        required: true
+        type: string
+        description: "GitHub runner label"
+      arch:
+        required: true
+        type: string
+        description: "Architecture: wormhole_b0 or blackhole"
+      mesh-device-env:
+        required: true
+        type: string
+        description: "MESH_DEVICE environment variable value"
+      model:
+        required: true
+        type: string
+        description: "Model to test"
       docker-image:
         required: true
         type: string
@@ -12,214 +32,112 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      model:
+      regenerate-ttnn-cache:
         required: false
-        type: string
-        default: "all"
+        type: boolean
+        default: false
       extra-tag:
         required: false
         type: string
-        default: "in-service"
+        default: "pipeline-perf"
+        description: "Extra tag for runner selection"
 
 jobs:
-  generate-matrix:
+  generate-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.generate.outputs.matrix }}
     steps:
-      - name: Generate Matrix
-        id: set-matrix
+      - name: Generate test matrix
+        id: generate
         run: |
-          ALWAYS_RUN=$(jq -n '[
-            {
-              "name": "t3k ttmetal tests",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_ttmetal_tests",
-              "timeout": 40,
-              "owner_id": "ULMEPM2MA" # Sean Nijjar
-            },
-            {
-              "name": "t3k ttnn tests",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_ttnn_tests",
-              "timeout": 45,
-              "owner_id": "UBHPP2NDP" # Joseph Chu
-            },
-            {
-              "name": "t3k tt_metal multiprocess tests",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_tt_metal_multiprocess_tests",
-              "timeout": 15,
-              "owner_id": "U03NG0A5ND7" # Aditya Saigal
-            }
-            ]')
+          # Define model-specific HuggingFace paths and cache paths
+          case "${{ inputs.model }}" in
+            llama3.1-8b)
+              HF_MODEL="meta-llama/Llama-3.1-8B-Instruct"
+              CACHE_DIR="meta-llama/Llama-3.1-8B-Instruct"
+              ;;
+            llama3.1-70b)
+              HF_MODEL="meta-llama/Llama-3.1-70B-Instruct"
+              CACHE_DIR="meta-llama/Llama-3.1-70B-Instruct"
+              ;;
+            llama3.2-1b)
+              HF_MODEL="meta-llama/Llama-3.2-1B"
+              CACHE_DIR="meta-llama/Llama-3.2-1B"
+              ;;
+            llama3.2-3b)
+              HF_MODEL="meta-llama/Llama-3.2-3B"
+              CACHE_DIR="meta-llama/Llama-3.2-3B"
+              ;;
+            qwen2.5-7b)
+              HF_MODEL="Qwen/Qwen2.5-7B"
+              CACHE_DIR="Qwen/Qwen2.5-7B"
+              ;;
+            mistral-7b)
+              HF_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
+              CACHE_DIR="mistralai/Mistral-7B-Instruct-v0.3"
+              ;;
+            *)
+              echo "Unknown model: ${{ inputs.model }}"
+              exit 1
+              ;;
+          esac
 
-          MODEL_TESTS=$(jq -n '[
-            {
-              "name": "t3k falcon7b tests",
-              "model": "falcon7b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon7b_tests",
-              "timeout": 30,
-              "owner_id": "UBHPP2NDP" # Joseph Chu
-            },
-            {
-              "name": "t3k falcon40b tests",
-              "model": "falcon40b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_falcon40b_tests",
-              "timeout": 30,
-              "owner_id": "U053W15B6JF" # Djordje Ivanovic
-            },
-            {
-              "name": "t3k llama3-small tests",
-              "model": "llama3-small",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3-small_tests",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            },
-            {
-              "name": "t3k llama3.2-11b tests",
-              "model": "llama3.2-11b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-11b_tests",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            },
-            {
-              "name": "t3k llama3.2-11b-vision tests",
-              "model": "llama3.2-11b-vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-11b-vision_unit_tests",
-              "timeout": 30,
-              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k n300 mesh llama3.2-11b-vision tests",
-              "model": "n300 mesh llama3.2-11b-vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests",
-              "timeout": 30,
-              "owner_id": "U03FJB5TM5Y" # Colman Glagovich
-            },
-            {
-              "name": "t3k llama3.2-90b-vision tests",
-              "model": "llama3.2-90b-vision",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-90b-vision_unit_tests",
-              "timeout": 30,
-              "label": "pipeline-functional",
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            # {
-            #   "name": "t3k llama3.1-70b tests",
-            #   "model": "llama3.1-70b",
-            #   "arch": "wormhole_b0",
-            #   "cmd": "run_t3000_llama3.1-70b_tests",
-            #   "timeout": 30,
-            #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-            # },
-            {
-              "name": "t3k llama3.2-90b tests",
-              "model": "llama3.2-90b",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3.2-90b_tests",
-              "timeout": 30,
-              "label": "pipeline-functional",
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
-              "name": "t3k mistral tests",
-              "model": "mistral",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mistral_tests",
-              "timeout": 30,
-              "owner_id": "U0896VBAKFC" # Praktikkumar Prajapati
-            },
-            {
-              "name": "t3k mixtral tests",
-              "model": "mixtral",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_mixtral_tests",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719" # Harry Zhou
-            },
-            {
-              "name": "t3k grok tests",
-              "model": "grok",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_grok_tests",
-              "timeout": 30,
-              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
-            },
-            {
-              "name": "t3k unet shallow tests",
-              "model": "unet shallow",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_unet_shallow_tests",
-              "timeout": 30,
-              "owner_id": "U06ECNVR0EN" # Evan Smal
-            },
-            {
-              "name": "t3k qwen25_vl tests",
-              "model": "qwen25_vl",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_qwen25_vl_unit_tests",
-              "timeout": 20,
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
-              "name": "t3k gemma3-small tests",
-              "model": "gemma3-small",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_gemma3-small_tests",
-              "timeout": 30,
-              "owner_id": "U08E1JCDVNX" # Pavle Petrovic
-            },
-            {
-              #Uses random weights for corresponding model initialization. Does not depend on MLPerf
-              "name": "t3k DiTs Image and Video Generation",
-              "model": "dits",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_tt_dit_tests",
-              "timeout": 20,
-              "owner_id": "U08TED0JM9D" # Samuel Adesoye
-            },
-            {
-              "name": "t3k gpt-oss unit tests",
-              "model": "gpt-oss",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_gpt_oss_unit_tests",
-              "timeout": 10,
-              "owner_id": "U08TJ70UFRT" # Harry Andrews
-            }
-          ]')
-
-          echo "[INFO] Selected model: ${{ inputs.model }}"
-          # Filter matrix based on model selection
-          if [ "${{ inputs.model }}" = "all" ]; then
-              MATRIX=$(jq -n -c --argjson MT "$MODEL_TESTS" --argjson AR "$ALWAYS_RUN" '$MT + $AR')
-            else
-              CHOSEN_MODEL=$(echo "$MODEL_TESTS" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]')
-              MATRIX=$(jq -n -c --argjson CM "$CHOSEN_MODEL" --argjson AR "$ALWAYS_RUN" '$CM + $AR')
+          # Determine cache path based on device type
+          if [[ "${{ inputs.arch }}" == "blackhole" ]]; then
+            CACHE_PATH="/localdev/blackhole_demos/huggingface_data/${CACHE_DIR}"
+          else
+            CACHE_PATH="/mnt/MLPerf/huggingface/tt_cache/${CACHE_DIR}"
           fi
 
-          echo "[INFO] Tests to be run:"
-          echo $MATRIX | jq '.[].name'
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          # Define test configurations
+          # Each test includes: name, test_key, extra_args, timeout, owner_id
+          tests='[
+            {
+              "name": "Batch-1 Performance",
+              "test_key": "performance and batch-1",
+              "extra_args": "",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "name": "Batch-32 Performance",
+              "test_key": "performance and batch-32",
+              "extra_args": "",
+              "timeout": 30,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "name": "Long Context 16K",
+              "test_key": "long-context",
+              "extra_args": "--max_seq_len=16384",
+              "timeout": 45,
+              "owner_id": "U03PUAKE719"
+            },
+            {
+              "name": "Long Context Performance",
+              "test_key": "performance and long",
+              "extra_args": "",
+              "timeout": 45,
+              "owner_id": "U03PUAKE719"
+            }
+          ]'
 
-  t3000-unit-tests:
-    needs: generate-matrix
+          # Add HF_MODEL and CACHE_PATH to each test
+          matrix=$(echo "$tests" | jq -c --arg hf "$HF_MODEL" --arg cache "$CACHE_PATH" \
+            '[.[] | . + {"hf_model": $hf, "cache_path": $cache}]')
+
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
+  run-tests:
+    needs: generate-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    name: ${{ matrix.test-group.name }}
+        test: ${{ fromJson(needs.generate-test-matrix.outputs.matrix) }}
+    name: "${{ inputs.device-type }} - ${{ inputs.model }} - ${{ matrix.test.name }}"
     runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-functional
+      - ${{ inputs.runner-label }}
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
@@ -227,26 +145,30 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
-        HF_HUB_OFFLINE: 1
-        HF_HOME: /mnt/MLPerf/huggingface
         LOGURU_LEVEL: INFO
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        ARCH_NAME: ${{ inputs.arch }}
+        MESH_DEVICE: ${{ inputs.mesh-device-env }}
+        HF_MODEL: ${{ matrix.test.hf_model }}
+        TT_CACHE_PATH: ${{ matrix.test.cache_path }}
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HUB_CACHE: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/hub' || '/mnt/MLPerf/huggingface/hub' }}
+        TT_CACHE_HOME: ${{ inputs.arch == 'blackhole' && '/localdev/blackhole_demos/huggingface_data/tt_cache' || '/mnt/MLPerf/huggingface/tt_cache' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - ${{ inputs.arch == 'blackhole' && format('/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.regenerate-ttnn-cache && ':rw' || ':ro') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: docker-job
+
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
@@ -254,25 +176,61 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Run unit regression tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+      - name: Run ${{ matrix.test.name }} test
+        timeout-minutes: ${{ matrix.test.timeout }}
         run: |
-          mkdir -p generated/test_reports
-          source tests/scripts/t3000/run_t3000_unit_tests.sh
-          ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+          echo "=========================================="
+          echo "Running: ${{ matrix.test.name }}"
+          echo "Device: ${{ inputs.device-type }}"
+          echo "Model: ${{ inputs.model }}"
+          echo "HF_MODEL: ${{ matrix.test.hf_model }}"
+          echo "TT_CACHE_PATH: ${{ matrix.test.cache_path }}"
+          echo "MESH_DEVICE: ${{ inputs.mesh-device-env }}"
+          echo "Test Key: ${{ matrix.test.test_key }}"
+          echo "Extra Args: ${{ matrix.test.extra_args }}"
+          echo "=========================================="
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+          pytest models/tt_transformers/demo/simple_text_demo.py \
+            -k "${{ matrix.test.test_key }}" \
+            ${{ matrix.test.extra_args }} \
+            --timeout 1000
+
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ inputs.arch }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          fi
+
+      - name: Upload benchmark data artifact
+        if: ${{ !cancelled() && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-data-${{ inputs.device-type }}-${{ inputs.model }}-${{ matrix.test.name }}-${{ github.run_id }}
+          path: generated/benchmark_data
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          payload: |
+            {
+              "text": "❌ TT-Transformers Test Failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*TT-Transformers Demo Test Failed*\n*Device:* ${{ inputs.device-type }}\n*Model:* ${{ inputs.model }}\n*Test:* ${{ matrix.test.name }}\n*Branch:* ${{ github.ref }}\n*Commit:* ${{ github.sha }}\n*Actor:* ${{ github.actor }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
