@@ -2,6 +2,55 @@ name: "Profiler CI"
 run-name: "Profiler CI"
 
 on:
+  schedule:
+    - cron: "0 2 * * *" # Run daily at 2am UTC (matches T3K/Galaxy profiler schedules)
+  workflow_dispatch:
+    inputs:
+      debug_build:
+        description: "Run ALL profiler jobs using a debug build (RelWithDebInfo) instead of Release."
+        required: false
+        type: boolean
+        default: false
+      run_t3k_profiler:
+        description: "T3K profiler"
+        required: false
+        type: boolean
+        default: false
+      run_galaxy_profiler:
+        description: "Galaxy profiler"
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: false
+      run_n300_profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: false
+      run_n150_profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: false
+      enable-watcher:
+        description: "Enable watcher (profiler regressions only)"
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        description: "Enable lightweight kernel asserts (profiler regressions only)"
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: "Enable LLK asserts (profiler regressions only)"
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       debug_build:
@@ -51,19 +100,32 @@ jobs:
   build-artifact-profiler:
     if: >-
       ${{
-        inputs.debug_build ||
-        inputs.run_t3k_profiler ||
-        inputs.run_galaxy_profiler ||
-        inputs.run_blackhole_profiler ||
-        inputs.run_n300_profiler ||
-        inputs.run_n150_profiler
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.debug_build || inputs.run_t3k_profiler || inputs.run_galaxy_profiler || inputs.run_blackhole_profiler || inputs.run_n300_profiler || inputs.run_n150_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true ||
+          github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true ||
+          github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true ||
+          github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true ||
+          github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true ||
+          github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true
+        ))
       }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.debug_build && 'RelWithDebInfo' || 'Release' }}
+      build-type: >-
+        ${{
+          (
+            (
+              (github.event_name == 'workflow_call' && inputs.debug_build) ||
+              (github.event_name == 'workflow_dispatch' && (github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true))
+            )
+            && 'RelWithDebInfo'
+          ) || 'Release'
+        }}
       tracy: true
       build-wheel: true
       version: "22.04"
@@ -71,8 +133,12 @@ jobs:
   t3k-profiler-tests:
     if: >-
       ${{
-        inputs.debug_build ||
-        inputs.run_t3k_profiler
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.debug_build || inputs.run_t3k_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true ||
+          github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true
+        ))
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -87,8 +153,12 @@ jobs:
   galaxy-profiler-tests:
     if: >-
       ${{
-        inputs.debug_build ||
-        inputs.run_galaxy_profiler
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.debug_build || inputs.run_galaxy_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true ||
+          github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true
+        ))
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -103,8 +173,12 @@ jobs:
   blackhole-profiler:
     if: >-
       ${{
-        inputs.debug_build ||
-        inputs.run_blackhole_profiler
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.debug_build || inputs.run_blackhole_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true ||
+          github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true
+        ))
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -117,15 +191,19 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-watcher == 'true' || github.event.inputs.enable-watcher == true)) || false }}
+      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lightweight-kernel-asserts == 'true' || github.event.inputs.enable-lightweight-kernel-asserts == true)) || false }}
+      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-llk-asserts == 'true' || github.event.inputs.enable-llk-asserts == true)) || false }}
 
   n300-profiler:
     if: >-
       ${{
-        inputs.debug_build ||
-        inputs.run_n300_profiler
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.debug_build || inputs.run_n300_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true ||
+          github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true
+        ))
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -138,15 +216,19 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-watcher == 'true' || github.event.inputs.enable-watcher == true)) || false }}
+      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lightweight-kernel-asserts == 'true' || github.event.inputs.enable-lightweight-kernel-asserts == true)) || false }}
+      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-llk-asserts == 'true' || github.event.inputs.enable-llk-asserts == true)) || false }}
 
   n150-profiler:
     if: >-
       ${{
-        inputs.debug_build ||
-        inputs.run_n150_profiler
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.debug_build || inputs.run_n150_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true ||
+          github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true
+        ))
       }}
     needs: build-artifact-profiler
     secrets: inherit
@@ -159,6 +241,6 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-watcher: ${{ (github.event_name == 'workflow_call' && inputs.enable-watcher) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-watcher == 'true' || github.event.inputs.enable-watcher == true)) || false }}
+      enable-lightweight-kernel-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-lightweight-kernel-asserts) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-lightweight-kernel-asserts == 'true' || github.event.inputs.enable-lightweight-kernel-asserts == true)) || false }}
+      enable-llk-asserts: ${{ (github.event_name == 'workflow_call' && inputs.enable-llk-asserts) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.enable-llk-asserts == 'true' || github.event.inputs.enable-llk-asserts == true)) || false }}
