@@ -435,7 +435,7 @@ void reduce_cb(
     compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
         cb_in, cb_scaler, cb_out, compute_kernel_lib::TileShape::row(cb_length_t), {},
         // PostReduceOp: conditionally accumulate with previous result
-        [cb_prev_out, use_prev_reduce]() {
+        [cb_prev_out, use_prev_reduce](uint32_t) {
             if (use_prev_reduce) {
                 // At this point, DST[0] contains the current reduce result
                 // Load previous result into DST[1] and accumulate

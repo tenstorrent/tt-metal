@@ -120,13 +120,31 @@ void MAIN {
         cb_push_back(cb_exps, Ht);
 
 #ifdef LOG
-        // log(sum)
-        reduce_and_log_tile_to_cb<PoolType::SUM, REDUCE_DIM>(
-            cb_exps, cb_bcast_scaler, cb_recipsumexps, Ht, /*pop0=*/Ht, /*pop1=*/0);
+        // log(sum) - pop tiles after reduce
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_exps,
+                cb_bcast_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::TileShape::col(Ht),
+                {},
+                [](uint32_t dst_idx) {
+                    log_tile_init();
+                    log_tile(dst_idx);
+                });
 #else
-        // 1/sum
-        reduce_and_recip_tile_to_cb<PoolType::SUM, REDUCE_DIM>(
-            cb_exps, cb_bcast_scaler, cb_recipsumexps, Ht, /*pop0=*/0, /*pop1=*/0);
+        // 1/sum - keep tiles for subsequent multiplication
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+                cb_exps,
+                cb_bcast_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::TileShape::col(Ht),
+                {},
+                [](uint32_t dst_idx) {
+                    recip_tile_init();
+                    recip_tile(dst_idx);
+                });
 #endif
 
         // compute final result
