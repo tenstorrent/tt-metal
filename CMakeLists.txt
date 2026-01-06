@@ -70,22 +70,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-# Global RPATH settings for test executables
-# Test executables are built to various locations under build/ (e.g., build/test/ttnn/tracy/)
-# and need to find shared libraries:
-#   - libtt_metal.so in build/lib/
-#   - _ttnn.so in ttnn/ttnn/ (note: this is in the SOURCE tree, not build tree)
-#
-# BUILD_RPATH uses absolute paths that work when the CI tar artifact is extracted to /work/
-# The tar artifact copies:
-#   - build/lib/, build/test/, build/tt-train/ from the build directory
-#   - ttnn/ttnn/*.so from the source directory
-# Both end up at the same relative locations under /work/ as in the original build.
-set(CMAKE_BUILD_RPATH
-    "${PROJECT_BINARY_DIR}/lib" # For libtt_metal.so
-    "${PROJECT_SOURCE_DIR}/ttnn/ttnn" # For _ttnn.so, _ttnncpp.so (in source tree)
-)
-
 # CMake 3.19: "smartly dropping dependencies of static and object libraries"
 set(CMAKE_OPTIMIZE_DEPENDENCIES TRUE)
 

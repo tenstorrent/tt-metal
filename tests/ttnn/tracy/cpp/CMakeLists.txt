@@ -13,4 +13,10 @@ set_target_properties(
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/ttnn/tracy/
+        # BUILD_RPATH for finding shared libraries when running from build tree or CI tar artifact
+        # The executable is at build/test/ttnn/tracy/, needs to find:
+        #   - libtt_metal.so in build/lib/
+        #   - _ttnn.so in ttnn/ttnn/ (source tree)
+        BUILD_RPATH
+            "${PROJECT_BINARY_DIR}/lib;${PROJECT_SOURCE_DIR}/ttnn/ttnn"
 )
