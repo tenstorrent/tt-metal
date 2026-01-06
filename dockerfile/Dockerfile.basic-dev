@@ -29,6 +29,9 @@ RUN set -eux; \
 
 FROM base AS basic-ttnn-runtime
 
+# Re-declare ARG to make it available in this stage
+ARG UBUNTU_VERSION
+
 # Install basic runtime dependencies
 RUN apt-get update && apt-get install -y \
     git \
@@ -38,8 +41,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (not available via apt, install via pip)
-# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+
-RUN python3 -m pip install --no-cache-dir --break-system-packages uv
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
+RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
+        python3 -m pip install --no-cache-dir --break-system-packages uv; \
+    else \
+        python3 -m pip install --no-cache-dir uv; \
+    fi
 
 # Install the SFPI compiler
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh

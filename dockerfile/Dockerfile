@@ -18,6 +18,9 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 
 FROM base AS ci-build
 
+# Re-declare ARG to make it available in this stage
+ARG UBUNTU_VERSION
+
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
@@ -64,8 +67,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install uv (not available via apt, install via pip)
-# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+
-RUN python3 -m pip install --no-cache-dir --break-system-packages uv
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
+RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
+        python3 -m pip install --no-cache-dir --break-system-packages uv; \
+    else \
+        python3 -m pip install --no-cache-dir uv; \
+    fi
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -192,9 +199,16 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
+# Re-declare ARG to make it available in this stage
+ARG UBUNTU_VERSION
+
 # Install uv (not available via apt, install via pip)
-# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+
-RUN python3 -m pip install --no-cache-dir --break-system-packages uv
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
+RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
+        python3 -m pip install --no-cache-dir --break-system-packages uv; \
+    else \
+        python3 -m pip install --no-cache-dir uv; \
+    fi
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
