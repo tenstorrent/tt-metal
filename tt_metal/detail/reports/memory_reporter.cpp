@@ -5,7 +5,6 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 
 #include <cstdint>
-#include <stdint.h>
 #include <filesystem>
 #include <map>
 #include <memory>
