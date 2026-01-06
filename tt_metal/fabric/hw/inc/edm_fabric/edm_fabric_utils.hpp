@@ -11,14 +11,22 @@
 namespace tt::tt_fabric {
 
 static constexpr uint8_t edm_to_local_chip_noc = 1;
-static constexpr uint8_t udm_worker_noc = 0;
+
+// When UDM_MODE and dynamic NOC are both enabled, all fabric transactions must use the same NOC
+// to preserve packet ordering when multiple data movement kernels write to fabric.
+// Using Noc0 for now until we get perf benchmark to indicate otherwise.
+static constexpr uint8_t udm_dynamic_mode_worker_noc = 0;
 
 // Helper to get the appropriate NOC for fabric worker operations.
-// When UDM_MODE and dynamic NOC are both enabled, all fabric transactions must use the same NOC (NOC0)
+// When UDM_MODE and dynamic NOC are both enabled, all fabric transactions must use the same NOC
 // to preserve packet ordering when multiple data movement kernels write to fabric.
 FORCE_INLINE constexpr uint8_t get_fabric_worker_noc() {
-#if defined(UDM_MODE) && (NOC_MODE == DM_DYNAMIC_NOC)
-    return udm_worker_noc;
+#if defined(UDM_MODE)
+    if constexpr (NOC_MODE == DM_DYNAMIC_NOC) {
+        return udm_dynamic_mode_worker_noc;
+    } else {
+        return noc_index;
+    }
 #else
     return noc_index;
 #endif
