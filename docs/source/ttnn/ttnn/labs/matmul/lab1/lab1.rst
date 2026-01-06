@@ -874,47 +874,35 @@ printing iterator values in all kernels may be useful to identify the iteration 
 Once you are done debugging, uncomment the calls to ``cb_pop_front`` in the compute kernel to restore normal behavior.
 
 Device Performance Profiling
-----------------------------
+============================
 
-TT-Metalium includes a device program profiler that measures how long sections of your device kernels take to run,
-using a scope macro called **``DeviceZoneScopedN``**.
-The profiler records timestamps on the RISC-V cores that execute your kernels and writes them to a CSV file for later analysis.
-
-To profile device execution time, you can add a profiling scope with ``DeviceZoneScopedN`` inside your kernel source files around the code you care about,
-typically inside the main kernel function. For example:
-
-
-   .. code-block:: cpp
-
-      #include <tools/profiler/kernel_profiler.hpp>
-
-      void kernel_main() {
-          DeviceZoneScopedN("ELTWISE-COMPUTE");
-          // existing compute code for eltwise add goes here
-      }
-
-``DeviceZoneScopedN("ELTWISE-COMPUTE")`` starts a timer when the scope is entered and stops it when the scope is exited;
-the profiler records a matching ``begin`` and ``end`` event in a log file. Each ``DeviceZoneScopedN`` introduces a small
-fixed overhead (on the order of a few tens of cycles), so it is recommended to use a handful of scopes to enclose meaningful
-regions instead of instrumenting every small block of code.
-
+TT-Metalium includes a device program profiler that measures how long sections of your device kernels take to run.
 Profiling is disabled by default, but can be enabled by setting the ``TT_METAL_DEVICE_PROFILER`` environment variable to ``1``
 when launching the binary.
 With this flag set, when the program finishes and the device is closed (e.g. via ``mesh_device->close()``), the runtime
 automatically pulls the profiling data from the device and writes it to a CSV log file on the host.
 The CSV file is named ``profile_log_device.csv`` and is stored in the ``generated/profiler/.logs/`` directory.
-The log file contains device-side profiling data for any kernels that contain ``DeviceZoneScopedN`` scopes,
-plus a few predefined zones including ``*RISC-FW`` and ``*RISC-KERNEL`` that measure firmware and full-kernel durations.
+The log file contains device-side profiling data for all RISC-V processors on all cores, tagged as
+``*RISC-KERNEL`` and ``*RISC-FW``, corresponding to kernel execution time and overall firmware (kernel + runtime support) execution time.
 Note that the log file uses names BRISC and NCRISC for the two RISC-V processors that control routers
 (RISC-V 0 and RISC-V 4 in Figure 5), and TRISC for the remaining Tensix RISC-V processors (RISC-V 1 through RISC-V 3 in Figure 5).
 
 Exercise 6: Using Device Profiling to Profile Kernels
 -----------------------------------------------------
 
-#. **Add profiling scopes**
-   Add profiling scopes to reader kernel, writer kernel, and the compute kernel in the ``lab_eltwise_binary`` example program,
-   making sure to use unique zone names for each kernel to differentiate the profiling results.
+#. **Make sure code is built with Release option** 
 
+   If you previously used the ``--build-type Debug`` flag, do not forget to rebuild the programming examples
+   with the ``--build-type Release`` flag before profiling performance.
+
+#. **Make sure DPRINTs are disabled**
+
+   Ensure that the ``TT_METAL_DPRINT_CORES`` environment variable is not set.
+   The device profiler and kernel DPRINT both consume the same limited on-chip SRAM,
+   so only one should be enabled at a time. Also, the time spent on DPRINT may affect performance measurements,
+   leading to misleading results when compared to another run without DPRINT.
+
+#. **Run the program with profiler enabled**
 
    .. code-block:: bash
 
@@ -922,43 +910,23 @@ Exercise 6: Using Device Profiling to Profile Kernels
 
 #. **Locate the CSV log file**
 
-   Once the run finishes, locate the CSV log file and open it in a text editor.
+   Once the run finishes, locate the CSV log file and open it in a spreadsheet editor such as Excel, or a text editor.
    The file contains one row per profiling event. It begins with a header line that includes the chip frequency, for example:
+
    .. code-block:: text
 
-      ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 72
+      ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120
       PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run host ID, trace id, trace id counter, zone name, type, source line, source file, meta data
 
+#. **Compute elapsed firmware time**
 
-#. **Identify your zone**
-
-   In the CSV, filter rows where the ``zone name`` column matches the string you passed to ``DeviceZoneScopedN``, for example ``ELTWISE-COMPUTE``.
-   You should see two rows per profiled scope instance one indicating ``ZONE_START`` and one indicating ``ZONE_END``.
-
-#. **Compute elapsed device time for various scopes**
-
-   Simply subtract the ``time[cycles since reset]`` values of the ``ZONE_END`` and ``ZONE_START`` rows to get the elapsed cycles for that zone,
-   then convert to seconds or nanoseconds using the chip frequency in the header.
-
-   On a single-core, single-kernel example like ``lab_eltwise_binary``, this gives you a good estimate of the
-   **total device execution time** for the region wrapped by your ``DeviceZoneScopedN`` scope.
-
-   Do the same computation using the built-in ``*RISC-KERNEL`` zone, which measures the full lifetime of ``kernel_main`` on that RISC
-   for each kernel launch.
-
-Key caveats and good practices
-------------------------------
-
-* **Do not mix the profiler with DPRINT or watcher.** The device profiler, kernel debug print (DPRINT), and watcher features all consume
-  the same limited on-chip SRAM. Only one should be enabled at a time.
-  Concretely, do not set ``TT_METAL_DEVICE_PROFILER``, ``TT_METAL_DPRINT_CORES``, and ``TT_METAL_WATCHER`` together.
-
-* **Remember the measurement overhead.** Each ``DeviceZoneScopedN`` scope adds a small constant timing overhead (tens of cycles) for start
-  and end bookkeeping. This is negligible at the scale of typical kernels, but if you instrument a very short inner loop it can slightly
-  distort the apparent timing, so keep zones at a coarse-enough granularity.
-  Furthermore, when doing performance profiling, enabling DPRINT or Watcher would impact performance, yielding results not reflective of the actual performance.
-
-* **Clock alignment limitations.** Within a single Tensix core, all RISCs use the same clock counter, so timings are directly comparable.
+   In the CSV, each RISC processor on each core has several rows of data, each indicating a unique timer event.
+   Column ``time[cycles since reset]`` indicates the number of cycles since the reset of the device until the specific timer event.
+   For the purpose of this lab, it is sufficient to determine the overall firmware execution time, To compute it,
+   simply subtract the maximum and minimum ``time[cycles since reset]`` values across all rows in the log file, and then multiply
+   the difference by the clock cycle time, which can be calculated from the chip frequency in the header.
+   The time computed this way is the total elapsed time in the firmware and does not include any host execution time,
+   or data transfer from the host to the device.
 
 
 Matrix Multiplication in TT-Metalium
@@ -972,15 +940,18 @@ which were organized in a row-major layout, and then performing the necessary ar
 We will now show how the same can be achieved in TT-Metalium, while taking advantage of the built-in tiled memory layout.
 
 The key insight is that tiled matrix multiplication can be performed by considering each tile as an element of a larger matrix,
-and then performing regular matrix multiplication on these larger matrices, where each tile is multiplied by another tile using standard matrix multiplication.
-While we will not present a formal proof here, we will illustrate how this works intuitively to allow us to write correct kernel code to perform this operation.
+and then performing regular matrix multiplication on these larger matrices, where each tile is multiplied by another tile
+using standard matrix multiplication.
+While we will not present a formal proof of correctness, we will illustrate how this works intuitively to allow us to
+write correct kernel code to perform this operation.
 
-Consider multiplication of an ``MxK`` matrix ``A`` and a ``KxN`` matrix ``B``. The ``C[i, j]`` element of the resulting matrix ``C`` is computed as the dot product of
-row ``i`` of ``A`` with column ``j`` of ``B``. Dot product is computed by multiplying corresponding pairs of elements and summing them.
-Extending this idea to two neighboring elements of ``C``, say ``C[i, j]`` and ``C[i + 1, j]``, we need rows ``i`` and ``i + 1`` of ``A`` and the same column ``j`` of ``B``.
-More generally, if we want to compute a rectangular tile of height ``TILE_HEIGHT`` and width ``TILE_WIDTH`` starting at ``C[i, j]``, we must fetch the entire band of tiles in
-``A`` covering rows ``i`` to ``i + TILE_HEIGHT - 1`` (across all tile columns in ``K``), and the entire band of tiles in ``B`` covering columns
-``j`` to ``j + TILE_WIDTH - 1`` (across all tile rows in ``K``).
+Consider multiplication of an ``MxK`` matrix ``A`` and a ``KxN`` matrix ``B``. The ``C[i, j]`` element of the resulting matrix is computed as
+the dot product of row ``i`` of ``A`` with column ``j`` of ``B``. Dot product is computed by multiplying corresponding pairs of elements
+and summing them. Extending this idea to two neighboring elements of ``C``, say ``C[i, j]`` and ``C[i + 1, j]``, we need rows ``i``
+and ``i + 1`` of ``A`` and the same column ``j`` of ``B``.
+More generally, if we want to compute a rectangular tile of height ``TILE_HEIGHT`` and width ``TILE_WIDTH`` starting at ``C[i, j]``,
+we must fetch the entire band of tiles in ``A`` covering rows ``i`` to ``i + TILE_HEIGHT - 1`` (across all columns),
+and the entire band of tiles in ``B`` covering columns ``j`` to ``j + TILE_WIDTH - 1`` (across all rows).
 Conceptually, we are treating the ``K`` dimension as being split into tile-sized chunks, and for each output tile we
 accumulate products over all those K-tiles.
 
@@ -993,18 +964,19 @@ Consider the concrete example shown in Figure 6.
 
    Figure 6: Tiled Matrix Multiplication Example
 
-Figure 6 shows an example where ``A`` is a ``9x4`` matrix, and ``B`` is a ``4x6`` matrix. If we choose ``3x2`` tiles for matrix ``A``, we
-can divide ``A`` into six tiles ``A0`` through ``A5``, each of shape ``3x2``. The figure shows labeling of the tiles in row-major order, which is exactly how tiled layout
-works on the Tenstorrent architecture. We can similarly divide ``B`` into four tiles ``B0`` through ``B3``, each of shape ``2x3`` (note that the number of rows in ``B``'s tiles must match
-the number of columns in ``A``'s tiles).
-The output matrix ``C`` is ``9x6`` and based on chosen tile shapes for ``A`` and ``B`` must be tiled such that ``C``'s tiles have the same number of rows as ``A``'s tiles
-and the same number of columns as ``B``'s tiles.
+Figure 6 shows an example where ``A`` is a ``9x4`` matrix, and ``B`` is a ``4x6`` matrix.
+If we choose ``3x3`` tiles for matrix ``C``, we need 3 rows of matrix ``A`` and 3 columns of matrix ``B`` to compute a single tile of matrix ``C``.
+This means that ``A`` must be tiled into 3 rows of tiles, and ``B`` must be tiled into 3 columns of tiles, with
+the number of columns in ``A``'s tiles matching the number of rows in ``B``'s tiles.
+If we choose ``3x2`` tiles for matrix ``A``, we can divide ``A`` into six tiles ``A0`` through ``A5``.
+The figure shows labeling of the tiles in row-major order, which is how tiled layout works on the Tenstorrent architecture, as described ealrier.
+We can similarly divide ``B`` into four tiles ``B0`` through ``B3``, each of shape ``2x3``.
 Each ``C`` tile is computed by summing products of one tile row of ``A`` with one tile column of ``B``, exactly like scalar matrix multiplication,
 but with tiles instead of individual numbers. For instance, tile ``C0`` corresponds to tile row 0 of ``A`` and tile column 0 of ``B``, and therefore
 
-``C0`` = ``A0`` * ``B0`` + ``A1`` * ``B2``,
+``C0 = A0 * B0 + A1 * B2``
 
-where each * is an inner ``3x2`` by ``2x3`` matrix multiplication producing a ``3x3`` tile that is accumulated into ``C0``.
+Each product in this equation is an inner ``3x2`` by ``2x3`` matrix multiplication producing a ``3x3`` tile that is accumulated into ``C0``.
 We can summarize computations for all ``C`` tiles in a table as follows:
 
 +-----------+--------+--------+-----------+--------+--------+
