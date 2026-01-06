@@ -308,17 +308,12 @@ def test_point_to_point(mesh_device):
     # Append fabric connection args to writer kernel
     writer_rt_args_ref = sender_program.kernels[1].runtime_args[sender_core.x][sender_core.y]
 
-    if dst_is_forward:
-        fabric_args = ttnn.setup_fabric_connection(
-            sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
-        )
-        writer_rt_args_ref.extend(fabric_args)
+    # dst_is_forward = False
     writer_rt_args_ref.append(int(not dst_is_forward))
-    if not dst_is_forward:
-        fabric_args = ttnn.setup_fabric_connection(
-            sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
-        )
-        writer_rt_args_ref.extend(fabric_args)
+    fabric_args = ttnn.setup_fabric_connection(
+        sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
+    )
+    writer_rt_args_ref.extend(fabric_args)
 
     mesh_program_descriptor[ttnn.MeshCoordinateRange(sender_coord, sender_coord)] = sender_program
 
@@ -419,17 +414,12 @@ def test_point_to_point(mesh_device):
     # Append fabric connection args to reader kernel
     reader_rt_args_ref = receiver_program.kernels[0].runtime_args[receiver_core.x][receiver_core.y]
 
-    if sender_is_forward:
-        fabric_args = ttnn.setup_fabric_connection(
-            receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
-        )
-        reader_rt_args_ref.extend(fabric_args)
+    # sender_is_forward = True
+    fabric_args = ttnn.setup_fabric_connection(
+        receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
+    )
+    reader_rt_args_ref.extend(fabric_args)
     reader_rt_args_ref.append(int(not sender_is_forward))
-    if not sender_is_forward:
-        fabric_args = ttnn.setup_fabric_connection(
-            receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
-        )
-        reader_rt_args_ref.extend(fabric_args)
 
     mesh_program_descriptor[ttnn.MeshCoordinateRange(receiver_coord, receiver_coord)] = receiver_program
 
