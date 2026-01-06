@@ -201,7 +201,7 @@ void RunTestOnCore(
     uint32_t l1_overflow_addr = 0;
     uint32_t eth_src_overflow_addr_words = 0;
     uint32_t eth_dest_overflow_addr_words = 0;
-    switch(feature) {
+    switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
@@ -269,7 +269,7 @@ void RunTestOnCore(
     if (use_ncrisc) {
         risc_name = "ncrisc";
     }
-    switch(feature) {
+    switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
