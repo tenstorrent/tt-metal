@@ -1,0 +1,8 @@
+# Add this to the main CMakeLists.txt for memory_utilization_monitor
+# to integrate tt_smi into the build system
+
+# TT-SMI Python UI module (optional)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tt_smi/CMakeLists.txt)
+    add_subdirectory(tt_smi)
+    message(STATUS "TT-SMI module added to build")
+endif()

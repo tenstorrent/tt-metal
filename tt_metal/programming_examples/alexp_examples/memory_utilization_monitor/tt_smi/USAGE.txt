@@ -1,0 +1,39 @@
+TT-SMI PYTHON UI - QUICK REFERENCE
+==================================
+
+INSTALL (30 seconds):
+  cd memory_utilization_monitor
+  export TT_SMI_BUILD_NATIVE=0
+  pip install -e .
+
+COMMAND LINE:
+  tt-smi-ui              Single snapshot
+  tt-smi-ui -w           Watch mode (live updates)
+  tt-smi-ui -w -r 500    Fast refresh (500ms)
+  tt-smi-ui --json       JSON output
+  tt-smi-ui --help       Show all options
+
+PYTHON API:
+  from tt_smi import get_devices, cleanup_dead_processes
+
+  devices = get_devices()
+  for dev in devices:
+      print(f"{dev.display_id}: {dev.temperature}°C")
+
+  cleanup_dead_processes()
+
+FEATURES:
+  ✓ Beautiful Rich UI with colors
+  ✓ Live watch mode
+  ✓ Telemetry (temp/power/clock)
+  ✓ Memory tracking (DRAM/L1)
+  ✓ Per-process breakdown
+  ✓ JSON export
+  ✓ Python API
+  ✓ C++ backend (optional)
+  ✓ Pure Python fallback
+
+DOCUMENTATION:
+  README_PYTHON_UI.md           Full documentation
+  QUICKSTART_PYTHON_UI.md       Quick start guide
+  IMPLEMENTATION_SUMMARY.md     Architecture details

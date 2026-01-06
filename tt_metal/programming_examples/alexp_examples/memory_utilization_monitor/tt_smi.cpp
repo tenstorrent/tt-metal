@@ -486,7 +486,7 @@ std::map<uint64_t, int> build_board_serial_to_device_id_map() {
 // Query telemetry from discovered Chip with resilient error handling (like tt-exalens)
 // Uses the cached Chip objects from TopologyDiscovery::discover() which properly
 // configures Ethernet routing for remote devices
-bool query_telemetry_resilient(int device_id, DeviceInfo& dev, bool force_retry = false) {
+bool query_telemetry_resilient([[maybe_unused]] int device_id, DeviceInfo& dev, bool force_retry = false) {
     auto now = std::chrono::steady_clock::now();
 
     // Check if we should skip this attempt (cooldown after failure)
@@ -657,11 +657,15 @@ void set_memory_sizes(DeviceInfo& dev, tt::umd::Chip* chip = nullptr) {
             // Extract actual values from hardware
             size_t num_dram_channels = soc_desc.get_num_dram_channels();
             uint32_t l1_size_per_core = soc_desc.worker_l1_size;
-            uint32_t grid_x = soc_desc.grid_size.x;
-            uint32_t grid_y = soc_desc.grid_size.y;
+
+            // Use get_grid_size(TENSIX) which accounts for harvesting
+            // This returns the actual active core grid, not the theoretical pre-harvesting grid
+            auto tensix_grid = soc_desc.get_grid_size(tt::CoreType::TENSIX);
+            uint32_t grid_x = tensix_grid.x;
+            uint32_t grid_y = tensix_grid.y;
             uint64_t dram_size_per_channel = soc_desc.dram_bank_size;
 
-            // Calculate totals
+            // Calculate totals (now accurate with harvesting accounted for)
             dev.total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
             dev.total_l1 = (uint64_t)l1_size_per_core * grid_x * grid_y;
 
@@ -796,11 +800,11 @@ void print_devices(const std::vector<DeviceInfo>& devices) {
 
         std::cout << "  ";
 
-        // L1 usage (includes L1, L1_SMALL, CB, and estimated Kernel footprint in L1 reserved region)
-        // Note: Kernel tracking estimates the L1 footprint (binary_size × cores) in the reserved region
-        //       This is an estimate since the actual KERNEL_CONFIG buffer is not directly trackable
+        // L1 usage (L1 + L1_SMALL + CB)
+        // Note: Kernel binaries live in a separate RESERVED L1 region (KERNEL_CONFIG)
+        //       CBs shown in CB column are tracked separately and need to be added here
         if (dev.has_shm) {
-            uint64_t total_l1_used = dev.used_l1 + dev.used_l1_small + dev.used_cb + dev.used_kernel;
+            uint64_t total_l1_used = dev.used_l1 + dev.used_l1_small + dev.used_cb;
 
             if (total_l1_used > 0) {
                 std::cout << Color::GREEN;
@@ -875,8 +879,8 @@ void print_process_table(const std::vector<DeviceInfo>& devices) {
 
     std::cout << Color::BOLD << std::left << std::setw(12) << "Dev" << std::setw(8) << "PID" << std::setw(16)
               << "Process" << std::setw(12) << "DRAM" << std::setw(10) << "L1" << std::setw(10) << "L1 Small"
-              << std::setw(10) << "Trace" << std::setw(10) << "CB" << std::setw(12) << "Kernel" << Color::RESET << "\n";
-    std::cout << std::string(130, '-') << "\n";
+              << std::setw(10) << "Trace" << std::setw(10) << "CB" << Color::RESET << "\n";
+    std::cout << std::string(118, '-') << "\n";  // Reduced width (removed Kernel column)
 
     for (const auto& dev : devices) {
         for (const auto& proc : dev.processes) {
@@ -914,7 +918,7 @@ void print_process_table(const std::vector<DeviceInfo>& devices) {
             std::cout << std::setw(10) << format_bytes(proc.l1_small_allocated);
             std::cout << std::setw(10) << format_bytes(proc.trace_allocated);
             std::cout << std::setw(10) << format_bytes(proc.cb_allocated);
-            std::cout << std::setw(12) << format_bytes(proc.kernel_allocated);
+            // Kernel column removed - kernels live in reserved L1 region not tracked
             std::cout << Color::RESET << "\n";
         }
     }

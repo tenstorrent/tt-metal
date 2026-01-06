@@ -80,6 +80,15 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/show_chip_ids.cpp")
 endif()
 
 # ============================================================================
+# TT-SMI Python UI Module (optional)
+# ============================================================================
+# Python UI with C++ backend for device monitoring
+# Builds: libtt_smi_backend.a (C++ API) and optional Python bindings
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi/CMakeLists.txt")
+    add_subdirectory(tt_smi)
+endif()
+
+# ============================================================================
 # Optional: Allocation Client Demo
 # ============================================================================
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/allocation_client_demo.cpp")
@@ -109,4 +118,8 @@ message(STATUS "  Targets:")
 message(STATUS "    • allocation_server_poc     (with TT::Metalium)")
 message(STATUS "    • allocation_monitor_client (standalone)")
 message(STATUS "    • tt_smi                    (UMD telemetry + SHM memory tracking)")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_smi/CMakeLists.txt")
+    message(STATUS "    • tt_smi_backend            (C++ backend library)")
+    message(STATUS "    • tt_smi Python UI          (pip install -e . for Python interface)")
+endif()
 message(STATUS "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
