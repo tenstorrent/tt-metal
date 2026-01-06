@@ -26,8 +26,10 @@ struct PeakMemoryUsagePerCore {
 struct DRAMUsage {
     /** peak memory usage in bytes between begin_capture and end_capture */
     long long peak = 0;
-    /** current memory usage in bytes at the time of end_capture */
-    long long current = 0;
+    /** total memory allocated in bytes between begin_capture and end_capture */
+    long long total_allocations = 0;
+    /** total memory deallocated in bytes between begin_capture and end_capture */
+    long long total_deallocations = 0;
 };
 
 enum class ExecutionStatus { Success, Error };

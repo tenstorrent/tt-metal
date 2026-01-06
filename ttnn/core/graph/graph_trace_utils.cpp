@@ -347,12 +347,14 @@ DRAMUsage extract_dram_usage(const nlohmann::json& trace) {
         if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
             size_t buffer_size = std::stoll(v[kParams][kSize].get<std::string>());
             current_buffer += buffer_size;
+            result.total_allocations += buffer_size;
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
             if (buffer[kParams][kType] == "DRAM") {
                 size_t buffer_size = std::stoll(buffer[kParams][kSize].get<std::string>());
                 current_buffer -= buffer_size;
+                result.total_deallocations += buffer_size;
             }
         }
 
@@ -360,8 +362,6 @@ DRAMUsage extract_dram_usage(const nlohmann::json& trace) {
         result.peak = std::max(result.peak, current_buffer);
     }
 
-    // Current usage is whatever remains allocated at end of trace
-    result.current = current_buffer;
     return result;
 }
 
