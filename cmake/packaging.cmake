@@ -312,3 +312,63 @@ cpack_add_component(
 cpack_add_component(ttml GROUP ml)
 
 include(CPack)
+
+# =============================================================================
+# Historical Note: Why Build Paths Were in INSTALL_RPATH
+# =============================================================================
+#
+# Previously, INSTALL_RPATH contained absolute build paths like:
+#   INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN"
+#
+# This was a workaround for handling THREE different installation scenarios
+# with a single INSTALL_RPATH setting:
+#
+# 1. Development/In-Tree (tt_pybinds component)
+#    ----------------------------------------
+#    The tt_pybinds component installs _ttnn.so into the SOURCE tree:
+#
+#      install(TARGETS ttnn DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
+#              COMPONENT tt_pybinds)
+#
+#    This allows developers to `import ttnn` without a full install. But at
+#    runtime, it needs to find libtt_metal.so in the BUILD directory. Hence
+#    the absolute build path was added to RPATH.
+#
+# 2. CI Tar Artifacts
+#    -----------------
+#    The tar bundles files from different locations:
+#      tar ... ttnn/ttnn/*.so build/lib build/test ...
+#
+#    Here _ttnn.so comes from the source tree (after tt_pybinds install) and
+#    libtt_metal.so comes from the build tree, with a specific relative layout.
+#
+# 3. FHS Packages (DEB/RPM)
+#    ----------------------
+#    All libraries are installed to /usr/lib64/ - co-located in the same dir.
+#
+# The Problem
+# -----------
+# The original RPATH tried to handle ALL scenarios:
+#
+#   ${PROJECT_BINARY_DIR}/lib  -> Absolute build path (WRONG: doesn't exist on target)
+#   $ORIGIN/build/lib          -> Wrong relative path (resolves to ttnn/ttnn/build/lib)
+#   $ORIGIN                    -> Same directory (correct for FHS)
+#
+# The Fix
+# -------
+# Use only $ORIGIN-based relative paths:
+#
+#   $ORIGIN/../../build/lib    -> Correct for tar artifact layout
+#   $ORIGIN                    -> Correct for FHS packages
+#
+# Architectural Note
+# ------------------
+# The root cause is that tt_pybinds installs into the SOURCE tree, conflating
+# development and installation. Ideally:
+#   - Development: Use BUILD_RPATH (correctly points to build directories)
+#   - Installation: Use INSTALL_RPATH (only portable paths)
+#
+# A cleaner long-term solution would be to use symlinks or PYTHONPATH for
+# development instead of "installing" to the source tree. This would allow
+# INSTALL_RPATH to only contain paths appropriate for actual package installs.
+#
