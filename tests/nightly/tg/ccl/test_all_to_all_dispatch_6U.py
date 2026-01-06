@@ -52,7 +52,7 @@ from tracy import signpost
         "fabric_1d_line",
         "fabric_1d_ring",
         "fabric_2d",
-        # "fabric_manager_enabled_1d_line"# test removed due to issue 35320
+        # "fabric_manager_enabled_1d_line"  # test removed due to issue 35320
     ],
     indirect=True,
 )
