@@ -1400,7 +1400,7 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
             bool dst_is_adjacent = false;
             auto it = mesh_adjacency_map.find(src_mesh_id);
             if (it != mesh_adjacency_map.end()) {
-                dst_is_adjacent = std::find(it->second.begin(), it->second.end(), dst_mesh_id) != it->second.end();
+                dst_is_adjacent = it->second.contains(dst_mesh_id);
             }
             if (same_mesh || dst_is_adjacent) {
                 filtered_pairs.push_back(pair);
