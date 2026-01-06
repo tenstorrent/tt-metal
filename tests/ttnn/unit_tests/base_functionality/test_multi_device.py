@@ -779,7 +779,7 @@ def test_heterogenous_operation_dispatch():
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_fabric_with_submeshes(mesh_device):
     logger.info("Spawning 2 1x4 submeshes on a 2x4 mesh device with fabric enabled")
-    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
+    mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)

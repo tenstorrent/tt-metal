@@ -251,7 +251,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.clear()
     profiler.start(f"e2e_prefill_1_user")
     # Prefill a single user, as this will be the real-world usage
-    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_prefill_input, 1)
+    run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_1_user")
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
