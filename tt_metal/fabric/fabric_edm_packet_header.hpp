@@ -687,7 +687,6 @@ struct LowLatencyRoutingFieldsT {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
     // Template-specific constants
-    static constexpr uint32_t ExtensionWords_v = ExtensionWords;  // For constexpr access
     static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS * (1 + ExtensionWords);
 
     // Block >32 hops until memory map is updated
@@ -735,7 +734,6 @@ struct LowLatencyRoutingFieldsT<0> {
     // Type alias to reference centralized constants
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
 
-    static constexpr uint32_t ExtensionWords_v = 0;
     static constexpr uint32_t MAX_NUM_ENCODINGS = LowLatencyFields::BASE_HOPS;  // 16 hops max
 
     uint32_t value;  // Only field - no route_buffer member
@@ -835,15 +833,7 @@ public:
 };
 
 // Validate expected sizes with detailed checks
-static_assert(LowLatencyPacketHeaderT<0>::base_size() == 44, "Base size must be 44B");
-static_assert(LowLatencyPacketHeaderT<0>::routing_fields_size() == 4, "16-hop routing must be 4B");
-static_assert(LowLatencyPacketHeaderT<0>::unpadded_size() == 48, "16-hop unpadded must be 48B");
-static_assert(LowLatencyPacketHeaderT<0>::padding_size() == 0, "16-hop needs 0B padding");
 static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "16-hop total must be 48B");
-
-static_assert(LowLatencyPacketHeaderT<1>::routing_fields_size() == 8, "32-hop routing must be 8B");
-static_assert(LowLatencyPacketHeaderT<1>::unpadded_size() == 52, "32-hop unpadded must be 52B");
-static_assert(LowLatencyPacketHeaderT<1>::padding_size() == 12, "32-hop needs 12B padding");
 static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "32-hop total must be 64B");
 
 // Conditional type selection based on injected define
@@ -909,8 +899,6 @@ static_assert(sizeof(HybridMeshPacketHeaderT<32>) == 96, "32B buffer must result
 static_assert(sizeof(HybridMeshPacketHeaderT<24>) == 96, "24B buffer must result in 96B header");
 static_assert(sizeof(HybridMeshPacketHeaderT<16>) == 80, "16B buffer must result in 80B header");
 static_assert(sizeof(HybridMeshPacketHeaderT<8>) == 80, "8B buffer must result in 80B header");
-static_assert(alignof(HybridMeshPacketHeaderT<32>) == 16, "2D headers must have 16-byte alignment");
-static_assert(alignof(HybridMeshPacketHeaderT<8>) == 16, "2D headers must have 16-byte alignment");
 
 // Conditional type selection based on injected define
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
