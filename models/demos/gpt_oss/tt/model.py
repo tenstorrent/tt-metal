@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
@@ -273,7 +274,7 @@ class Model:
         #     hidden_states = input_embeds
 
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
-        rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
         # Forward through layers and head (shared with prefill)
         out = self._forward_layers_and_head(
@@ -351,6 +352,33 @@ class Model:
             device_inputs[3],  # page_table
         )
 
+    def get_tt_pos_idx(self, current_pos):
+        if isinstance(current_pos, ttnn.Tensor):
+            return current_pos
+        else:
+            # Ensure position indices are non-negative (matches tt-transformers)
+            B = current_pos.shape[0]
+            rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
+            rot_current_pos = rot_current_pos.reshape(1, B)  # [1, batch]
+            assert rot_current_pos.shape == (1, B), "rot_current_pos must be a [1, batch] tensor"
+            assert torch.min(rot_current_pos) >= 0, "rot_current_pos must be non-negative"
+            # Add padding if needed
+            pad_size = nearest_32(B) - B
+            rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
+            mesh_mapper = (
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_device.shape)
+                if self.users_row_sharded
+                else ttnn.ReplicateTensorToMesh(self.mesh_device)
+            )
+            rope_idxs = ttnn.as_tensor(
+                rot_current_pos,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+
+            return rope_idxs
+
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
         Prepare decode inputs on host before transferring to device.
@@ -379,9 +407,7 @@ class Model:
         tokens = ttnn.from_torch(tokens.squeeze(), device=None, dtype=ttnn.uint32, mesh_mapper=mesh_mapper)
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
-        # Ensure position indices are non-negative (matches tt-transformers)
-        rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
-        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+        rope_idxs = self.get_tt_pos_idx(current_pos)
 
         # Prepare current position tensor
         current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)

@@ -466,8 +466,7 @@ class RotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=(-1, None), mesh_shape=self.device.shape),
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -476,8 +475,7 @@ class RotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=(-1, None), mesh_shape=self.device.shape),
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
             )
 
         return rot_idxs
