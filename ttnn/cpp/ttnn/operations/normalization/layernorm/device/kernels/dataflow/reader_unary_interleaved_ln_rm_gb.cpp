@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+
+namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -26,7 +29,8 @@ void kernel_main() {
     const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -48,7 +52,7 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    {
+    if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
@@ -61,39 +65,39 @@ void kernel_main() {
     uint32_t offs = 0;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_reserve_back(cb_id_in0, blk);
+        for (auto block : generic::blocks(Wt, blk)) {
+            cb_reserve_back(cb_id_in0, block.full_block_size());
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-            for (uint32_t r = 0; r < blk; r++) {
-                noc_async_read_tile(offs + wt + r + tile_offset, src_a, l1_write_addr);
+            for (auto r : block.local()) {
+                noc_async_read_tile(offs + block.start() + r + tile_offset, src_a, l1_write_addr);
                 l1_write_addr += src0_tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_in0, blk);
+            cb_push_back(cb_id_in0, block.full_block_size());
 
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
-            cb_reserve_back(cb_id_in1, blk);
+            cb_reserve_back(cb_id_in1, block.full_block_size());
             l1_write_addr = get_write_ptr(cb_id_in1);
-            for (uint32_t r = 0; r < blk; r++) {
-                noc_async_read_tile(offs + wt + r + tile_offset, src_b, l1_write_addr);
+            for (auto r : block.local()) {
+                noc_async_read_tile(offs + block.start() + r + tile_offset, src_b, l1_write_addr);
                 l1_write_addr += src1_tile_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_in1, blk);
+            cb_push_back(cb_id_in1, block.full_block_size());
 #endif
         }  // wt loop
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            for (auto block : generic::blocks(Wt, blk)) {
 #ifdef FUSE_GAMMA
                 {
-                    cb_reserve_back(cb_id_gamma, blk);
+                    cb_reserve_back(cb_id_gamma, block.full_block_size());
                     uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
+                    for (auto r : block.local()) {
+                        uint64_t gamma_noc_addr = get_noc_addr(block.start() + r, addrg);
                         noc_async_read(gamma_noc_addr, l1_write_addr, 64);
                         gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
                         noc_async_read_barrier();
@@ -101,16 +105,16 @@ void kernel_main() {
                         l1_write_addr += gamma_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_id_gamma, blk);
+                    cb_push_back(cb_id_gamma, block.full_block_size());
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    cb_reserve_back(cb_id_beta, blk);
+                    cb_reserve_back(cb_id_beta, block.full_block_size());
                     uint32_t l1_write_addr = get_write_ptr(cb_id_beta);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
+                    for (auto r : block.local()) {
+                        uint64_t beta_noc_addr = get_noc_addr(block.start() + r, addrb);
                         noc_async_read(beta_noc_addr, l1_write_addr, 64);
                         beta_noc_addr = get_noc_addr(l1_write_addr + 32);
                         noc_async_read_barrier();
@@ -118,7 +122,7 @@ void kernel_main() {
                         l1_write_addr += beta_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_id_beta, blk);
+                    cb_push_back(cb_id_beta, block.full_block_size());
                 }
 #endif
             }  // wt loop

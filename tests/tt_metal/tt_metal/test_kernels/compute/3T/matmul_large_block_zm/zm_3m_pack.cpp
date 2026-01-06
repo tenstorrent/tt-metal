@@ -92,7 +92,7 @@ void pack_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     llk_pack_init();
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
-    llk_init_packer_dest_offset_registers<DstTileFaceLayout::RowMajor, false>();
+    llk_init_packer_dest_offset_registers<false>();
     llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
     // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);

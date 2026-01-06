@@ -24,6 +24,8 @@ using ProgramId = std::uint64_t;
 class Program {
 public:
     Program();
+
+    // TODO (#34009): Change to free function and move impl to experimental
     explicit Program(const ProgramDescriptor& descriptor);
     ~Program() noexcept;
 

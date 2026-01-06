@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
-#include "remote_circular_buffer_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/remote_circular_buffer.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
 constexpr uint32_t num_layers = get_compile_time_arg_val(0);
@@ -35,8 +35,14 @@ void kernel_main() {
 
     start_page_size = page_size[0];
 
+    experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
+    experimental::Noc noc;
+
     constexpr uint32_t cb_id_in1 = 1;
+    experimental::CircularBuffer local_cb{cb_id_in1};
+
     constexpr uint32_t sync_cb_id = 2;
+    experimental::CircularBuffer sync_cb{sync_cb_id};
 
     for (uint32_t l = 0; l < num_layers; ++l) {
         uint32_t curr_page_size = page_size[l];
@@ -44,18 +50,18 @@ void kernel_main() {
         uint32_t curr_block_num_tiles = block_num_tiles[l];
 
         uint32_t curr_block_size = curr_block_num_tiles * curr_page_size;
-        experimental::resize_remote_receiver_cb_interface(remote_cb_id, curr_block_size, noc_index);
+        remote_cb.set_sender_page_size(noc, curr_block_size);
         experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {cb_id_in1});
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
-            cb_reserve_back(cb_id_in1, curr_block_num_tiles);
-            experimental::remote_cb_wait_front(remote_cb_id, 1);
-            cb_push_back(cb_id_in1, curr_block_num_tiles);
+            local_cb.reserve_back(curr_block_num_tiles);
+            remote_cb.wait_front(1);
+            local_cb.push_back(curr_block_num_tiles);
             // wait for compute done
-            cb_wait_front(sync_cb_id, 1);
-            experimental::remote_cb_pop_front(remote_cb_id, 1);
-            cb_pop_front(sync_cb_id, 1);
+            sync_cb.wait_front(1);
+            remote_cb.pop_front(noc, 1);
+            sync_cb.pop_front(1);
         }
     }
-    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    remote_cb.commit();
 }

@@ -18,7 +18,7 @@ public:
 
     TensorTopology(
         tt::tt_metal::distributed::MeshShape distribution_shape,
-        tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements,
+        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements,
         std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords) :
         distribution_shape_(std::move(distribution_shape)),
         placements_(std::move(placements)),
@@ -35,7 +35,7 @@ public:
 
     // Returns the shape that the original tensor was sharded over.
     const tt::tt_metal::distributed::MeshShape& distribution_shape() const { return distribution_shape_; }
-    const tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements() const {
+    const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements() const {
         return placements_;
     }
     const std::vector<tt::tt_metal::distributed::MeshCoordinate>& mesh_coords() const { return mesh_coords_; }
@@ -60,7 +60,7 @@ public:
 
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_;
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_;
 
     // Physical device coordinates
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords_;

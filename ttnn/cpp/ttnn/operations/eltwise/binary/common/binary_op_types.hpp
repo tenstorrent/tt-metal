@@ -25,6 +25,8 @@ enum class BinaryOpType {
     LDEXP,
     LOGADDEXP2,
     DIV,
+    DIV_FLOOR,
+    DIV_TRUNC,
     RSUB,
     POWER,
     BITWISE_XOR,
@@ -44,6 +46,8 @@ enum class BinaryOpType {
     SUBALPHA,
     XLOGY,
     HYPOT,
+    WHERE_TST,
+    WHERE_TTS,
 };
 
 }  // namespace ttnn::operations::binary

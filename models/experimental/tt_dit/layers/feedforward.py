@@ -38,9 +38,9 @@ class FeedForward(Module):
         self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
-        ff1_out = self.ff1(x, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
-        return self.ff2(ff1_out, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config)
+        return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)
 
 
 class ParallelFeedForward(Module):
@@ -98,10 +98,10 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
         )
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         """
-        ff1_out = self.ff1(x, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
-        return self.ff2(ff1_out, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
+        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config)
+        return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)

@@ -60,7 +60,7 @@ uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
                         ? MetalContext::instance().get_cluster().get_numa_node_for_device(physical_device_id)
                         : physical_device_id % 2;
     }
-    if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {
+    if (cpu_cores_per_numa_node.contains(numa_node)) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
         return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
 
@@ -125,7 +125,9 @@ public:
         // has progressed (data has been read).
         // A stall is only required when the ring_buffer_ backing the queue
         // is full. Realistically, this should never happen, given the size
-        while (tail_.load()->next == head_.load());
+        while (tail_.load()->next == head_.load()) {
+            ;
+        }
         tail_.load()->data = std::move(task);
         tail_.store(tail_.load()->next);
     }
@@ -343,7 +345,7 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override { f(); }
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
 };
 

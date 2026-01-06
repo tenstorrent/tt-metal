@@ -9,9 +9,7 @@
 #include <vector>
 #include <optional>
 
-namespace ttnn {
-namespace operations {
-namespace grid_sample {
+namespace ttnn::operations::grid_sample {
 
 /**
  * Precomputes grid sample data for optimized kernel execution.
@@ -23,7 +21,9 @@ namespace grid_sample {
  *
  * @param grid Grid tensor of shape (N, H_out, W_out, 2) with normalized coordinates in [-1, 1]
  * @param input_shape Array containing input tensor dimensions [N, H_in, W_in, C] in NHWC format
+ * @param mode Nearest or bilinear operation
  * @param padding_mode How to handle out-of-bounds coordinates (currently only "zeros" supported)
+ * @param align_corners Whether to align corners when sampling (default: false)
  * @param output_dtype Data type for the output tensor (default: bfloat16)
  *
  * @return Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
@@ -40,9 +40,9 @@ namespace grid_sample {
 ttnn::Tensor prepare_grid_sample_grid(
     const ttnn::Tensor& grid,
     const std::vector<uint32_t>& input_shape,
+    const std::string& mode = "bilinear",
     const std::string& padding_mode = "zeros",
+    bool align_corners = false,
     const std::optional<DataType>& output_dtype = std::nullopt);
 
-}  // namespace grid_sample
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::grid_sample

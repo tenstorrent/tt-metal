@@ -1,0 +1,23 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+
+  - rank: 2
+    mesh_id: 0
+    mesh_host_rank: 2
+
+  - rank: 3
+    mesh_id: 0
+    mesh_host_rank: 3
+
+global_env:
+  #TT_LOGGER_LEVEL: "Debug"
+  #TT_LOGGER_TYPES: "OpFabricDistributedTestTTNN"
+  TT_METAL_USE_MGD_2_0: "1"
+
+mesh_graph_desc_path: "tests/scale_out/4x_bh_quietbox/mesh_graph_descriptors/4x4_bh_torus_xy_mesh_graph_descriptor.textproto"

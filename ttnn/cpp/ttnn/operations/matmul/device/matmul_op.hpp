@@ -13,11 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 // shared variables between override and program
 
@@ -38,6 +34,69 @@ struct matmul_mcast_1d_common_override_variables_t {
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
 
+/**
+ * @brief Calculate the M dimension for matmul operations
+ *
+ * @param padded_shape The padded shape of the tensor
+ * @param tile The tile for the tensor (optional)
+ * @param fuse_batch Whether to fuse batch dimensions
+ * @return uint32_t The calculated M dimension
+ */
+uint32_t get_M_dim(
+    const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile, bool fuse_batch);
+
+/**
+ * @brief Calculate the K dimension for matmul operations
+ *
+ * @param padded_shape The padded shape of the tensor
+ * @param tile The tile for the tensor (optional)
+ * @return uint32_t The calculated K dimension
+ */
+uint32_t get_K_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile);
+
+/**
+ * @brief Calculate the N dimension for matmul operations
+ *
+ * @param padded_shape The padded shape of the tensor
+ * @param tile The tile for the tensor (optional)
+ * @return uint32_t The calculated N dimension
+ */
+uint32_t get_N_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile);
+
+/**
+ * @brief Get the tile shape of a tensor, with optional transpose.
+ *
+ * Returns a tuple representing the height and width of the tensor's tile. If transpose is true,
+ * the tile shape dimensions are swapped.
+ *
+ * @param input_tensor The tensor whose tile shape is queried.
+ * @param transpose Whether to return the tile shape after transposing (swap height and width).
+ * @return tt::tt_metal::Tile The tile shape of the tensor, possibly transposed.
+ */
+tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose);
+
+/**
+ * @brief Get the shape of a tensor, with optional transpose.
+ *
+ * Returns the shape of the tensor. If transpose is true, the shape dimensions are swapped.
+ *
+ * @param input_tensor The tensor whose shape is queried.
+ * @param transpose Whether to return the shape after transposing (swap height and width).
+ * @return ttnn::Shape The shape of the tensor, possibly transposed.
+ */
+ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, bool transpose);
+
+/**
+ * @brief Get the padded shape of a tensor, with optional transpose.
+ *
+ * Returns the padded shape of the tensor. If transpose is true, the padded shape dimensions are swapped.
+ *
+ * @param input_tensor The tensor whose padded shape is queried.
+ * @param transpose Whether to return the padded shape after transposing (swap height and width).
+ * @return ttnn::Shape The padded shape of the tensor, possibly transposed.
+ */
+ttnn::Shape get_matmul_tensor_padded_shape(const Tensor& input_tensor, bool transpose);
+
 using ttnn::operations::unary::UnaryWithParam;
 
 /**
@@ -47,12 +106,16 @@ using ttnn::operations::unary::UnaryWithParam;
  * - For 2D tensors: [m, k] @ [k, n] -> [m, n]
  * - For tensors with batch dimensions, the batch dimensions are broadcast
  * - For vector-matrix multiplication (rank 1 @ rank 2), the result is a vector
+ *  Takes into account the transpose flags for the input tensors.
  *
  * @param input_tensor_a First input tensor
  * @param input_tensor_b Second input tensor
+ * @param transpose_a Whether to transpose the first input tensor
+ * @param transpose_b Whether to transpose the second input tensor
  * @return Shape of the resulting tensor after matmul
  */
-ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
+ttnn::Shape compute_matmul_output_shape(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
 
 /**
  * @brief Computes the output shape of a sparse matmul operation given two input tensors.
@@ -79,10 +142,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool bcast_batch,
+    bool broadcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -121,7 +186,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
-    bool bcast_batch,
+    bool broadcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
@@ -140,6 +207,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor& input_tensor_b,
     Tensor& output_tensor,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     tt::tt_metal::DataType output_dtype,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -247,8 +316,8 @@ struct Matmul {
     const std::optional<const CoreCoord> user_core_coord = std::nullopt;
     const std::optional<UnaryWithParam> user_fused_activation = std::nullopt;
     const bool user_run_batched = false;
-    const bool transpose_a = false;
-    const bool transpose_b = false;
+    bool transpose_a = false;
+    bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
     const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
@@ -319,10 +388,10 @@ SparseMatmul create_sparse_matmul_struct(
 matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool bcast_batch,
+    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
@@ -335,10 +404,10 @@ matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_opt
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
+    const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
-    bool bcast_batch,
+    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
@@ -351,11 +420,11 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     Tensor& output_tensor,
-    bool bcast_batch,
+    bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& matmul_signal_info);
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
 
 Tensor matmul(
     const Tensor& input_tensor_a,
@@ -378,13 +447,19 @@ Tensor sparse_matmul(
     const struct SparseMatmul& parameters = SparseMatmul{},
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-}  // namespace matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul
 
 namespace bmm_op_utils {
+
+using ttnn::operations::matmul::Matmul;
+
+ttnn::operations::matmul::MatmulProgramConfig get_program_config(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    bool transpose_a,
+    bool transpose_b,
+    uint32_t bias_single_tile_size,
+    const ttnn::operations::matmul::Matmul* matmul);
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     uint32_t per_core_M,
@@ -397,7 +472,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 namespace reuse_mcast_1d_optimized_helpers {
 void override_program_parameters(
-    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& shared_variables,
+    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
     const void* operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,

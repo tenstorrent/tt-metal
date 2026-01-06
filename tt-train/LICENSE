@@ -207,7 +207,6 @@ distributed as part of the software:
 - boost - [License available here](https://www.boost.org/LICENSE_1_0.txt)
 - glog - [License available here](https://github.com/google/glog/blob/v0.4.0/COPYING)
 - icu - [License available here](http://www.unicode.org/copyright.html#license)
-- tokenizers-cpp - [License available here](https://github.com/mlc-ai/tokenizers-cpp?tab=Apache-2.0-1-ov-file)
 - xtensor - [License available here](https://github.com/xtensor-stack/xtensor?tab=BSD-3-Clause-1-ov-file)
 - xtl - [License available here](https://github.com/xtensor-stack/xtl?tab=BSD-3-Clause-1-ov-file)
 - msgpack - [License available here](https://github.com/msgpack/msgpack-c?tab=License-1-ov-file)

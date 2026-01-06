@@ -7,7 +7,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "point_to_point_device_op.hpp"
@@ -105,7 +105,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
 
     TT_FATAL(
         operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
@@ -173,7 +173,7 @@ PointToPointOp::tensor_return_value_t PointToPointOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
 
     const auto intermediate_output_tensor =
         tensor_args.optional_intermediate_tensor.value_or(create_device_tensor(output_specs.at(0), mesh_device));
@@ -194,7 +194,7 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
 
     std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
@@ -287,3 +287,18 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
 };
 
 }  // namespace ttnn::operations::point_to_point
+
+namespace ttnn::prim {
+ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to_point(
+    const Tensor& input_tensor,
+    const ::ttnn::ccl::Topology& topology,
+    const MeshCoordinate& receiver_coord,
+    const MeshCoordinate& sender_coord,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
+    using OperationType = ttnn::operations::point_to_point::PointToPointOp;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
+        OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
+}
+}  // namespace ttnn::prim

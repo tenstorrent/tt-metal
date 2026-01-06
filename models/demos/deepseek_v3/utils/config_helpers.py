@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
-import json
 import math
 from itertools import takewhile
 from pathlib import Path
@@ -11,17 +10,17 @@ from typing import Any, Sequence
 
 import torch
 from loguru import logger
-from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.deepseek_v3.utils.run_config import WeightConfig
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
+SPARSITY_BLOCK_SIZE = 32
 
 
 # Compute kernel configurations
@@ -67,31 +66,6 @@ COMPUTE_KERNEL_CONFIG_SDPA = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
 )
-
-
-# JSON serializer for the weight config
-class WeightConfigEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, SavedWeight):
-            obj = {
-                "path": str(obj.path),
-                "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
-            }
-        return obj
-
-
-def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
-    path_str = obj.get("path", None)
-    if not isinstance(path_str, str):
-        return obj
-    memory_config_dict = obj.get("memory_config", None)
-    if not isinstance(memory_config_dict, dict) or not {
-        "buffer_type",
-        "memory_layout",
-        "created_with_nd_shard_spec",
-    }.issubset(memory_config_dict.keys()):
-        return obj
-    return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
 
 
 # Helper math functions
@@ -574,6 +548,9 @@ def get_state_dicts(
 
 def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
+    # Preserve laziness when applicable by returning a LazyStateDict view.
+    if isinstance(state_dict, LazyStateDict):
+        return state_dict.view_with_prefix(prefix, num_layers)
     if num_layers is None:
         return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
     else:
@@ -676,6 +653,19 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
+
+    # Always convert absolute paths to relative paths for portability
+    # This ensures SavedWeight objects always have relative paths
+    if path.is_absolute():
+        path_str = str(path)
+        mesh_idx = path_str.find("mesh_")
+        if mesh_idx == -1:
+            raise ValueError(f"Expected 'mesh_' in path: {path}")
+        # Skip past "mesh_<rows>x<cols>/" to get relative path
+        parts = path_str[mesh_idx:].split("/", 1)
+        if len(parts) < 2:
+            raise ValueError(f"Invalid path structure after 'mesh_': {path}")
+        path = Path(parts[1])
 
     return SavedWeight(path, memory_config)
 
@@ -827,50 +817,6 @@ def _get_remove_dim_slices(
         assert shard_dim is not None
         slices[shard_dim] = 0
     return tuple(slices)
-
-
-def get_weight_config(
-    ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
-    hf_config: PretrainedConfig,
-    state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
-    weight_cache_path: Path,
-    mesh_device: ttnn.Device,
-    force_recalculate: bool,
-):
-    weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
-    config_path = weight_cache_path / "config.json"
-    weight_path = weight_cache_path / "weights"
-    for _ in range(1):
-        if force_recalculate:
-            break
-        if not config_path.exists():
-            break
-        weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
-        if not _check_weights_exist(weight_path, weight_config):
-            break
-        logger.info(f"Using weights cached at {weight_cache_path}")
-        return weight_config
-
-    logger.info(f"Caching weights at {weight_cache_path}")
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-    json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
-    return weight_config
-
-
-def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
-    if isinstance(weight_config, dict):
-        entries = weight_config.values()
-    else:
-        entries = weight_config
-    for entry in entries:
-        if entry is None:
-            continue
-        if isinstance(entry, SavedWeight):
-            if not (root_path / entry.path).exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION:
-                return False
-        elif not _check_weights_exist(root_path, entry):
-            return False
-    return True
 
 
 def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:

@@ -26,7 +26,7 @@ enum BinaryStatus {
 }
 
 struct DeviceBinaryStatus {
-    deviceId @0 :UInt64;
+    metalDeviceId @0 :UInt64;
     status @1 :BinaryStatus;
 }
 
@@ -70,14 +70,60 @@ struct MeshWorkloadData {
 # enabling correct firmware path resolution without relying on relative
 # paths
 struct BuildEnvData {
-    buildKey @0 :UInt32; # Unique identifier for the build configuration
+    buildKey @0 :UInt64; # Unique identifier for the build configuration
     firmwarePath @1 :Text; # Absolute path to the firmware directory for this device
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
 }
 
 struct BuildEnvPerDevice {
-    deviceId @0 :UInt64;
+    metalDeviceId @0 :UInt64;
     buildInfo @1 :BuildEnvData;
+}
+
+# Per Dispatch Core Information
+struct CoreInfo {
+    workType @0: Text;
+    metalDeviceId @1: Int32;
+    servicingMetalDeviceId @2: Int32;
+    eventID @3: UInt32;
+    cqId @4: UInt8;
+}
+
+# Virtual core coordinates are used as a unique key to fetch dispatch/prefetch core information
+# Same as tt_cxy_pair
+struct VirtualCore {
+    chip @0: UInt64;
+    x @1: UInt64;
+    y @2: UInt64;
+}
+
+# Per entry information of a dispatch/dispatch_s/prefetch core
+# Contains virtual coordinates and associated information
+struct CoreEntry {
+  key  @0 :VirtualCore;       # chip,x,y (virtual)
+  info @1 :CoreInfo;  # metalDeviceId, servicingMetalDeviceId, workType, cqId
+}
+
+# Simplified core type enum for grouping cores by their storage category
+# Maps to the three internal data structures: dispatch_core_info,
+# dispatch_s_core_info, prefetch_core_info
+enum CoreCategory {
+    prefetch @0;
+    dispatch @1;
+    dispatchS @2;
+    count @3; # Sentinel value representing the total count of CoreCategory enum values
+}
+
+# Struct to group core entries by category
+struct CoreEntriesByCategory {
+    category @0 :CoreCategory;
+    entries @1 :List(CoreEntry);
+}
+
+# Mapping from logical metal ID to unique ID
+struct MetalDeviceIdToUniqueId {
+    metalDeviceId @0 :UInt64;
+    uniqueId @1 :UInt64;
 }
 
 interface Inspector {
@@ -91,7 +137,7 @@ interface Inspector {
     getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
     # Get list of local devices that are being used by this Metal runtime
-    getDevicesInUse @3 () -> (deviceIds :List(UInt64));
+    getDevicesInUse @3 () -> (metalDeviceIds :List(UInt64));
 
     # Search for a kernel
     getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
@@ -101,4 +147,10 @@ interface Inspector {
     # This replaces the old approach of constructing relative paths,
     # providing correct firmware locations for each device
     getAllBuildEnvs @5 () -> (buildEnvs :List(BuildEnvPerDevice));
+
+    # Get all core Info
+    getAllDispatchCoreInfos @6 () -> (coresByCategory :List(CoreEntriesByCategory));
+
+    # Get mapping from metal device ID to unique ID for all devices
+    getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
 }

@@ -7,12 +7,17 @@ from types import SimpleNamespace
 from typing import Mapping, Optional
 
 import torch
+import vllm.envs as envs
 from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
+from vllm.model_executor.models.qwen2_5_vl import (
+    Qwen2_5_VLDummyInputsBuilder,
+    Qwen2_5_VLMultiModalProcessor,
+    Qwen2_5_VLProcessingInfo,
+)
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
@@ -46,8 +51,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer
 
 
 def get_platform_specific_optimizations(model_name):
-    is_72B = "72B" in model_name
-    max_seq_len = 65536 if is_72B else 131072
+    max_seq_len = 131072
 
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
@@ -98,7 +102,9 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
 
 # TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
-    MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+    Qwen2_5_VLMultiModalProcessor if envs.VLLM_USE_V1 else MultiModalProcessor,
+    info=TT_Qwen2_5_VLProcessingInfo,
+    dummy_inputs=Qwen2_5_VLDummyInputsBuilder if envs.VLLM_USE_V1 else DummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
@@ -167,11 +173,16 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def prefill_forward(
         self,
         tokens,
-        images,
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
+        enable_trace,
+        **kwargs,  # images for V0, pixel_values and image_grid_thw for V1,
     ):
+        # Must add this so that vLLM can call without errors
+        enable_trace = False
+        logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
+
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
         padded_seq_len = tokens.shape[-1]
@@ -180,28 +191,78 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] is not None else tokens
-        inputs.attention_mask = torch.concat(
-            [
-                torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
-                if im is not None
-                else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
-                for i, im in enumerate(images)
-            ],
-            dim=0,
-        )
-        if images[0] is not None and "pixel_values" in images[0]:
-            # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
-            inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
-            inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
-            # Vision prefill
-            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-        else:
-            # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16)
+        if envs.VLLM_USE_V1:
+            inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype, like V0 does (see below)?
+            # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
+            # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
+            inputs.attention_mask = torch.zeros(
+                (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
+            )
+            for i, plen in enumerate(prompt_lens):
+                inputs.attention_mask[i, :plen] = 1
+
+            if (
+                "pixel_values" in kwargs
+                and len(kwargs["pixel_values"]) > 0
+                and kwargs["pixel_values"][0] is not None
+                # kwargs["pixel_values"] is a list,
+                # each element is a list of images for one user
+                # We only check if the first user's pixel_values is not None
+                # as we currently do not support mixed inputs of text-only
+                # users and text-image users
+            ):
+                inputs.pixel_values = torch.concat(
+                    [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+                )
+                inputs.image_grid_thw = torch.concat(
+                    [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw], dim=0
+                )
+                # Vision prefill
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            else:
+                # text-only users
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+        else:  # V0
+            if (
+                "images" in kwargs
+                and isinstance(kwargs["images"], list)
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "attention_mask" in kwargs["images"][0]
+            ):
+                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
+            else:
+                inputs.input_ids = tokens
+
+            inputs.attention_mask = torch.concat(
+                [
+                    torch.nn.functional.pad(
+                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
+                    )
+                    if im is not None
+                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                    for i, im in enumerate(kwargs["images"])
+                ],
+                dim=0,
+            )
+            if (
+                "images" in kwargs
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "pixel_values" in kwargs["images"][0]
+            ):
+                # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
+                inputs.pixel_values = torch.concat([im.pixel_values for im in kwargs["images"]], dim=0)
+                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in kwargs["images"]], dim=0)
+
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            else:
+                # text-only users
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
+
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, self.reference_model.config)
         (
             input_prefill_pt,
@@ -214,7 +275,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
@@ -226,13 +287,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-        return logits, rot_mats
+        return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop(
-            "rot_mats_all_users", None
+        rope_deltas_list: list = kwargs.pop(
+            "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
-        if rot_mats_list is not None:
-            super().update_cos_sin_rows(rot_mats_list)
+        if rope_deltas_list is not None:
+            super().update_rope_deltas(rope_deltas_list)
 
         return super().decode_forward_text(*args, **kwargs)

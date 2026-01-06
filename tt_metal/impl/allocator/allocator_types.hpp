@@ -16,7 +16,6 @@ namespace tt::tt_metal {
 // Setup what each core-type is
 enum class AllocCoreType {
     Dispatch,
-    StorageOnly,
     ComputeOnly,
     ComputeAndStore,
     Invalid,
@@ -36,7 +35,6 @@ struct AllocatorConfig {
     uint32_t l1_unreserved_base = 0;
     CoreRangeSet worker_grid;
     size_t worker_l1_size = 0;
-    std::optional<uint32_t> storage_core_bank_size = 0;
     size_t l1_small_size = 0;
     size_t trace_region_size = 0;
     std::unordered_map<CoreCoord, AllocCoreType> core_type_from_noc_coord_table;

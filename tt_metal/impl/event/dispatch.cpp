@@ -26,10 +26,10 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
-
-namespace event_dispatch {
+namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
@@ -219,6 +219,4 @@ void read_events_from_completion_queue(
         event_descriptor.get_global_event_id());
 }
 
-}  // namespace event_dispatch
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::event_dispatch

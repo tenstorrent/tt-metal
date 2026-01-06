@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -48,7 +48,7 @@ bool test_cb_config_written_to_core(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     vector<uint32_t> cb_config_vector;

@@ -11,9 +11,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
-from models.demos.gemma3.tt.model_config import ModelArgs, determine_device_name
+from models.demos.gemma3.tt.model_config import ModelArgs
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.model_config import determine_device_name
 
 THRESHOLD_PERCENT = 5
 
@@ -69,7 +70,8 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
 
     upper_threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
     lower_threshold = targets["model_forward_inference"] * (1 - THRESHOLD_PERCENT / 100)
-    assert lower_threshold < inference_mean < upper_threshold
+    assert lower_threshold < inference_mean, "Failed because it's too fast"
+    assert inference_mean < upper_threshold, "Failed because it's too slow"
 
 
 def helper_write_to_json(device_type, measurements, output_filename, model_name):
@@ -79,6 +81,11 @@ def helper_write_to_json(device_type, measurements, output_filename, model_name)
 
     with open(output_filename, "r") as f:
         file_dict = json.load(f)
+
+    if file_dict.get(model_name) is None:
+        file_dict[model_name] = dict()
+    if file_dict[model_name].get(device_type) is None:
+        file_dict[model_name][device_type] = dict()
 
     file_dict[model_name][device_type] = {"model_forward_inference": measurements}
 

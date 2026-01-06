@@ -9,8 +9,8 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace tt::tt_metal {
 
@@ -85,7 +85,7 @@ public:
         return tt::tt_metal::TerminationInfo{
             .logical_core = logical_core_,
             .core_type = GetCoreType(),
-            .address = this->mux_kernel_config_->get_termination_signal_address(),
+            .address = static_cast<uint32_t>(this->mux_kernel_config_->get_termination_signal_address()),
             .val = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE,
         };
     }

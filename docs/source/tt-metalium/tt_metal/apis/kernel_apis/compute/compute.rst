@@ -83,7 +83,7 @@ Integer operations
   add_int_tile
   sub_int_tile
   mul_int_tile
-  rsub_int32_tile
+  rsub_int_tile
   gcd_tile
   lcm_tile
   remainder_tile
@@ -150,7 +150,6 @@ Rounding and ceiling functions
 
 .. toctree::
 
-  ceil_tile
   round_tile
   clamp_tile
   threshold_tile

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -39,7 +39,7 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(
     distributed::MeshWorkload& workload, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(n_cbs);

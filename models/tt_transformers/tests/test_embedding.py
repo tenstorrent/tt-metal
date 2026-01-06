@@ -48,10 +48,16 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     reference_emb = model_args.reference_embedding()
 
     if model_args.is_llama_vision():
-        layer_name = "text_model.tok_embeddings.weight"
+        weight = torch.cat(
+            [
+                state_dict["text_model.tok_embeddings.weight"],
+                state_dict["text_model.learnable_embedding.weight"],
+            ],
+            dim=0,
+        )
     else:
-        layer_name = "tok_embeddings.weight"
-    reference_emb.load_state_dict({"emb.weight": state_dict[layer_name]})
+        weight = state_dict["tok_embeddings.weight"]
+    reference_emb.load_state_dict({"emb.weight": weight})
 
     emb_kwargs = {
         "mesh_device": mesh_device,

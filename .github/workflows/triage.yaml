@@ -1,0 +1,89 @@
+name: "[internal] Triage tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 30
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
+
+jobs:
+  triage-tests:
+    name: Triage tests ${{ inputs.runner-label }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: >-
+      ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+          auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
+      - name: Run triage tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+            mkdir -p generated/test_reports
+            pip install -r tools/triage/requirements.txt
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U066XH7HD6W # Vuk Jovanovic
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate test annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}

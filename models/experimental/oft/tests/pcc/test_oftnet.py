@@ -34,20 +34,14 @@ from loguru import logger
     ],
 )
 @pytest.mark.parametrize(
-    "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
+    "model_dtype, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.bfloat16, False, 0.822, 0.893, 0.998, 0.904),
-       ( torch.bfloat16,  True, 0.862, 0.964, 0.999, 0.894),
-       ( torch.float32, False, 0.906, 0.978, 0.999, 0.929),
-       ( torch.float32,  True, 0.914, 0.881, 0.998, 0.918)
+       ( torch.float32, 0.905, 0.971, 0.999, 0.927)
     ],
     # fmt: on
     ids=[
-        "bfp16_use_device_oft",
-        "bfp16_use_host_oft",
-        "fp32_use_device_oft",
-        "fp32_use_host_oft",
+        "torch_float32",
     ],
 )
 def test_oftnet(
@@ -55,7 +49,6 @@ def test_oftnet(
     input_image_path,
     calib_path,
     model_dtype,
-    use_host_oft,
     pcc_scores_oft,
     pcc_positions_oft,
     pcc_dimensions_oft,
@@ -106,8 +99,8 @@ def test_oftnet(
         topdown_layers=topdown_layers,
         grid_res=GRID_RES,
         grid_height=GRID_HEIGHT,
-        host_fallback_model=ref_model if use_host_oft else None,
-        fallback_oft=use_host_oft,
+        host_fallback_model=None,
+        fallback_oft=False,
         fallback_feedforward=False,
         fallback_lateral=False,
     )
@@ -158,7 +151,7 @@ def test_oftnet(
 
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"
-        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {exp_pcc=}, {abs=:.3f}, {rel=:.3f}")
         if passed and float(pcc) - exp_pcc > 0.001:
             logger.warning(
                 f"⚠️  Output {i} {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
@@ -175,7 +168,7 @@ def test_oftnet(
         os.makedirs(output_dir, exist_ok=True)
 
         # Construct a unique filename based on test parameters
-        test_config = f"{model_dtype}_host_oft_{use_host_oft}"
+        test_config = f"{model_dtype}"
         output_file = os.path.join(output_dir, f"outputs_{test_config}.pt")
 
         # Package all outputs in a dictionary

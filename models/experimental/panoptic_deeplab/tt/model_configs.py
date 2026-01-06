@@ -6,6 +6,7 @@ import ttnn
 from dataclasses import replace
 from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
+    MaxPool2dConfiguration,
     AutoShardedStrategyConfiguration,
     HeightSliceStrategyConfiguration,
     WidthSliceStrategyConfiguration,
@@ -27,6 +28,7 @@ class ModelOptimisations:
 
     def __init__(
         self,
+        device,
         conv_act_dtype=ttnn.bfloat8_b,
         conv_w_dtype=ttnn.bfloat8_b,
     ):
@@ -34,9 +36,11 @@ class ModelOptimisations:
         Initialize model optimization configurations.
 
         Args:
-            conv_act_dtype: Default data type for convolution activations
-            conv_w_dtype: Default data type for convolution weights
+            device: Target device on which model optimizations will be applied.
+            conv_act_dtype: Default data type for convolution activations.
+            conv_w_dtype: Default data type for convolution weights.
         """
+        self.device = device
         self.conv_output_dtype = conv_act_dtype
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
@@ -58,6 +62,13 @@ class ModelOptimisations:
             "activation": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             "config_tensors_in_dram": True,
         }
+
+        # Default overrides applied to all MaxPool2d layers
+        self.default_maxpool_overrides = {}
+
+        # Default overrides applied to all Matmul layers
+        self.default_matmul_overrides = {}
+        self._setup_matmul_configs()
 
         self.layer_overrides = {}
 
@@ -93,13 +104,33 @@ class ModelOptimisations:
 
         return replace(base_config, **overrides)
 
-    def register_layer_override(self, conv_path: str, **overrides):
+    def apply_maxpool_overrides(
+        self, base_config: MaxPool2dConfiguration, maxpool_path: str = None
+    ) -> MaxPool2dConfiguration:
         """
-        Register layer-specific overrides for a convolution layer.
+        Apply configuration overrides to a base MaxPool2dConfiguration.
 
         Args:
-            conv_path: String path identifying the layer
-            **overrides: Keyword arguments for Conv2dConfiguration fields
+            base_config: Base MaxPool2dConfiguration from preprocessing
+            maxpool_path: String path identifying the layer (e.g., "stem.maxpool")
+
+        Returns:
+            Updated MaxPool2dConfiguration with overrides applied
+        """
+        overrides = self.default_maxpool_overrides.copy()
+
+        if maxpool_path is not None and maxpool_path in self.layer_overrides:
+            overrides.update(self.layer_overrides[maxpool_path])
+
+        return replace(base_config, **overrides)
+
+    def register_layer_override(self, layer_path: str, **overrides):
+        """
+        Register layer-specific overrides for a layer (convolution or maxpool).
+
+        Args:
+            layer_path: String path identifying the layer (e.g., "stem.conv1", "stem.maxpool")
+            **overrides: Keyword arguments for layer configuration fields
 
         Example:
             config.register_layer_override(
@@ -107,14 +138,23 @@ class ModelOptimisations:
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
                 slice_strategy=WidthSliceStrategyConfiguration(num_slices=4)
             )
+            config.register_layer_override(
+                "stem.maxpool",
+                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+                dtype=ttnn.bfloat8_b
+            )
         """
-        if conv_path not in self.layer_overrides:
-            self.layer_overrides[conv_path] = {}
-        self.layer_overrides[conv_path].update(overrides)
+        if layer_path not in self.layer_overrides:
+            self.layer_overrides[layer_path] = {}
+        self.layer_overrides[layer_path].update(overrides)
 
     def get_conv_output_dtype(self):
         """Get the default output dtype for convolutions."""
         return self.conv_output_dtype
+
+    def get_matmul_config(self, config_name: str):
+        """Get a specific matmul configuration by name"""
+        return self.default_matmul_overrides.get(config_name, None)
 
     # =========================================================================
     # HELPER METHODS FOR BULK REGISTRATION
@@ -144,6 +184,57 @@ class ModelOptimisations:
         self.setup_decoder()
         self.setup_heads()
 
+    def _setup_matmul_configs(self):
+        """Setup matmul configurations based on device capabilities"""
+        compute_grid = self.device.compute_with_storage_grid_size()
+
+        # Final upsample matmul configs (used by both semantic and instance heads)
+        if compute_grid.x == 5 and compute_grid.y == 4:
+            self.default_matmul_overrides.update(
+                {
+                    "final_upsample_mm_config1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(5, 4),
+                        in0_block_w=2,
+                        out_subblock_h=4,
+                        out_subblock_w=2,
+                        out_block_h=4,
+                        out_block_w=2,
+                        per_core_M=4,
+                        per_core_N=2,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                        untilize_out=False,
+                    ),
+                    "final_upsample_mm_config2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(5, 4),
+                        in0_block_w=2,
+                        out_subblock_h=4,
+                        out_subblock_w=2,
+                        out_block_h=16,
+                        out_block_w=2,
+                        per_core_M=16,
+                        per_core_N=2,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        num_global_cb_receivers=0,
+                        untilize_out=False,
+                    ),
+                }
+            )
+        else:
+            # Auto-config for other grid sizes
+            self.default_matmul_overrides.update(
+                {
+                    "final_upsample_mm_config1": None,
+                    "final_upsample_mm_config2": None,
+                }
+            )
+
     # -------------------------------------------------------------------------
     # RESNET BACKBONE CONFIGURATION
     # -------------------------------------------------------------------------
@@ -156,6 +247,7 @@ class ModelOptimisations:
         self._setup_res4_stage()
         self._setup_res5_stage()
         self._setup_resnet_activation_fusion()
+        self._setup_resnet_conv1_deallocation()
 
     def _setup_stem(self):
         """
@@ -172,6 +264,12 @@ class ModelOptimisations:
             ["stem.conv2", "stem.conv3"],
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
         )
+        self.register_layer_override(
+            "stem.maxpool",
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
 
     def _setup_res2_stage(self):
         """
@@ -187,14 +285,6 @@ class ModelOptimisations:
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
         )
 
-        # Conv3: 1x1 bottleneck convolutions (matmul path with width slicing)
-        for i in range(3):
-            self.register_layer_override(
-                f"res2.{i}.conv3",
-                slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),  # 1 tile
-            )
-
     def _setup_res3_stage(self):
         """
         Res3 (128x256->64x128): 4 bottleneck blocks, 512 output channels
@@ -202,6 +292,11 @@ class ModelOptimisations:
         - conv2: 3x3 convs with height sharding
         - shortcut: First block uses width slicing and block sharding
         """
+        # Conv1: First block takes res2 output as input, must not deallocate it
+        self.register_layer_override(
+            "res3.0.conv1",
+            deallocate_activation=False,
+        )
         # Conv2: First block downsamples with stride=2
         self.register_layer_override(
             "res3.0.conv2",
@@ -217,18 +312,11 @@ class ModelOptimisations:
             start_idx=1,
         )
 
-        # Conv3: 1x1 bottleneck with width slicing
-        self.register_layer_override(
-            "res3.0.conv3",
-            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
-        )
-
         # Shortcut: Downsample layer in first block
         self.register_layer_override(
             "res3.0.shortcut",
-            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-            sharding_strategy=BlockShardedStrategyConfiguration(),
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+            sharding_strategy=HeightShardedStrategyConfiguration(),
         )
 
     def _setup_res4_stage(self):
@@ -255,6 +343,7 @@ class ModelOptimisations:
         self.register_layer_override(
             "res4.0.shortcut",
             sharding_strategy=BlockShardedStrategyConfiguration(),
+            enable_weights_double_buffer=True,
         )
 
     def _setup_res5_stage(self):
@@ -267,6 +356,7 @@ class ModelOptimisations:
                 f"res5.{i}.conv2",
                 sharding_strategy=BlockShardedStrategyConfiguration(),
                 slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+                enable_weights_double_buffer=True,
             )
 
     def _setup_resnet_activation_fusion(self):
@@ -293,6 +383,32 @@ class ModelOptimisations:
                         deallocate_activation=False,
                     )
 
+    def _setup_resnet_conv1_deallocation(self):
+        """
+        Set deallocate_activation=False for conv1 in blocks that need to preserve
+        the input tensor for residual connections, allowing us to avoid ttnn.clone().
+
+        Blocks that need this:
+        - All blocks without shortcuts (i > 0 in each stage)
+        - All res4 blocks
+        - All res5 blocks
+
+        Exceptions:
+        - res3.3: Keep deallocate_activation=True to avoid L1 memory issues
+        """
+        stage_configs = [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]
+
+        for stage, num_blocks in stage_configs:
+            for i in range(num_blocks):
+                # Blocks without shortcuts (i > 0) need conv1 to not deallocate input
+                # Also, res4 and res5 blocks always need this (even block 0)
+                # Exception: res3.3 needs deallocate_activation=True to avoid L1 memory issues
+                if (i > 0 or stage in ["res4", "res5"]) and not (stage == "res3" and i == 3):
+                    self.register_layer_override(
+                        f"{stage}.{i}.conv1",
+                        deallocate_activation=False,
+                    )
+
     def _register_stage_blocks(self, stage: str, num_blocks: int, conv_name: str, start_idx: int = 0, **overrides):
         """Helper to register overrides for blocks starting from start_idx."""
         for i in range(start_idx, num_blocks):
@@ -311,12 +427,14 @@ class ModelOptimisations:
         - Branch 1-3: 3x3 dilated convs (dilation=6, 12, 18)
         - Branch 4: Global average pooling + 1x1 conv
         - Project: 1x1 conv to combine branches
+
+        ASPP is the direct consumer of res5 backbone features, so all branches
+        must have deallocate_activation=False to preserve the backbone output.
         """
         # Branches without slicing (1x1 convs and pooling)
         no_slice_branches = ["aspp.convs.0", "aspp.convs.4", "aspp.project"]
         self._register_multiple_layers(
             no_slice_branches,
-            slice_strategy=None,
             deallocate_activation=False,
         )
 
@@ -334,6 +452,29 @@ class ModelOptimisations:
                 sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=act_block_h),
                 deallocate_activation=False,
                 activation=None,
+                enable_weights_double_buffer=True,
+            )
+
+        # Also set per-head ASPP paths explicitly to ensure backbone features are preserved
+        # Each head has its own ASPP (as decoder.res5.project_conv)
+        for head_prefix in ["semantic_head", "instance_head"]:
+            # ASPP conv branches (0-4)
+            for i in range(5):
+                if i == 4:
+                    # Branch 4 has a pooling conv
+                    self.register_layer_override(
+                        f"{head_prefix}.decoder.res5.project_conv.convs.4.1",
+                        deallocate_activation=False,
+                    )
+                else:
+                    self.register_layer_override(
+                        f"{head_prefix}.decoder.res5.project_conv.convs.{i}",
+                        deallocate_activation=False,
+                    )
+            # ASPP project layer
+            self.register_layer_override(
+                f"{head_prefix}.decoder.res5.project_conv.project",
+                deallocate_activation=False,
             )
 
     # -------------------------------------------------------------------------
@@ -351,12 +492,20 @@ class ModelOptimisations:
             iteration_index: Decoder iteration (0 for first pass)
         """
         # Projection layers: No slicing, preserve backbone outputs for head sharing
+        # These are the direct consumers of backbone features, so they must not deallocate them
         projection_layers = [f"decoder.{stage}.project_conv" for stage in ["res5", "res4", "res3", "res2"]]
         self._register_multiple_layers(
             projection_layers,
-            slice_strategy=None,
             deallocate_activation=False,
         )
+
+        # Each head has its own decoder, so we need to configure both semantic and instance heads
+        for head_prefix in ["semantic_head", "instance_head"]:
+            for stage in ["res5", "res4", "res3", "res2"]:
+                self.register_layer_override(
+                    f"{head_prefix}.decoder.{stage}.project_conv",
+                    deallocate_activation=False,
+                )
 
         # Fusion layers: Two convs per stage (except res5 which only has projection)
         for stage in ["res4", "res3", "res2"]:
@@ -374,13 +523,10 @@ class ModelOptimisations:
         path = f"decoder.{stage}.fuse_conv.0"
 
         if iteration_index == 0 and stage in ["res3", "res2"]:
-            num_slices = 2 if stage == "res3" else 4
-            act_block_h = 32 if stage == "res3" else 64
-
             self.register_layer_override(
                 path,
-                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=act_block_h),
+                slice_strategy=None,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=0),
                 deallocate_activation=False,
                 activation=None,
             )

@@ -14,14 +14,15 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace creation {
+
+namespace operations::creation {
 
 namespace detail {
 
@@ -86,7 +87,7 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, /*blocking=*/false);
+        tt::tt_metal::tensor_impl::copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
     } else if (device != nullptr) {
         return host_tensor.to_device(device, output_mem_config);
@@ -257,6 +258,23 @@ struct Empty {
 struct FromBuffer {
     template <typename BufferType>
     static Tensor invoke(
+        std::vector<BufferType>&& buffer,
+        const Shape& shape,
+        const DataType dtype,
+        MeshDevice* device,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
+        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+        TensorSpec spec(
+            shape,
+            TensorLayout(
+                dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
+        return Tensor::from_vector<BufferType>(std::move(buffer), spec, device);
+    }
+
+    template <typename BufferType>
+    static Tensor invoke(
         const std::vector<BufferType>& buffer,
         const Shape& shape,
         const DataType dtype,
@@ -361,8 +379,7 @@ struct Arange {
     }
 };
 
-}  // namespace creation
-}  // namespace operations
+}  // namespace operations::creation
 
 constexpr auto full = ttnn::decorators::register_operation<"ttnn::full", ttnn::operations::creation::Full>();
 constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();

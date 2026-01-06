@@ -11,8 +11,6 @@ from loguru import logger
 from models.experimental.vgg.tt.vgg import *
 from models.common.utility_functions import (
     profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     comp_pcc,
     unpad_from_zero,
     torch_to_tt_tensor,
@@ -24,7 +22,6 @@ from models.common.utility_functions import (
     ((0.99, 2),),
 )
 def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_label_dict):
-    disable_persistent_kernel_cache()
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
     with torch.no_grad():
@@ -47,8 +44,6 @@ def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_la
         profiler.start("\nExecution time of tt_vgg first run")
         tt_output = tt_vgg(tt_image)
         profiler.end("\nExecution time of tt_vgg first run")
-
-        enable_persistent_kernel_cache()
 
         logger.info(f"\nRunning the tt_vgg model for {PERF_CNT} iterations . . . ")
         for i in range(PERF_CNT):

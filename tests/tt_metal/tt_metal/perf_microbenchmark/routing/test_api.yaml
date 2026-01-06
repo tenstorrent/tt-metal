@@ -5,7 +5,7 @@
 # tt_fabric_test_common_types.hpp: Shows us the data structures that each field is parsed into, and which fields are optional.
 
 physical_mesh:
-  mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"
+  mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto"
   eth_coord_mapping: [
     [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
     [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
@@ -33,10 +33,8 @@ allocation_policies:
 Tests:
   - name: "TestName"
     fabric_setup:
-      topology: Linear/Mesh/Ring/Torus # The logical topology we're testing.
-      # LowLatency: Each packet is loaded with an infiniband-style packet header, where a segment is peeled off for each hop.
-      # Dynamic: Every time a packet arrives at a router, the router checks its routing table to figure out where to send it.
-      (optional) routing_type: LowLatency/Dynamic
+      topology: Linear/Mesh/Ring/Torus/NeighborExchange # The logical topology we're testing.
+      # NOTE: NeighborExchange topology does not support message forwarding, and so many test patterns will fail
       # Tensix extension for fabric routers, used to build connections between worker->fabric router, upstream fabric router->downstream fabric router.
       (optional) fabric_tensix_config: Default/Mux
       # Controls the number of ETH links on each chip that is used in the test.

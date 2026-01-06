@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.common.utility_functions import is_grayskull
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
@@ -13,7 +12,7 @@ def bert_attention(
     attention_mask,
     *,
     parameters,
-    num_cores_x=12 if is_grayskull() else 8,
+    num_cores_x=8,
 ):
     num_heads = config.num_attention_heads
     batch_size, _, hidden_size = hidden_states.shape
@@ -96,7 +95,7 @@ def bert_intermediate(
     hidden_states,
     *,
     parameters,
-    num_cores_x=12 if is_grayskull() else 8,
+    num_cores_x=8,
 ):
     batch_size, *_ = hidden_states.shape
 
@@ -123,7 +122,7 @@ def bert_output(
     residual,
     *,
     parameters,
-    num_cores_x=12 if is_grayskull() else 8,
+    num_cores_x=8,
 ):
     batch_size, *_ = hidden_states.shape
 

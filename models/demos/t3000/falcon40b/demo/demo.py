@@ -15,7 +15,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import enable_persistent_kernel_cache, nearest_32
+from models.common.utility_functions import nearest_32
 from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
@@ -262,8 +262,6 @@ def run_falcon_demo_kv(
 
     kv_cache_singlelayer = tt_FalconCausalLM_singlelayer.initialize_kv_cache()  # only used for compile
 
-    enable_persistent_kernel_cache()
-
     ### First prefill run with compile ###
     use_cache = True
     profiler.start("compile_prefill")
@@ -368,7 +366,6 @@ def run_falcon_demo_kv(
     profiler.end("initializing_KV_cache")
 
     ### Second prefill run without compile ###
-    enable_persistent_kernel_cache()
 
     post_processor = partial(post_process)
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
@@ -600,6 +597,11 @@ def run_falcon_demo_kv(
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets=perf_targets)
     run_type = f"demo_{'perf' if perf_mode else 'generate'}_{mesh_device.get_num_devices()}chip"
+
+    data_parallel = 1
+    tensor_parallel = mesh_device.get_num_devices() // data_parallel
+    config_params = configuration.to_dict() | {"data_parallel": data_parallel, "tensor_parallel": tensor_parallel}
+
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
@@ -607,7 +609,7 @@ def run_falcon_demo_kv(
         ml_model_type="llm",
         num_layers=num_layers,
         batch_size=batch_size,
-        config_params=configuration.to_dict(),
+        config_params=config_params,
         precision=f"prefill[{model_config_str_for_prefill}]_decode[{model_config_str_for_decode}]",
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,
@@ -620,6 +622,7 @@ def run_falcon_demo_kv(
 @pytest.mark.parametrize("greedy_sampling", (False,))
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_demo(
     perf_mode,
     greedy_sampling,
@@ -627,10 +630,8 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    t3k_mesh_device,
+    mesh_device,
 ):
-    # disable_persistent_kernel_cache()
-
     return run_falcon_demo_kv(
         user_input=user_input,
         model_version=model_config_entries["_name_or_path"],
@@ -641,7 +642,7 @@ def test_demo(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         prefill_on_host=False,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

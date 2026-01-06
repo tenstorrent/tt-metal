@@ -7,13 +7,11 @@
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-#include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 
@@ -220,16 +218,16 @@ void CaptureEnqueueWriteBuffer(
     // TODO (kmabee) - Currently support limited data formats. Long term we might not store data in flatbuffer,
     // but have it provided at runtime so just do what's easiest here and support few types for now.
     ::flatbuffers::Offset<::flatbuffers::Vector<uint32_t>> src_vector;
-    if (auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
+    if (const auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
         src_vector = ctx.get_builder().CreateVector(**uint32_vec);
-    } else if (auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
+    } else if (const auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
         // Convert uint16_t to uint32_t before creating the FlatBuffers vector
         std::vector<uint32_t> converted(uint16_vec->get()->begin(), uint16_vec->get()->end());
         src_vector = ctx.get_builder().CreateVector(converted);
     } else if (auto* void_ptr = std::get_if<const void*>(&src)) {
         // Assuming the void* points to a buffer of uint32_t values. Infer size, cast to uint32_t.
         size_t num_elements = buffer_ptr->size() / sizeof(uint32_t);
-        auto uint32_data = static_cast<const uint32_t*>(*void_ptr);
+        const auto* uint32_data = static_cast<const uint32_t*>(*void_ptr);
         src_vector = ctx.get_builder().CreateVector(uint32_data, num_elements);
     } else {
         TT_THROW("Unsupported HostDataType for captureEnqueueWriteBuffer()");
@@ -284,24 +282,6 @@ void CaptureProgramConstructor(Program& program) {
 
     auto cmd = tt::tt_metal::flatbuffer::CreateProgramConstructorCommand(ctx.get_builder(), program_global_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand, cmd.Union());
-}
-
-void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
-    auto& ctx = LightMetalCaptureContext::get();
-
-    // When Metal Trace is enabled, skip EnqueueProgram capture (replaced with LoadTrace + ReplayTrace)
-    if (cq.sysmem_manager().get_bypass_mode()) {
-        return;
-    }
-
-    uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    uint32_t program_global_id = ctx.get_global_id(&program);
-    log_debug(
-        tt::LogMetalTrace, "{}: cq_global_id: {} program_global_id: {}", __FUNCTION__, cq_global_id, program_global_id);
-
-    auto cmd = tt::tt_metal::flatbuffer::CreateEnqueueProgramCommand(
-        ctx.get_builder(), cq_global_id, program_global_id, blocking);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand, cmd.Union());
 }
 
 void CaptureCreateKernel(

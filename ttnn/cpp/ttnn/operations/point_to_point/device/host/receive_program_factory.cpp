@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -15,7 +15,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const PointToPointOp::operation_attributes_t& operation_attributes,
     PointToPointOp::tensor_return_value_t& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
+    auto* mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
 
     const auto& send_coord = operation_attributes.send_coord;
     const auto& receive_coord = operation_attributes.receive_coord;

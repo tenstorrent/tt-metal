@@ -282,13 +282,13 @@ def run(
 
 ## Test Vector Generation
 
-The test vector generator takes in lists of parameters from each sweep test file and generates all permutations of these parameters, and stores serialized versions of them as suites in the test vector database.
+The test vector generator takes in lists of parameters from each sweep test file and generates all permutations of these parameters, and stores serialized versions of them as suites in JSON files.
 
-The test vectors are stored in a separate Elasticsearch index based on the module. The test vector ids are the sha224 hash of the vector itself. This ID is used to uniquely identify each vector, and detect changes in the suite. If the parameter generator is run multiple times on the same parameter set from the op test file, only the first run will generate vectors. Only if the suite is changed, will the old vectors be marked "archived", and the suite will be updated with the new inputs. The runner will only detect and run vectors that are marked "current".
+**NOTE: Elasticsearch support has been removed. Test vectors are now always exported to disk in JSON format under `tests/sweep_framework/vectors_export/`.**
+
+The test vector ids are the sha224 hash of the vector itself. This ID is used to uniquely identify each vector, and detect changes in the suite. If the parameter generator is run multiple times on the same parameter set from the op test file, it will update the JSON files with the new vectors.
 
 ### Usage
-
-**NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
 
 To run the test vector generator:
 
@@ -298,9 +298,7 @@ Options:
 
 `--module-name <sweep_name>` OPTIONAL: Select the sweep file to generate parameters for. This should be only the name and not extension of the file. If not set, the generator will generate vectors for all sweep files in the sweeps folder.
 
-`--elastic <corp/cloud/custom_url>` OPTIONAL: Default is `corp` which should be used on the internal VPN. Users on tt-cloud should set this to `cloud`. If there is a custom URL required, use `--elastic <custom_url>`.
-
-`--clean` OPTIONAL: This setting is used to recover from mistakes in parameter generation, or if you have removed some test suites. If set, this flag will mark ALL vectors in the sweep as "archived", and regenerate all suites based on the current parameters in the sweep file.
+`--dump-file` OPTIONAL: [DEPRECATED] This flag is deprecated and no longer needed. Vectors are always dumped to disk by default. Elasticsearch support has been removed.
 
 `--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors separate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
 
@@ -320,6 +318,12 @@ The test runner reads in test vectors from the test vector database and executes
     4. NOT RUN: The test was run with a vector that is marked as invalid. The invalid reason given from the op test file is stored with the result.
     5. FAIL_L1_OUT_OF_MEM: The test failed specifically due to an L1 Out of Memory error.
     6. FAIL_WATCHER: The test failed due to a Watcher raised exception. This only occurs if `--watcher` is passed in the run command.
+- Memory Profiling: Per-core and device-level memory usage can be captured using the `--measure-memory` flag. This uses graph trace in NO_DISPATCH mode to profile memory requirements without execution overhead. Memory data is stored in test results with multiple granular metrics and can be analyzed in downstream dashboards. This is useful for:
+    - Identifying memory-intensive operations and configurations per core
+    - Tracking memory usage trends and regressions across commits
+    - Understanding actual vs theoretical worst-case memory usage
+    - Optimizing memory layouts and detecting L1 memory limit violations
+    - Analyzing memory distribution patterns (sequential vs parallel execution)
 - Granularity of Testing: Tests can be run by all sweeps, individual sweep, or individual suite to allow for faster/slower test runs, spanning larger/smaller suites of tests.
 - Git Hash information is stored with each test run, so it is easy to see on which commit the test is breaking/passing.
 - Data Aggregation: Results are accumulated in a database that can be queried to see desired details of test runs.
@@ -327,47 +331,110 @@ The test runner reads in test vectors from the test vector database and executes
 
 ### Usage
 
-**NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
+**NOTE: Elasticsearch support has been removed from the parameter generator. Vectors are now always exported to disk in JSON format.**
 
 Go to [`tests/README.md`](../README.md) for the latest information on how to run the sweeps_runner.
 
+#### Memory Profiling
+
+To capture per-core and device-level memory usage during sweep runs, add the `--measure-memory` flag:
+
+```bash
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name <module_name> \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --measure-memory \
+  --tag <your_tag>
+```
+
+**How it works:**
+- Uses ttnn graph trace with NO_DISPATCH mode (fast, no device execution overhead)
+- Captures both per-core and device-level memory metrics for each test vector
+- Uses `extract_resource_usage_per_core()` for worst-case per-core analysis
+- Uses `extract_peak_L1_memory_usage()` for actual observed device memory
+- Memory capture failures are non-fatal (returns null but test continues)
+
+**Memory metrics captured:**
+
+| Metric Name | Description | Use Case |
+|-------------|-------------|----------|
+| `peak_l1_memory_per_core_bytes` | Peak total (CB+L1) per core | Per-core memory budget validation |
+| `peak_cb_per_core_bytes` | Peak circular buffer per core | CB-specific analysis |
+| `peak_l1_buffers_per_core_bytes` | Peak L1 buffer per core | L1-specific analysis |
+| `num_cores` | Number of cores used | Context for other metrics |
+| `peak_l1_memory_aggregate_bytes` | Worst-case if all cores peak together | Conservative capacity planning |
+| `peak_l1_memory_device_bytes` | Actual observed peak across device | Realistic usage tracking |
+
+**Understanding the metrics:**
+
+- **Per-core metrics** (`peak_l1_memory_per_core_bytes`, etc.): Show worst-case memory per individual core
+- **Aggregate** (`peak_l1_memory_aggregate_bytes`): Theoretical maximum if all cores peak simultaneously (= `peak_l1_memory_per_core_bytes × num_cores`)
+- **Device** (`peak_l1_memory_device_bytes`): Actual peak observed during execution
+- **Key insight**: If `aggregate ≈ device`, cores peak together (parallel). If `aggregate >> device`, execution is sequential.
+
+**Example result with memory metrics:**
+```json
+{
+  "status": "pass",
+  "metrics": [
+    {
+      "metric_name": "peak_l1_memory_per_core_bytes",
+      "metric_value": 18432
+    },
+    {
+      "metric_name": "peak_cb_per_core_bytes",
+      "metric_value": 18432
+    },
+    {
+      "metric_name": "peak_l1_buffers_per_core_bytes",
+      "metric_value": 0
+    },
+    {
+      "metric_name": "num_cores",
+      "metric_value": 64
+    },
+    {
+      "metric_name": "peak_l1_memory_aggregate_bytes",
+      "metric_value": 1179648
+    },
+    {
+      "metric_name": "peak_l1_memory_device_bytes",
+      "metric_value": 18432
+    },
+    {
+      "metric_name": "e2e_perf_ms",
+      "metric_value": 2.5
+    }
+  ]
+}
+```
+
+**Interpreting results:**
+In the example above:
+- Each core uses at most 18KB (well within 256KB L1 limit ✓)
+- Circular buffers account for all memory (18KB), L1 buffers are 0
+- 64 cores are used
+- Aggregate (1.18MB) >> Device (18KB), indicating **sequential execution** (only ~1 core active at a time)
+- Low memory pressure, good efficiency
+
+**Use cases:**
+- Identify memory-intensive operation configurations
+- Track memory usage trends across commits
+- Detect memory regressions in CI
+- Optimize memory layouts before running on hardware
+
 ## FAQ / Troubleshooting
 
-- If you see an error like the following, it means you did not set the `ELASTIC_USERNAME` and/or `ELASTIC_PASSWORD` environment variables:
-```
-Traceback (most recent call last):
-  File "tests/sweep_framework/sweeps_parameter_generator.py", line 136, in <module>
-    generate_tests(args.module_name)
-  File "tests/sweep_framework/sweeps_parameter_generator.py", line 114, in generate_tests
-    generate_vectors(module_name)
-  File "tests/sweep_framework/sweeps_parameter_generator.py", line 39, in generate_vectors
-    export_suite_vectors(module_name, suite, suite_vectors)
-  File "tests/sweep_framework/sweeps_parameter_generator.py", line 56, in export_suite_vectors
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
-  File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/__init__.py", line 423, in __init__
-    self._headers = resolve_auth_headers(
-  File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/_base.py", line 132, in resolve_auth_headers
-    f"Basic {_base64_auth_header(resolved_basic_auth)}"
-  File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/utils.py", line 251, in _base64_auth_header
-    return base64.b64encode(to_bytes(":".join(auth_value))).decode("ascii")
-TypeError: sequence item 0: expected str instance, NoneType found
-```
-
-- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `pip install elasticsearch beautifultable termcolor`:
+- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `pip install beautifultable termcolor`:
 ```
 Traceback (most recent call last):
   File "<stdin>", line 1, in <module>
-ModuleNotFoundError: No module named 'elasticsearch'
+ModuleNotFoundError: No module named 'beautifultable'
 ```
 
-- TTNN class pybinds need to use the `tt_pybind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `py::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these pybinds.
+- TTNN class nanobinds need to use the `tt_nanobind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `nb::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these nanobinds.
 
 - Code within the `invalidate_vector` function or any code / generators used within `parameters` must NOT include any device code. These functions are intended to be run on CPU only, without access to a device. If you wish to filter tests by device architecture, see the [Device Fixture](#device-fixture) section.
 
 - Before merging new tests / modified tests to main, please verify that your changes can generate tests and execute by testing locally, and also using the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) pipeline with your branch and modified test(s) selected.
-
-## Database
-
-Elasticsearch instances are hosted on tt-corp and tt-cloud networks. Use the appropriate flag depending on your environment.
-
-Access credentials are shared separately.

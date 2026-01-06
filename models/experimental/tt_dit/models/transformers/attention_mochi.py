@@ -224,24 +224,24 @@ class MochiAttention:
                 out_state["bias"] = bias
             return out_state
 
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
-        self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
+        self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
+        self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
+        self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
+        self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
         qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
         )
-        self.to_qkv.load_state_dict(qkv_state)
+        self.to_qkv.load_torch_state_dict(qkv_state)
 
         add_qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
         )
-        self.add_qkv_proj.load_state_dict(add_qkv_state)
+        self.add_qkv_proj.load_torch_state_dict(add_qkv_state)
 
-        self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
+        self.to_out.load_torch_state_dict(substate(state_dict, "to_out.0"))
         if not self.context_pre_only:
-            self.to_add_out.load_state_dict(substate(state_dict, "to_add_out"))
+            self.to_add_out.load_torch_state_dict(substate(state_dict, "to_add_out"))
 
     def __call__(self, spatial_1BND, prompt_1BLP, N, rope_cos, rope_sin, trans_mat):
         """
@@ -254,9 +254,7 @@ class MochiAttention:
         """
 
         # Project spatial
-        qkv_1BNF = self.to_qkv(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        qkv_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=self.n_local_heads, transpose_key=False
         )
@@ -266,9 +264,7 @@ class MochiAttention:
         k_BHNE = self.norm_k(k_BHNE, compute_kernel_config=self.rmsnorm_compute_kernel_config)
 
         # Project prompt
-        add_qkv_1BLF = self.add_qkv_proj(
-            prompt_1BLP, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(add_qkv_1BLF, 0), num_heads=self.n_local_heads, transpose_key=False
         )
@@ -347,9 +343,7 @@ class MochiAttention:
                 **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial on TP axis after projection
@@ -388,9 +382,7 @@ class MochiAttention:
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                     # **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLP = self.to_add_out(
-                prompt_1BLD, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-            )
+            prompt_1BLP = self.to_add_out(prompt_1BLD, compute_kernel_config=self.mm_compute_kernel_config)
 
             if self.parallel_config.tensor_parallel.factor > 1:
                 # Gather prompt on TP axis after projection

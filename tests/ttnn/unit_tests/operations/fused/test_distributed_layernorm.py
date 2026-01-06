@@ -65,7 +65,8 @@ def run_distributed_layernorm(
     fp32_enabled=False,
     iterations=1,
 ):
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_enabled,
@@ -173,11 +174,12 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
 @pytest.mark.parametrize("inp_shape", inp_shapes, ids=inp_shape_ids)
 @pytest.mark.parametrize("n_devices", [8])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_distributed_layernorm_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, mesh_device
 ):
     run_test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, iterations=iterations
+        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations=iterations
     )
 
 

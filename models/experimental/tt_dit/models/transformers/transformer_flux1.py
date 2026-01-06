@@ -10,9 +10,9 @@ import torch
 import ttnn
 
 from ...blocks.attention import Attention
-from ...blocks.transformer_block import TransformerBlock, _chunk_time3d, _shuffle_linear_output
+from ...blocks.transformer_block import TransformerBlock, _chunk_time3d
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
@@ -100,7 +100,7 @@ class Flux1SingleTransformerBlock(Module):
 
         embedding_dim = state["time_embed.weight"].shape[1]
 
-        _shuffle_linear_output(
+        prepare_chunked_linear_output(
             state,
             prefix="time_embed",
             device_count=self.parallel_config.tensor_parallel.factor,

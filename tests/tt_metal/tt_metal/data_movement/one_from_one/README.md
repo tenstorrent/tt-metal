@@ -37,6 +37,25 @@ The tests use the Mesh Device API with fast dispatch mode:
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. **One From One Packet Sizes**: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters. The subordinate core sends data to the master core using various packet configurations.
+1. **TensixDataMovementOneFromOnePacketSizes** (Test ID: 5) - Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters. The master core reads data from the subordinate core using various packet configurations.
 
-2. **One From One Directed Ideal**: Tests the most optimal data movement setup from one subordinate core to one master core that maximizes the transaction size and performs enough transactions to amortize initialization overhead. This test uses neighboring cores to minimize latency.
+2. **TensixDataMovementOneFromOneDirectedIdeal** (Test ID: 51) - Tests the most optimal data movement setup from one subordinate core to one master core that maximizes the transaction size and performs enough transactions to amortize initialization overhead. Uses neighboring cores (0,0) ← (0,1) to minimize latency.
+
+3. **TensixDataMovementOneFromOneVirtualChannels** (Test ID: 152) - *[Currently Skipped]* Tests virtual channel functionality by cycling through multiple NOCs (NOC_0, NOC_1), transaction sizes, and virtual channels (1-4). Validates that different virtual channels can be used effectively for read operations.
+
+4. **TensixDataMovementOneFromOneCustom** (Test ID: 153) - *[Currently Skipped]* Custom test case with configurable parameters for specialized testing scenarios. Uses 256 transactions, 1 page per transaction, and 4 virtual channels for read operations.
+
+5. **TensixDataMovementOneFromOnePacketSizes2_0** (Test ID: 159) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 5 but uses the experimental NOC API with structured endpoints and virtual channel support for async read operations.
+
+## Device 2.0 API Tests
+This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Kernels:
+- `requestor_2_0.cpp`: Implements the requestor (master/receiver) functionality using the experimental NOC API with async read operations
+- `requestor.cpp`: Original requestor kernel for comparison
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new experimental API.

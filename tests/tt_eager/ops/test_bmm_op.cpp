@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <cstring>
@@ -25,11 +25,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using namespace tt;
 using namespace tt_metal;
@@ -47,7 +45,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        auto device = device_owner.get();
+        auto* device = device_owner.get();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

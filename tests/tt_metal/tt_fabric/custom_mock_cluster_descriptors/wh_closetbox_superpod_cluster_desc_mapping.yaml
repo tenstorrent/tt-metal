@@ -1,0 +1,5 @@
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc/closet_box_cluster_desc_metal-wh-03.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc/closet_box_cluster_desc_metal-wh-04.yaml"
+  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc/closet_box_cluster_desc_metal-wh-05.yaml"
+  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc/closet_box_cluster_desc_metal-wh-06.yaml"

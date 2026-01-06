@@ -314,7 +314,7 @@ TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
     std::vector<uint8_t> data(volume);
     auto tensor = Tensor::from_vector(data, tensor_spec, device_);
 
-    auto buffer = tensor.buffer();
+    auto* buffer = tensor.buffer();
     EXPECT_EQ(buffer->size(), params.expected_buffer_size);
     EXPECT_EQ(buffer->num_pages(), params.expected_num_pages);
     EXPECT_EQ(buffer->num_dev_pages(), params.expected_num_dev_pages);

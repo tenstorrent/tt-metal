@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     get_model_config,
+    get_test_weight_config,
     run_module_forward,
 )
 
@@ -52,12 +53,12 @@ def reference_model(hf_config):
 def test_forward_pass(
     mode,
     seq_len,
+    set_deterministic_env,
     reference_model,
     hf_config,
-    tmp_path,
+    cache_path,
     mesh_device,
     ccl,
-    set_deterministic_env,
     topk_fallback,
 ):
     """Test forward pass against reference model."""
@@ -78,8 +79,9 @@ def test_forward_pass(
     with torch.no_grad():
         reference_output = reference_model(torch_input)
 
-    # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+    )
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)

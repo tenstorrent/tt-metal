@@ -13,8 +13,8 @@ struct ProfilerNoopProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
-        CoreRangeSet core_group_1;
-        CoreRangeSet core_group_2;
+        tt::tt_metal::CoreRangeSet core_group_1;
+        tt::tt_metal::CoreRangeSet core_group_2;
         uint32_t num_cores{};
         uint32_t num_cores_y{};
     };

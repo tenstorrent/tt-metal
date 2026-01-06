@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "routing_table_generator.hpp"
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
@@ -15,6 +15,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
     const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
@@ -42,11 +43,12 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     return os;
 }
 
-RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_file) {
-    this->mesh_graph = std::make_unique<MeshGraph>(mesh_graph_desc_file);
+RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapper) :
+    topology_mapper_(topology_mapper) {
     // Use IntraMeshConnectivity to size all variables
-    const auto& intra_mesh_connectivity = this->mesh_graph->get_intra_mesh_connectivity();
-    const auto& inter_mesh_connectivity = this->mesh_graph->get_inter_mesh_connectivity();
+    const auto& mesh_graph = topology_mapper_.get_mesh_graph();
+    const auto& intra_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity();
+    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
     this->intra_mesh_table_.resize(intra_mesh_connectivity.size());
     this->inter_mesh_table_.resize(intra_mesh_connectivity.size());
     this->exit_node_lut_.resize(intra_mesh_connectivity.size());
@@ -120,18 +122,19 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             mesh_id_val);
         return RoutingDirection::NONE;  // This line should never be reached
     };
+    const auto& mesh_graph = topology_mapper_.get_mesh_graph();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
         for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             for (ChipId dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
-                auto src_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, src_chip_id);
-                auto dst_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, dst_chip_id);
+                auto src_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, src_chip_id);
+                auto dst_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, dst_chip_id);
                 // X first routing, traverse rows first
                 if (src_mesh_coord[0] != dst_mesh_coord[0]) {
                     // If source and destination are in different rows, we need to move in the X direction first
                     // Move North or South
                     MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
-                    auto target_chip_id = this->mesh_graph->coordinate_to_chip(mesh_id, target_coord_on_column);
+                    auto target_chip_id = mesh_graph.coordinate_to_chip(mesh_id, target_coord_on_column);
                     auto direction = get_shorter_direction_on_row_or_col(
                         mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
@@ -222,7 +225,8 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
     for (std::uint32_t src_mesh_id_val = 0; src_mesh_id_val < this->inter_mesh_table_.size(); src_mesh_id_val++) {
         MeshId src_mesh_id{src_mesh_id_val};
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
-        MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
+        const auto& mesh_graph = topology_mapper_.get_mesh_graph();
+        MeshShape mesh_shape = mesh_graph.get_mesh_shape(src_mesh_id);
         std::uint32_t ew_size = mesh_shape[1];
         for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
             for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size(); dst_mesh_id_val++) {
@@ -313,9 +317,10 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
 }
 
 void RoutingTableGenerator::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
-    this->mesh_graph->load_intermesh_connections(intermesh_connections);
+    const auto& mesh_graph = topology_mapper_.get_mesh_graph();
+    const_cast<MeshGraph&>(mesh_graph).load_intermesh_connections(intermesh_connections);
     this->generate_intermesh_routing_table(
-        this->mesh_graph->get_inter_mesh_connectivity(), this->mesh_graph->get_intra_mesh_connectivity());
+        mesh_graph.get_inter_mesh_connectivity(), mesh_graph.get_intra_mesh_connectivity());
 }
 
 void RoutingTableGenerator::print_routing_tables() const {

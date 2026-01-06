@@ -41,6 +41,7 @@ def run_reduce_scatter_impl(
     verify_output=True,
     use_new=False,
 ):
+    use_sub_devices = False
     torch.manual_seed(0)
 
     tile = (32, 32)
@@ -58,8 +59,9 @@ def run_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -242,7 +244,8 @@ def run_reduce_scatter_impl(
             assert eq, f"{i} FAILED ag: {output}"
 
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -251,6 +254,29 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers",
     [
+        # Dim 0 tests
+        (
+            [16, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
+        (
+            [8, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            False,
+        ),  # check, barrier_without_persistent
         # Dim 1 tests
         (
             [2, 24, 256, 256],
@@ -466,6 +492,8 @@ def run_reduce_scatter_impl(
         ),  # perf, barrier_with_persistent
     ],
     ids=[
+        "scatter_dim_0_test_one-perf-barrier_with_persistent",
+        "scatter_dim_0_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_one-perf-barrier_with_persistent",
         "scatter_dim_1_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_three-perf-no_barrier_with_persistent",
@@ -506,8 +534,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1531456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -980,8 +1008,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1271456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1271456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
@@ -1188,7 +1216,7 @@ def test_reduce_scatter_minimal_async_linear_sharded(
     )
 
 
-MESH_SHAPE = (2, 4)
+MESH_SHAPE = (1, 8)
 LAYOUT = ttnn.TILE_LAYOUT
 
 NUM_ITERS = 1
@@ -1246,19 +1274,19 @@ def _get_tensors(
     return tt_input, torch_reference
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+    "input_shape", [[256, 256], [8, 8, 256, 256], [8, 256, 256], [8, 8, 8, 8, 256, 256], [8, 8, 8, 16, 16]]
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
-        pytest.skip("Invalid gather dim")
+        pytest.skip("Invalid scatter dim")
 
     tt_input, torch_reference = _get_tensors(
         input_shape,
@@ -1277,8 +1305,6 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
     )
     semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
 
-    print(f"{tt_input.shape=}")
-
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input,
@@ -1291,3 +1317,40 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
+def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(520)
+    devices = mesh_device.get_num_devices()
+    input_shape[-1] *= devices
+
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for _ in range(devices)]
+
+    torch_reference = torch.zeros_like(torch_inputs_per_device[0])
+    for i in range(devices):
+        torch_reference += torch_inputs_per_device[i]
+
+    tt_input = ttnn.from_torch(
+        torch.cat(torch_inputs_per_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )  # [2, 2, 32, 32*devices] per device
+
+    tt_output = ttnn.reduce_scatter(tt_input, dim=3)  # [2, 2, 32, 32] per device
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    )  # [2, 2, 32, 32*devices]
+
+    assert torch.allclose(
+        torch_reference, torch_output, atol=1e-1, rtol=1e-2
+    ), "Output mismatch between torch and ttnn reduce-scatter"

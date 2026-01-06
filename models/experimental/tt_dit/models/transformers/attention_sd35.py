@@ -8,10 +8,11 @@ from ...layers.normalization import RMSNorm
 from ...layers.linear import ColParallelLinear
 from ...utils.substate import substate
 from ...utils.padding import pad_weight_tensor
+from ...layers.module import Module
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class SD35JointAttention:
+class SD35JointAttention(Module):
     def __init__(
         self,
         query_dim,
@@ -27,6 +28,8 @@ class SD35JointAttention:
         parallel_config=None,
         padding_config=None,
     ):
+        super().__init__()
+
         self.query_dim = query_dim
         self.head_dim = head_dim
         self.heads = heads
@@ -165,7 +168,7 @@ class SD35JointAttention:
         if self.context_pre_only is not None and not self.context_pre_only:
             self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         def reshape_and_merge_qkv(q_state, k_state, v_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _merge_tensors(q, k, v):
@@ -220,13 +223,13 @@ class SD35JointAttention:
         self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
         self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
-    def __call__(self, spatial_1BND, prompt_1BLD, N):
+    def forward(self, spatial_1BND, prompt_1BLD, N):
         """
         Inputs are replicated
         Outputs are width-fractured
         """
 
-        qkv_1BNF = self.to_qkv(spatial_1BND, core_grid=self.core_grid)
+        qkv_1BNF = self.to_qkv(spatial_1BND)
         local_heads = self.n_local_heads
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
@@ -235,7 +238,7 @@ class SD35JointAttention:
         q_BHNE = self.norm_q(q_BHNE)
         k_BHNE = self.norm_k(k_BHNE)
 
-        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD, core_grid=self.core_grid)
+        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(add_qkv_1BLF, 0), num_heads=local_heads, transpose_key=False
         )
@@ -303,7 +306,7 @@ class SD35JointAttention:
                 **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(spatial_1BND, core_grid=self.core_grid)
+        spatial_1BND = self.to_out(spatial_1BND)
 
         prompt_out = None
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -324,7 +327,7 @@ class SD35JointAttention:
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                     **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLD = self.to_add_out(prompt_1BLD, core_grid=self.core_grid)
+            prompt_1BLD = self.to_add_out(prompt_1BLD)
             prompt_out = prompt_1BLD
 
         return spatial_1BND, prompt_out

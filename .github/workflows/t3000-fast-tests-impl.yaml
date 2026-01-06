@@ -16,6 +16,16 @@ on:
         required: false
         type: boolean
         default: false
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        required: false
+        type: boolean
+        default: false
       timeout:
         required: false
         type: number
@@ -59,12 +69,19 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
         timeout-minutes: 20
@@ -110,8 +127,16 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: Upload benchmark data
+        ## Only upload fabric benchmark data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main'}}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()

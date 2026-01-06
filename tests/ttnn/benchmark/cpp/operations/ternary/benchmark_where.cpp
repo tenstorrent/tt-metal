@@ -4,7 +4,7 @@
 
 #include <benchmark/benchmark.h>
 #include "ttnn/operations/experimental/where/where.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/device.hpp"
 
 #include "ttnn/operations/functions.hpp"
@@ -55,7 +55,7 @@ void BM_where_experimental_bf16_ttt(benchmark::State& state) {
     auto host_true_values = genRandomTensor<::bfloat16>(shape, layout);
     auto host_false_values = genRandomTensor<::bfloat16>(shape, layout);
 
-    auto dev_ptr = device.get();
+    auto* dev_ptr = device.get();
     auto cond_tensor = host_condition.to_device(dev_ptr);
     auto true_value_tensor = host_true_values.to_device(dev_ptr);
     auto false_value_tensor = host_false_values.to_device(dev_ptr);
@@ -85,7 +85,7 @@ void BM_where_bf16_ttt(benchmark::State& state) {
     auto host_true_values = genRandomTensor<::bfloat16>(shape, layout);
     auto host_false_values = genRandomTensor<::bfloat16>(shape, layout);
 
-    auto dev_ptr = device.get();
+    auto* dev_ptr = device.get();
     auto cond_tensor = host_condition.to_device(dev_ptr);
     auto true_value_tensor = host_true_values.to_device(dev_ptr);
     auto false_value_tensor = host_false_values.to_device(dev_ptr);

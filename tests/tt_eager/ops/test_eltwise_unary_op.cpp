@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -21,13 +22,13 @@
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::distributed::MeshDevice;
@@ -39,7 +40,7 @@ namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
 float exp(float x) { return std::exp(x); }
 float recip(float x) { return 1 / x; }
-float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::sqrt(2)))); }
+float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::numbers::sqrt2))); }
 float relu(float x) { return std::max(0.0f, x); }
 float sigmoid(float x) { return 1 / (1 + std::exp(-x)); }
 float log(float x) { return std::log(x); }
@@ -77,7 +78,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
 
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
-        auto device_output = ttnn::sqrt(input_tensor.to_device(device)).cpu();
+        auto device_output = ttnn::sqrt(input_tensor.to_device(device), /*fast_and_approximate_mode=*/false).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::EXP) {
         auto host_output = host_function<::detail::exp>(input_tensor);
@@ -121,7 +122,7 @@ void test_operation_infrastructure() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     auto shape = ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     auto input_tensor =
@@ -143,8 +144,8 @@ void test_shape_padding() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
-    ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
+    auto* device = device_owner.get();
+    ttnn::SetDefaultDevice(device);
 
     ttnn::Shape input_shape({1, 1, 13, 18});
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -161,16 +162,14 @@ void test_shape_padding() {
     TT_FATAL(output_tensor.logical_shape() == input_shape, "Error");
 }
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
         return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 void test_numerically() {
     log_info(tt::LogTest, "Running {}", __func__);
@@ -182,7 +181,7 @@ void test_numerically() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     {
@@ -238,7 +237,7 @@ void test_program_cache() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     auto run_tests = [&]() {
         // Program Cache Miss

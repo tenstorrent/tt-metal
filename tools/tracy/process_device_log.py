@@ -121,20 +121,21 @@ def extract_device_info(logPath):
         line = f.readline()
 
     if "Chip clock is at " in line:
-        return "grayskull", 1200
+        return "grayskull", 1200, None
     elif "ARCH" in line:
         info = line.split(",")
         arch = info[0].split(":")[-1].strip(" \n")
         freq = info[1].split(":")[-1].strip(" \n")
-        return arch, int(freq)
+        max_compute_cores = info[2].split(":")[-1].strip(" \n")
+        return arch, int(freq), int(max_compute_cores)
     else:
         raise Exception
 
 
 def import_device_profile_log(logPath):
     devicesData = {"devices": {}}
-    arch, freq = extract_device_info(logPath)
-    devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
+    arch, freq, max_compute_cores = extract_device_info(logPath)
+    devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq, max_compute_cores=max_compute_cores)))
 
     df = pd.read_csv(logPath, skiprows=1, header=0, na_filter=False)
 
@@ -240,7 +241,7 @@ def get_ops(timeseries):
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
                         or (
-                            risc == "CORE_AGG"
+                            risc == "TENSIX_RISC_AGG"
                             and timerID["zone_name"] == "TRACE-FW"
                             and timerID["type"] == "ZONE_START"
                         )
@@ -264,7 +265,11 @@ def get_ops(timeseries):
                     elif (
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                        or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
+                        or (
+                            risc == "TENSIX_RISC_AGG"
+                            and timerID["zone_name"] == "TRACE-FW"
+                            and timerID["type"] == "ZONE_END"
+                        )
                     ):
                         assert (
                             len(opCores[core]) == 1
@@ -280,7 +285,7 @@ def get_ops(timeseries):
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
                         or (
-                            risc == "CORE_AGG"
+                            risc == "TENSIX_RISC_AGG"
                             and timerID["zone_name"] == "TRACE-FW"
                             and timerID["type"] == "ZONE_START"
                         )
@@ -291,7 +296,11 @@ def get_ops(timeseries):
                 if (
                     (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
                     or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                    or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
+                    or (
+                        risc == "TENSIX_RISC_AGG"
+                        and timerID["zone_name"] == "TRACE-FW"
+                        and timerID["type"] == "ZONE_END"
+                    )
                 ):
                     opIsDone = True
             ops[-1]["timeseries"].append(ts)
@@ -664,11 +673,10 @@ def timeseries_analysis(riscData, name, analysis):
 
 
 def timeseries_events(riscData, name, analysis):
+    if "events" not in riscData:
+        riscData["events"] = {}
     if analysis["type"] == "event":
-        if "events" not in riscData:
-            riscData["events"] = {name: []}
-        else:
-            riscData["events"][name] = []
+        riscData["events"][name] = []
 
         for index, (timerID, timestamp, attachedData, risc, *_) in enumerate(riscData["timeseries"]):
             if (timerID["type"] == "TS_EVENT" or timerID["type"] == "TS_DATA") and (

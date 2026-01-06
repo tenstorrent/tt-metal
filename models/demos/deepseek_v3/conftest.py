@@ -11,7 +11,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.utils.test_utils import load_state_dict
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict, system_name_to_mesh_shape
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
@@ -42,13 +42,15 @@ def mesh_device(request, device_params):
     """
     import ttnn
 
-    device_ids = ttnn.get_device_ids()
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
 
-    if len(device_ids) == 32:  # If running on Galaxy system
-        default_mesh_shape = ttnn.MeshShape(4, 8)
-    else:
-        default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
+    # Override mesh shape based on MESH_DEVICE environment variable
+    requested_system_name = os.getenv("MESH_DEVICE")
+    if requested_system_name is None:
+        raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to T3K, DUAL, QUAD, or TG.")
+
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
 
     updated_device_params = get_updated_device_params(device_params)
 
@@ -56,10 +58,10 @@ def mesh_device(request, device_params):
     if fabric_config:
         ttnn.set_fabric_config(fabric_config)
 
-    updated_device_params.setdefault("mesh_shape", default_mesh_shape)
+    updated_device_params.setdefault("mesh_shape", mesh_shape)
     mesh_device = ttnn.open_mesh_device(**updated_device_params)
 
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
+    logger.debug(f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
     yield mesh_device
 
     for submesh in mesh_device.get_submeshes():
@@ -68,6 +70,7 @@ def mesh_device(request, device_params):
     ttnn.close_mesh_device(mesh_device)
     if fabric_config:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
     del mesh_device
 
 
@@ -85,7 +88,17 @@ def hf_config(model_path):
 
 @pytest.fixture(scope="session")
 def state_dict(model_path):
-    return load_state_dict(model_path, "")
+    yield load_state_dict(model_path, "")
+
+
+@pytest.fixture(scope="function", autouse=True)
+def clear_state_dict_cache(state_dict):
+    """
+    Clear the LazyStateDict cache after each test to prevent memory accumulation.
+    This preserves file handles (mmap benefits) while freeing tensor memory.
+    """
+    yield
+    state_dict.clear_cache()
 
 
 @pytest.fixture(scope="session")

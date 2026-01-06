@@ -7,19 +7,19 @@
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 #include "stream_io_map.h"
-#include "firmware_common.h"
-#include "dataflow_api.h"
+#include "internal/firmware_common.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
-#include "circular_buffer_init.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
+#include "internal/circular_buffer_init.h"
 #include "tdma_xmov.h"
 
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
 // clang-format on
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
@@ -50,6 +50,10 @@ uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
+// These arrays are used to store the worker logical to virtual coordinate mapping
+uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
+uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -103,6 +107,7 @@ int main(int argc, char* argv[]) {
     do_crt1((uint32_t tt_l1_ptr*)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+    noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     risc_init();
 

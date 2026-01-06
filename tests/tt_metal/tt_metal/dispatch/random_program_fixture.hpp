@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "dispatch_test_utils.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 namespace tt::tt_metal {
 
@@ -265,6 +266,7 @@ private:
             const auto proc = this->get_processor(true);
             config = EthernetConfig{
                 .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines};
+            eth_test_common::set_arch_specific_eth_config(std::get<EthernetConfig>(config));
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
             config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};

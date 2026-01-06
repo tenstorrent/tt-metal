@@ -23,7 +23,7 @@ Tensor MorehNorm::invoke(
         dim = std::make_optional(dims);
     }
     auto INF = std::numeric_limits<float>::infinity();
-    if (auto single_dim = std::get_if<int64_t>(&dim.value())) {
+    if (auto* single_dim = std::get_if<int64_t>(&dim.value())) {
         if (p == 0.0 || p == INF || p == -INF) {
             return ttnn::prim::moreh_norm(input, p, *single_dim, keepdim, output, memory_config, compute_kernel_config);
         }

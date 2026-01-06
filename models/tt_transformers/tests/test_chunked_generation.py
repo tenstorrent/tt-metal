@@ -87,7 +87,7 @@ def test_chunked_prefill_single_user(
             or any(
                 [
                     f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                    for name in ["tok_embeddings.weight", "learnable_embedding.weight", "norm.weight", "output.weight"]
                 ]
             )
         )

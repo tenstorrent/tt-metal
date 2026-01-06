@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
+from tests.nightly.tg.ccl.test_all_reduce_async import (
     run_all_reduce_test,
     run_all_reduce_with_mesh_tensor_along_row,
 )
@@ -54,8 +54,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_ring_all_reduce_post_commit(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     num_links,
     per_chip_output_shape,
@@ -67,7 +68,7 @@ def test_ring_all_reduce_post_commit(
     num_iters=2,
 ):
     run_all_reduce_test(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
@@ -114,8 +115,9 @@ def test_ring_all_reduce_post_commit(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_ring_all_reduce_post_commit_2chip(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     num_links,
@@ -127,7 +129,7 @@ def test_ring_all_reduce_post_commit_2chip(
     num_iters=2,
 ):
     run_all_reduce_with_mesh_tensor_along_row(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
@@ -204,3 +206,43 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
+def test_all_reduce_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(520)
+    devices = mesh_device.get_num_devices()
+    input_shape[-1] *= devices
+
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for _ in range(devices)]
+
+    torch_reference = torch.zeros_like(torch_inputs_per_device[0])
+    for i in range(devices):
+        torch_reference += torch_inputs_per_device[i]
+
+    tt_input = ttnn.from_torch(
+        torch.cat(torch_inputs_per_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )  # [2, 2, 32, 32*devices] per device
+
+    tt_output = ttnn.all_reduce(tt_input)  # [2, 2, 32, 32] per device
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )  # [2, 2, 32, 32*devices]
+
+    # chunk and make sure each is equal to the reference
+    torch_output_slices = torch.chunk(torch_output, devices, dim=0)
+    for i, torch_output_slice in enumerate(torch_output_slices):
+        assert torch.allclose(
+            torch_reference, torch_output_slice, atol=1e-1, rtol=1e-2
+        ), f"Output slice {i} mismatch between torch and ttnn reduce-scatter"

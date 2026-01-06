@@ -16,20 +16,20 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc",
+    "input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, block, pcc",
     [
-        ((1, 320, 128, 128), (1, 1280), 0, 0, False, 1, "down_blocks", 0.999),
-        ((1, 320, 64, 64), (1, 1280), 1, 0, True, 1, "down_blocks", 0.999),
-        ((1, 640, 64, 64), (1, 1280), 1, 1, False, 1, "down_blocks", 0.999),
-        ((1, 640, 32, 32), (1, 1280), 2, 0, True, 1, "down_blocks", 0.999),
-        ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.999),
-        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 1, "up_blocks", 0.998),
-        ((1, 640, 128, 128), (1, 1280), 2, 1, True, 1, "up_blocks", 0.998),
-        ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.999),
-        ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.999),
-        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.999),
-        ((1, 1280, 64, 64), (1, 1280), 1, 1, True, 1, "up_blocks", 0.999),
-        ((1, 960, 64, 64), (1, 1280), 1, 2, True, 1, "up_blocks", 0.999),
+        ((1, 320, 128, 128), (1, 1280), 0, 0, False, "down_blocks", 0.999),
+        ((1, 320, 64, 64), (1, 1280), 1, 0, True, "down_blocks", 0.999),
+        ((1, 640, 64, 64), (1, 1280), 1, 1, False, "down_blocks", 0.999),
+        ((1, 640, 32, 32), (1, 1280), 2, 0, True, "down_blocks", 0.999),
+        ((1, 1280, 32, 32), (1, 1280), 2, 1, False, "down_blocks", 0.999),
+        ((1, 960, 128, 128), (1, 1280), 2, 0, True, "up_blocks", 0.998),
+        ((1, 640, 128, 128), (1, 1280), 2, 1, True, "up_blocks", 0.998),
+        ((1, 2560, 32, 32), (1, 1280), 0, 0, True, "up_blocks", 0.999),
+        ((1, 1920, 32, 32), (1, 1280), 0, 2, True, "up_blocks", 0.999),
+        ((1, 1920, 64, 64), (1, 1280), 1, 0, True, "up_blocks", 0.999),
+        ((1, 1280, 64, 64), (1, 1280), 1, 1, True, "up_blocks", 0.999),
+        ((1, 960, 64, 64), (1, 1280), 1, 2, True, "up_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -40,7 +40,6 @@ def test_resnetblock2d(
     down_block_id,
     resnet_id,
     conv_shortcut,
-    split_in,
     block,
     pcc,
     debug_mode,
@@ -71,7 +70,6 @@ def test_resnetblock2d(
         f"{block}.{down_block_id}.resnets.{resnet_id}",
         model_config,
         conv_shortcut,
-        split_in,
         debug_mode=debug_mode,
     )
 
@@ -98,6 +96,7 @@ def test_resnetblock2d(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

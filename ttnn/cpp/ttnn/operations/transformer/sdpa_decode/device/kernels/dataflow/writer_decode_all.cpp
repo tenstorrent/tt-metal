@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -198,12 +198,6 @@ void kernel_main() {
                 cb_reserve_back(cb_m_in, PNHt);
                 cb_reserve_back(cb_l_in, PNHt);
 
-                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
-                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
-                intermed_l1_read_addr += q_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_out_o, out_chunk_tiles);
-
                 uint32_t m_write_ptr = get_read_ptr(cb_m_in);
                 noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
                 intermed_l1_read_addr += ml_read_size;
@@ -215,6 +209,12 @@ void kernel_main() {
                 intermed_l1_read_addr += ml_read_size;
                 noc_async_read_barrier();
                 cb_push_back(cb_l_in, PNHt);
+
+                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
+                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
+                intermed_l1_read_addr += q_read_size;
+                noc_async_read_barrier();
+                cb_push_back(cb_out_o, out_chunk_tiles);
             }
         }
         // Offset for current batch
@@ -236,7 +236,7 @@ void kernel_main() {
             constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
 
             if (!is_out_sharded) {
-                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold>(
+                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
                     out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
             }
             // sharded out case

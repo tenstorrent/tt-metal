@@ -359,16 +359,6 @@ FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
     } else {
         throw_parse_error("Invalid topology value: " + topology_str, node["topology"]);
     }
-    TT_FATAL(node["routing_type"].IsDefined(), "FabricConfig missing required 'routing_type' field");
-
-    std::string routing_str = node["routing_type"].as<std::string>();
-
-    auto routing = enchantum::cast<RoutingType>(routing_str, ttsl::ascii_caseless_comp);
-    if (routing.has_value()) {
-        config.routing_type = routing.value();
-    } else {
-        throw_parse_error("Invalid routing_type value: " + routing_str, node["routing_type"]);
-    }
 
     return config;
 }
@@ -685,7 +675,6 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
     // Print fabric configuration
     log_info(tt::LogTest, "Fabric Configuration:");
     log_info(tt::LogTest, "  Topology: {}", static_cast<int>(config.fabric_config.topology));
-    log_info(tt::LogTest, "  Routing Type: {}", static_cast<int>(config.fabric_config.routing_type));
 
     // Print physical mesh configuration if present
     if (config.physical_mesh_config.has_value()) {

@@ -241,12 +241,11 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
 
 
 @pytest.mark.parametrize("pcc", [(0.99)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_FalconLayernorm_inference(
     pcc,
-    all_devices,
+    mesh_device,
     model_location_generator,
     get_tt_cache_path,
 ):
-    devices = all_devices
-
-    run_test_FalconLayernorm_inference(pcc, devices[0], model_location_generator, get_tt_cache_path)
+    run_test_FalconLayernorm_inference(pcc, mesh_device, model_location_generator, get_tt_cache_path)

@@ -20,6 +20,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -78,6 +79,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        num_dispatch_device_rows = mesh_device.shape[0]
 
         expert_mapping_tensors = ttnn.from_torch(
             torch.eye(num_devices, dtype=torch.int32)
@@ -91,9 +93,19 @@ class MoE(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        remap_topk_mask = ttnn.from_torch(
+            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
         # Store CCL object for runtime semaphore initialization
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
+            "remap_topk_mask": remap_topk_mask,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "num_links": 1,
@@ -140,6 +152,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+            "sparsity_block_size": SPARSITY_BLOCK_SIZE,
             "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
             "all_to_all_combine_output_memory_config": memory_config,
             "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
@@ -177,7 +190,6 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        ttnn.synchronize_device(cfg["mesh_device"])
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
@@ -207,9 +219,16 @@ class MoE(SharedStateAddOn, AbstractModule):
         post_all_to_all_dispatch_output = ttnn.reshape(
             all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
         )
-        post_all_to_all_dispatch_output = ttnn.repeat(post_all_to_all_dispatch_output, **cfg["activations_repeat"])
         post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
-        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, cfg["moe_experts"])
+        # repeat remap_topk_mask for the num_tokens known at runtime
+        remap_topk_mask = ttnn.repeat(cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        _, sparsity_t = ttnn.moe_expert_token_remap(
+            remap_topk_mask,
+            cfg["expert_mapping_tensors"],
+            all_to_all_dispatch_metadata_tensors,
+            reduction_size=cfg["sparsity_block_size"],
+        )
+        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
         ttnn.deallocate(post_all_to_all_dispatch_output)
         experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
         experts_output = ttnn.reshape(
