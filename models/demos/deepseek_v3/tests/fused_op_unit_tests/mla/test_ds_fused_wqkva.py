@@ -112,6 +112,181 @@ def ds_fused_wqkva_ttnn(
     return tt_q, tt_kv_nope, tt_kv_rope
 
 
+def _run_ds_fused_wqkva_test(
+    mesh_device: ttnn.MeshDevice,
+    run_config: dict,
+    tt_input: ttnn.Tensor,
+    ref_outputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    q_lora_rank: int,
+    kv_lora_rank: int,
+    qk_rope_head_dim: int,
+    expected_pcc: float,
+    expected_atol: float,
+    expected_rtol: float,
+    expected_perf_us: float,
+    trace_mode: bool,
+    program_cache_enabled: bool,
+    mode: str,
+    seq_len: int,
+    batch_size: int,
+    ccl,
+    step_prefix: str,
+):
+    ref_q, ref_kv_nope, ref_kv_rope = ref_outputs
+
+    tt_q, tt_kv_nope, tt_kv_rope = ds_fused_wqkva_ttnn(
+        tt_input, run_config, ccl, q_lora_rank, kv_lora_rank, qk_rope_head_dim, mode
+    )
+
+    # Output is replicated across devices after all-gather + reduce; avoid concatenating across mesh.
+    tt_q_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_q)[0])
+    tt_kv_nope_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_kv_nope)[0])
+    tt_kv_rope_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_kv_rope)[0])
+
+    _compare_with_reference(tt_q_torch, ref_q, expected_pcc, expected_atol, expected_rtol)
+    _compare_with_reference(tt_kv_nope_torch, ref_kv_nope, expected_pcc, expected_atol, expected_rtol)
+    _compare_with_reference(tt_kv_rope_torch, ref_kv_rope, expected_pcc, expected_atol, expected_rtol)
+
+    if os.getenv(DEVICE_PERF_ENV_VAR) is None:
+        perf_profiler = BenchmarkProfiler()
+        benchmark_data = BenchmarkData()
+        trace_suffix = "trace" if trace_mode else "no_trace"
+        cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
+        step_name = f"{step_prefix}_{trace_suffix}_{cache_suffix}"
+
+        perf_profiler.start("run")
+        perf_profiler.start(step_name)
+        perf_us = _measure_perf_us(
+            mesh_device,
+            lambda: ds_fused_wqkva_ttnn(tt_input, run_config, ccl, q_lora_rank, kv_lora_rank, qk_rope_head_dim, mode),
+            PERF_WARMUP_ITERS,
+            PERF_MEASURE_ITERS,
+            trace_mode=trace_mode,
+        )
+        logger.info(f"Perf avg: {perf_us:.3f} us over {PERF_MEASURE_ITERS} iters (warmup {PERF_WARMUP_ITERS})")
+        perf_profiler.end(step_name)
+        perf_profiler.end("run")
+
+        benchmark_data.add_measurement(
+            perf_profiler,
+            0,
+            step_name,
+            f"{step_name}-avg_us",
+            perf_us,
+            step_warm_up_num_iterations=PERF_WARMUP_ITERS,
+            target=expected_perf_us if expected_perf_us > 0 and not trace_mode and program_cache_enabled else None,
+        )
+        benchmark_data.save_partial_run_json(
+            perf_profiler,
+            run_type="deepseek_v3_fused_ops",
+            ml_model_name="deepseek-v3",
+            batch_size=batch_size,
+            input_sequence_length=seq_len,
+        )
+        if expected_perf_us > 0 and not trace_mode and program_cache_enabled:
+            perf_margin = 0.2
+            assert perf_us <= expected_perf_us * (
+                1 + perf_margin
+            ), f"Perf regression: {perf_us:.3f}us exceeds expected {expected_perf_us:.3f}us"
+        elif expected_perf_us == 0 and not trace_mode and program_cache_enabled:
+            logger.warning("TODO: Set expected_perf_us using a measured baseline.")
+    else:
+        logger.info("Skipping e2e perf measurement during device-perf profiling.")
+        from tracy import signpost
+
+        def op_fn():
+            return ds_fused_wqkva_ttnn(tt_input, run_config, ccl, q_lora_rank, kv_lora_rank, qk_rope_head_dim, mode)
+
+        for _ in range(PERF_WARMUP_ITERS):
+            outputs = op_fn()
+            ttnn.synchronize_device(mesh_device)
+            for output in outputs:
+                ttnn.deallocate(output)
+
+        ttnn.synchronize_device(mesh_device)
+        if trace_mode:
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            outputs = op_fn()
+            for output in outputs:
+                ttnn.deallocate(output)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            signpost("start")
+            for _ in range(DEVICE_PERF_ITERS):
+                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            signpost("stop")
+            ttnn.release_trace(mesh_device, trace_id)
+        else:
+            signpost("start")
+            for _ in range(DEVICE_PERF_ITERS):
+                outputs = op_fn()
+                ttnn.synchronize_device(mesh_device)
+                for output in outputs:
+                    ttnn.deallocate(output)
+            signpost("stop")
+
+
+def _build_wqkva_inputs(
+    mesh_device: ttnn.MeshDevice,
+    hf_config_short,
+    cache_path: str,
+    ccl,
+    force_recalculate_weight_config: bool,
+    state_dict: dict,
+    mode: str,
+    seq_len: int,
+):
+    module_path = "model.layers.0.self_attn"
+    module_state_dict = sub_state_dict(state_dict, module_path + ".")
+    dequant_state_dict = dequantize_state_dict(module_state_dict, hf_config_short)
+
+    q_a_weight = dequant_state_dict["q_a_proj.weight"]
+    kv_a_weight = dequant_state_dict["kv_a_proj_with_mqa.weight"]
+
+    from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
+
+    weight_config = get_test_weight_config(
+        MLA1D,
+        hf_config_short,
+        (module_state_dict,) * mesh_device.shape[0],
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+    )
+    model_config = get_model_config(MLA1D, mode, hf_config_short, mesh_device)
+    model_state = {
+        "mesh_device": mesh_device,
+        "mesh_shape": mesh_device.shape,
+        "ccl": ccl,
+    }
+    run_config = create_run_config(model_config, weight_config, model_state)
+
+    batch_size = USERS_PER_ROW if mode == "decode" else 1
+    torch_input = torch.randn(batch_size, seq_len, hf_config_short.hidden_size, dtype=torch.bfloat16)
+    if mode == "decode":
+        torch_input = torch_input.permute(1, 0, 2)
+
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(0),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=mesh_device.shape),
+        dtype=ttnn.bfloat16,
+        memory_config=run_config["input_memory_config"],
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    q_lora_rank = hf_config_short.q_lora_rank
+    kv_lora_rank = hf_config_short.kv_lora_rank
+    qk_rope_head_dim = hf_config_short.qk_rope_head_dim
+
+    ref_outputs = ds_fused_wqkva_reference(
+        torch_input.unsqueeze(0), q_a_weight, kv_a_weight, q_lora_rank, kv_lora_rank, qk_rope_head_dim
+    )
+
+    return run_config, tt_input, ref_outputs, q_lora_rank, kv_lora_rank, qk_rope_head_dim, batch_size
+
+
 def _maybe_skip_long_seq(seq_len: int):
     if seq_len <= 8192:
         return
@@ -297,6 +472,10 @@ def _collect_device_perf(
     return op_stats, total_kernel_ns, total_op_to_op_ns
 
 
+def _skip_single_device_ccl():
+    pytest.skip("Single-device test is not applicable because ds_fused_wqkva includes CCL ops.")
+
+
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
@@ -346,144 +525,79 @@ def test_ds_fused_wqkva(
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
 
-    module_path = "model.layers.0.self_attn"
-    module_state_dict = sub_state_dict(state_dict, module_path + ".")
-    dequant_state_dict = dequantize_state_dict(module_state_dict, hf_config_short)
-
-    q_a_weight = dequant_state_dict["q_a_proj.weight"]
-    kv_a_weight = dequant_state_dict["kv_a_proj_with_mqa.weight"]
-
-    from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
-
-    weight_config = get_test_weight_config(
-        MLA1D,
-        hf_config_short,
-        (module_state_dict,) * mesh_device.shape[0],
-        cache_path,
+    run_config, tt_input, ref_outputs, q_lora_rank, kv_lora_rank, qk_rope_head_dim, batch_size = _build_wqkva_inputs(
         mesh_device,
+        hf_config_short,
+        cache_path,
+        ccl,
         force_recalculate_weight_config,
+        state_dict,
+        mode,
+        seq_len,
     )
-    model_config = get_model_config(MLA1D, mode, hf_config_short, mesh_device)
-    model_state = {
-        "mesh_device": mesh_device,
-        "mesh_shape": mesh_device.shape,
-        "ccl": ccl,
-    }
-    run_config = create_run_config(model_config, weight_config, model_state)
-
-    batch_size = USERS_PER_ROW if mode == "decode" else 1
-    torch_input = torch.randn(batch_size, seq_len, hf_config_short.hidden_size, dtype=torch.bfloat16)
-    if mode == "decode":
-        torch_input = torch_input.permute(1, 0, 2)
-
-    tt_input = ttnn.from_torch(
-        torch_input.unsqueeze(0),
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=mesh_device.shape),
-        dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    q_lora_rank = hf_config_short.q_lora_rank
-    kv_lora_rank = hf_config_short.kv_lora_rank
-    qk_rope_head_dim = hf_config_short.qk_rope_head_dim
-
-    ref_q, ref_kv_nope, ref_kv_rope = ds_fused_wqkva_reference(
-        torch_input.unsqueeze(0), q_a_weight, kv_a_weight, q_lora_rank, kv_lora_rank, qk_rope_head_dim
+    _run_ds_fused_wqkva_test(
+        mesh_device,
+        run_config,
+        tt_input,
+        ref_outputs,
+        q_lora_rank,
+        kv_lora_rank,
+        qk_rope_head_dim,
+        expected_pcc,
+        expected_atol,
+        expected_rtol,
+        expected_perf_us,
+        trace_mode,
+        program_cache_enabled,
+        mode,
+        seq_len,
+        batch_size,
+        ccl,
+        f"ds_fused_wqkva_{mode}_seq{seq_len}",
     )
 
-    tt_q, tt_kv_nope, tt_kv_rope = ds_fused_wqkva_ttnn(
-        tt_input, run_config, ccl, q_lora_rank, kv_lora_rank, qk_rope_head_dim, mode
-    )
 
-    # Output is replicated across devices after all-gather + reduce; avoid concatenating across mesh.
-    tt_q_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_q)[0])
-    tt_kv_nope_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_kv_nope)[0])
-    tt_kv_rope_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_kv_rope)[0])
-
-    _compare_with_reference(tt_q_torch, ref_q, expected_pcc, expected_atol, expected_rtol)
-    _compare_with_reference(tt_kv_nope_torch, ref_kv_nope, expected_pcc, expected_atol, expected_rtol)
-    _compare_with_reference(tt_kv_rope_torch, ref_kv_rope, expected_pcc, expected_atol, expected_rtol)
-
-    if os.getenv(DEVICE_PERF_ENV_VAR) is None:
-        perf_profiler = BenchmarkProfiler()
-        benchmark_data = BenchmarkData()
-        trace_suffix = "trace" if trace_mode else "no_trace"
-        cache_suffix = "pcache" if program_cache_enabled else "no_pcache"
-        step_name = f"ds_fused_wqkva_{mode}_seq{seq_len}_{trace_suffix}_{cache_suffix}"
-
-        perf_profiler.start("run")
-        perf_profiler.start(step_name)
-        perf_us = _measure_perf_us(
-            mesh_device,
-            lambda: ds_fused_wqkva_ttnn(tt_input, run_config, ccl, q_lora_rank, kv_lora_rank, qk_rope_head_dim, mode),
-            PERF_WARMUP_ITERS,
-            PERF_MEASURE_ITERS,
-            trace_mode=trace_mode,
-        )
-        logger.info(f"Perf avg: {perf_us:.3f} us over {PERF_MEASURE_ITERS} iters (warmup {PERF_WARMUP_ITERS})")
-        perf_profiler.end(step_name)
-        perf_profiler.end("run")
-
-        benchmark_data.add_measurement(
-            perf_profiler,
-            0,
-            step_name,
-            f"{step_name}-avg_us",
-            perf_us,
-            step_warm_up_num_iterations=PERF_WARMUP_ITERS,
-            target=expected_perf_us if expected_perf_us > 0 and not trace_mode and program_cache_enabled else None,
-        )
-        benchmark_data.save_partial_run_json(
-            perf_profiler,
-            run_type="deepseek_v3_fused_ops",
-            ml_model_name="deepseek-v3",
-            batch_size=batch_size,
-            input_sequence_length=seq_len,
-        )
-        if expected_perf_us > 0 and not trace_mode and program_cache_enabled:
-            perf_margin = 0.2
-            assert perf_us <= expected_perf_us * (
-                1 + perf_margin
-            ), f"Perf regression: {perf_us:.3f}us exceeds expected {expected_perf_us:.3f}us"
-        elif expected_perf_us == 0 and not trace_mode and program_cache_enabled:
-            logger.warning("TODO: Set expected_perf_us using a measured baseline.")
-    else:
-        logger.info("Skipping e2e perf measurement during device-perf profiling.")
-        from tracy import signpost
-
-        def op_fn():
-            return ds_fused_wqkva_ttnn(tt_input, run_config, ccl, q_lora_rank, kv_lora_rank, qk_rope_head_dim, mode)
-
-        for _ in range(PERF_WARMUP_ITERS):
-            outputs = op_fn()
-            ttnn.synchronize_device(mesh_device)
-            for output in outputs:
-                ttnn.deallocate(output)
-
-        ttnn.synchronize_device(mesh_device)
-        if trace_mode:
-            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            outputs = op_fn()
-            for output in outputs:
-                ttnn.deallocate(output)
-            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(mesh_device)
-            signpost("start")
-            for _ in range(DEVICE_PERF_ITERS):
-                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-                ttnn.synchronize_device(mesh_device)
-            signpost("stop")
-            ttnn.release_trace(mesh_device, trace_id)
-        else:
-            signpost("start")
-            for _ in range(DEVICE_PERF_ITERS):
-                outputs = op_fn()
-                ttnn.synchronize_device(mesh_device)
-                for output in outputs:
-                    ttnn.deallocate(output)
-            signpost("stop")
+@pytest.mark.parametrize(
+    "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
+    [
+        # TODO: Replace expected_perf_us baselines with theoretical targets.
+        ("decode", 1, 0.99993, 0.2, 0.2, 2003.264),
+        ("prefill", 128, 0.99993, 0.2, 0.2, 1295.686),
+        ("prefill", 1024, 0.99993, 0.2, 0.2, 4040.506),
+        ("prefill", 8192, 0.99993, 0.2, 0.2, 24818.087),
+        ("prefill", 131072, 0.99993, 0.2, 0.2, 0.0),
+    ],
+)
+@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
+@pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 2967552,
+        }
+    ],
+    indirect=True,
+)
+def test_ds_fused_wqkva_single_device(
+    mode,
+    seq_len,
+    expected_pcc,
+    expected_atol,
+    expected_rtol,
+    expected_perf_us,
+    program_cache_enabled,
+    trace_mode,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    _skip_single_device_ccl()
 
 
 @pytest.mark.parametrize(
@@ -573,3 +687,17 @@ def test_ds_fused_wqkva_device_perf(mode, seq_len):
         batch_size=batch_size,
         input_sequence_length=seq_len,
     )
+
+
+@pytest.mark.parametrize(
+    "mode, seq_len",
+    [
+        ("decode", 1),
+        ("prefill", 128),
+        ("prefill", 1024),
+        ("prefill", 8192),
+        ("prefill", 131072),
+    ],
+)
+def test_ds_fused_wqkva_single_device_device_perf(mode, seq_len):
+    _skip_single_device_ccl()

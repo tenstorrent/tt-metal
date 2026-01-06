@@ -46,7 +46,7 @@ Follow these steps to add a new fused op unit test:
     5. Restructure the existing code to maintain a clean test that re-uses common parts of the code. Be very careful not to change any functionality in the existing test.
     6. Run the single device test and verify that both the PCC and the perf are the same as for the multi device test.
 11. Add a single device test for device performance, see step 10 for how to do that.
-12. *Verify* the single device tests by running the single device, device perf test that generated the csv file and compare it to the multi device perf csv. All shapes must match, create a helper script to verify that.
+12. If single device tests are not skipped, *verify* the single device tests by running the single device, device perf test that generated the csv file and compare it to the multi device perf csv. All shapes must match, create a helper script to verify that.
 13. Print the summary for all verification steps clearly representing the results and the links to logs for all successful verification steps.
 14. List anything that was unexpected and/or any workarouds you needed to make the fused op unit test work.
 
@@ -65,6 +65,7 @@ Notes on performance measurements:
 - Decode uses trace mode for perf measurements, prefill uses non_trace mode for perf measurements
 
 Notes on using TT hardware:
+- If running tests, set a timeout of 15 minutes.
 - If there's a machine issue, you'll need to reset the machine using "tt-smi -glx_reset"
 - Important: Running the test may take a few minutes, if you kill it the device might need a reset. In general, if there is no log output for more than 5 minutes the test likely hangs and needs to be killed + device reset, but if there's log output keep it running.
 - Run each job with piping the output to a log file, i.e. add " 2>&1 | tee $TT_METAL_HOME/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log" to each command
