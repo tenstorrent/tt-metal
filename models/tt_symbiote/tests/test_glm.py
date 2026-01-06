@@ -9,10 +9,10 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.tt_symbiote.core.module import TTNNModule
 from models.tt_symbiote.core.run_config import DispatchManager
 from models.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.tt_symbiote.modules.activation import TTNNSilu
+from models.tt_symbiote.modules.attention import TTNNSDPAAttention
 from models.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearLLama
 from models.tt_symbiote.utils.device_management import set_device
 from models.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -21,80 +21,10 @@ from models.tt_symbiote.utils.module_replacement import register_module_replacem
 def get_attention_mappings():
     try:
         from transformers.integrations import use_kernelized_func
-        from transformers.integrations.sdpa_attention import sdpa_attention_forward
         from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeAttention as OriginalGlm4MoeAttention
         from transformers.models.glm4_moe.modeling_glm4_moe import apply_rotary_pos_emb
     except:
         return {}
-
-    class TorchSDPAAttention(torch.nn.Module):
-        def forward(
-            self,
-            module: torch.nn.Module,
-            query: torch.Tensor,
-            key: torch.Tensor,
-            value: torch.Tensor,
-            attention_mask: torch.Tensor | None,
-            dropout: float = 0.0,
-            scaling: float | None = None,
-            is_causal: bool | None = None,
-            transpose_output: bool = True,
-            **kwargs,
-        ) -> torch.Tensor:
-            attn_output = sdpa_attention_forward(
-                module,
-                query,
-                key,
-                value,
-                attention_mask,
-                dropout=dropout,
-                scaling=scaling,
-                is_causal=is_causal,
-                **kwargs,
-            )[0]
-            if not transpose_output:  # revert the transpose in sdpa_attention_forward
-                attn_output = attn_output.transpose(1, 2)
-            return attn_output
-
-    class TTNNSDPAAttention(TTNNModule):
-        def __init__(self):
-            super().__init__()
-            self._fallback_torch_layer = TorchSDPAAttention()
-
-        def forward(
-            self,
-            module: torch.nn.Module,
-            query: torch.Tensor,
-            key: torch.Tensor,
-            value: torch.Tensor,
-            attention_mask: torch.Tensor | None,
-            dropout: float = 0.0,
-            scaling: float | None = None,
-            is_causal: bool | None = None,
-            transpose_output: bool = True,
-            **kwargs,
-        ) -> ttnn.Tensor:
-            assert attention_mask is None, "TTNNSDPAAttention currently only supports attention_mask=None"
-            if query.layout != ttnn.TILE_LAYOUT:
-                query = ttnn.to_layout(query, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if key.layout != ttnn.TILE_LAYOUT:
-                key = ttnn.to_layout(key, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if value.layout != ttnn.TILE_LAYOUT:
-                value = ttnn.to_layout(value, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            assert len(query.shape) == 4, "Query tensor must be 4D"
-            assert dropout == 0.0, "TTNNSDPAAttention does not support dropout"
-            is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
-            is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
-            attn_output = ttnn.transformer.scaled_dot_product_attention(
-                query,
-                key,
-                value,
-                is_causal=is_causal,
-                scale=scaling,
-            )
-            if transpose_output:
-                attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
-            return attn_output
 
     @use_kernelized_func(apply_rotary_pos_emb)
     class Glm4MoeAttention(nn.Module):
