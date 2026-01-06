@@ -30,9 +30,13 @@ void bind_reduce_scatter(nb::module_& mod) {
             cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            intermediate_memory_config (ttnn.MemoryConfig, optional): Memory configuration for intermediate buffer used within the operation.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
             num_links (int, optional): The number of links to use for the reduce-scatter operation. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+            chunks_per_sync (int, optional): Hyperparameter.
+            num_workers_per_link (int, optional): Hyperparameter.
+            num_buffers_per_channel (int, optional): Hyperparameter.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
