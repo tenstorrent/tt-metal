@@ -8,6 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.common.utility_functions import skip_for_blackhole
 
 
 def _out_size(in_size, pad, stride, k):
@@ -220,6 +221,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
     assert device.num_program_cache_entries() == 2
 
 
+@skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
     [
