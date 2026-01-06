@@ -26,7 +26,6 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         conv3d.cpp
-        prepare_conv3d_weights.cpp
         device/conv3d_device_operation.cpp
         device/conv3d_program_factory.cpp
 )

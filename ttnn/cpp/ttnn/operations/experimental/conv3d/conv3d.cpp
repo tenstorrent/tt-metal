@@ -4,13 +4,10 @@
 
 #include "conv3d.hpp"
 #include "device/conv3d_device_operation.hpp"
-#include "prepare_conv3d_weights.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-
-#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::tt_metal;
 
@@ -31,26 +28,9 @@ ttnn::Tensor ExecuteConv3d::invoke(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::Tensor weight_tensor_prepared = weight_tensor;
-
-    log_info(tt::LogTest, "weight_tensor.logical_shape(): {}", weight_tensor.logical_shape());
-
-    Conv3dWeightsBiasPrepConfig weight_prep_config;
-    weight_prep_config.groups = groups_;
-
-    weight_tensor_prepared = prepare_conv_weights(weight_tensor, weight_prep_config, input_tensor.device());
-
-    log_info(tt::LogTest, "weight_tensor.storage_type(): {}", weight_tensor.storage_type());
-    log_info(tt::LogTest, "weight_tensor_prepared.storage_type(): {}", weight_tensor_prepared.storage_type());
-
-    log_info(tt::LogTest, "weight_tensor.layout(): {}", weight_tensor.layout());
-    log_info(tt::LogTest, "weight_tensor_prepared.layout(): {}", weight_tensor_prepared.layout());
-
-    log_info(tt::LogTest, "weight_tensor_prepared.logical_shape(): {}", weight_tensor_prepared.logical_shape());
-
     return ttnn::prim::conv3d(
         input_tensor,
-        weight_tensor_prepared,
+        weight_tensor,
         bias_tensor,
         config,
         dtype_,
