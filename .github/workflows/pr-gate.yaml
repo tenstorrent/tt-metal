@@ -428,6 +428,6 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build, build-tt-train"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs, APC-test-count-check"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
