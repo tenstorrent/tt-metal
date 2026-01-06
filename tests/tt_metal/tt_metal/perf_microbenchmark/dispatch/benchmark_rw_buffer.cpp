@@ -5,7 +5,6 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <fmt/format.h>
-#include <stdint.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -24,6 +23,7 @@
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
 #include "mesh_coord.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

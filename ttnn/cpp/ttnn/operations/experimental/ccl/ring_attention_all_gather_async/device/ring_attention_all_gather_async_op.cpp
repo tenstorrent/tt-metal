@@ -128,7 +128,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RingAttentionAllGatherAsync::
 tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
@@ -197,9 +197,7 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 namespace {
 
@@ -231,8 +229,8 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
     optional_output_tensors.reserve(persistent_output_buffer.size());
-    for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-        optional_output_tensors.push_back(persistent_output_buffer[i]);
+    for (const auto& buffer : persistent_output_buffer) {
+        optional_output_tensors.push_back(buffer);
     }
 
     return tt::tt_metal::operation::run(
@@ -276,8 +274,6 @@ std::vector<Tensor> ring_attention_all_gather_async(
         sub_device_id);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

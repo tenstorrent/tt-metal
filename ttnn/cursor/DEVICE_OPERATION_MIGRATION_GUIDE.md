@@ -151,11 +151,11 @@ struct Embeddings {
 
 ```cpp
 struct operation_attributes_t {
-    const MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
-    const DataType output_dtype;
+    MemoryConfig output_mem_config;
+    bool tilized;
+    EmbeddingsType embeddings_type;
+    std::optional<uint32_t> pad_token;
+    DataType output_dtype;
 };
 ```
 
@@ -183,9 +183,9 @@ struct Embedding {
 
 ```cpp
 struct tensor_args_t {
-    const Tensor& input_tensor_arg;
-    const Tensor& weight_arg;
-    const std::optional<Tensor>& optional_output_tensor;
+    Tensor input_tensor_arg;
+    Tensor weight_arg;
+    std::optional<Tensor> optional_output_tensor;
 };
 ```
 
@@ -412,7 +412,7 @@ return ttnn::prim::embedding(input_tensor, weight, ...);
 
 ### Step 7: Create Program Factory
 
-To define `shared_params_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
+To define `shared_variables_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
 
 **Example - Old program factory lambda:**
 
@@ -447,18 +447,18 @@ auto override_runtime_args_callback = [
 };
 ```
 
-**Lambda capture → `shared_params_t`:**
+**Lambda capture → `shared_variables_t`:**
 
-The lambda's capture list becomes `shared_params_t`:
+The lambda's capture list becomes `shared_variables_t`:
 
 ```cpp
-struct shared_params_t {
+struct shared_variables_t {
     uint32_t num_cores_x;
     uint32_t num_cores_y;
     KernelHandle reader_kernel_id;
     KernelHandle writer_kernel_id;
     std::vector<CoreCoord> cores;
-    // Note: 'device' is typically not needed in shared_params_t
+    // Note: 'device' is typically not needed in shared_variables_t
 };
 ```
 
@@ -516,7 +516,10 @@ Tensor hash includes:
 - Alignment dimensions (vector of uint32_t)
 
 **If the legacy operation does not implement `compute_program_hash`**,
-Simply hash operation_attributes and tensors_args
+Do not implement `compute_program_hash` in the newly-migrated operation, because we want to mimic how the legacy was hashed.
+
+**If the legacy operation implements `compute_program_hash`**,
+Include everything that was in the legacy into the new hash. Make sure to include `tensor_args` as a whole.
 
 **What must be included in hash:**
 Anything that affects the compiled kernel binary:
@@ -605,6 +608,11 @@ Great examples of operations migrated to TMP:
 - `update_cache/`, `fill_cache/`, `fused_update_cache/` all demonstrate mesh workload factory pattern
 - Shows how to handle multiple factory variants (tiled vs row_major for fused_update_cache)
 
+**Send Async operations**: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/`
+- Demonstrates another mesh workload factory example
+- PRs:
+  - https://github.com/tenstorrent/tt-metal/pull/33005
+
 ---
 
 ## Building and Testing
@@ -614,7 +622,7 @@ Great examples of operations migrated to TMP:
 To build the project with debug symbols (without Python bindings for faster builds during development):
 
 ```bash
-./build_metal.sh -c -e --debug --without-python-bindings
+./build_metal.sh -c -e --debug
 ```
 
 ### Running Tests
@@ -687,5 +695,5 @@ ttnn/cpp/ttnn/operations/<operation>/
 │   └── kernels/                              # Kernel files (if any)
 ├── <operation>.hpp                           # Public API wrapper
 ├── <operation>.cpp                           # Public API implementation
-└── <operation>_pybind.cpp                    # Python bindings (if any)
+└── <operation>_nanobind.cpp                    # Python bindings (if any)
 ```

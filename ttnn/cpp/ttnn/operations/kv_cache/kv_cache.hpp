@@ -8,8 +8,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace kv_cache {
+
+namespace operations::kv_cache {
 
 struct ExecuteFillCache {
     static ttnn::Tensor invoke(const ttnn::Tensor& cache, const ttnn::Tensor& input, uint32_t batch_index);
@@ -37,8 +37,7 @@ struct FillCacheOperation {
     static ttnn::Tensor invoke(const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx);
 };
 
-}  // namespace kv_cache
-}  // namespace operations
+}  // namespace operations::kv_cache
 
 constexpr auto fill_cache_for_user_ =
     ttnn::register_operation<"ttnn::kv_cache::fill_cache_for_user_", ttnn::operations::kv_cache::ExecuteFillCache>();

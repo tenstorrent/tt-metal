@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 inline void read_tiles(uint32_t num_tiles, uint32_t src_addr, uint32_t bank_id, uint32_t cb_id_in) {
     // ublocks size defined in tiles

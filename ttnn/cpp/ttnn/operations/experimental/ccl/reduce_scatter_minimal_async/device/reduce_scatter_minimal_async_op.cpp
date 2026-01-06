@@ -327,9 +327,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         input_tensors);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 namespace {
 Tensor reduce_scatter_minimal_async_impl(
@@ -420,8 +418,6 @@ Tensor reduce_scatter_minimal_async(
         num_buffers_per_channel);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

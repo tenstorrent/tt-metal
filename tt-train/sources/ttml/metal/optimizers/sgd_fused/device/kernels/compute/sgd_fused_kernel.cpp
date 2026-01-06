@@ -8,7 +8,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "tt-train/sources/ttml/metal/ops/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 namespace NAMESPACE {
 

@@ -22,27 +22,13 @@ create_in_memory_token_dataset<tokenizers::CharTokenizer>(
 }
 
 
-std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string &file_path) {
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + file_path);
-    }
+InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data) {
 
-    std::vector<uint32_t> tokens;
-    uint32_t token;
 
-    while (file >> token) {
-        tokens.push_back(token);
-    }
+    std::vector<uint32_t> tokens = yaml_data["tokens"].as<std::vector<uint32_t>>();
+        uint32_t seq_length = yaml_data["sequence_length"].as<uint32_t>();
 
-    if (file.bad()) {
-        throw std::runtime_error("I/O error while reading file: " + file_path);
-    } else if (!file.eof()) {
-        throw std::runtime_error("Non-integer data encountered in file: " + file_path);
-    }
-
-    file.close();
-    return tokens;
+    return InMemoryTokenDataset(tokens, seq_length);
 }
 
 }  // namespace ttml::datasets

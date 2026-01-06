@@ -172,8 +172,8 @@ void ConvertToCHWProgramFactory::override_runtime_arguments(
     const auto& total_tiles_per_core = cached_program.shared_variables.total_tiles_per_core;
 
     // buffers are not provided so we take them from output/input tensors
-    auto output_dram_buffer = output.buffer();
-    auto input_dram_buffer = tensor_args.input.buffer();
+    auto* output_dram_buffer = output.buffer();
+    auto* input_dram_buffer = tensor_args.input.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_in, *input_dram_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_out, *output_dram_buffer);

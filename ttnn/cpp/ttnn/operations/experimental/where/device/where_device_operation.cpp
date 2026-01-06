@@ -5,7 +5,6 @@
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operation_concepts.hpp"
 
 #include <tt-metalium/hal_types.hpp>
@@ -22,10 +21,6 @@ namespace ttnn::operations::experimental::ternary {
 static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
     "WhereDeviceOperation must satisfy DeviceOperationConcept");
-
-static_assert(
-    ttnn::decorators::PrimitiveOperationConcept<WhereDeviceOperation>,
-    "WhereDeviceOperation must satisfy PrimitiveOperationConcept");
 
 template <typename... Tensors>
 static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... other_tensors) {
@@ -139,7 +134,7 @@ WhereDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor) {
     CoreRangeSet worker_grid;
-    auto device = condition_tensor.device();
+    auto* device = condition_tensor.device();
     for (const auto& sub_device_id : device->get_sub_device_ids()) {
         const auto& sub_device_workers =
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);

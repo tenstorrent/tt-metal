@@ -5,7 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -227,8 +227,8 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
                         output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                         MeshCoordinate(logical_y, logical_x));
                     auto expected_value = expected_values[logical_x + (logical_y * mesh_device_->num_cols())];
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), expected_value);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), expected_value);
                     }
                 }
             }
@@ -459,7 +459,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
 
-    for (auto device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->get_devices()) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
     }
@@ -482,7 +482,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
-        for (auto device : mesh_device_->get_devices()) {
+        for (auto* device : mesh_device_->get_devices()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
@@ -533,10 +533,10 @@ void run_heterogenous_trace_sweep(
 
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
-    for (auto& workload_grid : workload_grids) {
+    for (const auto& workload_grid : workload_grids) {
         for (int i = 0; i < num_workloads; i++) {
             auto workload = std::make_shared<MeshWorkload>();
-            for (auto& program_grid : workload_grid) {
+            for (const auto& program_grid : workload_grid) {
                 auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
                     1, mesh_device->compute_with_storage_grid_size(), seed);
                 workload->add_program(program_grid, std::move(*programs[0]));

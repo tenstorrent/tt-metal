@@ -167,9 +167,9 @@ void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
-        auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
-        auto& utilized_core = shared_variables.utilized_core;
+        const auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+        const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+        const auto& utilized_core = shared_variables.utilized_core;
 
         auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, utilized_core);
         auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, utilized_core);

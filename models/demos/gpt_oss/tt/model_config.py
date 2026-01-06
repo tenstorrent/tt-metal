@@ -16,6 +16,11 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.tt_transformers.tt.common import (
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+    get_base_model_name,
+)
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -25,7 +30,6 @@ class ModelArgs:
     def __init__(
         self,
         mesh_device,
-        instruct=False,
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=1024 * 128,
@@ -33,7 +37,6 @@ class ModelArgs:
         cache_hf=False,
     ):
         self.mesh_device = mesh_device
-        self.instruct = instruct
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
@@ -82,7 +85,11 @@ class ModelArgs:
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
-        self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
+        self.model_name = Path(self.model_path).name
+        assert self.model_name in [
+            "gpt-oss-20b",
+            "gpt-oss-120b",
+        ], f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Make sure you're using standard huggingface naming convention for your model checkpoint e.g openai/gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
@@ -94,7 +101,46 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
+        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_warmup_prefill_supported_seq_lens(self):
+        DEFAULT_VALUE = self.capped_warmup_seq_len
+        # This dictionary is used to override the default ceil warmup prefill value
+        model_specific_ceil_warmup_lengths = {
+            # e.g. "gpt-oss-120b": 4096
+        }
+
+        max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
+
+        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
+        )
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
+        if self.model_name == "gpt-oss-120b":
+            if 6144 in to_warmup_seq_lens:
+                to_warmup_seq_lens.remove(6144)
+
+        for seq_len in to_warmup_seq_lens:
+            if seq_len >= 64 * 1024:
+                to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
+                break
+        return to_warmup_seq_lens
+
+    @property
+    def base_model_name(self):
+        return get_base_model_name(self.model_name)
 
     def can_enable_trace(self, prefill_seq_len):
         """
@@ -127,21 +173,22 @@ class ModelArgs:
         # Try model-specific sequence lengths first
         result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # Fall back to default sequence lengths
         result = default_supported_seq_lens.get(device_name)
         if result:
-            return result
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
 
         # No supported sequence lengths found, return empty list
         return []
 
-    def encode_prompt(self, prompt_text, instruct=True, system_prompt_text=None):
+    def encode_prompt(self, prompt_text, instruct=False, system_prompt_text=None):
         """
         Encode prompts using HuggingFace tokenizer with chat template
         Compatible with tt_transformers interface
         """
+        assert not instruct, "GPT-OSS does not support instruct mode"
         chat = []
         if isinstance(prompt_text, str):
             if system_prompt_text:
@@ -153,21 +200,24 @@ class ModelArgs:
             # prompt_text is already a list of chat messages
             return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
-    def load_state_dict(self, convert_to_meta_format=True):
+    @staticmethod
+    def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
         """Load model state dict compatible with tt_transformers
 
         Args:
-            convert_to_meta_format: If True, convert HF QKV weights to Meta format for RoPE.
-                                   Set to False when loading for HuggingFace reference models.
+            weights_path (str or Path): Path to the model weights directory or file.
+            dummy_weights (bool): If True, returns a dummy state dict for testing purposes.
+            convert_to_meta_format (bool): If True, convert HF QKV weights to Meta format for RoPE.
+                Set to False when loading for HuggingFace reference models.
         """
-        if self.dummy_weights:
+        if dummy_weights:
             # Return dummy state dict for testing
             return {}
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
             model = AutoModelForCausalLM.from_pretrained(
-                self.weights_path,
+                weights_path,
                 torch_dtype="auto"
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
@@ -177,7 +227,7 @@ class ModelArgs:
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, self.hf_config.head_dim)
+                state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
             if state_dict["model.norm.weight"].dtype != torch.bfloat16:
                 # Convert to bfloat16 if needed
                 state_dict = {
@@ -195,11 +245,7 @@ class ModelArgs:
             cache_dir = Path(self.model_path)  # Use same directory as model
         logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-
-        if self.instruct:
-            cache_path = cache_dir / f"tensor_cache_instruct_{dtype_str}_{self.mesh_device.shape}"
-        else:
-            cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
+        cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
 
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path

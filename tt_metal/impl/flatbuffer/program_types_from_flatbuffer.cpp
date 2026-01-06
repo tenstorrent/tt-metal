@@ -18,12 +18,12 @@ DataMovementConfig from_flatbuffer(const flatbuffer::DataMovementConfig* fb_conf
     config.noc_mode = from_flatbuffer(fb_config->noc_mode());
 
     // Extract compile_args
-    auto fb_compile_args = fb_config->compile_args();
+    const auto* fb_compile_args = fb_config->compile_args();
     config.compile_args.assign(fb_compile_args->begin(), fb_compile_args->end());
 
     // Extract defines
-    auto fb_defines = fb_config->defines();
-    for (auto fb_define : *fb_defines) {
+    const auto* fb_defines = fb_config->defines();
+    for (const auto* fb_define : *fb_defines) {
         config.defines.emplace(fb_define->key()->str(), fb_define->value()->str());
     }
 
@@ -42,19 +42,19 @@ ComputeConfig from_flatbuffer(const flatbuffer::ComputeConfig* fb_config) {
     config.math_approx_mode = fb_config->math_approx_mode();
 
     // Extract unpack_to_dest_mode
-    auto fb_unpack_modes = fb_config->unpack_to_dest_mode();
+    const auto* fb_unpack_modes = fb_config->unpack_to_dest_mode();
     config.unpack_to_dest_mode.reserve(fb_unpack_modes->size());
     for (auto fb_mode : *fb_unpack_modes) {
         config.unpack_to_dest_mode.push_back(from_flatbuffer(fb_mode));
     }
 
     // Extract compile_args
-    auto fb_compile_args = fb_config->compile_args();
+    const auto* fb_compile_args = fb_config->compile_args();
     config.compile_args.assign(fb_compile_args->begin(), fb_compile_args->end());
 
     // Extract defines
-    auto fb_defines = fb_config->defines();
-    for (auto fb_define : *fb_defines) {
+    const auto* fb_defines = fb_config->defines();
+    for (const auto* fb_define : *fb_defines) {
         config.defines.emplace(fb_define->key()->str(), fb_define->value()->str());
     }
 
@@ -71,12 +71,12 @@ EthernetConfig from_flatbuffer(const flatbuffer::EthernetConfig* fb_config) {
     config.processor = from_flatbuffer(fb_config->processor());
 
     // Extract compile_args
-    auto fb_compile_args = fb_config->compile_args();
+    const auto* fb_compile_args = fb_config->compile_args();
     config.compile_args.assign(fb_compile_args->begin(), fb_compile_args->end());
 
     // Extract defines
-    auto fb_defines = fb_config->defines();
-    for (auto fb_define : *fb_defines) {
+    const auto* fb_defines = fb_config->defines();
+    for (const auto* fb_define : *fb_defines) {
         config.defines.emplace(fb_define->key()->str(), fb_define->value()->str());
     }
 
@@ -122,7 +122,7 @@ std::vector<std::vector<uint32_t>> from_flatbuffer(
 
 CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* fb_core_coord) {
     TT_FATAL(fb_core_coord, "Invalid CoreCoord data from flatbuffer.");
-    return CoreCoord{fb_core_coord->x(), fb_core_coord->y()};
+    return CoreCoord{static_cast<std::size_t>(fb_core_coord->x()), static_cast<std::size_t>(fb_core_coord->y())};
 }
 
 CoreRange from_flatbuffer(const flatbuffer::CoreRange* fb_core_range) {

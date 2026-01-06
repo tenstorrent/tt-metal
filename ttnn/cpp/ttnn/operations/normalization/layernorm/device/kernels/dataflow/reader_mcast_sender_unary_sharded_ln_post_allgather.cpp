@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 // split REDUCE across cores
@@ -37,6 +37,7 @@ void kernel_main() {
 
         noc_semaphore_set_multicast_loopback_src(
             reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks, false);
+        noc_async_write_barrier();
     };
 
     const auto& global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global)

@@ -10,7 +10,6 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_grayskull
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
@@ -32,23 +31,14 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 )
 
 fp32_accum = True
-
 conv_compute_kernel_config = None
-if not is_grayskull():
-    if fp32_accum:
-        conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-    else:
-        conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+if fp32_accum:
+    conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
 
 def permute_conv_weights(weight, bias):

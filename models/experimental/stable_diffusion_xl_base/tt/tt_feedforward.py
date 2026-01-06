@@ -30,6 +30,7 @@ class TtFeedForward(LightweightModule):
 
         self.ff2_model_config = model_config.get_matmul_config(f"{module_path}.net.2")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
+        self.ff2_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.net.2")
 
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)
@@ -39,7 +40,7 @@ class TtFeedForward(LightweightModule):
             self.tt_weights,
             bias=self.tt_bias,
             program_config=self.ff2_model_config,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.ff2_model_config is not None else None,
+            memory_config=self.ff2_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
 

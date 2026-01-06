@@ -25,6 +25,11 @@ TILE_WIDTH = 32
         ([11, 29, 14, 1], -1, True),
         ([1, 1, 512, 64], -1, False),
         ([1, 1, 2112, 64], -1, False),
+        ([1, 64, 64], 0, False),
+        ([1, 64, 64], 1, True),
+        ([1, 64, 64], 2, False),
+        ([1, 64], 0, False),
+        ([1, 64], 1, True),
     ],
 )
 def test_sort_standard(shape, dim, descending, device):
@@ -76,7 +81,7 @@ def test_sort_prealocated_output(shape, dim, descending, device):
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
 
     ttnn_sort_values = ttnn.zeros_like(ttnn_input)
-    ttnn_sort_indices = ttnn.zeros_like(ttnn_input)
+    ttnn_sort_indices = ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)
     ttnn.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
@@ -100,6 +105,7 @@ def test_sort_prealocated_output(shape, dim, descending, device):
         ([1, 1, 32, 256 * TILE_WIDTH], -1, False),
         ([1, 151936], -1, False),
         ([1, 128256], -1, False),
+        ([1, 16384 * TILE_WIDTH], -1, False),
     ],
 )
 def test_sort_long_tensor(shape, dim, descending, device):

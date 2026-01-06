@@ -53,14 +53,14 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <impl/debug/watcher_server.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
@@ -99,7 +99,7 @@ std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserv
 
 bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores) const {
     auto active_ethernet_cores = this->get_active_ethernet_cores(skip_reserved_tunnel_cores);
-    return active_ethernet_cores.find(logical_core) != active_ethernet_cores.end();
+    return active_ethernet_cores.contains(logical_core);
 }
 
 std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
@@ -109,7 +109,7 @@ std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
-    return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
+    return inactive_ethernet_cores.contains(logical_core);
 }
 
 uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
@@ -161,7 +161,7 @@ void Device::initialize_default_sub_device_state(
         sub_devices);
 }
 
-std::unique_ptr<Allocator> Device::initialize_allocator(
+std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
@@ -309,9 +309,15 @@ void Device::init_command_queue_device() {
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (watcher_lock) {
@@ -581,12 +587,18 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     }
 }
 
-const std::unique_ptr<Allocator>& Device::allocator() const {
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
+const std::unique_ptr<Allocator>& Device::allocator() const { return this->allocator_impl()->view(); }
+
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(sub_device_id);
+}
+
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 uint32_t Device::num_sub_devices() const {
@@ -661,9 +673,11 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
@@ -829,6 +843,4 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

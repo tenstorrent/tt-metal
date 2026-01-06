@@ -11,6 +11,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
@@ -115,20 +116,24 @@ inline void verify_kernel_coordinates(
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
 
-    CoreType core_type = hal_core_type == HalProgrammableCoreType::TENSIX     ? CoreType::WORKER
-                         : hal_core_type == HalProgrammableCoreType::IDLE_ETH ? CoreType::IDLE_ETH
-                                                                              : CoreType::ETH;
+    CoreType core_type;
+    if (hal_core_type == HalProgrammableCoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    } else if (hal_core_type == HalProgrammableCoreType::IDLE_ETH) {
+        core_type = CoreType::IDLE_ETH;
+    } else {
+        core_type = CoreType::ETH;
+    }
 
     const auto& sub_device_origin = mesh_device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
     for (const auto& cr : cr_set.ranges()) {
-        for (auto core = cr.begin(); core != cr.end(); ++core) {
-            const auto& logical_coord = *core;
+        for (const auto& logical_coord : cr) {
             const auto& virtual_coord = mesh_device->virtual_core_from_logical_core(logical_coord, core_type);
             CoreCoord relative_coord{logical_coord.x - sub_device_origin.x, logical_coord.y - sub_device_origin.y};
             for (const auto& device : mesh_device->get_devices()) {
                 auto read_coords_raw = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                     device->id(), virtual_coord, cb_addr, sizeof(tt::tt_metal::CoreCoordsL1));
-                auto read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
+                auto* read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
 
                 EXPECT_EQ(read_coords->my_logical_x, logical_coord.x) << "Logical X";
                 EXPECT_EQ(read_coords->my_logical_y, logical_coord.y) << "Logical Y";

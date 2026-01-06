@@ -31,11 +31,7 @@
 
 using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace tensor_impl {
+namespace tt::tt_metal::tensor_impl {
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
@@ -289,7 +285,7 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 
 template <typename T>
 inline void print_datum(std::ostream& ss, T datum, bool use_scientific = false) {
-    if (std::is_integral<T>::value) {
+    if (std::is_integral_v<T>) {
         ss << std::setw(5) << datum;
     } else {
         int precision = TTNN_PRINT_OPTIONS.precision;
@@ -1278,7 +1274,7 @@ Tensor unpad(
 
 template <typename T>
 Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
-    auto buffer = tensor.buffer();
+    auto* buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
     tt::tt_metal::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
@@ -1444,8 +1440,4 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
 
-}  // namespace tensor_impl
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal::tensor_impl

@@ -13,13 +13,18 @@ from models.common.utility_functions import torch_random
 
 from loguru import logger
 
+pytestmark = pytest.mark.use_module_device
+
 
 def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)
 
+    # Generate random [0; 1] tensor
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     if "digamma" in str(ttnn_function):
-        torch_input_tensor += 100.0
+        # Scale and shift range to [2; 102] for digamma
+        torch_input_tensor = torch_input_tensor * 100.0 + 2.0
+
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor)
 

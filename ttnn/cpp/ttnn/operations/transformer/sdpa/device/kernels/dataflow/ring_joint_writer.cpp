@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
@@ -62,10 +62,11 @@ void kernel_main() {
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_in);
 
     const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
-    const auto lse_writer = TensorAccessor(lse_args, lse_addr, tile_bytes);
+    const auto lse_writer = TensorAccessor(lse_args, lse_addr, lse_tile_bytes);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);
@@ -135,7 +136,7 @@ void kernel_main() {
                 for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                     noc_async_read_tile(lse_tile_id, lse_writer, lse_addr);
                     lse_tile_id++;
-                    lse_addr += tile_bytes;
+                    lse_addr += lse_tile_bytes;
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_lse_in, Sq_chunk_t);
@@ -150,7 +151,7 @@ void kernel_main() {
             for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                 noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
                 lse_tile_id++;
-                lse_addr += tile_bytes;
+                lse_addr += lse_tile_bytes;
             }
             noc_async_writes_flushed();
             cb_pop_front(cb_lse_out, Sq_chunk_t);

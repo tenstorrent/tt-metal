@@ -88,8 +88,8 @@ void set_state(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, hdr);
             } break;
             case NOC_UNICAST_SCATTER_WRITE: {
-                tt::tt_fabric::NocUnicastScatterCommandHeader shdr;
-                shdr.chunk_size[0] = static_cast<uint16_t>(packet_size / 2);
+                const auto shdr =
+                    tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_multicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager,
@@ -138,8 +138,8 @@ void set_state(
                     connection_manager, route_id, hop_info.ucast.num_hops, hdr);
             } break;
             case NOC_UNICAST_SCATTER_WRITE: {
-                tt::tt_fabric::NocUnicastScatterCommandHeader shdr;
-                shdr.chunk_size[0] = static_cast<uint16_t>(packet_size / 2);
+                const auto shdr =
+                    tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, hop_info.ucast.num_hops, shdr, packet_size);
@@ -194,8 +194,8 @@ void set_state(
                     connection_manager, route_id, ranges, hdr);
             } break;
             case NOC_UNICAST_SCATTER_WRITE: {
-                tt::tt_fabric::NocUnicastScatterCommandHeader shdr;
-                shdr.chunk_size[0] = static_cast<uint16_t>(packet_size / 2);
+                const auto shdr =
+                    tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_multicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, ranges, shdr, packet_size);
@@ -238,8 +238,8 @@ void set_state(
                     connection_manager, route_id, hdr);
             } break;
             case NOC_UNICAST_SCATTER_WRITE: {
-                tt::tt_fabric::NocUnicastScatterCommandHeader shdr;
-                shdr.chunk_size[0] = static_cast<uint16_t>(packet_size / 2);
+                const auto shdr =
+                    tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, shdr, packet_size);

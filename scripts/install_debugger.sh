@@ -15,6 +15,9 @@ if [[ -z "$REF" ]]; then
   exit 1
 fi
 
-echo "Installing ttexalens at ref: $REF"
-python3 -m pip uninstall -y ttexalens >/dev/null 2>&1 || true
-LD_LIBRARY_PATH= python3 -m pip install "git+https://github.com/tenstorrent/tt-exalens.git@$REF"
+# Uninstall tt-exalens if already installed
+python3 -m pip uninstall -y tt-exalens >/dev/null 2>&1 || true
+
+# Install tt-exalens to the requested version
+echo "Installing tt-exalens version: $REF"
+pip install --extra-index-url https://test.pypi.org/simple/ tt-exalens=="$REF"

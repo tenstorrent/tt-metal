@@ -3,25 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests::multihost {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 std::string get_system_config_name(SystemConfig system_config) {
     switch (system_config) {
@@ -123,7 +119,7 @@ bool test_socket_send_recv(
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
-                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                if (mesh_core_coords.contains(connection.sender_core)) {
                     continue;
                 }
                 mesh_core_coords.insert(connection.sender_core);
@@ -220,7 +216,8 @@ bool test_socket_send_recv(
             }
             // Run receiver workload using the created socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
-            auto& core_to_core_id = recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+            const auto& core_to_core_id =
+                recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 std::vector<uint32_t> recv_data_readback;
                 ReadShard(
@@ -238,11 +235,11 @@ bool test_socket_send_recv(
         }
         // Increment the source vector for the next iteration
         // This is to ensure that the data is different for each transaction
-        for (int i = 0; i < src_vec.size(); i++) {
-            src_vec[i]++;
+        for (unsigned int& val : src_vec) {
+            val++;
         }
-        for (int i = 0; i < src_vec_per_core.size(); i++) {
-            src_vec_per_core[i]++;
+        for (unsigned int& val : src_vec_per_core) {
+            val++;
         }
     }
     return is_data_match;
@@ -536,7 +533,4 @@ void test_multi_mesh_multi_conn_bidirectional(
     distributed_context->barrier();
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

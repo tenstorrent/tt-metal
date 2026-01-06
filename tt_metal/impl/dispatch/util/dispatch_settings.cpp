@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <limits.h>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -18,6 +18,7 @@
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
