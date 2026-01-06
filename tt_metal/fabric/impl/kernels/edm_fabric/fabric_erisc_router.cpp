@@ -749,7 +749,12 @@ FORCE_INLINE void receiver_forward_packet(
         false;
 #endif
     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
-    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
+    if constexpr (NUM_DOWNSTREAM_CHANNELS == 0) {
+        // No downstream channels means that this packet cannot be forwarded and therefore can only be delivered to a
+        // local destination
+        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
             (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
