@@ -697,21 +697,23 @@ def test_gpt_oss_demo(
         with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
             perf_targets = json.load(f)
         prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
+        targets = {}
         if (
-            f"prefill_{prefill_pad_length}" in perf_targets["targets"]
-            and model_device_key in perf_targets["targets"][f"prefill_{prefill_pad_length}"]
+            f"batch_{batch_size}" in perf_targets["targets"]
+            and f"prefill_{prefill_pad_length}" in perf_targets["targets"][f"batch_{batch_size}"]
+            and model_device_key in perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]
         ):
             targets = {
-                "prefill_t/s": perf_targets["targets"][f"prefill_{prefill_pad_length}"][model_device_key]["TTFT"],
-                "decode_t/s": perf_targets["targets"][f"prefill_{prefill_pad_length}"][model_device_key][
-                    "decode_tok_s"
-                ],
-                "decode_t/s/u": perf_targets["targets"][f"prefill_{prefill_pad_length}"][model_device_key][
-                    "decode_tok_s_u"
-                ],
+                "prefill_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
+                    model_device_key
+                ]["TTFT"],
+                "decode_t/s": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
+                    model_device_key
+                ]["decode_tok_s"],
+                "decode_t/s/u": perf_targets["targets"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
+                    model_device_key
+                ]["decode_tok_s_u"],
             }
-        else:
-            targets = {}
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
@@ -759,35 +761,42 @@ def test_gpt_oss_demo(
             f"Checking measurements against CI performance targets for {model_name} on {tt_device_name} for padded prefill length {prefill_pad_length}"
         )
         # Only call verify_perf if the model_device_key exists in the targets
-        if f"prefill_{prefill_pad_length}" in perf_targets["ci"]:
-            if model_device_key in perf_targets["ci"][f"prefill_{prefill_pad_length}"]:
-                current_ttft_target = perf_targets["ci"][f"prefill_{prefill_pad_length}"][model_device_key]["TTFT"]
-                if isinstance(current_ttft_target, list):
-                    high_tol_percentage = current_ttft_target[1]
-                    current_ttft_target = current_ttft_target[0]
+        if f"batch_{batch_size}" in perf_targets["ci"]:
+            if f"prefill_{prefill_pad_length}" in perf_targets["ci"][f"batch_{batch_size}"]:
+                if model_device_key in perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"]:
+                    current_ttft_target = perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
+                        model_device_key
+                    ]["TTFT"]
+                    if isinstance(current_ttft_target, list):
+                        high_tol_percentage = current_ttft_target[1]
+                        current_ttft_target = current_ttft_target[0]
+                    else:
+                        high_tol_percentage = 1.15
+                    ci_targets = {
+                        "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
+                        "decode_t/s/u": perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
+                            model_device_key
+                        ]["decode_tok_s_u"],
+                        "decode_t/s": perf_targets["ci"][f"batch_{batch_size}"][f"prefill_{prefill_pad_length}"][
+                            model_device_key
+                        ]["decode_tok_s_u"]
+                        * global_batch_size,  # calculate from per-user rate
+                    }
+                    verify_perf(
+                        measurements,
+                        ci_targets,
+                        high_tol_percentage=high_tol_percentage,
+                        expected_measurements={k: True for k in ci_targets.keys()},
+                    )
                 else:
-                    high_tol_percentage = 1.15
-                ci_targets = {
-                    "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
-                    "decode_t/s/u": perf_targets["ci"][f"prefill_{prefill_pad_length}"][model_device_key][
-                        "decode_tok_s_u"
-                    ],
-                    "decode_t/s": perf_targets["ci"][f"prefill_{prefill_pad_length}"][model_device_key][
-                        "decode_tok_s_u"
-                    ]
-                    * global_batch_size,  # calculate from per-user rate
-                }
-                verify_perf(
-                    measurements,
-                    ci_targets,
-                    high_tol_percentage=high_tol_percentage,
-                    expected_measurements={k: True for k in ci_targets.keys()},
-                )
+                    logger.warning(
+                        f"No CI performance targets found for model {model_name} on device {tt_device_name} for prefill length {prefill_pad_length}. Skipping performance verification."
+                    )
             else:
                 logger.warning(
-                    f"No CI performance targets found for model {model_name} on device {tt_device_name} for prefill length {prefill_pad_length}. Skipping performance verification."
+                    f"No CI performance targets found for prefill length {prefill_pad_length}. Skipping performance verification."
                 )
         else:
             logger.warning(
-                f"No CI performance targets found for prefill length {prefill_pad_length}. Skipping performance verification."
+                f"No CI performance targets found for batch size {batch_size}. Skipping performance verification."
             )
