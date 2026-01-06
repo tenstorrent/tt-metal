@@ -48,7 +48,7 @@ public:
     //////////////////////////////
 
     // Used in ops.
-    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
