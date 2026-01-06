@@ -38,7 +38,6 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
-    const uint32_t tmp_rand_tile_size = tile_size(out_data_format);
 
     constexpr uint32_t in_out_num_tiles = 2;
 
@@ -48,19 +47,11 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
             .set_page_size(dst_cb_id, dtype_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    const uint32_t tmp_rand_num_tiles = std::max(units_per_core_group_1, units_per_core_group_2) + 1;
-
-    constexpr uint32_t tmp_rand_cb_id = CBIndex::c_1;
-    CircularBufferConfig cb_tmp_rand_config =
-        CircularBufferConfig(tmp_rand_num_tiles * tmp_rand_tile_size, {{tmp_rand_cb_id, out_data_format}})
-            .set_page_size(tmp_rand_cb_id, tmp_rand_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp_rand_config);
-
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/randn/device/kernels/";
     std::vector<uint32_t> writer_compile_time_args{dst_cb_id};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_standard_normal.cpp";
-    const std::vector<uint32_t> compute_compile_time_args{dst_cb_id, tmp_rand_cb_id};
+    const std::vector<uint32_t> compute_compile_time_args{dst_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_standard_normal.cpp";
 
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
