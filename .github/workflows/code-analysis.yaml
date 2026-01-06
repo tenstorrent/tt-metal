@@ -2,7 +2,7 @@ name: "Code analysis"
 
 on:
   schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+    - cron: "0 2 * * 1,3,5" # Static analysis: 2 AM UTC on Mon/Wed/Fri
   workflow_call:
     inputs:
       distro:
@@ -208,7 +208,7 @@ jobs:
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
     needs: [ build-docker-image, determine-scan-type ]
-    if: ${{ inputs.enable-static-analysis == true && needs.determine-scan-type.outputs.do-scan == 'true' }}
+    if: ${{ (inputs.enable-static-analysis == true || github.event_name == 'schedule') && needs.determine-scan-type.outputs.do-scan == 'true' }}
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
@@ -232,7 +232,7 @@ jobs:
         run: cmake --preset clang-static-analyzer
 
       - name: 🛠️ Generate files
-        run: cmake --build .build/clang-static-analyzer --target all_generated_files --config RelWithDebInfo
+        run: cmake --build .build/clang-static-analyzer --target all_generated_files
 
       - name: Setup clang symlinks for CodeChecker
         run: |
