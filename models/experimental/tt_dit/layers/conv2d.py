@@ -35,6 +35,7 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
+    # TODO: Remove manual slicing (https://github.com/tenstorrent/tt-metal/issues/33484)
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
