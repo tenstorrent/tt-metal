@@ -680,41 +680,43 @@ class MasterConfigLoader:
 
                         # pad: If padding has front padding (non-zero first element), use ROW_MAJOR layout
                         # (TILE layout doesn't support front padding, but ROW_MAJOR does)
+                        # IMPORTANT: Pad has two formats:
+                        # 1. padding format: arg1 is nested list like [[0,0], [0,13], [0,0], [0,0]]
+                        # 2. output_padded_shape format: arg1 is flat list like [1, 96, 32, 64] (output shape)
+                        # We need to detect which format and only check front padding for format 1
                         if self._matches_operation(operation_name, "pad"):
-                            # Extract padding from config to check for front padding
-                            padding = None
+                            # Extract arg1 from config to determine format
+                            arg1_parsed = None
                             for arg in config:
                                 if isinstance(arg, dict) and "arg1" in arg:
-                                    padding_str = arg["arg1"]
-                                    # Parse padding string/list
-                                    if isinstance(padding_str, str):
-                                        # Try parsing as JSON list string like "[[0, 0], [0, 13], [0, 0], [0, 0]]"
+                                    arg1_str = arg["arg1"]
+                                    # Parse arg1 string/list
+                                    if isinstance(arg1_str, str):
                                         try:
                                             import ast
 
-                                            padding = ast.literal_eval(padding_str)
+                                            arg1_parsed = ast.literal_eval(arg1_str)
                                         except Exception:
-                                            padding = OperationParameterExtractors._parse_list_from_string(padding_str)
-                                    elif isinstance(padding_str, list):
-                                        padding = padding_str
+                                            arg1_parsed = OperationParameterExtractors._parse_list_from_string(arg1_str)
+                                    elif isinstance(arg1_str, list):
+                                        arg1_parsed = arg1_str
                                     break
 
-                            if padding:
-                                # Check if any dimension has front padding (non-zero first element)
+                            # Determine format: nested list = padding format, flat 4-element list = output_padded_shape format
+                            is_padding_format = False
+                            if arg1_parsed and isinstance(arg1_parsed, list):
+                                if len(arg1_parsed) > 0 and isinstance(arg1_parsed[0], (list, tuple)):
+                                    # Nested list - this is padding format
+                                    is_padding_format = True
+
+                            # Only check for front padding if using padding format
+                            if is_padding_format and arg1_parsed:
                                 has_front_padding = False
-                                if isinstance(padding, list):
-                                    # Handle nested format: [[dim0_front, dim0_back], [dim1_front, dim1_back], ...]
-                                    if len(padding) > 0 and isinstance(padding[0], (list, tuple)):
-                                        for dim_pad in padding:
-                                            if len(dim_pad) >= 1:
-                                                if dim_pad[0] != 0:  # Front padding is non-zero
-                                                    has_front_padding = True
-                                                    break
-                                    # Handle flat format: [front_H, back_H, front_W, back_W] (4 elements)
-                                    elif len(padding) == 4 and all(isinstance(x, int) for x in padding):
-                                        # Check front padding for H and W dimensions (indices 0 and 2)
-                                        if padding[0] != 0 or padding[2] != 0:
+                                for dim_pad in arg1_parsed:
+                                    if isinstance(dim_pad, (list, tuple)) and len(dim_pad) >= 1:
+                                        if dim_pad[0] != 0:  # Front padding is non-zero
                                             has_front_padding = True
+                                            break
 
                                 if has_front_padding:
                                     parsed_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -1043,6 +1045,16 @@ class MasterConfigLoader:
                         if "target_shape" not in cfg:
                             continue  # Skip configs without target_shape
 
+                    # For pad, only include configs that have pad parameters
+                    # This ensures alignment with the pad parameter lists built later
+                    if operation_name == "pad" or operation_name == "ttnn::pad":
+                        has_padding = "padding" in cfg and "value" in cfg
+                        has_output_format = (
+                            "output_padded_shape" in cfg and "input_tensor_start" in cfg and "value" in cfg
+                        )
+                        if not (has_padding or has_output_format):
+                            continue  # Skip configs without pad parameters
+
                     # Validate and report invalid configs (but don't filter - let them fail)
                     mem_config = cfg.get("memory_config")
                     output_mem_config = cfg.get("output_memory_config")
@@ -1323,9 +1335,8 @@ class MasterConfigLoader:
                             output_padded_shape_complete.append(cfg["output_padded_shape"])
                             input_tensor_start_complete.append(cfg["input_tensor_start"])
                         else:
-                            # Config has neither format - skip this config entirely
-                            # Remove corresponding entries from all other param lists
-                            # (This is safer than adding None values which might cause issues)
+                            # Config has neither format - this should not happen if first loop filtering works correctly
+                            # But keep this as a safety check
                             continue
 
                     # Add ALL pad parameters (both formats) to support mixed configs

@@ -40,34 +40,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> tuple:
-    """
-    Invalidate test vectors where memory configs don't make sense for sharded_to_interleaved.
-    For sharded_to_interleaved: input should be SHARDED, output should be INTERLEAVED.
-
-    The traced JSON (config_65) has an INTERLEAVED input tensor, which is invalid.
-    This happens when the tracer captures the tensor state BEFORE it was sharded,
-    not the actual input to sharded_to_interleaved.
-    """
-    input_mem_config = test_vector.get("input_a_memory_config")
-    output_mem_config = test_vector.get("output_memory_config")
-
-    # Check if input memory config is interleaved (should be sharded)
-    if input_mem_config and hasattr(input_mem_config, "memory_layout"):
-        if input_mem_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-            return (
-                True,
-                "sharded_to_interleaved requires SHARDED input, but traced config has INTERLEAVED input (tracer captured pre-sharding state)",
-            )
-
-    # Check if output memory config is sharded (should be interleaved)
-    if output_mem_config and hasattr(output_mem_config, "memory_layout"):
-        if output_mem_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-            return (True, "sharded_to_interleaved requires INTERLEAVED output, but output_memory_config is SHARDED")
-
-    return (False, None)
-
-
 def mesh_device_fixture():
     """
     Override default device fixture for sharded_to_interleaved operation.
@@ -118,34 +90,46 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Use the traced sharded memory config directly since it's valid
-    # Create interleaved tensor first, then convert to sharded
-    input_tensor_interleaved = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    # Check if input is already interleaved or needs to be sharded
+    is_input_sharded = (
+        hasattr(input_a_memory_config, "memory_layout")
+        and input_a_memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     )
 
-    # Convert to sharded using the traced config
-    # Catch errors related to invalid core coordinates
-    try:
-        sharded_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, input_a_memory_config)
-    except (RuntimeError, ValueError) as e:
-        error_msg = str(e)
-        if "No core coordinate found" in error_msg or "core coordinate" in error_msg.lower():
-            # Invalid core coordinates in traced config - skip this config
-            raise ValueError(
-                f"Invalid core coordinates in sharding config: {error_msg}. "
-                f"This traced config uses cores that don't exist on this device."
-            )
-        raise
+    if is_input_sharded:
+        # Input should be sharded - create interleaved first, then convert to sharded
+        input_tensor_interleaved = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-    # Run sharded_to_interleaved - create reference by converting back to sharded
-    # Since this is a data movement op, we verify by round-trip conversion
+        # Convert to sharded using the traced config
+        try:
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor_interleaved, input_a_memory_config)
+        except (RuntimeError, ValueError) as e:
+            error_msg = str(e)
+            if "No core coordinate found" in error_msg or "core coordinate" in error_msg.lower():
+                raise ValueError(
+                    f"Invalid core coordinates in sharding config: {error_msg}. "
+                    f"This traced config uses cores that don't exist on this device."
+                )
+            raise
+    else:
+        # Input is interleaved - use the traced config directly (op supports this)
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+
+    # Run sharded_to_interleaved
     start_time = start_measuring_time()
-    output_tensor = ttnn.sharded_to_interleaved(sharded_tensor, memory_config=output_memory_config)
+    output_tensor = ttnn.sharded_to_interleaved(input_tensor, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     # Verify output is interleaved
@@ -155,13 +139,8 @@ def run(
             f"sharded_to_interleaved should produce interleaved output, but got {output_mem_config.memory_layout}"
         )
 
-    # Convert back to sharded to verify correctness (round-trip test)
-    # This ensures the data movement is correct
-    output_sharded = ttnn.interleaved_to_sharded(output_tensor, input_a_memory_config)
-    output_torch = ttnn.to_torch(output_sharded)
-    input_torch = ttnn.to_torch(sharded_tensor)
-
-    # Check with PCC - compare original sharded tensor with round-trip result
-    pcc = check_with_pcc(input_torch, output_torch, 0.999)
+    # Verify correctness by comparing with original torch tensor
+    output_torch = ttnn.to_torch(output_tensor)
+    pcc = check_with_pcc(torch_input_tensor_a, output_torch, 0.999)
 
     return [pcc, e2e_perf]
