@@ -245,6 +245,7 @@ jobs:
         with:
           logfile: /work/.build/clang-static-analyzer/compile_commands.json
           llvm-version: ignore # Already installed in our Docker container
+          config: /work/.codechecker.json
 
       - name: Upload CodeChecker reports
         uses: actions/upload-artifact@v4

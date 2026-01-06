@@ -1,0 +1,6 @@
+{
+  "analyzer": [
+    "--analyzers", "clangsa",
+    "--skip", ".codechecker.skiplist"
+  ]
+}

@@ -38,7 +38,8 @@
         "cacheVariables": {
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
-          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"}
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "TT_UMD_BUILD_SIMULATION": {"value": "FALSE"}
         }
       },
       {
