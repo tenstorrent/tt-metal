@@ -4,84 +4,63 @@
 
 #pragma once
 
-#include <array>
-#include <cstdint>
 #include <optional>
-#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "minimal_matmul_device_operation_types.hpp"
+#include "minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
-struct minimal_matmul_override_variables_t {
-    uint32_t num_cores;
-    std::vector<CoreCoord> cores;
-    tt::tt_metal::KernelHandle in0_sender_kernels_id;
-    tt::tt_metal::KernelHandle in0_receiver_kernels_id;
-    tt::tt_metal::KernelHandle in1_sender_kernels_id;
-    tt::tt_metal::KernelHandle in1_receiver_kernels_id;
-    bool transpose_core_grid;
-    bool read_local_slice_from_input;
-};
+struct MinimalMatmulDeviceOperation {
+    using operation_attributes_t = ttnn::operations::experimental::minimal_matmul::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::experimental::minimal_matmul::tensor_args_t;
+    using spec_return_value_t = ttnn::operations::experimental::minimal_matmul::spec_return_value_t;
+    using tensor_return_value_t = ttnn::operations::experimental::minimal_matmul::tensor_return_value_t;
 
-struct MinimalMatmulConfig {
-    MinimalMatmulConfig(
-        uint32_t M_block_size_ = 1,
-        uint32_t K_block_size_ = 1,
-        uint32_t N_block_size_ = 1,
-        uint32_t subblock_h_ = 1,
-        uint32_t subblock_w_ = 1,
-        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
-        M_block_size(M_block_size_),
-        K_block_size(K_block_size_),
-        N_block_size(N_block_size_),
-        subblock_h(subblock_h_),
-        subblock_w(subblock_w_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
+    using program_factory_t = std::variant<program::MinimalMatmulProgramFactory>;
 
-    uint32_t M_block_size;
-    uint32_t K_block_size;
-    uint32_t N_block_size;
-    uint32_t subblock_h;
-    uint32_t subblock_w;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    CoreCoord compute_with_storage_grid_size;
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static constexpr auto attribute_names = std::make_tuple(
-        "M_block_size", "K_block_size", "N_block_size", "subblock_h", "subblock_w", "compute_with_storage_grid_size");
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->M_block_size,
-            this->K_block_size,
-            this->N_block_size,
-            this->subblock_h,
-            this->subblock_w,
-            this->compute_with_storage_grid_size);
-    }
-};
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-struct MinimalMatmulOp {
-    std::optional<const MinimalMatmulConfig> config;
-    std::optional<unary::UnaryWithParam> fused_activation;
-    std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
-    std::optional<tt::tt_metal::DataType> output_dtype;
-    DeviceComputeKernelConfig compute_kernel_config;
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-
-    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const Tensor& weight_tensor,
+        const std::optional<Tensor>& bias_tensor,
+        std::optional<unary::UnaryWithParam> fused_activation,
+        const std::optional<const MinimalMatmulConfig>& config,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<const DataType> dtype,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::experimental::minimal_matmul
+
+namespace ttnn::prim {
+
+operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_return_value_t minimal_matmul(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<Tensor>& bias_tensor,
+    std::optional<operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+
+}  // namespace ttnn::prim
