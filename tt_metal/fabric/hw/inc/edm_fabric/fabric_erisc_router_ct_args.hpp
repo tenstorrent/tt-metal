@@ -153,7 +153,7 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 //   "is it the payload size or does it include the packet header size?"
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
 constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
-constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
+constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode || (NUM_SENDER_CHANNELS == 1);
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);

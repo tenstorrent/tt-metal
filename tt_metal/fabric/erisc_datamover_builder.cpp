@@ -907,7 +907,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // when there is no remote router paired with current router, don't care about skip_src_ch_id_update and set it to
     // false
     if (remote_routing_direction.has_value()) {
-        skip_src_ch_id_update = this->has_tensix_extension;
+        // We will only have a single sender channel if tensix cores are used as mux extension or the number of sender
+        // channels has been explicitly set to 1.
+        skip_src_ch_id_update = this->has_tensix_extension || (num_sender_channels == 1);
         remote_worker_sender_channel = get_worker_connected_sender_channel();
     }
 
