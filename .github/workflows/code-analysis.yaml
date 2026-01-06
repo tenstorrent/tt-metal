@@ -231,6 +231,9 @@ jobs:
       - name: 🔧 CMake configure
         run: cmake --preset clang-static-analyzer
 
+      - name: 🛠️ Generate files
+        run: cmake --build .build/clang-static-analyzer --target all_generated_files --config RelWithDebInfo
+
       - name: Setup clang symlinks for CodeChecker
         run: |
           update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
