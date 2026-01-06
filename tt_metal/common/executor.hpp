@@ -33,7 +33,7 @@ inline std::mutex& GetExecutorMutex() {
 // launch an async tf job only if not all workers are occupied
 template <class F, class... Args>
 auto async(F&& func, Args&&... args) {
-    using return_type = typename std::invoke_result<F, Args...>::type;
+    using return_type = std::invoke_result_t<F, Args...>;
 
     auto task = std::make_shared<std::packaged_task<return_type()>>(
         std::bind(std::forward<F>(func), std::forward<Args>(args)...));
