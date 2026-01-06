@@ -201,7 +201,7 @@ jobs:
               "model": "gpt-oss",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_gpt_oss_tests",
-              "timeout": 30,
+              "timeout": 20,
               "owner_id": "U08TJ70UFRT" # Harry Andrews
             }
           ]')
@@ -240,7 +240,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':rw' || ':rw' }}
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
