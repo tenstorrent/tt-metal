@@ -406,9 +406,9 @@ FORCE_INLINE volatile tt::tt_fabric::fabric_connection_sync_t* get_fabric_connec
  * The lock is acquired on first initialization and held until release_fabric_connection() is called.
  * The initialized flag is stored in L1 (shared across RISCs on multi-RISC architectures).
  *
- * @return Reference to the fabric connection and initialized flag
+ * @return Reference to the fabric connection
  */
-FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
+FORCE_INLINE tt::tt_fabric::WorkerToFabricEdmSender& get_or_open_fabric_connection() {
     // Get sync region pointer (just address calculation, no memory read)
     auto* sync = get_fabric_connection_sync();
 
@@ -429,17 +429,7 @@ FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_ope
         sync->initialized = 1;
     }
 
-    return {*connection, sync->initialized != 0};
-}
-
-/**
- * @brief Close a singleton fabric connection for the current worker
- */
-FORCE_INLINE void close_fabric_connection() {
-    auto [connection, initialized] = get_or_open_fabric_connection();
-    if (initialized) {
-        connection.close();
-    }
+    return *connection;
 }
 
 /**
