@@ -53,7 +53,7 @@ def padded_shape(output_shape, tile, num_devices, num_links, ag_input_dtype):
 
 
 def run_all_gather_impl(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -77,7 +77,7 @@ def run_all_gather_impl(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
@@ -89,13 +89,13 @@ def run_all_gather_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = t3k_mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    t3k_mesh_device.load_sub_device_manager(sub_device_manager)
-    t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     ccl_semaphore_handles = [
-        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
     ### Create persistent output buffers
@@ -103,22 +103,22 @@ def run_all_gather_impl(
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(padded_shape(ag_output_shape, tile, num_devices, num_links, ag_input_dtype)),
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ag_input_dtype,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         for _ in range(num_iters)
     ]
     persistent_output_buffers = [
         ttnn.from_torch(
             torch.zeros(ag_output_shape),
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ag_input_dtype,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         for _ in range(num_iters)
     ]
@@ -134,11 +134,11 @@ def run_all_gather_impl(
         ag_output_tensor_goldens_list.append(ag_output_tensor)
         input_tensor_mesh = ttnn.from_torch(
             ag_output_tensor,
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=layout,
             dtype=ag_input_dtype,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=dim),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -169,17 +169,17 @@ def run_all_gather_impl(
         logger.info(f"Done compiling Op")
 
         # Capture the trace
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_all_gather_out_tensor = run_op(0)
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
         # Execute trace
-        ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
 
         # Synchronize the devices
-        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
         tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
     else:
@@ -188,7 +188,7 @@ def run_all_gather_impl(
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
@@ -198,15 +198,15 @@ def run_all_gather_impl(
         torch_ag_out_tensor = ag_output_tensor_goldens_list[i]
 
         tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))[
+        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))[
             :, :, :, 0 : torch_ag_out_tensor.shape[3]
         ]
         eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
-    t3k_mesh_device.reset_sub_device_stall_group()
-    t3k_mesh_device.clear_loaded_sub_device_manager()
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
 
 
 @pytest.mark.parametrize(
@@ -238,8 +238,9 @@ def run_all_gather_impl(
     ],
     indirect=["device_params"],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_gather_async(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -251,7 +252,7 @@ def test_all_gather_async(
     all_gather_topology,
 ):
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         ag_output_shape,
         dim,
@@ -300,8 +301,9 @@ def test_all_gather_async(
     ],
     indirect=["device_params"],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_reduce_scatter_async(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     num_links,
     rs_input_shape,
@@ -315,7 +317,7 @@ def test_reduce_scatter_async(
     rs_topology,
 ):
     run_reduce_scatter_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         rs_input_shape,
         dim,

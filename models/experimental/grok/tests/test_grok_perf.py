@@ -38,8 +38,9 @@ from transformers import AutoTokenizer
         (2048, 150, 0.025),
     ),
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_grok_model_perf(
-    t3k_mesh_device,
+    mesh_device,
     generation_start_pos,
     expected_compile_time,
     expected_inference_time,
@@ -48,7 +49,7 @@ def test_grok_model_perf(
     dtype = ttnn.bfloat8_b
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=False)
+    model_args = TtModelArgs(mesh_device, dummy_weights=False)
     model_args.n_layers = 1
 
     # Clear global profiler state before starting measurements
@@ -75,7 +76,7 @@ def test_grok_model_perf(
 
     # Load TTNN model
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -98,7 +99,7 @@ def test_grok_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.ReadDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
