@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_COL
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
@@ -34,7 +34,8 @@ void MAIN {
         if (Ht == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            reduce_tile_to_cb<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, cb_max, Ht, /*pop0=*/1, /*pop1=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::single());
         } else {
             cb_reserve_back(cb_max, onetile);
 
