@@ -139,11 +139,15 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .memory_config = memory_config,
+            .optional_intermediate_mem_config = optional_intermediate_mem_config,
             .dim = dim,
             .cluster_axis = cluster_axis,
             .subdevice_id = subdevice_id,
             .topology = topology,
-            .num_links = num_links},
+            .num_links = num_links,
+            .chunks_per_sync = chunks_per_sync,
+            .num_workers_per_link = num_workers_per_link,
+            .num_buffers_per_channel = num_buffers_per_channel},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
 }  // namespace ttnn::prim
