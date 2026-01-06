@@ -23,15 +23,8 @@ namespace tt::test_utils {
 // this follows the implementation of numpy's is_close
 template <typename ValueType>
 bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float atol = 0.001f) {
-    float af = 0.0f;
-    float bf = 0.0f;
-    if constexpr (std::is_integral_v<ValueType> or std::is_floating_point_v<ValueType>) {
-        af = static_cast<float>(a);
-        bf = static_cast<float>(b);
-    } else {
-        af = static_cast<float>(a);
-        bf = static_cast<float>(b);
-    }
+    auto af = static_cast<float>(a);
+    auto bf = static_cast<float>(b);
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)
     // elsewhere (not near zero) we want relative tolerance

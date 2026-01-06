@@ -330,7 +330,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
             case DispatchFeature::ETH_MAILBOX_API: return true;
             // Active eth kernel config buffer is not needed until 2 ERISCs
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));
         }

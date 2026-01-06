@@ -357,9 +357,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DispatchFeature::ETH_MAILBOX_API: return true;
-            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::ETH_MAILBOX_API:
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER:
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
         }

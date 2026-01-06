@@ -76,11 +76,9 @@ bool should_use_two_stage_reduce(
     bool mcast_1d, bool row_wise, CoreCoord grid_size, CoreCoord compute_with_storage_grid_size) {
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x > 1 && grid_size.x <= compute_with_storage_grid_size.x &&
-            grid_size.y > 1) {  // row major and multiple rows
-            return true;
-        } else if (!row_wise && grid_size.x > 1 && grid_size.y == compute_with_storage_grid_size.y) {  // col major and
-                                                                                                       // multiple cols
+        // row major with multiple rows, or col major with multiple cols
+        if ((row_wise && grid_size.x > 1 && grid_size.x <= compute_with_storage_grid_size.x && grid_size.y > 1) ||
+            (!row_wise && grid_size.x > 1 && grid_size.y == compute_with_storage_grid_size.y)) {
             return true;
         }
     }
