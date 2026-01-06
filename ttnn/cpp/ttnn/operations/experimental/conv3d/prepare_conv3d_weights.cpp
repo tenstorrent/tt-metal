@@ -42,6 +42,7 @@ Tensor convert_tensor_to_tiled_layout_common(
     if (entry == function_map.end()) {
         TT_THROW("Unsupported data type");
     }
+    log_info(tt::LogTest, "convert_tensor_to_tiled_layout_common");
     return entry->second(input_tensor, std::forward<Args>(args)..., output_dtype.value_or(input_tensor.dtype()));
 }
 
@@ -49,44 +50,50 @@ Tensor convert_tensor_to_tiled_layout_common(
 Helper function to aid in converting grouped weight tensor to ungrouped weight tensor with padded zero channels
 */
 template <typename T>
-static Tensor conv_group_weight_zero_pad_helper(
-    const Tensor& weight,
-    const ttnn::Shape& original_weight_shape,
-    const ttnn::Shape& output_weight_shape,
+static Tensor conv3d_group_weight_zero_pad_helper(
+    const Tensor& weight,                      // 已经是 2D 矩阵 [H_in, W_in]
+    const ttnn::Shape& original_weight_shape,  // 这里的 shape 也是 2D [H_in, W_in]
+    const ttnn::Shape& output_weight_shape,    // 目标矩阵 2D [H_out, W_out]
     uint32_t num_groups,
     DataType output_dtype) {
-    auto pad_weight = [&original_weight_shape, &output_weight_shape, num_groups, output_dtype](
+    auto pad_weight = [&original_weight_shape, &output_weight_shape, num_groups](
                           const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
-        auto conv_weight_tensor_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
-        auto output_buffer = std::vector<T>(output_weight_shape.volume());
+        auto src_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
+        auto output_buffer = std::vector<T>(output_weight_shape.volume(), 0);
 
-        for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
-            int new_batch_idx = curr_batch_idx;
+        uint32_t h_out = output_weight_shape[0];  // kD * kH * kW * C_in_total
+        uint32_t w_out = output_weight_shape[1];  // C_out_total (即 out_channels)
 
-            // Find which group_id the filter belongs to - through this, we can compute the offset where the padding
-            // should be applied
-            auto group_size = original_weight_shape[0] / num_groups;
-            auto group_index = curr_batch_idx / group_size;
-            auto group_id = std::min(group_index, num_groups - 1);
-            int new_channel_start_idx = group_id * original_weight_shape[1];
+        // 计算每个 Group 在矩阵中占据的“块”大小
+        // 每个块的高度包含了该组的所有空间维度和通道数据
+        uint32_t rows_per_group = h_out / num_groups;
+        uint32_t cols_per_group = w_out / num_groups;
 
-            for (int j = 0; j < original_weight_shape[1]; j++) {
-                for (int k = 0; k < original_weight_shape[2]; k++) {
-                    for (int l = 0; l < original_weight_shape[3]; l++) {
-                        for (int m = 0; m < original_weight_shape[4]; m++) {
-                            // Get value from original weight tensor
-                            auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                ttnn::SmallVector<int>{curr_batch_idx, j, k, l, m},
-                                compute_strides(original_weight_shape));
-                            auto value = conv_weight_tensor_buffer[value_flat_input_index];
+        // 遍历每一个 Group，进行对角块拷贝
+        for (uint32_t g = 0; g < num_groups; g++) {
+            // 目标矩阵中的起始坐标 (对角块位置)
+            uint32_t dest_start_row = g * rows_per_group;
+            uint32_t dest_start_col = g * cols_per_group;
 
-                            // Copy value to output tensor at the adjusted position
-                            auto new_channel_idx = new_channel_start_idx + j;
-                            auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                ttnn::SmallVector<int>{new_batch_idx, new_channel_idx, k, l, m},
-                                compute_strides(output_weight_shape));
-                            output_buffer[output_flat_input_index] = value;
-                        }
+            // 源矩阵中的起始坐标
+            // 假设源矩阵是 [kD*kH*kW * (C_in/G) * G, (C_out/G)] 这种紧凑排布
+            uint32_t src_start_row = g * rows_per_group;
+
+            for (uint32_t i = 0; i < rows_per_group; i++) {
+                for (uint32_t j = 0; j < cols_per_group; j++) {
+                    // 计算源矩阵的一维索引 (源矩阵宽度为 cols_per_group)
+                    uint32_t src_row = src_start_row + i;
+                    uint32_t src_col = j;
+                    uint32_t src_idx = src_row * cols_per_group + src_col;
+
+                    // 计算目标矩阵的一维索引 (目标矩阵宽度为 w_out)
+                    uint32_t dest_row = dest_start_row + i;
+                    uint32_t dest_col = dest_start_col + j;
+                    uint32_t dest_idx = dest_row * w_out + dest_col;
+
+                    // 赋值
+                    if (src_idx < src_buffer.size()) {
+                        output_buffer[dest_idx] = src_buffer[src_idx];
                     }
                 }
             }
@@ -96,7 +103,8 @@ static Tensor conv_group_weight_zero_pad_helper(
 
     const TensorSpec output_spec(
         output_weight_shape,
-        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
+
     return convert_tensor<T>(weight, pad_weight, output_spec);
 }
 
@@ -111,24 +119,27 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
-    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.logical_shape();
-    ttnn::Shape output_conv_weight_tensor_shape{
-        original_conv_weight_tensor_shape[0],
-        original_conv_weight_tensor_shape[1] * num_groups,
-        original_conv_weight_tensor_shape[2],
-        original_conv_weight_tensor_shape[3],
-        original_conv_weight_tensor_shape[4]};
+    const auto& original_shape = conv_weight_tensor.logical_shape();
+    uint32_t h_in = original_shape[0];
+    uint32_t w_in = original_shape[1];  // 这通常是 out_channels / num_groups
+
+    // 计算输出矩阵的形状：宽度变为原来的 num_groups 倍（补 0 后的总 Out Channels）
+    // 高度保持一致，因为 H_in 已经包含了 kD*kH*kW*C_in_per_group * num_groups
+    uint32_t h_out = h_in;
+    uint32_t w_out = w_in * num_groups;
+
+    ttnn::Shape output_conv_weight_tensor_shape(ttnn::SmallVector<uint32_t>{h_out, w_out});
 
     const static std::
         unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::Shape, ttnn::Shape, uint32_t, DataType)>>
             to_w_tile_layout_map = {
-                {DataType::INT32, &conv_group_weight_zero_pad_helper<int32_t>},
-                {DataType::FLOAT32, &conv_group_weight_zero_pad_helper<float>},
-                {DataType::BFLOAT16, &conv_group_weight_zero_pad_helper<bfloat16>},
-                {DataType::UINT16, &conv_group_weight_zero_pad_helper<uint16_t>},
-                {DataType::BFLOAT8_B, &conv_group_weight_zero_pad_helper<float>},
-                {DataType::UINT32, &conv_group_weight_zero_pad_helper<uint32_t>},
-                {DataType::BFLOAT4_B, &conv_group_weight_zero_pad_helper<uint32_t>},
+                {DataType::INT32, &conv3d_group_weight_zero_pad_helper<int32_t>},
+                {DataType::FLOAT32, &conv3d_group_weight_zero_pad_helper<float>},
+                {DataType::BFLOAT16, &conv3d_group_weight_zero_pad_helper<bfloat16>},
+                {DataType::UINT16, &conv3d_group_weight_zero_pad_helper<uint16_t>},
+                {DataType::BFLOAT8_B, &conv3d_group_weight_zero_pad_helper<float>},
+                {DataType::UINT32, &conv3d_group_weight_zero_pad_helper<uint32_t>},
+                {DataType::BFLOAT4_B, &conv3d_group_weight_zero_pad_helper<uint32_t>},
             };
 
     if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
@@ -137,30 +148,51 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
             "Prepare weights for Conv3D with groups > 1 expects weights on host, but they are on device. The op will "
             "move them back to host.");
     }
+
+    log_info(tt::LogTest, "conv_weight_tensor.layout(): {}", conv_weight_tensor.layout());
+    Tensor weight_on_host = tt::tt_metal::is_device_tensor(conv_weight_tensor)
+                                ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                : conv_weight_tensor;
+    log_info(tt::LogTest, "weight_on_host.logical_shape(): {}", weight_on_host.logical_shape());
+    log_info(tt::LogTest, "weight_on_host.layout(): {}", weight_on_host.layout());
+
     return convert_tensor_to_tiled_layout_common(
-        tt::tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
-                                                           : conv_weight_tensor,
+        weight_on_host,
         output_dtype,
         to_w_tile_layout_map,
-        original_conv_weight_tensor_shape,
+        original_shape,
         output_conv_weight_tensor_shape,
         num_groups);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(
-    const ttnn::Tensor& weight_tensor, const Conv3dWeightsBiasPrepConfig& params) {
+    const ttnn::Tensor& weight_tensor, const Conv3dWeightsBiasPrepConfig& params, MeshDevice* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;
 
     if (params.groups > 1) {
         weight_tensor_ =
             convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
+
     }
+    // group=1,需要实现原先python端中的pad与tile操作
+    else {
+        weight_tensor_ = ttnn::to_layout(weight_tensor_, Layout::TILE);
+    }
+    log_info(tt::LogTest, "weight_tensor_.logical_shape(): {}", weight_tensor_.logical_shape());
+    log_info(tt::LogTest, "weight_tensor_.layout(): {}", weight_tensor_.layout());
+
+    log_info(tt::LogTest, "ttnn::operations::core::to_device");
+    // Always move parameters to device
+    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
+
+    log_info(tt::LogTest, "ttnn::operations::core::to_device END END END");
 
     return weight_tensor_;
 }
 
-ttnn::Tensor prepare_conv_weights(const ttnn::Tensor& weight_tensor, const Conv3dWeightsBiasPrepConfig& config) {
-    return prepare_conv_weights_internal(weight_tensor, config);
+ttnn::Tensor prepare_conv_weights(
+    const ttnn::Tensor& weight_tensor, const Conv3dWeightsBiasPrepConfig& config, MeshDevice* device) {
+    return prepare_conv_weights_internal(weight_tensor, config, device);
 }
 
 }  // namespace ttnn::operations::experimental::conv3d
