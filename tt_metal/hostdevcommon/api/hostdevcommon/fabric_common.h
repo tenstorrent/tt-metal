@@ -357,22 +357,22 @@ inline void encode_2d_unicast(
 
     if (ns_hops > 0 && ew_hops > 0) {
         // NS -> EW turn: (ns_hops-1 + prepend) NS forwards, ew_hops EW forwards, 1 EW write
-        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
+        for (auto i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
             buffer[idx++] = ns_fwd;
         }
-        for (uint8_t i = 0; i < ew_hops; ++i) {
+        for (auto i = 0; i < ew_hops; ++i) {
             buffer[idx++] = ew_fwd;
         }
         buffer[idx++] = ew_write;
     } else if (ns_hops > 0) {
         // Only NS: (ns_hops-1 + prepend) NS forwards, 1 NS write
-        for (uint8_t i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
+        for (auto i = 0; i < ns_hops - 1 + prepend_one_hop; ++i) {
             buffer[idx++] = ns_fwd;
         }
         buffer[idx++] = ns_write;
     } else if (ew_hops > 0) {
         // Only EW: (ew_hops-1 + prepend) EW forwards, 1 EW write
-        for (uint8_t i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
+        for (auto i = 0; i < ew_hops - 1 + prepend_one_hop; ++i) {
             buffer[idx++] = ew_fwd;
         }
         buffer[idx++] = ew_write;
@@ -381,59 +381,6 @@ inline void encode_2d_unicast(
     // Fill remainder with NOOP
     while (idx < max_buffer_size) {
         buffer[idx++] = MeshFields::NOOP;
-    }
-}
-
-/**
- * Encodes a linear segment of a 2D multicast route.
- *
- * 2D Multicast routes are built from multiple segments (Spine N/S, Branch E/W).
- * This function is called multiple times by fabric_set_mcast_route to build the tree.
- * Matches logic in fabric_set_route (tt_fabric_api.h lines 74-95).
- *
- * Multicast logic:
- * - For spine (N/S): forwards with potential branch flags at last hop
- * - For branches (E/W): just forwards
- * - branch_forward contains WRITE_AND_FORWARD_EW flags for E/W branching
- *
- * @param direction Direction of this segment (0=EAST, 1=WEST, 2=NORTH, 3=SOUTH)
- * @param branch_forward Branch flags (WRITE_AND_FORWARD_EW bits for 2D mcast branching)
- * @param start_hop Starting index in the route vector
- * @param segment_length Length of this segment
- * @param buffer Output buffer (uint8_t array)
- */
-inline void encode_2d_mcast_segment(
-    uint8_t direction, uint32_t branch_forward, uint32_t start_hop, uint32_t segment_length, uint8_t* buffer) {
-    using MeshFields = RoutingFieldsConstants::Mesh;
-
-    // Determine forward command based on direction
-    uint8_t forward_cmd = 0;
-    switch (direction) {
-        case 0: forward_cmd = MeshFields::FORWARD_EAST; break;   // EAST
-        case 1: forward_cmd = MeshFields::FORWARD_WEST; break;   // WEST
-        case 2: forward_cmd = MeshFields::FORWARD_NORTH; break;  // NORTH
-        case 3: forward_cmd = MeshFields::FORWARD_SOUTH; break;  // SOUTH
-    }
-
-    // OR in branch_forward flags (for N/S spine with E/W branches)
-    forward_cmd |= static_cast<uint8_t>(branch_forward);
-
-    const uint32_t end_hop = start_hop + segment_length;
-
-    for (uint32_t i = start_hop; i < end_hop; i++) {
-        uint8_t val = forward_cmd;
-
-        // For multicast spine (N/S with branch_forward):
-        // Last hop gets only the branch flags (E/W), not the spine forward
-        if (i == end_hop - 1 && branch_forward) {
-            // Check if this is a N/S mcast that needs to branch E/W
-            uint32_t mcast_branch = (forward_cmd & MeshFields::WRITE_AND_FORWARD_NS)
-                                        ? (branch_forward & MeshFields::WRITE_AND_FORWARD_EW)
-                                        : 0;
-            val = static_cast<uint8_t>(mcast_branch);
-        }
-
-        buffer[i] = val;
     }
 }
 
