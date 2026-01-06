@@ -387,7 +387,8 @@ class Attention(LightweightModule):
     def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
         """
         Convert Q and K tensors to height-sharded memory layouts suitable for
-        fused QK ops such as rotary_embedding_llama_fused_qk and  computation.
+        fused QK ops such as rotary_embedding_llama_fused_qk and the subsequent
+        QK matmul/attention score computation.
 
         This function:
         - Infers the number of Q heads and KV heads from the input tensors
