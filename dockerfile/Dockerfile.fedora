@@ -129,16 +129,8 @@ RUN umask 000 && \
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-# Install the debugger (tt-exalens) using uv instead of pip
-# The install_debugger.sh script uses pip, but uv venvs don't include pip by default
-RUN REF=$(head -n1 ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt | tr -d '[:space:]') && \
-    PYTHON_CP_VERSION=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")') && \
-    DOWNLOAD_LINK="https://github.com/tenstorrent/tt-exalens/releases/download/v${REF}/tt_exalens-${REF}-${PYTHON_CP_VERSION}-${PYTHON_CP_VERSION}-linux_x86_64.whl" && \
-    if curl --head --silent --fail "$DOWNLOAD_LINK" >/dev/null 2>&1; then \
-        uv pip install --no-cache "$DOWNLOAD_LINK"; \
-    else \
-        uv pip install --no-cache "git+https://github.com/tenstorrent/tt-exalens.git@v${REF}"; \
-    fi
+# Install the debugger (tt-exalens) via script (uses uv with fallback to pip)
+RUN ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 
 #############################################################
 
