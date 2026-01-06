@@ -73,7 +73,6 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
-        CARGO_HOME: /tmp/.cargo
         TT_FROM_PRECOMPILED_DIR: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
