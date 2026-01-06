@@ -327,6 +327,7 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
     // still not sure why this CFG_STATE_ID_StateID manipulation is needed
     if (unpack_dst_format != (uint)DataFormat::Tf32)
     {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
         TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         TTI_NOP;

@@ -164,6 +164,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
  */
 inline void _llk_unpack_AB_reduce_block_max_row_uninit_()
 {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
     TTI_SETADCXX(p_setadc::UNP_AB, (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);

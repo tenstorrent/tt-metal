@@ -242,6 +242,7 @@ inline void _llk_pack_untilize_(
 
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const uint z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 }

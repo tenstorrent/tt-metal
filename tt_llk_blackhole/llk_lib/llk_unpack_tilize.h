@@ -158,6 +158,7 @@ inline void _llk_unpack_tilize_(
 
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Revert X dim value to default.
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);

@@ -416,6 +416,7 @@ inline void _llk_unpack_tilizeA_B_(
 
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
     unpack_config_u config = {0};
@@ -543,6 +544,7 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_fast_tilize_uninit_()
 {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     // restore saved state
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
