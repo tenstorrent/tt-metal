@@ -463,11 +463,11 @@ inline void _init_typecast_fp32_to_fp16b_()
     }
 
     // Misc: {
-    //   StoreMod0: 2,
+    //   StoreMod0: FP16B,
     //   UsesLoadMod0ForStore: {1,0},
     //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
     // }
-    TTI_SFPCONFIG(0x312, 8, 1);
+    TTI_SFPCONFIG(0x310 | InstrModLoadStore::FP16B, 8, 1);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -485,7 +485,7 @@ inline void _init_typecast_uint16_to_uint32_()
     }
 
     // Misc: {
-    //   StoreMod0: InstrModLoadStore::INT32,
+    //   StoreMod0: INT32,
     //   UsesLoadMod0ForStore: {0},
     //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
     // }
