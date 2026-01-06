@@ -265,7 +265,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
-    const uint32_t dim,
+    const int32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,

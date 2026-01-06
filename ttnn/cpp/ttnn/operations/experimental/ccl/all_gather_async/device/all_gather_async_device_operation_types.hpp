@@ -19,7 +19,7 @@
 namespace ttnn::operations::experimental::ccl::all_gather_async {
 
 struct operation_attributes_t {
-    uint32_t dim = 0;
+    int32_t dim = 0;
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
@@ -38,7 +38,7 @@ struct operation_attributes_t {
     std::optional<CoreRangeSet> sub_core_grid;
 
     operation_attributes_t(
-        uint32_t dim,
+        int32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
         MemoryConfig output_mem_config,

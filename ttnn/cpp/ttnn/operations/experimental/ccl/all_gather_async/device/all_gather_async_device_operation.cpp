@@ -231,7 +231,7 @@ std::tuple<AllGatherAsyncDeviceOperation::operation_attributes_t, AllGatherAsync
 AllGatherAsyncDeviceOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
-    uint32_t dim,
+    int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
@@ -255,6 +255,17 @@ AllGatherAsyncDeviceOperation::invoke(
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     bool using_persistent_buffers = persistent_output_buffer.has_value();
 
+    int32_t rank = input_tensor.logical_shape().rank();
+
+    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    TT_FATAL(
+        gather_dim >= -rank && gather_dim <= rank - 1,
+        "Dimension input should be in between -{} and {}, but has {}",
+        rank,
+        rank - 1,
+        dim);
+
     // Prioritize optional mesh device first, then check device of input_tensor
     bool using_optional_mesh_device = optional_mesh_device != nullptr;
     if (using_optional_mesh_device) {
@@ -262,18 +273,6 @@ AllGatherAsyncDeviceOperation::invoke(
         TT_FATAL(
             mesh_view.is_mesh_2d(),
             "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-
-        int32_t rank = input_tensor.logical_shape().rank();
-
-        int32_t gather_dim = (dim < 0) ? rank + dim : dim;
-
-        TT_FATAL(
-            gather_dim >= -rank && gather_dim <= rank - 1,
-            "Dimension input should be in between -{} and {}, but has {}",
-            rank,
-            rank - 1,
-            dim);
-
     } else {
         TT_FATAL(input_tensor.device() != nullptr, "Input tensor has no mesh device assigned.");
 
@@ -287,7 +286,7 @@ AllGatherAsyncDeviceOperation::invoke(
 
     return {
         operation_attributes_t(
-            dim,
+            gather_dim,
             num_links,
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),

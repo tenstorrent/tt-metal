@@ -35,7 +35,7 @@ struct AllGatherAsyncDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const std::optional<ttnn::Tensor>& persistent_output_buffer,
-        uint32_t dim,
+        int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         uint32_t num_links,
         const std::optional<MemoryConfig>& memory_config,
