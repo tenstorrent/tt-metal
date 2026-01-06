@@ -52,33 +52,21 @@ BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcas
             break;
 
         case SubtileBroadcastType::ROW_A:
-            compute_kernel = KernelName::ComputeNoBcast;
-            bcast_input = std::nullopt;
-            break;
-
         case SubtileBroadcastType::ROW_B:
             compute_kernel = KernelName::ComputeNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::ROW_B_COL_A:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-
         case SubtileBroadcastType::ROW_A_COL_B:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 1;
-            break;
-
-        case SubtileBroadcastType::ROW_B_COL_A:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
             break;
     }
 }

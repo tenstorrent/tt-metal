@@ -57,13 +57,16 @@ struct DRAMConfig {
 
 tt::tt_metal::KernelHandle CreateKernelFromVariant(tt::tt_metal::Program& program, DRAMConfig cfg) {
     tt::tt_metal::KernelHandle kernel;
-    std::visit([&](auto&& cfg_variant) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(cfg_variant)>, tt::tt_metal::EthernetConfig>) {
-            kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(cfg_variant)>, tt::tt_metal::DataMovementConfig>) {
-            kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);
-        }
-    }, cfg.kernel_cfg);
+    std::visit(
+        [&](auto&& cfg_variant) {
+            using T = std::decay_t<decltype(cfg_variant)>;
+            if constexpr (
+                std::is_same_v<T, tt::tt_metal::EthernetConfig> ||
+                std::is_same_v<T, tt::tt_metal::DataMovementConfig>) {
+                kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);
+            }
+        },
+        cfg.kernel_cfg);
     return kernel;
 }
 

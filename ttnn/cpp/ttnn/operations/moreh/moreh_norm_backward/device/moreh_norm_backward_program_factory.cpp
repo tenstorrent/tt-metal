@@ -77,13 +77,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
-        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
-
-        if (is_tile_dim) {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
-        } else {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
-        }
+        need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
     }
 
     const auto num_input_grad_tiles = input_grad.physical_volume() / tt::constants::TILE_HW;

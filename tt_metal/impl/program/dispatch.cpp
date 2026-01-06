@@ -1851,12 +1851,7 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
     config_buffer_mgr.init_add_buffer(0, dev_msgs::launch_msg_buffer_num_entries - 1);
-    if (hal.get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
-        // Keeping it the same
-        config_buffer_mgr.init_add_buffer(0, 1);
-    } else {
-        config_buffer_mgr.init_add_buffer(0, 1);
-    }
+    config_buffer_mgr.init_add_buffer(0, 1);
 }
 
 void reserve_space_in_kernel_config_buffer(
