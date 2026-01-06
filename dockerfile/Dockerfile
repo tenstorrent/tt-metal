@@ -232,6 +232,17 @@ RUN uv pip install $WHEEL_FILENAME
 
 FROM base AS release-models
 
+# Re-declare ARG to make it available in this stage
+ARG UBUNTU_VERSION
+
+# Install uv (not available via apt, install via pip)
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
+RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
+        python3 -m pip install --no-cache-dir --break-system-packages uv; \
+    else \
+        python3 -m pip install --no-cache-dir uv; \
+    fi
+
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal

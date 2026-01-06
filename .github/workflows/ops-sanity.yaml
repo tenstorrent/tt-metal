@@ -37,7 +37,7 @@ jobs:
         with:
           submodules: recursive
       - name: Install dependencies
-        run: pip3 install PyYAML
+        run: uv pip install PyYAML
       - name: Verify test timeouts against budget
         run: |
           set -e

@@ -53,7 +53,7 @@ jobs:
       - name: Install Wheel
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install $WHEEL_FILENAME
+          uv pip install $WHEEL_FILENAME
       - name: Build Docs
         timeout-minutes: 15
         env:
