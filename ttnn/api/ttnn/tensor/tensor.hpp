@@ -282,14 +282,6 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]] Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config = MemoryConfig{},
-    const std::optional<Tile>& tile = std::nullopt);
-
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
     distributed::MeshCommandQueue& queue,
