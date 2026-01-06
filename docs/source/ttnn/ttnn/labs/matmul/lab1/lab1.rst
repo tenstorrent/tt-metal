@@ -862,13 +862,16 @@ Observe the output in the terminal. The output will show the call stacks for all
 that are running firmware reposible for dispatching kernel code. You should ingore the cores that are running firmware,
 and focus on the cores that are running kernel code. In our example, these will be in location ``(0,0)``, since that is
 the core we specified in ``init_program()`` in ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
+Another way to recognize relevant RISC-V processors is to look under the **Kernel Name** column, and
+look for kernel names of interest, such as ``read_tiles`` or ``write_tiles``.
 
-You should see the call stack for the ``read_tiles`` kernel contains a call to ``cb_reserve_back``, even if you dump stack trace
+In this case, you should see the call stack for the ``read_tiles`` kernel contains a call to ``cb_reserve_back``, even if you dump stack trace
 repeatedly, indicating a possible source of the problem.
 In general, stack traces alone may not be sufficient to uncover the reason for the hang. In such a case,
 you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
 printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.
 
+Once you are done debugging, uncomment the calls to ``cb_pop_front`` in the compute kernel to restore normal behavior.
 
 Device Performance Profiling
 ----------------------------
