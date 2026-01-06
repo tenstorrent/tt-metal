@@ -87,10 +87,6 @@ public:
     size_t get_fabric_channel_buffer_size_bytes() const { return channel_buffer_size_bytes_; }
 
     // ============ Dynamic Header Sizing ============
-    uint32_t get_1d_max_hops() const {
-        TT_FATAL(!is_2D_routing_enabled(), "Cannot query 1D max hops in 2D routing mode");
-        return max_1d_hops_;
-    }
     uint32_t get_1d_pkt_hdr_extension_words() const {
         TT_FATAL(!is_2D_routing_enabled(), "Cannot query 1D extension words in 2D routing mode");
         return routing_1d_extension_words_;

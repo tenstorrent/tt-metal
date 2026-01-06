@@ -66,8 +66,6 @@ uint32_t FabricContext::get_max_1d_hops_from_topology() const {
         max_hops = std::max(max_hops, mesh_max_hops);
     }
 
-    TT_FATAL(max_hops > 0, "No chips found in mesh topology - cannot determine 1D hop count");
-
     return max_hops;
 }
 
@@ -89,8 +87,6 @@ uint32_t FabricContext::get_max_2d_hops_from_topology() const {
         uint32_t mesh_max_hops = (rows > 0 ? rows - 1 : 0) + (cols > 0 ? cols - 1 : 0);
         max_hops = std::max(max_hops, mesh_max_hops);
     }
-
-    TT_FATAL(max_hops > 0, "No chips found in mesh topology - cannot determine 2D hop count");
 
     return max_hops;
 }
@@ -138,6 +134,12 @@ void FabricContext::compute_packet_specifications() {
         // 2D mode: query topology and validate against limits
         max_2d_hops_ = get_max_2d_hops_from_topology();
 
+        if (max_2d_hops_ == 0) {
+            log_warning(
+                tt::LogFabric,
+                "Max 2D routing hops were determined as 0, check mesh topology before running fabric workloads");
+        }
+
         // Validate 2D topology against route buffer limits
         // Each byte in route buffer encodes 1 hop, so max_hops cannot exceed buffer size
         TT_FATAL(
@@ -153,6 +155,12 @@ void FabricContext::compute_packet_specifications() {
     } else {
         // 1D mode: query topology and validate against limits
         max_1d_hops_ = get_max_1d_hops_from_topology();
+
+        if (max_1d_hops_ == 0) {
+            log_warning(
+                tt::LogFabric,
+                "Max 1D routing hops were determined as 0, check mesh topology before running fabric workloads");
+        }
 
         // Validate 1D topology against memory map limits
         // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
