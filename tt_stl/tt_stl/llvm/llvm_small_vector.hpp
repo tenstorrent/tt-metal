@@ -404,7 +404,7 @@ protected:
         size_t NewCapacity;
         T* NewElts = mallocForGrow(NumElts, NewCapacity);
         std::uninitialized_fill_n(NewElts, NumElts, Elt);
-        this->destroy_range(this->begin(), this->end());
+        this->destroy_range(this->begin(), this->end());  // NOLINT(readability-static-accessed-through-instance)
         takeAllocationForGrow(NewElts, NewCapacity);
         this->set_size(NumElts);
     }
