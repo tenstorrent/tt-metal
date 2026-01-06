@@ -199,4 +199,5 @@ def test_binary_comp_uint16_ops(input_shapes, mem_configs, ttnn_function, device
     golden_tensor = golden_tensor.int()
 
     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = convert_to_signed_tensor(output_tensor)
     assert torch.equal(output_tensor, golden_tensor)
