@@ -84,6 +84,9 @@ jobs:
 
       - name: Count and compare tests
         run: |
+          # Add current directory to PYTHONPATH so models stub can be found
+          export PYTHONPATH="${PYTHONPATH}:${PWD}"
+          
           # Define locked directories to check
           DIRS="eltwise conv matmul pool fused transformers reduce tensor debug base_functionality benchmarks"
           
