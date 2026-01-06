@@ -372,13 +372,13 @@ The first thing to emphasize is that all the code in this file executes on the h
 Looking at the main function, we see that the host program first initializes input data for the operation and performs a reference computation on the host CPU.
 This will be used to verify the correctness of the Metalium implementation. Note that the data type used is bfloat16 (brain floating-point), which is a
 16-bit floating-point format commonly used in AI applications. Since the host CPU doesn't natively support bfloat16,
-we use the `bfloat16` class from the `tt-metal` library and cast data between this type and single-precision (32-bit) floating-point as needed.
+we use the ``bfloat16`` class from the ``tt-metal`` library and cast data between this type and single-precision (32-bit) floating-point as needed.
 
-Next, the host program initializes the Tensix device and program state by calling the function `init_program`.
+Next, the host program initializes the Tensix device and program state by calling the function ``init_program``.
 This function contains a lot of boilerplate code that configures the device to run our code on a single Tensix core. Most programs utilizing
 a Tensix device would use similar code to configure the device and program, and exact initialization details are not important for this lab.
 
-After initialization, the program calls the function `eltwise_add_tensix`, which is the main function that configures and creates kernels
+After initialization, the program calls the function ``eltwise_add_tensix``, which is the main function that configures and creates kernels
 and triggers elementwise addition on the Tensix device.
 Finally, the program validates the results by comparing the Tensix output with the reference computation on the host CPU.
 
@@ -386,7 +386,7 @@ Finally, the program validates the results by comparing the Tensix output with t
 Kernel Types and Data Flow
 --------------------------
 
-Before diving into the function `eltwise_add_tensix`, let us discuss the different types of kernels and how they map to the underlying hardware.
+Before diving into the function ``eltwise_add_tensix``, let us discuss the different types of kernels and how they map to the underlying hardware.
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
 a **compute kernel** for calculations, and a **writer kernel** for data output.
 Reader and writer kernels are collectively referred to as data movement kernels.
@@ -441,15 +441,15 @@ The Tensix Core consists of four major parts:
 Kernel Creation and Configuration
 ---------------------------------
 
-The function `eltwise_add_tensix` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
+The function ``eltwise_add_tensix`` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
 At a high-level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
 one compute kernel, and three circular buffers to pass data between the kernels, and then triggers kernel execution on the device.
 
 The function creates three Tensor objects of shape ``MxN`` using the tile layout described earlier.
 These tensors are allocated in device DRAM, which is distinct from host DRAM and is directly attached to the Tensix processor.
-The input tensors are created and initialized by transferring the data from the host to the device in one step using `Tensor::from_vector`.
-The vectors passed to `Tensor::from_vector` are the same input vectors that were used for the reference computation.
-Because the ``TensorSpec`` object passed to `Tensor::from_vector` specifies the tile layout, the data is automatically organized in a tiled
+The input tensors are created and initialized by transferring the data from the host to the device in one step using ``Tensor::from_vector``.
+The vectors passed to ``Tensor::from_vector`` are the same input vectors that were used for the reference computation.
+Because the ``TensorSpec`` object passed to ``Tensor::from_vector`` specifies the tile layout, the data is automatically organized in a tiled
 memory layout when stored on the device. This is desirable because the matrix engine is optimized for operations on tiled data.
 
 The function then creates three circular buffers to enable data movement between kernels.
@@ -661,14 +661,28 @@ After observing the error, fix the error and rerun the program to confirm that t
 Debug Facilities in TT-Metalium
 ===============================
 
-TT-Metalium provides a number of facilities for debugging kernels.
-These facilities are particularly useful for debugging hangs and other issues that may not be apparent from the host-side code.
+Host code can be debugged using usual debugger tools like ``gdb``.
+To debug host code, build the program with debug symbols:
+
+.. code-block:: bash
+
+   ./build_metal.sh --build-type Debug --build-programming-examples
+
+Then run the program using ``gdb``:
+
+.. code-block:: bash
+
+   gdb ./build/programming_examples/metal_example_lab_eltwise_binary
+
+Kernels cannot be directly debugged using ``gdb``, but TT-Metalium provides a number of other methods for debugging kernels.
+These methods are useful for debugging hangs and other issues that may not be apparent from the host-side code.
 
 
 Debug Print API
 ---------------
 
-Since kernel code runs on the device, it is not possible to use the standard C++ functions to print debug information, since the device doesn't have a terminal.
+Since kernel code runs on the device, it is not possible to use the standard C++ functions to print debug information,
+since the device doesn't have a terminal.
 The Debug Print (DPRINT) API is a device-side debugging feature that lets a kernel print values back
 to the host while it runs.  You can think of it as a constrained, lightweight alternative to ``printf`` that works inside kernels.
 It is mainly used to inspect scalar variables, addresses, and the contents of tiles stored in circular buffers, which helps when debugging
@@ -801,93 +815,63 @@ Exercise 4: Using DPRINT to Debug a Kernel
 ==========================================
 
 Add DPRINT statements to the writer kernel in our example program to print:
-* Value of the iterator ``i`` in every iteteration of the `for'` loop
-* Contents of the resulting tile for the first three tiles processed by the kernel..
 
-For testing purposes, modify the input data to the program to not use random numbers for the input data
+* Value of the iterator ``i`` in every iteteration of the ``for`` loop
+* Contents of the resulting tile for the first three tiles processed by the kernel.
+
+For testing purposes, modify the program's input data to not use random numbers
 so you can verify that the results are as expected. Keep in mind that the input data vector is in row-major order,
 but it is then stored in tiled layout in the tensor.
 Since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
 Easiest way to rebuild the program is to rerun ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
 
-Debugging Hangs with Watcher
-============================
+Debugging Hangs using Stack Traces
+==================================
 
-The **Watcher** tool in TT-Metalium is a debug facility that instruments firmware and kernels and runs a
-host-side monitoring thread to catch common programming errors and hangs.
-On a fatal error, Watcher stops the program and reports a clear message.
-On a hang, the log shows which kernels and cores were active at the time of the hang.
-
-Watcher can be enabled by setting an environment variable before running your program::
-
-    # Enable Watcher with a 10 second polling interval
-    export TT_METAL_WATCHER=10
-
-The numeric value is the interval, in seconds, between Watcher status dumps. Small values like 1 give very frequent snapshots and
-are convenient while you are developing or chasing a hang, at the cost of extra overhead.
-Larger values like 60 or 120 are less intrusive and are better when you only want a periodic heartbeat.
-
-When enabled, Watcher will print messages such as "Watcher checking device 0" to the terminal and write a log file
-(typically `generated/watcher/watcher.log`) that summarizes the kernel IDs that were running, as well as the last **waypoint** string
-hit on each RISC-V. Waypoints are short markers you can insert into kernel code to tag key positions like "entered main loop" or "finished writing".
-
-Exercise 5: Using Watcher to Debug a Hang
-=========================================
-
-To illustrate how Watcher can be used to debug a hang, we will use the `lab_eltwise_binary` example program.
-You can introduce a very simple artificial hang by commenting out the calls to `cb_pop_front`
-(as if you accidentally forgot them) in the compute kernel in
-`tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`.
-
-With this change, for the first two tiles, the program should run normally, but then the reader kernel blocks trying to write the next tile,
-and the compute kernel waits on `cb_wait_front` forever, which from the host side looks like a hang.
-Because Watcher is enabled, it continuously records for each core which kernel is running and the last waypoint reached.
-
-To help pinpoint the problem, you can add simple waypoints around the suspicious loop in the compute kernel.
-For example:
-
-  ::
-
-      #include "debug/waypoint.h"
-
-      void MAIN {
-          // ...
-          WAYPOINT("LOP0");
-          for (uint32_t i = 0; i < n_tiles; i++) {
-              WAYPOINT("LOP1");
-              cb_wait_front(cb_in0, 1);
-              cb_wait_front(cb_in1, 1);
-              // math and writes
-              WAYPOINT("LOP2");
-              // (buggy code: missing pops)
-          }
-          WAYPOINT("DONE");
-      }
-
-These waypoints are optimized away when Watcher is off, but become visible in the Watcher log when it is on.
-
-Add waypoints as shown above and run the example with Watcher enabled:
+TT-Metalium includes a Python tool called ``tt-triage``, which inspects a hung TT-Metalium run and prints per-core
+call stacks for the RISC-V processors on all cores. This is often the fastest way to see exactly where the device got stuck.
+When a program hangs, **leave it running**,  open another terminal and run the following command from the ``tt-metal`` directory:
 
 .. code-block:: bash
 
-   export TT_METAL_WATCHER=5
-   ./build/programming_examples/metal_example_lab_eltwise_binary
+   python tools/triage/dump_callstacks.py
 
-When it becomes apparent that the program has been running for a long time without indication of progress, terminate it from the host
-(for example with Ctrl+C) and open `generated/watcher/watcher.log` to see the last waypoint before the hang.
-The waypoint field for the compute RISC-V processor should show something like `LOP2`, indicating that execution reached inside
-the main loop but never got as far as `DONE`.
-That strongly suggests a problem in the loop body, such as a missing `cb_pop_front` that prevents progress.
+This will print the call stacks for all RISC-V processors on all cores.
 
-Watcher adds extra checking and bookkeeping code, so it has a nonzero performance and code-size cost.
-Therefore Watcher should be disabled when doing performance benchmarking or production runs.
 
-For more information about the Watcher, refer to https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
+Exercise 5: Using tt-triage to Debug a Hang
+===========================================
+
+To illustrate how ``tt-triage`` can be used to debug a hang, we will use the ``lab_eltwise_binary`` example program.
+You can introduce a very simple artificial hang by commenting out the calls to ``cb_pop_front``
+(as if you accidentally forgot them) in the compute kernel in
+``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp``.
+
+With this change, for the first two tiles, the program should run normally, but then the reader kernel blocks waiting
+for space in the circular buffers, which from the host side looks like a hang.
+To help pinpoint the problem, you can dump stack traces. 
+
+#. Make changes to the compute kernel as suggested above.
+
+#. Run the program as usual.
+
+#. When it becomes apparent that the program has been running for a long time without indication of progress,
+   keep it running and open another terminal and run ``python tools/triage/dump_callstacks.py`` from the ``tt-metal`` directory.
+
+Observe the output in the terminal. The output will show the call stacks for all RISC-V processors on all cores, including cores
+that are running firmware reposible for dispatching kernel code. You should ingore the cores that are running firmware,
+and focus on the cores that are running kernel code. In our example, these will be in location ``(0,0)``, since that is
+the core we specified in ``init_program()`` in ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
+
+You should see the call stack for the ``read_tiles`` kernel contains a call to ``cb_reserve_back``, even if you dump stack trace
+repeatedly, indicating a possible source of the problem.
+In general, stack traces alone may not be sufficient to uncover the reason for the hang. In such a case,
+you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
+printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.
 
 
 Device Performance Profiling
 ----------------------------
-
 
 TT-Metalium includes a device program profiler that measures how long sections of your device kernels take to run,
 using a scope macro called **``DeviceZoneScopedN``**.
@@ -925,7 +909,7 @@ Exercise 6: Using Device Profiling to Profile Kernels
 -----------------------------------------------------
 
 #. **Add profiling scopes**
-   Add profiling scopes to reader kernel, writer kernel, and the compute kernel in the `lab_eltwise_binary` example program,
+   Add profiling scopes to reader kernel, writer kernel, and the compute kernel in the ``lab_eltwise_binary`` example program,
    making sure to use unique zone names for each kernel to differentiate the profiling results.
 
 
@@ -1118,3 +1102,14 @@ You will need to make the following changes:
 
 8. Profile the performance of the implementation, taking note of the total execution time on the device. This will be useful to compare
    against future labs when we optimize the implementation for performance.
+   If you previously used the ``--build-type Debug`` flag, **do not forget to rebuild the programming examples**
+   with the ``--build-type Release`` flag before profiling performance.
+
+Additional Resources
+====================
+
+For additional information, please refer to the following resources:
+
+* TT-Metalium Documentation: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/index.html
+* TT-Metalium GitHub Repository: https://github.com/tenstorrent/tt-metal
+* TT-Metalium Discord: https://discord.gg/tenstorrent
