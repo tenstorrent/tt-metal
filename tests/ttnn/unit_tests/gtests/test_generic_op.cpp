@@ -1041,7 +1041,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
     auto input_shards = ttnn::distributed::get_device_tensors(input_tensor);
     auto sender_data = input_shards[0].cpu();
     auto original_receiver_data = input_shards[1].cpu();
-    log_info(tt::LogTest, "Original shard data at receiver: {}", ttnn::to_string(original_receiver_data));
 
     // Create output tensor (same spec as input, allocated on mesh)
     Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(input_tensor.tensor_spec(), mesh_device.get());
@@ -1051,11 +1050,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
 
-    log_info(tt::LogTest, "input_num_pages: {}", input_num_pages);
-    log_info(tt::LogTest, "input_page_size_bytes: {}", input_page_size_bytes);
-    log_info(tt::LogTest, "l1_alignment: {}", l1_alignment);
-    log_info(tt::LogTest, "aligned_input_page_size_bytes: {}", aligned_input_page_size_bytes);
-
     // Figure out packets - single packet
     const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes = std::bit_floor(fabric_max_packet_size_bytes);
@@ -1063,11 +1057,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
         std::min(max_packet_size_bytes / aligned_input_page_size_bytes, input_num_pages);
     const uint32_t packet_size_bytes = aligned_input_page_size_bytes * num_pages_per_packet;
     const uint32_t num_page_segments = 1;  // pages fit in single packet
-
-    log_info(tt::LogTest, "fabric_max_packet_size_bytes: {}", fabric_max_packet_size_bytes);
-    log_info(tt::LogTest, "max_packet_size_bytes: {}", max_packet_size_bytes);
-    log_info(tt::LogTest, "num_pages_per_packet: {}", num_pages_per_packet);
-    log_info(tt::LogTest, "packet_size_bytes: {}", packet_size_bytes);
 
     // Create intermediate tensor using the same logic as point_to_point operation
     TensorSpec intermediate_spec = ttnn::operations::point_to_point::p2p_compute_intermediate_tensor_spec(
@@ -1082,13 +1071,11 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
 
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    log_info(tt::LogTest, "packet_header_size_bytes: {}", packet_header_size_bytes);
 
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), available_cores, 0);
     tt::tt_metal::distributed::Synchronize(mesh_device.get(), std::nullopt, {});
-    log_info(tt::LogTest, "available_cores: {}", available_cores);
 
     // Determine routing direction and next fabric node ID (same logic as point_to_point operations)
     const auto sender_fabric_id = mesh_device->get_fabric_node_id(sender_coord);
@@ -1099,13 +1086,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
     const auto [num_hops_receiver, sender_is_forward, next_fabric_id_receiver] =
         ttnn::operations::point_to_point::detail::fabric_1d_routing(
             mesh_device.get(), receiver_coord, sender_coord, ttnn::ccl::Topology::Linear);
-
-    log_info(tt::LogTest, "num_hops_sender: {}", num_hops_sender);
-    log_info(tt::LogTest, "dst_is_forward: {}", dst_is_forward);
-    log_info(tt::LogTest, "next_fabric_id_sender: {}", next_fabric_id_sender);
-    log_info(tt::LogTest, "num_hops_receiver: {}", num_hops_receiver);
-    log_info(tt::LogTest, "sender_is_forward: {}", sender_is_forward);
-    log_info(tt::LogTest, "next_fabric_id_receiver: {}", next_fabric_id_receiver);
 
     constexpr uint32_t link_idx = 0;  // for single link implementation
 
@@ -1222,7 +1202,6 @@ TEST_F(MeshDevice2x4Fabric1DFixture, TestGenericOpPointToPoint) {
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
                 sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core, writer_rt_args_ref);
         }
-        log_info(tt::LogTest, "writer_rt_args_ref: {}", writer_rt_args_ref);
 
         mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(sender_coord), sender_program);
     }

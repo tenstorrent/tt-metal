@@ -126,9 +126,8 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
         nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
 
-    // Returns fabric connection runtime args (also adds semaphores to program_descriptor)
     mod.def(
-        "get_fabric_connection_rt_args",
+        "setup_fabric_connection",
         [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
            uint32_t link_idx,
@@ -155,11 +154,8 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("worker_core"),
         nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),
         R"(
-            Returns fabric connection runtime arguments and adds semaphores to program.
-
-            This function computes the runtime args needed to connect a worker to the
-            fabric router, and also adds necessary semaphores to the program descriptor.
-
+            Sets up fabric connection: returns necessary runtime args and appends SemaphoreDescriptors to
+            the given ProgramDescriptor
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_fabric_node_id: FabricNodeId of the destination chip
@@ -167,13 +163,6 @@ void bind_fabric_api(nb::module_& mod) {
                 program_descriptor: ProgramDescriptor to add semaphores to (mutated)
                 worker_core: Logical core coordinate of the worker
                 core_type: Core type (WORKER or ETH), defaults to WORKER
-
-            Returns:
-                List of runtime args to extend the kernel's runtime args with
-
-            Note:
-                - Source and destination chips should be physically adjacent (for 1D fabric)
-                - Source and destination chips should be on the same mesh (for 1D fabric)
         )");
 }
 

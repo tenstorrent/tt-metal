@@ -161,7 +161,7 @@ from ttnn._ttnn.fabric import (
     set_fabric_config,
     MeshId,
     FabricNodeId,
-    get_fabric_connection_rt_args,
+    setup_fabric_connection,
 )
 
 # Import cluster functions and types

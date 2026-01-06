@@ -42,7 +42,7 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // determined/pushed to keep things clean and avoid any extra arg management.
 //
 // Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
-// it adds SemaphoreDescriptors instead of creating semaphores (only WORKER core_type supported).
+// it adds SemaphoreDescriptors instead of creating semaphores.
 //
 // Inputs:
 // src_chip_id: physical chip id/device id of the sender chip
@@ -177,7 +177,6 @@ public:
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
-    // Template parameter ProgramOrDescriptor defaults to Program. When ProgramDescriptor is passed,
     template <typename ProgramOrDescriptor = tt::tt_metal::Program>
     std::vector<uint32_t> get_fabric_mux_run_time_args(
         const FabricNodeId& src_fabric_node_id,

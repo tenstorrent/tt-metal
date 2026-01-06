@@ -29,6 +29,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
+NB_MAKE_OPAQUE(std::vector<uint32_t>);
 
 namespace ttnn::program_descriptors {
 
@@ -40,7 +41,16 @@ class RuntimeArgsColProxy {
 public:
     RuntimeArgsColProxy(tt::tt_metal::KernelDescriptor::RuntimeArgs& args, size_t x) : args_(args), x_(x) {}
 
-    void set_item(size_t y, const std::vector<uint32_t>& values) { args_.push_back({CoreCoord(x_, y), values}); }
+    void set_item(size_t y, const std::vector<uint32_t>& values) {
+        CoreCoord target(x_, y);
+        for (auto& [coord, vec] : args_) {
+            if (coord == target) {
+                vec = values;  // Update existing
+                return;
+            }
+        }
+        args_.push_back({target, values});  // Append if not found
+    }
 
     std::vector<uint32_t>& get_item(size_t y) {
         CoreCoord target(x_, y);
@@ -103,6 +113,8 @@ private:
 };
 
 void py_module_types(nb::module_& mod) {
+    nb::bind_vector<std::vector<uint32_t>>(mod, "VectorUInt32");
+
     // Bind RuntimeArgs helper classes for Python 2D indexing syntax: rtargs[x][y] = [args]
     nb::class_<RuntimeArgsColProxy>(mod, "RuntimeArgsColProxy", R"pbdoc(
         Proxy class for getting/setting runtime args at a specific x-coordinate.
@@ -114,7 +126,10 @@ void py_module_types(nb::module_& mod) {
             nb::arg("y"),
             nb::arg("values"),
             R"pbdoc(
-                Set runtime args for a specific core coordinate.
+                Set runtime args for a specific core coordinate (upsert).
+
+                If args already exist for this coordinate, they are replaced.
+                Otherwise, a new entry is appended.
 
                 Args:
                     y: Y coordinate of the core
@@ -240,7 +255,7 @@ void py_module_types(nb::module_& mod) {
 
     // Bind RuntimeArgsView for accessing existing runtime_args on KernelDescriptor
     nb::class_<RuntimeArgsView>(mod, "RuntimeArgsView")
-        .def("__getitem__", &RuntimeArgsView::get_col, nb::arg("x"))
+        .def("__getitem__", &RuntimeArgsView::get_col, nb::arg("x"), nb::keep_alive<0, 1>())
         .def("__len__", &RuntimeArgsView::size);
 
     // Bind TileDescriptor first
@@ -611,6 +626,7 @@ void py_module_types(nb::module_& mod) {
                     self.runtime_args = nb::cast<tt::tt_metal::KernelDescriptor::RuntimeArgs>(value);
                 }
             },
+            nb::keep_alive<0, 1>(),  // Keep KernelDescriptor alive while RuntimeArgsView exists
             R"pbdoc(
                 Runtime arguments for the kernel.
 

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
-#include <type_traits>
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -262,11 +261,6 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
     const CoreCoord& mux_logical_core) const {
-    static_assert(
-        std::is_same_v<ProgramOrDescriptor, tt::tt_metal::Program> ||
-            std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>,
-        "ProgramOrDescriptor must be either Program or ProgramDescriptor");
-
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -284,7 +278,6 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     return args;
 }
 
-// Explicit template instantiations
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
     const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const CoreCoord&) const;
 

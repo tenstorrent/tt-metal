@@ -164,7 +164,6 @@ def test_point_to_point(mesh_device):
     original_receiver_data = ttnn.to_torch(input_shards[1])
     logger.info(f"Original shard data at receiver: {original_receiver_data}")
 
-    # Create output tensor
     output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
 
     input_num_pages = (prod(input_tensor.padded_shape) + 1024 - 1) // 1024  # = 2
@@ -179,7 +178,6 @@ def test_point_to_point(mesh_device):
     packet_size_bytes = aligned_input_page_size_bytes * num_pages_per_packet  # = 4096
     num_page_segments = 1
 
-    # Create intermediate tensor
     intermediate_spec = ttnn._ttnn.operations.point_to_point.p2p_compute_intermediate_tensor_spec(
         input_tensor, receiver_coord, sender_coord, ttnn.Topology.Linear
     )
@@ -194,7 +192,6 @@ def test_point_to_point(mesh_device):
     input_dataformat = dtype
     packet_header_size_bytes = 64
 
-    # FIX THIS
     grid = mesh_device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
@@ -202,7 +199,8 @@ def test_point_to_point(mesh_device):
     global_semaphore_address = ttnn.get_global_semaphore_address(global_semaphore)
     ttnn.synchronize_device(mesh_device)
 
-    # Determine routing direction and next fabric node ID (hardcoded for FABRIC_1D + Linear)
+    # Determine routing direction and next fabric node ID
+    # hardcoded for point_to_point::detail::fabric_1d_routing FABRIC_1D + Linear
     sender_fabric_id = mesh_device.get_fabric_node_id(sender_coord)
     receiver_fabric_id = mesh_device.get_fabric_node_id(receiver_coord)
     num_hops_sender = 1
@@ -211,12 +209,9 @@ def test_point_to_point(mesh_device):
     num_hops_receiver = 1
     sender_is_forward = True
     next_fabric_id_receiver = mesh_device.get_fabric_node_id(sender_coord)
+    link_idx = 0
 
-    link_idx = 0  # for single link implementation
-
-    # Build MeshProgramDescriptor
     mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-
     # ----- SENDER PROGRAM -----
     sender_cb_id = 0
     packet_header_cb_id = 1
@@ -311,20 +306,19 @@ def test_point_to_point(mesh_device):
     )
 
     # Append fabric connection args to writer kernel
-    writer_kernel_idx = 1
-    writer_rt_args_ref = sender_program.kernels[writer_kernel_idx].runtime_args[sender_core.x]
+    writer_rt_args_ref = sender_program.kernels[1].runtime_args[sender_core.x][sender_core.y]
 
     if dst_is_forward:
-        fabric_args = ttnn.get_fabric_connection_rt_args(
+        fabric_args = ttnn.setup_fabric_connection(
             sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
         )
-        writer_rt_args_ref.extend(sender_core.y, fabric_args)
-    writer_rt_args_ref.append(sender_core.y, int(not dst_is_forward))
+        writer_rt_args_ref.extend(fabric_args)
+    writer_rt_args_ref.append(int(not dst_is_forward))
     if not dst_is_forward:
-        fabric_args = ttnn.get_fabric_connection_rt_args(
+        fabric_args = ttnn.setup_fabric_connection(
             sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
         )
-        writer_rt_args_ref.extend(sender_core.y, fabric_args)
+        writer_rt_args_ref.extend(fabric_args)
 
     mesh_program_descriptor[ttnn.MeshCoordinateRange(sender_coord, sender_coord)] = sender_program
 
@@ -423,20 +417,19 @@ def test_point_to_point(mesh_device):
     )
 
     # Append fabric connection args to reader kernel
-    reader_kernel_idx = 0
-    reader_rt_args_ref = receiver_program.kernels[reader_kernel_idx].runtime_args[receiver_core.x]
+    reader_rt_args_ref = receiver_program.kernels[0].runtime_args[receiver_core.x][receiver_core.y]
 
     if sender_is_forward:
-        fabric_args = ttnn.get_fabric_connection_rt_args(
+        fabric_args = ttnn.setup_fabric_connection(
             receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
         )
-        reader_rt_args_ref.extend(receiver_core.y, fabric_args)
-    reader_rt_args_ref.append(receiver_core.y, int(not sender_is_forward))
+        reader_rt_args_ref.extend(fabric_args)
+    reader_rt_args_ref.append(int(not sender_is_forward))
     if not sender_is_forward:
-        fabric_args = ttnn.get_fabric_connection_rt_args(
+        fabric_args = ttnn.setup_fabric_connection(
             receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
         )
-        reader_rt_args_ref.extend(receiver_core.y, fabric_args)
+        reader_rt_args_ref.extend(fabric_args)
 
     mesh_program_descriptor[ttnn.MeshCoordinateRange(receiver_coord, receiver_coord)] = receiver_program
 

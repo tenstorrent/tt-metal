@@ -8,23 +8,20 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
-#include <set>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "impl/buffers/semaphore.hpp"
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -103,10 +100,6 @@ void append_fabric_connection_rt_args(
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
-    static_assert(
-        std::is_same_v<ProgramOrDescriptor, tt::tt_metal::Program> ||
-            std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>,
-        "ProgramOrDescriptor must be either Program or ProgramDescriptor");
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
         "Expected different src and dst chip ids but got same, Src: {}, Dst: {}",
@@ -459,7 +452,6 @@ size_t get_number_of_available_routing_planes(
 
 }  // namespace experimental
 
-// Explicit template instantiations
 template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
     const FabricNodeId&,
     const FabricNodeId&,
