@@ -53,7 +53,7 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return program::UnaryShardedProgramFactory{};
-    } else if(args.sub_core_grids.has_value()) {
+    } else if (args.sub_core_grids.has_value()) {
         return program::UnarySubCoreGridProgramFactory{};
     } else {
         return program::UnaryProgramFactory{};
@@ -122,7 +122,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        if(!input_tensor.is_sharded()){
+        if (!input_tensor.is_sharded()) {
             TT_FATAL(
                 (preallocated_output_tensor.value().layout() == Layout::TILE),
                 "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
@@ -161,18 +161,9 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
-
     auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        args.sub_core_grids,
-        input_shape.volume());
-
-    return hash;
+    return operation::hash_operation<UnaryDeviceOperation>(
+        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), args.sub_core_grids);
 }
 
 bool UnaryDeviceOperation::skip_launch(
