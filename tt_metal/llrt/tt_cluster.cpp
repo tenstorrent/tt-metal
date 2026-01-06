@@ -333,7 +333,7 @@ void Cluster::initialize_device_drivers() {
             auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = pci->is_mapping_buffer_to_noc_supported();
+                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
         }
     }
