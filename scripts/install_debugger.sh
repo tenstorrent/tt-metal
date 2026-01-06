@@ -15,9 +15,18 @@ if [[ -z "$REF" ]]; then
   exit 1
 fi
 
+# Determine whether to use uv or pip
+if command -v uv &>/dev/null; then
+  PIP_CMD="uv pip"
+  echo "Using uv for package management"
+else
+  PIP_CMD="python3 -m pip"
+  echo "uv not found, falling back to pip"
+fi
+
 # Uninstall tt-exalens if already installed
-python3 -m pip uninstall -y tt-exalens >/dev/null 2>&1 || true
+$PIP_CMD uninstall -y tt-exalens >/dev/null 2>&1 || true
 
 # Install tt-exalens to the requested version
 echo "Installing tt-exalens version: $REF"
-pip install --extra-index-url https://test.pypi.org/simple/ tt-exalens=="$REF"
+$PIP_CMD install --extra-index-url https://test.pypi.org/simple/ tt-exalens=="$REF"
