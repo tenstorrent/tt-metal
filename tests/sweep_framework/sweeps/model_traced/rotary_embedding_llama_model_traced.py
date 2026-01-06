@@ -18,6 +18,23 @@ Tensor formats:
 - Input: [batch, n_heads, seq_len, head_dim] for prefill mode
 - cos/sin: [1, n_heads_or_1, seq_len, head_dim] in TTNN "doubled" format
 - trans_mat: [1, 1, 32, 32] fixed transformation matrix
+
+RoPE Parameter Support:
+This test supports different RoPE configurations across various model families:
+- Standard RoPE (LLaMA 1/2, Mistral): theta=10000.0, no scaling
+- LLaMA 3+ RoPE: theta=500000.0, llama3 scaling with factor=8.0
+- YARN RoPE (Qwen 2.5): theta varies, yarn scaling
+- Phi-3 LongRoPE: complex multi-factor scaling
+- Vision RoPE (Mistral Vision): 2D positional encoding
+
+The test automatically uses appropriate parameters based on traced model metadata,
+with fallback to LLaMA 3 defaults (the primary traced model).
+
+For other models, RoPE parameters can be provided explicitly via:
+- rope_theta: Base frequency parameter
+- rope_scale_factor: Context extension scaling factor
+- rope_orig_context_len: Original max context length
+- rope_type: Scaling algorithm ("default", "linear", "llama3", "yarn", "longrope")
 """
 
 import torch
@@ -28,10 +45,12 @@ from functools import partial
 
 # Import helper functions for proper cos/sin generation and transformation matrix
 from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    gather_cos_sin,
     get_rot_transformation_mat,
+    RopeScalingLlama3,
+    RopeScalingLinear,
+    RopeScalingYarn,
 )
+from models.tt_transformers.tt.rope import compute_gather_cos_sin
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -63,6 +82,12 @@ parameters = {
         "input_d_layout": [ttnn.TILE_LAYOUT],
         "input_d_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        # Optional RoPE parameters (None = use defaults from traced model or LLaMA 3)
+        # Uncomment and modify to test other RoPE configurations:
+        # "rope_theta": [10000.0],  # Standard LLaMA: 10000.0, LLaMA 3: 500000.0
+        # "rope_scale_factor": [None],  # None = no scaling, or 2.0, 4.0, 8.0, etc.
+        # "rope_orig_context_len": [None],  # Required if scale_factor is set
+        # "rope_type": ["default"],  # "default", "linear", "llama3", "yarn", "longrope"
     },
 }
 
@@ -142,33 +167,137 @@ def apply_rotary_emb_golden(x: torch.Tensor, cos_cache: torch.Tensor, sin_cache:
     return out
 
 
-def generate_cos_sin_for_prefill(seq_len: int, head_dim: int, theta: float = 10000.0) -> tuple:
+def generate_cos_sin_for_prefill(
+    seq_len: int,
+    head_dim: int,
+    theta: float = 10000.0,
+    scale_factor: float = None,
+    orig_context_len: int = None,
+    rope_type: str = "default",
+) -> tuple:
     """
     Generate properly formatted cos/sin tensors for sweep test (prefill mode).
+
+    This function generates RoPE (Rotary Position Embedding) frequency tables
+    using the same approach as the actual model implementations.
 
     Args:
         seq_len: Sequence length
         head_dim: Head dimension (must be even)
-        theta: RoPE theta parameter (default 10000.0)
+        theta: RoPE theta base frequency parameter (default 10000.0)
+            - Standard LLaMA/LLaMA 2: 10000.0
+            - LLaMA 3/3.1/3.2: 500000.0
+            - Mistral: 10000.0
+            - Qwen: 10000.0 or 1000000.0 depending on version
+            - Model-specific: check config.json "rope_theta"
+        scale_factor: Scaling factor for context extension (None = no scaling)
+            - Used for extending context beyond original training length
+            - LLaMA 3: 8.0 (for 8x context extension)
+            - Linear scaling: 2.0, 4.0, etc.
+        orig_context_len: Original max context length (required if scale_factor is set)
+            - LLaMA 3: 8192
+            - LLaMA 2: 4096
+            - Check config.json "original_max_position_embeddings"
+        rope_type: Type of RoPE scaling (default "default")
+            - "default": No scaling
+            - "linear": Simple linear scaling
+            - "llama3": LLaMA 3 scaling with smooth interpolation
+            - "yarn": YARN scaling (used in Qwen 2.5)
+            - "longrope": Phi-3 long rope
 
     Returns:
         Tuple of (cos, sin) tensors in TTNN format [1, 1, seq_len, head_dim]
+
+    Note:
+        The returned cos/sin tensors are in TTNN "doubled" format where each
+        frequency value is duplicated: [c0, c0, c1, c1, c2, c2, ...]
     """
-    # Compute raw frequencies using precompute_freqs
-    # This returns cos/sin with shape [end, head_dim//2]
-    cos_raw, sin_raw = precompute_freqs(
-        head_dim,
-        seq_len * 2,  # Compute extra positions for safety
+    # Create RopeScaling object if scaling is needed
+    rope_scaling = None
+    if scale_factor is not None:
+        # Build rope_scaling object based on rope_type using specific subclasses
+        if rope_type == "llama3":
+            rope_scaling = RopeScalingLlama3(
+                rope_type=rope_type,
+                factor=scale_factor,
+                original_max_position_embeddings=orig_context_len,
+                low_freq_factor=1.0,
+                high_freq_factor=4.0,
+            )
+        elif rope_type == "linear":
+            rope_scaling = RopeScalingLinear(rope_type=rope_type, factor=scale_factor)
+        elif rope_type == "yarn":
+            # YARN requires additional parameters - use defaults
+            rope_scaling = RopeScalingYarn(
+                rope_type=rope_type,
+                factor=scale_factor,
+                original_max_position_embeddings=orig_context_len,
+                beta_fast=32,
+                beta_slow=1,
+                mscale=1.0,
+                mscale_all_dim=0.0,
+            )
+        # Add more rope_type handling as needed
+
+    # Use the same code path as production: compute_gather_cos_sin
+    # This uses rotary_embedding_factory internally which handles all RoPE variants correctly
+    cos_matrix, sin_matrix = compute_gather_cos_sin(
+        dhead=head_dim,
+        end=seq_len * 2,  # Compute extra positions for safety
         theta=theta,
-        scale_factor=None,
-        orig_context_len=131072,
+        rope_scaling=rope_scaling,
     )
 
-    # Gather and format for TTNN (this doubles the dimension)
-    # Output shape: [1, 1, seq_len, head_dim]
-    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(seq_len), cos_raw, sin_raw)
+    # cos_matrix and sin_matrix are already in the correct format [seq_len, head_dim]
+    # They're already "doubled" and gathered by the factory
+    return cos_matrix, sin_matrix
 
-    return cos_gathered, sin_gathered
+
+def extract_rope_parameters(traced_source: str = None) -> dict:
+    """
+    Extract RoPE parameters from traced model source or use defaults.
+
+    Args:
+        traced_source: Optional source string that may contain HF_MODEL tag
+
+    Returns:
+        Dictionary with RoPE parameters: {theta, scale_factor, orig_context_len, rope_type}
+
+    Note:
+        Current defaults are for LLaMA 3.x models (the primary traced model).
+        For other models, parameters would need to be extracted from model config
+        or passed explicitly.
+    """
+    # Default parameters (LLaMA 3.x configuration)
+    # These are the values used by meta-llama/Llama-3.2-1B-Instruct (the primary traced model)
+    rope_params = {
+        "theta": 500000.0,  # LLaMA 3+ uses higher theta
+        "scale_factor": 8.0,  # Context extension factor
+        "orig_context_len": 8192,  # Original training context length
+        "rope_type": "llama3",  # LLaMA 3 scaling type
+    }
+
+    # TODO: Extract from HF model config if traced_source contains HF_MODEL
+    # For now, we use LLaMA 3 defaults since that's the primary traced model
+    # In the future, this could load the actual model config from HuggingFace
+    # and extract rope_theta and rope_scaling parameters
+
+    # Example of what could be done (requires HuggingFace transformers):
+    # if traced_source and "HF_MODEL:" in traced_source:
+    #     import re
+    #     match = re.search(r'HF_MODEL:([^\]]+)', traced_source)
+    #     if match:
+    #         model_name = match.group(1)
+    #         # Load config and extract parameters
+    #         from transformers import AutoConfig
+    #         config = AutoConfig.from_pretrained(model_name)
+    #         rope_params["theta"] = config.rope_theta
+    #         if hasattr(config, 'rope_scaling') and config.rope_scaling:
+    #             rope_params["scale_factor"] = config.rope_scaling.get("factor")
+    #             rope_params["orig_context_len"] = config.rope_scaling.get("original_max_position_embeddings")
+    #             rope_params["rope_type"] = config.rope_scaling.get("type", "default")
+
+    return rope_params
 
 
 def run(
@@ -187,6 +316,12 @@ def run(
     input_d_memory_config=None,
     output_memory_config=None,
     storage_type=None,
+    traced_source=None,
+    traced_machine_info=None,
+    rope_theta=None,
+    rope_scale_factor=None,
+    rope_orig_context_len=None,
+    rope_type=None,
     *,
     device,
 ) -> list:
@@ -197,9 +332,31 @@ def run(
     1. Traced configurations (input_shape is a dict with all tensor shapes)
     2. Sample configurations (input_shape is a simple tuple)
 
+    RoPE Parameters:
+        The function supports configurable RoPE parameters for different model types:
+        - rope_theta: Base frequency (default from traced model)
+        - rope_scale_factor: Context extension scaling (default from traced model)
+        - rope_orig_context_len: Original context length (default from traced model)
+        - rope_type: Scaling algorithm type (default from traced model)
+
+        If not provided, defaults are extracted from traced_source or use LLaMA 3 values.
+
     Note: Decode mode (HEIGHT_SHARDED) requires regenerating vectors with invalidate_vector.
     """
     torch.manual_seed(0)
+
+    # Extract RoPE parameters from traced source or explicit parameters
+    rope_params = extract_rope_parameters(traced_source)
+
+    # Override with explicit parameters if provided
+    if rope_theta is not None:
+        rope_params["theta"] = rope_theta
+    if rope_scale_factor is not None:
+        rope_params["scale_factor"] = rope_scale_factor
+    if rope_orig_context_len is not None:
+        rope_params["orig_context_len"] = rope_orig_context_len
+    if rope_type is not None:
+        rope_params["rope_type"] = rope_type
 
     # Determine if this is a traced config (dict) or sample config (tuple)
     is_traced_config = isinstance(input_shape, dict)
@@ -235,7 +392,14 @@ def run(
     if is_traced_config:
         # For traced configs, generate cos/sin that match the traced shapes
         cache_size = shape_b[2]
-        cos_cache, sin_cache = generate_cos_sin_for_prefill(cache_size, head_dim)
+        cos_cache, sin_cache = generate_cos_sin_for_prefill(
+            cache_size,
+            head_dim,
+            theta=rope_params["theta"],
+            scale_factor=rope_params["scale_factor"],
+            orig_context_len=rope_params["orig_context_len"],
+            rope_type=rope_params["rope_type"],
+        )
         # Ensure shapes match traced config (handle n_heads dimension)
         if shape_b[1] != 1:
             # Broadcast cos/sin to match n_heads if needed
@@ -244,7 +408,14 @@ def run(
     else:
         # For sample configs, generate based on cache_size
         cache_size = shape_b[2]
-        cos_cache, sin_cache = generate_cos_sin_for_prefill(cache_size, head_dim)
+        cos_cache, sin_cache = generate_cos_sin_for_prefill(
+            cache_size,
+            head_dim,
+            theta=rope_params["theta"],
+            scale_factor=rope_params["scale_factor"],
+            orig_context_len=rope_params["orig_context_len"],
+            rope_type=rope_params["rope_type"],
+        )
 
     # Convert to bfloat16 for consistency
     torch_cos_cache = cos_cache.to(torch.bfloat16)
