@@ -229,27 +229,51 @@ def test_conv3d_mochi_shapes(
     assert pcc_passed, pcc_message
 
 
+def get_shard_shape(tensor_shape, grid_size, memory_layout):
+    """
+    Calculate corrected shard shape based on tensor shape, grid size, and layout.
+    tensor_shape: (TotalPages, PageSize)
+    grid_size: (grid_x, grid_y)
+    """
+    total_pages, page_size = tensor_shape
+    grid_x, grid_y = grid_size
+    num_cores = grid_x * grid_y
+
+    if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return (ttnn.div_up(total_pages, num_cores), page_size)
+    elif memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return (total_pages, ttnn.div_up(page_size, num_cores))
+    elif memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        # Assuming row-major core mapping
+        return (ttnn.div_up(total_pages, grid_y), ttnn.div_up(page_size, grid_x))
+    else:
+        raise ValueError(f"Unsupported memory layout: {memory_layout}")
+
+
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode, memory_layout",
     [
         # HEIGHT_SHARDED tests
-        [(1, 32, 4, 8, 8), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros", ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
+        [(1, 32, 2, 4, 4), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros", ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
         # WIDTH_SHARDED tests
-        [(1, 32, 4, 8, 8), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros", ttnn.TensorMemoryLayout.WIDTH_SHARDED],
+        [(1, 32, 2, 4, 4), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros", ttnn.TensorMemoryLayout.WIDTH_SHARDED],
         # BLOCK_SHARDED tests
-        [(1, 32, 4, 8, 8), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros", ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+        [(1, 64, 2, 4, 4), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros", ttnn.TensorMemoryLayout.BLOCK_SHARDED],
     ],
     ids=["height_sharded", "width_sharded", "block_sharded"],
 )
-def test_conv3d_sharded_input(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, memory_layout):
+@pytest.mark.parametrize("shard_weights", [False, True], ids=["weights_interleaved", "weights_sharded"])
+@pytest.mark.parametrize("shard_bias", [False, True], ids=["bias_interleaved", "bias_sharded"])
+def test_conv3d_sharded(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, memory_layout, shard_weights, shard_bias
+):
     """
-    Test Conv3d with sharded input tensors.
-    This validates that the TensorAccessor correctly handles sharded memory layouts.
+    Test Conv3d with sharded tensors.
+    Validates that TensorAccessor correctly handles sharded memory layouts for input, weights, and biases.
     """
-    import torch.nn as nn
-
     B, C_in, T, H, W = input_shape
     grid_size = device.compute_with_storage_grid_size()
+    num_cores = grid_size.x * grid_size.y
 
     # Create PyTorch reference
     torch_input = torch.randn(B, C_in, T, H, W, dtype=torch.bfloat16)
@@ -261,27 +285,63 @@ def test_conv3d_sharded_input(device, input_shape, out_channels, kernel_size, st
     with torch.no_grad():
         gt_output = conv3d_module(torch_input)
 
-    # Convert to TTNN format (N, T, H, W, C)
+    # Convert input to TTNN format (N, T, H, W, C)
     tt_input_data = torch_input.permute(0, 2, 3, 4, 1).contiguous()
 
-    # Create sharded memory config
-    num_cores = grid_size.x * grid_size.y
-    shard_shape = (tt_input_data.numel() // num_cores // C_in, C_in)
+    # Calculate shard shape for input
+    total_pages = tt_input_data.numel() // C_in
+    input_shard_shape = get_shard_shape((total_pages, C_in), (grid_size.x, grid_size.y), memory_layout)
 
-    shard_spec = ttnn.ShardSpec(
+    input_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
-        shard_shape,
+        input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
     )
+    input_mem_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
-    sharded_mem_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    # Create input tensor
+    tt_input = ttnn.from_torch(
+        tt_input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem_config
+    )
 
-    # Create input tensor with sharded memory config
-    tt_input = ttnn.from_torch(tt_input_data, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    # Prepare weights
+    # Prepare weights and bias
     tt_weight, tt_bias = prepare_weights(conv3d_module, C_in, out_channels, device)
+
+    if shard_weights:
+        # Shard weights: (K, C_out)
+        weight_shape = tt_weight.shape
+        weight_shard_shape = get_shard_shape(
+            (weight_shape[0], weight_shape[1]), (grid_size.x, grid_size.y), ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        )
+        # Ensure tile alignment for sharded tiled tensors
+        weight_shard_shape = (ttnn.round_up(weight_shard_shape[0], 32), ttnn.round_up(weight_shard_shape[1], 32))
+
+        weight_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
+            weight_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        weight_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, weight_shard_spec)
+        tt_weight = ttnn.to_memory_config(tt_weight, weight_mem_config)
+
+    if shard_bias and tt_bias is not None:
+        # Shard bias: (1, C_out)
+        bias_shape = tt_bias.shape
+        bias_shard_shape = get_shard_shape(
+            (bias_shape[0], bias_shape[1]), (grid_size.x, grid_size.y), ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        )
+        bias_shard_shape = (ttnn.round_up(bias_shard_shape[0], 32), ttnn.round_up(bias_shard_shape[1], 32))
+
+        bias_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}),
+            bias_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        bias_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, bias_shard_spec)
+        tt_bias = ttnn.to_memory_config(tt_bias, bias_mem_config)
 
     config = create_conv3d_config(
         T_out_block=2,
@@ -320,6 +380,6 @@ def test_conv3d_sharded_input(device, input_shape, out_channels, kernel_size, st
 
     assert tt_output.shape == gt_output.shape, f"Shape mismatch: {tt_output.shape} vs {gt_output.shape}"
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.99)
-    logger.info(f"Sharded test ({memory_layout}): {pcc_message}")
-    assert pcc_passed, f"Sharded test failed for {memory_layout}: {pcc_message}"
+    logger.info(f"Sharded test ({memory_layout}, weights={shard_weights}, bias={shard_bias}): {pcc_message}")
+    assert pcc_passed, f"Sharded test failed: {pcc_message}"
 
