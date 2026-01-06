@@ -99,13 +99,19 @@ FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) 
 }
 
 // Process a chunk of tokens that have arrived for a given (local_expert, src_dev) pair.
-// Scans metadata to find which tokens selected this expert and prints their info.
+// Scans metadata to find which tokens selected this expert, reads them, and pushes to CB.
+// All token reads are issued first, then a single barrier is done before pushing all pages.
+// Always reserves/pushes TokensPerChunk for simpler synchronization with compute.
 template <
     uint32_t TileHeight,
     uint32_t SelectedExpertsK,
     uint32_t ExpertsPerDevice,
     uint32_t TokensPerDevice,
-    typename AddrGenT>
+    uint32_t TilizerInputCbId,
+    uint32_t AlignedOutputPageSize,
+    uint32_t TokensPerChunk,
+    typename MetadataAddrGenT,
+    typename OutputAddrGenT>
 FORCE_INLINE void process_chunk(
     uint32_t local_expert,
     uint32_t src_dev,
@@ -115,8 +121,11 @@ FORCE_INLINE void process_chunk(
     uint32_t& last_scanned_token,
     uint32_t& tokens_found_count,
     uint32_t metadata_cb_addr,
-    const AddrGenT& metadata_tensor_addr_gen,
-    uint16_t* devices_for_experts) {
+    const MetadataAddrGenT& metadata_tensor_addr_gen,
+    const OutputAddrGenT& output_tensor_addr_gen,
+    uint16_t* devices_for_experts,
+    uint32_t tilizer_subtoken_offset,
+    uint32_t tilizer_subtoken_size) {
     // Calculate how many tokens we need to find in this chunk
     uint32_t tokens_to_find = chunk_boundary - tokens_found_count;
     uint32_t tokens_found_in_chunk = 0;
@@ -129,6 +138,11 @@ FORCE_INLINE void process_chunk(
 
     DPRINT << "Chunk E[" << local_expert << "][D" << src_dev << "]: finding " << tokens_to_find
            << " tokens starting from token " << scan_token << ENDL();
+
+    // Always reserve TokensPerChunk for simpler synchronization with compute kernel
+    // Extra slots in last iteration will contain garbage but won't affect results
+    cb_reserve_back(TilizerInputCbId, TokensPerChunk);
+    uint32_t tilizer_cb_base_addr = get_write_ptr(TilizerInputCbId);
 
     while (tokens_found_in_chunk < tokens_to_find && scan_token < TokensPerDevice) {
         uint32_t page_in_src = scan_token / TileHeight;
@@ -169,6 +183,17 @@ FORCE_INLINE void process_chunk(
                         DPRINT << "  Token " << token_idx << " from D" << src_dev << " selected expert " << expert_id
                                << " (local " << local_expert << ") -> output[" << output_offset << "]" << ENDL();
 
+                        // Calculate write address for this token in the CB
+                        // Each token slot is tilizer_subtoken_size bytes
+                        uint32_t tilizer_cb_write_addr =
+                            tilizer_cb_base_addr + tokens_found_in_chunk * tilizer_subtoken_size;
+
+                        // Issue async read for this token's subtoken portion
+                        // Token is at page output_offset, we read from tilizer_subtoken_offset within the page
+                        uint64_t token_noc_addr =
+                            get_noc_addr(output_offset, output_tensor_addr_gen, tilizer_subtoken_offset);
+                        noc_async_read(token_noc_addr, tilizer_cb_write_addr, tilizer_subtoken_size);
+
                         tokens_found_in_chunk++;
                         break;  // Found match for this token, move to next token
                     }
@@ -179,6 +204,11 @@ FORCE_INLINE void process_chunk(
             scan_token++;
         }
     }
+
+    // Wait for all token reads to complete, then push all pages at once
+    // Always push TokensPerChunk for simpler synchronization with compute kernel
+    noc_async_read_barrier();
+    cb_push_back(TilizerInputCbId, TokensPerChunk);
 
     // Update tracking variables
     last_scanned_token = scan_token;
@@ -230,6 +260,10 @@ void kernel_main() {
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t e_d_buffer_id = get_named_compile_time_arg_val("e_d_buffer_id");
+    constexpr uint32_t tilizer_input_cb_id = get_named_compile_time_arg_val("tilizer_input_cb_id");
+
+    constexpr uint32_t tilizer_subtoken_bytes_aligned =
+        get_named_compile_time_arg_val("tilizer_subtoken_bytes_aligned");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -250,6 +284,7 @@ void kernel_main() {
     constexpr uint32_t aligned_indices_page_size = get_named_compile_time_arg_val("aligned_indices_page_size");
     constexpr uint32_t aligned_mapping_page_size = get_named_compile_time_arg_val("aligned_mapping_page_size");
     constexpr uint32_t aligned_metadata_page_size = get_named_compile_time_arg_val("aligned_metadata_page_size");
+    constexpr uint32_t aligned_output_page_size = get_named_compile_time_arg_val("aligned_output_page_size");
 
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr uint32_t cluster_axis = get_named_compile_time_arg_val("cluster_axis");
@@ -294,6 +329,8 @@ void kernel_main() {
     uint32_t indices_sent_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);  // 3
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 4
     bool is_drain_tilizer_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);         // 5
+    uint32_t tilizer_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);         // 6
+    uint32_t tilizer_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);           // 7
     zero_buffer_barrier();
 
     // DEBUG: Print E-D table right after zeroing to verify it's actually zeroed
@@ -451,7 +488,14 @@ void kernel_main() {
                         }
 
                         // CHUNK PROCESSING: Scan metadata to find tokens that selected this local_expert
-                        process_chunk<tile_height, selected_experts_k, experts_per_device, tokens_per_device>(
+                        process_chunk<
+                            tile_height,
+                            selected_experts_k,
+                            experts_per_device,
+                            tokens_per_device,
+                            tilizer_input_cb_id,
+                            aligned_output_page_size,
+                            tokens_per_chunk>(
                             local_expert,
                             src_dev,
                             next_chunk_boundary,
@@ -461,7 +505,10 @@ void kernel_main() {
                             tokens_found_count[local_expert][src_dev],
                             metadata_cb_addr,
                             metadata_tensor_addr_gen,
-                            devices_for_experts);
+                            output_tensor_addr_gen,
+                            devices_for_experts,
+                            tilizer_subtoken_offset,
+                            tilizer_subtoken_size);
 
                         // Update last_signaled and print
                         last_signaled[flat_idx] = next_chunk_boundary;
@@ -491,7 +538,14 @@ void kernel_main() {
 
                         while (current_val >= next_chunk_boundary && last_signaled[flat_idx] < ground_truth_val) {
                             // CHUNK PROCESSING: Scan metadata to find tokens that selected this local_expert
-                            process_chunk<tile_height, selected_experts_k, experts_per_device, tokens_per_device>(
+                            process_chunk<
+                                tile_height,
+                                selected_experts_k,
+                                experts_per_device,
+                                tokens_per_device,
+                                tilizer_input_cb_id,
+                                aligned_output_page_size,
+                                tokens_per_chunk>(
                                 local_expert,
                                 src_dev,
                                 next_chunk_boundary,
@@ -501,7 +555,10 @@ void kernel_main() {
                                 tokens_found_count[local_expert][src_dev],
                                 metadata_cb_addr,
                                 metadata_tensor_addr_gen,
-                                devices_for_experts);
+                                output_tensor_addr_gen,
+                                devices_for_experts,
+                                tilizer_subtoken_offset,
+                                tilizer_subtoken_size);
 
                             // Update last_signaled
                             last_signaled[flat_idx] = next_chunk_boundary;

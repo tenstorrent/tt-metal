@@ -131,6 +131,7 @@ void kernel_main() {
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t e_d_buffer_id = get_named_compile_time_arg_val("e_d_buffer_id");
+    constexpr uint32_t tilizer_input_cb_id = get_named_compile_time_arg_val("tilizer_input_cb_id");
 
     constexpr uint32_t input_pages = get_named_compile_time_arg_val("input_pages");
     constexpr uint32_t indices_pages = get_named_compile_time_arg_val("indices_pages");
@@ -310,5 +311,11 @@ void kernel_main() {
                              tokens_per_chunk - 1) /
                             tokens_per_chunk;
         }
+    }
+
+    // temporary for synchronization with reader.
+    for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
+        cb_wait_front(tilizer_input_cb_id, tokens_per_chunk);
+        cb_pop_front(tilizer_input_cb_id, tokens_per_chunk);
     }
 }

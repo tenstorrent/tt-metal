@@ -179,6 +179,8 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     uint32_t scores_tensor_cb_id = tt::CBIndex::c_5;
     // E-D buffer
     uint32_t e_d_buffer_id = tt::CBIndex::c_6;
+    // Tilizer input buffer for tokens to be tilized
+    uint32_t tilizer_input_cb_id = tt::CBIndex::c_7;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
     log_debug(
@@ -271,6 +273,24 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         std::max(subtoken_units_per_core_g1, subtoken_units_per_core_g2) * subtoken_bytes_aligned;
 
     auto sender_core_grid = all_tokens_cores.merge(all_indices_cores);
+
+    // Split token subregions across tilizer cores (similar to sender subtoken splitting)
+    // Each tilizer core handles a portion of the hidden dimension for each token
+    uint32_t tilizer_subtoken_bytes_aligned =
+        tt::align(tt::div_up(aligned_input_page_size, selective_tilize_core_range_set.num_cores()), l1_alignment);
+    uint32_t tilizer_subtoken_units_of_work = tt::div_up(aligned_input_page_size, tilizer_subtoken_bytes_aligned);
+
+    auto
+        [num_tilizer_work_cores,
+         all_tilizer_work_cores,
+         tilizer_cores_group_1,
+         tilizer_cores_group_2,
+         tilizer_units_per_core_g1,
+         tilizer_units_per_core_g2] =
+            tt::tt_metal::split_work_to_cores(selective_tilize_core_range_set, tilizer_subtoken_units_of_work);
+
+    uint32_t max_tilizer_subtoken_size =
+        std::max(tilizer_units_per_core_g1, tilizer_units_per_core_g2) * tilizer_subtoken_bytes_aligned;
 
     auto full_grid = sender_core_grid.merge(selective_tilize_core_range_set);
 
@@ -367,6 +387,16 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         tt::DataFormat::UInt32);  // E-D buffer where each element is 16B aligned to ensure each semaphore increment is
                                   // 16B aligned
 
+    // Tilizer input buffer: holds subtokens for tokens_per_chunk tokens, double-buffered
+    // Each tilizer core reads its subtoken portion of incoming tokens
+    tt::tt_metal::create_cb(
+        tilizer_input_cb_id,
+        program,
+        selective_tilize_core_range_set,
+        max_tilizer_subtoken_size,
+        operation_attributes.tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
+        input_data_format);
+
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
@@ -387,6 +417,9 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         {"send_preparation_buffer_id", send_preparation_buffer_id},
         {"scores_tensor_cb_id", scores_tensor_cb_id},
         {"e_d_buffer_id", e_d_buffer_id},
+        {"tilizer_input_cb_id", tilizer_input_cb_id},
+
+        {"tilizer_subtoken_bytes_aligned", tilizer_subtoken_bytes_aligned},
 
         {"input_pages", input_pages},
         {"indices_pages", indices_pages},
@@ -516,9 +549,17 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     };
 
     uint32_t is_drain_tilizer_core_idx = selective_tilize_runtime_args.size();
-    selective_tilize_runtime_args.push_back(0);  // 4
+    selective_tilize_runtime_args.push_back(0);  // 5
+
+    // Add work split runtime args for tilizer cores
+    uint32_t tilizer_subtoken_offset_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);  // 6: tilizer_subtoken_offset
+    uint32_t tilizer_subtoken_size_idx = selective_tilize_runtime_args.size();
+    selective_tilize_runtime_args.push_back(0);  // 7: tilizer_subtoken_size
 
     std::vector<CoreCoord> drain_tilizer_cores;
+    uint32_t tilizer_subtoken_offset = 0;
+
     for (uint32_t i = 0; i < num_tilizer_cores; i++) {
         // Only first num_links tilizer cores are drain cores (one per link/sender)
         if (i < num_links) {
@@ -527,6 +568,28 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
         } else {
             selective_tilize_runtime_args.at(is_drain_tilizer_core_idx) = 0;
         }
+
+        // Set work split parameters based on which group the core is in
+        if (tilizer_cores_group_1.contains(selective_tilize_cores.at(i))) {
+            selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
+            uint32_t tilizer_subtoken_size = tilizer_units_per_core_g1 * tilizer_subtoken_bytes_aligned;
+            // Clamp to not exceed the total token size
+            if (tilizer_subtoken_offset + tilizer_subtoken_size > aligned_input_page_size) {
+                tilizer_subtoken_size = aligned_input_page_size - tilizer_subtoken_offset;
+            }
+            selective_tilize_runtime_args.at(tilizer_subtoken_size_idx) = tilizer_subtoken_size;
+            tilizer_subtoken_offset += tilizer_subtoken_size;
+        } else if (tilizer_cores_group_2.contains(selective_tilize_cores.at(i))) {
+            selective_tilize_runtime_args.at(tilizer_subtoken_offset_idx) = tilizer_subtoken_offset;
+            uint32_t tilizer_subtoken_size = tilizer_units_per_core_g2 * tilizer_subtoken_bytes_aligned;
+            // Clamp to not exceed the total token size
+            if (tilizer_subtoken_offset + tilizer_subtoken_size > aligned_input_page_size) {
+                tilizer_subtoken_size = aligned_input_page_size - tilizer_subtoken_offset;
+            }
+            selective_tilize_runtime_args.at(tilizer_subtoken_size_idx) = tilizer_subtoken_size;
+            tilizer_subtoken_offset += tilizer_subtoken_size;
+        }
+
         tt::tt_metal::SetRuntimeArgs(
             program, selective_tilize_kernel_id, selective_tilize_cores.at(i), selective_tilize_runtime_args);
         tt::tt_metal::SetRuntimeArgs(
