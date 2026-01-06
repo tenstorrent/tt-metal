@@ -231,20 +231,10 @@ void kernel_main() {
             pack_tile(dst0, cb_ex2pe);
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
-            tile_regs_acquire();
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_SCALAR, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
-            cb_reserve_back(cb_ex_partial, 1);
-            cb_wait_front(cb_scaler, 1);
-            cb_wait_front(cb_ex2pe, 1);
+
             // reduce only one final tile
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
-            cb_pop_front(cb_ex2pe, 1);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial);
-            tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
-            reduce_uninit<FP32_DEST_ACC>();
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
+                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::TileShape::single());
 
             // GLOBAL reduction: Can safely use reduce helper (single tile reduction)
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
@@ -338,23 +328,9 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
 
-            cb_reserve_back(cb_ex_partial, 1);
-            cb_wait_front(cb_scaler, 1);
-            cb_wait_front(cb_ex2pe, 1);
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(
+                cb_ex2pe, cb_scaler, cb_ex_partial, compute_kernel_lib::TileShape::single());
 
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_SCALAR, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
-
-            tile_regs_acquire();
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial);
-            tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
-
-            reduce_uninit<FP32_DEST_ACC>();
-
-            cb_pop_front(cb_ex2pe, 1);
             cb_wait_front(cb_ex_partial, 1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
