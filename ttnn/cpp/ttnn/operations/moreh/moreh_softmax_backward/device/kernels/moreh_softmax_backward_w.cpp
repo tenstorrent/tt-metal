@@ -4,9 +4,7 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -34,17 +32,20 @@ void kernel_main() {
             // apply mask
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter2, /*itile=*/0, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
-            reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_inter2, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop=1*/ 0);
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                cb_inter2, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileShape::single());
         } else {
             constexpr auto cb_inter0 = tt::CBIndex::c_24;
-            reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(
-                cb_dy, cb_bcast_scaler, cb_inter0, Wt - 1, /*pop0=*/0, /*pop=1*/ 0);
+            compute_kernel_lib::
+                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::PERSISTENT>(
+                    cb_dy, cb_bcast_scaler, cb_inter0, compute_kernel_lib::TileShape::row(Wt - 1));
 
             constexpr auto cb_inter1 = tt::CBIndex::c_25;
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter1, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_inter1, cb_bcast_scaler, cb_inter2, 1, /*pop0=*/1, /*pop=1*/ 0);
+            compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::TileShape::single());
 
             add_tiles_to_cb(cb_inter0, cb_inter2, cb_sum);
         }
@@ -78,7 +79,9 @@ void kernel_main() {
         }
 
         // step 2, compute sum(y * dy)
-        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_ydy, cb_bcast_scaler, cb_sum, Wt, /*pop0=*/Wt, /*pop=1*/ 0);
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileShape::row(Wt));
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {

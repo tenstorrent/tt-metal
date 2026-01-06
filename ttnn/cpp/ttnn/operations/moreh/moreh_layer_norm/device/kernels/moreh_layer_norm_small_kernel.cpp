@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
@@ -161,24 +162,11 @@ void kernel_main() {
         // We don't pop cb_x until we compute xmm.
 
         /*
-         * E[x]
+         * E[x] - reduce single pre-accumulated tile
          * cb_ex
          */
-        tile_regs_acquire();
-        cb_wait_front(cb_xsum, onetile);
-        cb_reserve_back(cb_ex, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_ex, cb_xsum, cb_scaler);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_xsum, cb_scaler, first_tile, first_tile, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_ex);
-
-        cb_pop_front(cb_xsum, onetile);
-        cb_push_back(cb_ex, onetile);
-        tile_regs_release();
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_xsum, cb_scaler, cb_ex, compute_kernel_lib::TileShape::single());
 
         cb_wait_front(cb_ex, onetile);
         if (mean_has_value) {
@@ -298,24 +286,11 @@ void kernel_main() {
         // We don't pop cb_xmm here.
 
         /*
-         * E[(x-E[x])^2 = Var[x]
+         * E[(x-E[x])^2 = Var[x] - reduce single pre-accumulated tile
          * cb_var
          */
-        tile_regs_acquire();
-        cb_wait_front(cb_xmm2sum, onetile);
-        cb_reserve_back(cb_var, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_var, cb_xmm2sum, cb_scaler);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_var);
-
-        cb_pop_front(cb_xmm2sum, onetile);
-        cb_push_back(cb_var, onetile);
-        tile_regs_release();
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_xmm2sum, cb_scaler, cb_var, compute_kernel_lib::TileShape::single());
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
