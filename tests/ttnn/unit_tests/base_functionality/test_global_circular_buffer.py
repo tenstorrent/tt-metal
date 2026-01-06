@@ -32,9 +32,5 @@ def run_global_circular_buffer(device):
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, 3200)
 
 
-def test_global_circular_buffer(device):
-    run_global_circular_buffer(device)
-
-
 def test_global_circular_buffer_mesh(mesh_device):
     run_global_circular_buffer(mesh_device)
