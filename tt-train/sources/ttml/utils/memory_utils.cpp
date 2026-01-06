@@ -29,7 +29,7 @@ ttnn::ScopeGuard begin_capture(tt::tt_metal::IGraphProcessor::RunMode mode) {
     graph_processor = std::make_shared<ttnn::graph::GraphProcessor>(mode);
     graph_processor->begin_graph_capture(mode);
     is_capture_active = true;
-    return ttnn::make_guard([&]() {
+    return ttnn::make_guard([]() {
         end_capture();
         clear();
     });

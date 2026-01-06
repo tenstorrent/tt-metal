@@ -451,13 +451,8 @@ def main():
     args = parser.parse_args()
 
     # Read log file
-    try:
-        with open(args.logs, "r") as f:
-            content = f.read()
-    except FileNotFoundError:
-        raise ValueError(f"Error: Log file '{args.logs}' not found")
-    except Exception as e:
-        raise ValueError(f"Error reading log file: {e}")
+    with open(args.logs, "r") as f:
+        content = f.read()
 
     # Find all memory summaries
     summaries = find_memory_summaries(content)
