@@ -52,7 +52,7 @@ def rms_norm_ttnn(
         eps: Epsilon for numerical stability
 
     Returns:
-        Normalized TTNN tensor
+        Normalized TTNN tensor (bfloat16)
     """
     return ttnn.rms_norm(
         x,
@@ -171,9 +171,6 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # Enable native RoPE when precomputed tensors are available
-        self.use_native_rope = cos_meta is not None and sin_meta is not None
-
         # Compute kernel config for attention
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -203,7 +200,7 @@ class GemmaAttentionTTNN:
 
         Args:
             hidden_states: TTNN tensor (batch, seq_len, hidden_dim)
-            cos, sin: RoPE embeddings (unused when use_native_rope=True)
+            cos, sin: Unused (kept for API compatibility, native RoPE uses self.cos_meta/sin_meta)
             attention_mask: Attention mask
             position_ids: Position indices
             past_key_value: Cached KV
@@ -221,11 +218,12 @@ class GemmaAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
+        # OPTIMIZATION: Use bfloat8_b + L1 for maximum bandwidth
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -237,7 +235,7 @@ class GemmaAttentionTTNN:
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
@@ -286,15 +284,15 @@ class GemmaAttentionTTNN:
         # attn_output: [batch, num_heads, seq, head_dim] -> [batch, 1, seq, num_heads * head_dim]
         attn_concat = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Output projection (DRAM for large tensors)
+        # Output projection - use bfloat16 for residual add compatibility
         output = ttnn.linear(
             attn_concat,
             self.o_proj,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -311,6 +309,15 @@ class GemmaAttentionTTNN:
 class GemmaMLPTTNN:
     """
     Gemma MLP with GeGLU activation using TTNN.
+
+    Uses chunking along sequence dimension combined with auto L1 sharding
+    to fit large intermediate tensors (mlp_dim=16384) in L1 memory.
+
+    Strategy:
+    - Chunk input along sequence dimension (e.g., 544 → 3 chunks of 256)
+    - Let matmul auto-compute optimal sharding for L1
+    - Subsequent ops inherit the sharding from matmul output
+    - Accumulate results in L1, concatenate at end
     """
 
     def __init__(
@@ -333,28 +340,106 @@ class GemmaMLPTTNN:
         self.up_proj = weights["mlp.up_proj.weight"]
         self.down_proj = weights["mlp.down_proj.weight"]
 
+        # Chunk size must be tile-aligned (multiple of 32)
+        # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
+        # 256 tokens × 16384 mlp_dim × 1 byte = ~4MB total
+        # With auto-sharding across 64 cores = ~64KB per core (fits L1)
+        self.chunk_size = 256
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Forward pass using TTNN operations.
+        Forward pass using chunked processing with auto L1 sharding.
+
+        Strategy:
+        1. Chunk input along sequence dimension (e.g., 544 → 3 chunks of 256)
+        2. Let matmul auto-compute sharding (typically WIDTH or BLOCK in L1)
+        3. Subsequent ops inherit sharding from matmul output
+        4. Accumulate results in L1, concatenate at end
 
         Args:
-            x: TTNN input tensor
+            x: TTNN input tensor [batch, seq, hidden] or [batch, 1, seq, hidden]
 
         Returns:
-            TTNN output tensor
+            TTNN output tensor [batch, seq, hidden] or [batch, 1, seq, hidden]
         """
-        # Use DRAM for large intermediate tensors to avoid OOM
-        gate = ttnn.linear(x, self.gate_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        up = ttnn.linear(x, self.up_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        batch_size = x.shape[0]
+        is_4d = len(x.shape) == 4
+        seq_len = x.shape[2] if is_4d else x.shape[1]
+        hidden = x.shape[-1]
 
-        # GELU activation
-        gate_activated = ttnn.gelu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Calculate number of chunks (tile-aligned)
+        num_chunks = (seq_len + self.chunk_size - 1) // self.chunk_size
+        output_chunks = []
 
-        # Element-wise multiply
-        hidden = ttnn.multiply(gate_activated, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for chunk_idx in range(num_chunks):
+            chunk_start = chunk_idx * self.chunk_size
+            chunk_end = min(chunk_start + self.chunk_size, seq_len)
+            actual_chunk_size = chunk_end - chunk_start
 
-        # Down projection
-        return ttnn.linear(hidden, self.down_proj, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Pad last chunk to tile alignment if needed
+            needs_chunk_padding = actual_chunk_size < self.chunk_size
+            padded_chunk_size = self.chunk_size if needs_chunk_padding else actual_chunk_size
+
+            # Slice input chunk
+            if is_4d:
+                x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
+            else:
+                x_chunk = ttnn.slice(x, [0, chunk_start, 0], [batch_size, chunk_end, hidden])
+
+            # Pad chunk if needed for tile alignment
+            if needs_chunk_padding:
+                pad_amount = padded_chunk_size - actual_chunk_size
+                if is_4d:
+                    x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
+                else:
+                    x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, pad_amount), (0, 0)), value=0.0)
+
+            # Gate and up projections - use bfloat8_b for 2x memory savings
+            # Let matmul auto-compute L1 sharding
+            gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b)
+            up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(x_chunk)
+
+            # GELU activation - inherits sharding and dtype
+            gate_activated = ttnn.gelu(gate)
+            ttnn.deallocate(gate)
+
+            # Element-wise multiply - inherits sharding from inputs
+            hidden_out = ttnn.multiply(gate_activated, up)
+            ttnn.deallocate(gate_activated)
+            ttnn.deallocate(up)
+
+            # Down projection - output to DRAM in bfloat16 for accumulation
+            output_chunk = ttnn.linear(
+                hidden_out, self.down_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            ttnn.deallocate(hidden_out)
+
+            # Slice back to actual size if padded
+            if needs_chunk_padding:
+                if is_4d:
+                    output_chunk = ttnn.slice(
+                        output_chunk, [0, 0, 0, 0], [batch_size, 1, actual_chunk_size, hidden]
+                    )
+                else:
+                    output_chunk = ttnn.slice(output_chunk, [0, 0, 0], [batch_size, actual_chunk_size, hidden])
+
+            output_chunks.append(output_chunk)
+
+        # Concatenate all chunks along sequence dimension
+        if len(output_chunks) == 1:
+            output = output_chunks[0]
+        else:
+            output = output_chunks[0]
+            for i in range(1, len(output_chunks)):
+                dim = 2 if is_4d else 1
+                output = ttnn.concat([output, output_chunks[i]], dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(output_chunks[i])
+
+        # Move final output to L1
+        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        return output
 
 
 # ============================================================================
@@ -417,7 +502,7 @@ class GemmaBlockTTNN:
 
         Args:
             hidden_states: TTNN input tensor
-            cos, sin: RoPE embeddings
+            cos, sin: Unused (kept for API compatibility, passed through to attention)
             attention_mask: Attention mask
             position_ids: Position indices
             past_key_value: Cached KV
@@ -444,6 +529,7 @@ class GemmaBlockTTNN:
             use_cache,
         )
         hidden_states = ttnn.add(hidden_states, attn_output)
+        ttnn.deallocate(attn_output)
 
         # Pre-MLP norm
         normed = rms_norm_ttnn(
@@ -454,7 +540,9 @@ class GemmaBlockTTNN:
 
         # MLP with residual
         mlp_output = self.mlp.forward(normed)
+        ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_output)
+        ttnn.deallocate(mlp_output)
 
         return hidden_states, new_cache
 
