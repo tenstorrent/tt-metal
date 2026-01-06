@@ -112,7 +112,9 @@ bool GraphTracker::hook_deallocate(Buffer* buffer) {
     if (hooked) {
         std::lock_guard<std::mutex> lock(hooked_buffers_mutex);
         auto buffer_it = hooked_buffers.find(buffer);
-        if (buffer_it != hooked_buffers.end()) {
+        if (buffer_it == hooked_buffers.end()) {
+            log_warning(tt::LogMetal, "Can't hook deallocation of a buffer which allocation wasn't hooked");
+        } else {
             hooked_buffers.erase(buffer_it);
         }
     }
