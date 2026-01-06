@@ -55,7 +55,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     auto output_compile_time_args = output_mesh_tensor_builder.get_compile_time_args();
 
     // Combine compile-time args: input args first, then output args
-    // TODO: once we can allow two risc work in parallel, seperate them into two kernels
+    // TODO(#34704): once we can allow two risc work in parallel, seperate them into two kernels
     std::vector<uint32_t> compile_time_args = input_compile_time_args;
     compile_time_args.insert(compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
 

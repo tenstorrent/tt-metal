@@ -21,7 +21,7 @@
  * @note Based on LayerNorm mcast_sender style but simplified for SUM reduction only
  */
 void kernel_main() {
-    // TODO: move fabric counter init to fw kernel init
+    // TODO(#34735): move fabric counter init to fw kernel init
     tt::tt_fabric::udm::fabric_local_state_init();
 
     // ============================================================================
@@ -150,7 +150,7 @@ void kernel_main() {
     // ============================================================================
     // Phase 7: Distribute final results to all receivers
     // ============================================================================
-    // TODO: Once UDM supports multicast, replace unicast with mcast for efficiency
+    // TODO(#34705): Once UDM supports multicast, replace unicast with mcast for efficiency
     uint32_t l1_read_addr_out = get_read_ptr(cb_out);
     uint32_t total_bytes = block_ht * single_tile_size_bytes;
 
@@ -172,6 +172,6 @@ void kernel_main() {
     }
     tt::tt_fabric::experimental::udm::atomic_barrier();
 
-    // TODO: remove once we have persistent connection across programs
+    // TODO(#34736): remove once we have persistent connection across programs
     tt::tt_fabric::udm::close_fabric_connection();
 }

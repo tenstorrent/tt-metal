@@ -30,7 +30,7 @@
 #include "api/debug/dprint.h"
 
 void kernel_main() {
-    // TODO: move fabric counter init to fw kernel init
+    // TODO(#34735): move fabric counter init to fw kernel init
     tt::tt_fabric::udm::fabric_local_state_init();
 
     // ==================== Create MeshTensorAccessor from Compile-Time Args ====================
@@ -152,6 +152,6 @@ void kernel_main() {
         }
     }
 
-    // TODO: remove once we have persistent connection across programs
+    // TODO(#34736): remove once we have persistent connection across programs
     tt::tt_fabric::udm::close_fabric_connection();
 }

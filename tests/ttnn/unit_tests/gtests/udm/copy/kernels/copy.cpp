@@ -19,7 +19,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 void kernel_main() {
-    // TODO: move fabric counter init to fw kernel init
+    // TODO(#34735): move fabric counter init to fw kernel init
     tt::tt_fabric::udm::fabric_local_state_init();
 
     // ==================== Create MeshTensorAccessor from Compile-Time Args ====================
@@ -84,7 +84,7 @@ void kernel_main() {
         tt::tt_fabric::experimental::udm::async_read(input_mesh_accessor, page_id, l1_addr, page_size);
         tt::tt_fabric::experimental::udm::async_read_barrier();
 
-        // TODO: once allowed two kernels in one tensix to use fabric connection, move to writer kernel
+        // TODO(#34704): once allowed two kernels in one tensix to use fabric connection, move to writer kernel
         // Write to output tensor using UDM API
         tt::tt_fabric::experimental::udm::async_write(output_mesh_accessor, page_id, l1_addr, page_size);
         tt::tt_fabric::experimental::udm::async_write_barrier();
@@ -101,6 +101,6 @@ void kernel_main() {
         }
     }
 
-    // TODO: remove once we have persistent connection across programs
+    // TODO(#34736): remove once we have persistent connection across programs
     tt::tt_fabric::udm::close_fabric_connection();
 }
