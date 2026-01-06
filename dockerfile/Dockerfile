@@ -63,9 +63,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set up virtual environment
+# Install uv (not available via apt, install via pip)
+RUN python3 -m pip install --no-cache-dir uv
+
+# Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
+RUN umask 000 && uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -75,7 +78,7 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN python3 -m pip install --no-cache-dir build numpy setuptools
+RUN uv pip install --no-cache build numpy setuptools
 
 RUN git config --global --add safe.directory '*'
 
@@ -111,16 +114,28 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-RUN umask 000 && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+# Configure PyTorch CPU index and install Python packages using uv
+# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# that are not explicitly listed in the requirements.txt files
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
+# Install the debugger (tt-exalens) using uv instead of pip
+# The install_debugger.sh script uses pip, but uv venvs don't include pip by default
 RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-    echo "Installing debugger for Ubuntu 22.04..." && \
-    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
+    REF=$(head -n1 ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt | tr -d '[:space:]') && \
+    PYTHON_CP_VERSION=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")') && \
+    DOWNLOAD_LINK="https://github.com/tenstorrent/tt-exalens/releases/download/v${REF}/tt_exalens-${REF}-${PYTHON_CP_VERSION}-${PYTHON_CP_VERSION}-linux_x86_64.whl" && \
+    if curl --head --silent --fail "$DOWNLOAD_LINK" >/dev/null 2>&1; then \
+        uv pip install --no-cache "$DOWNLOAD_LINK"; \
+    else \
+        uv pip install --no-cache "git+https://github.com/tenstorrent/tt-exalens.git@v${REF}"; \
+    fi && \
     echo "Debugger installation completed" && \
     python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi
@@ -184,9 +199,12 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
-# Set up virtual environment
+# Install uv (not available via apt, install via pip)
+RUN python3 -m pip install --no-cache-dir uv
+
+# Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
+RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -200,7 +218,7 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN pip3 install $WHEEL_FILENAME
+RUN uv pip install $WHEEL_FILENAME
 
 #############################################################
 
