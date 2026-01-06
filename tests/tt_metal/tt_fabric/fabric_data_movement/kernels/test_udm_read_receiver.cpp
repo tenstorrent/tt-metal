@@ -28,9 +28,6 @@ constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(10);
  * blocks can be tested without requiring full integration/deployment into fabric
  */
 void kernel_main() {
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     // Per-core sender coordinates from runtime args
     uint32_t arg_index = 0;
     uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);

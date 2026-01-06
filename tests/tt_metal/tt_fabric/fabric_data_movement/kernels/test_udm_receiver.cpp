@@ -35,9 +35,6 @@ inline void poll_for_value(volatile tt_l1_ptr uint32_t* poll_addr, uint32_t expe
  * blocks can be tested without requiring full integration/deployment into fabric
  */
 void kernel_main() {
-    // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     uint32_t time_seed = time_seed_init;
 
     int32_t dest_bank_id;

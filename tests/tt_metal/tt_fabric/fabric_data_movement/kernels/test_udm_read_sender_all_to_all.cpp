@@ -31,8 +31,6 @@ constexpr uint32_t reader_device_idx = get_compile_time_arg_val(12);
  * Runtime args: for each provider: (noc_x, noc_y, dst_dev_id, dst_mesh_id)
  */
 void kernel_main() {
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
