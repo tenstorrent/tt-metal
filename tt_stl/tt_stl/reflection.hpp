@@ -377,7 +377,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
 }
 
 template <typename T>
-typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std::ostream& os, const T& value) {
+typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
     os << enchantum::scoped::to_string(value);
     return os;
 }
@@ -493,7 +493,7 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
-    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
+    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
     os << "(";
@@ -944,7 +944,7 @@ struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::suppor
 };
 
 template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
+struct fmt::formatter<T, char, std::enable_if_t<std::is_enum_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& value, format_context& ctx) const -> format_context::iterator {
@@ -1077,8 +1077,8 @@ struct fmt::formatter<std::unordered_map<K, V>> {
 
 template <typename T>
     requires(
-        ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
-                                               ttsl::reflection::detail::supports_conversion_to_string_v<T>))
+        ttsl::concepts::Reflectable<T> and
+        not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 

@@ -771,7 +771,7 @@ public:
     // Helper for random number generation in a range [min, max]
     template <typename T>
     T get_rand(T min, T max) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
+        static_assert(std::is_integral_v<T>, "T must be an integral type");
         std::uniform_int_distribution<T> dist(min, max);
         return dist(rng_);
     }
