@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -14,7 +15,7 @@ struct SystemMemoryCQInterface {
     // Device signals completion and writes data for D2H transfers in the completion region, host reads from the
     // completion region Equation for issue fifo size is | issue_fifo_wr_ptr + command size B - issue_fifo_rd_ptr |
     // Space available would just be issue_fifo_limit - issue_fifo_size
-    SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start);
+    SystemMemoryCQInterface(ChipId device_id, uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start);
 
     // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B
     // aligned and remaining space is dedicated for completion queue Smaller issue queues can lead to more stalls for

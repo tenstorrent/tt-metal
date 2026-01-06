@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <limits.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -14,6 +15,7 @@
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -58,9 +60,63 @@ DispatchSettingsContainer& get_store() {
     static DispatchSettingsContainer store;
     return store;
 }
+
+uint32_t get_min_cq_size_bytes(const tt::Cluster& cluster, uint32_t num_hw_cqs) {
+    uint32_t min_cq_size = std::numeric_limits<uint32_t>::max();
+    const bool is_galaxy = cluster.is_galaxy_cluster();
+    for (ChipId device_id : cluster.all_chip_ids()) {
+        const ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
+        const uint16_t channel = cluster.get_assigned_channel_for_device(device_id);
+        uint32_t host_channel_size = cluster.get_host_channel_size(mmio_device_id, channel);
+        if (host_channel_size == 0) {
+            continue;
+        }
+        uint32_t cq_size = host_channel_size / num_hw_cqs;
+        if (is_galaxy) {
+            const uint32_t devices_per_channel =
+                std::max(1u, host_channel_size / DispatchSettings::MAX_DEV_CHANNEL_SIZE);
+            cq_size /= devices_per_channel;
+        }
+        min_cq_size = std::min(min_cq_size, cq_size);
+    }
+    if (min_cq_size == std::numeric_limits<uint32_t>::max()) {
+        return 0;
+    }
+    return min_cq_size;
+}
+
+uint32_t calculate_issue_queue_size_bytes(uint32_t cq_size_bytes) {
+    if (cq_size_bytes == 0) {
+        return 0;
+    }
+    const uint32_t host_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    const uint32_t cq_start = static_cast<uint32_t>(CommandQueueHostAddrType::UNRESERVED) * host_alignment;
+    if (cq_size_bytes <= cq_start) {
+        return 0;
+    }
+    const uint32_t cq_payload = cq_size_bytes - cq_start;
+    const uint32_t completion_bytes =
+        ((cq_payload / DispatchSettings::TRANSFER_PAGE_SIZE) / 4) * DispatchSettings::TRANSFER_PAGE_SIZE;
+    return cq_payload - completion_bytes;
+}
+
+uint32_t calculate_prefetch_entry_budget(
+    const tt::Cluster& cluster, uint32_t num_hw_cqs, uint32_t max_prefetch_command_size) {
+    const uint32_t cq_size_bytes = get_min_cq_size_bytes(cluster, num_hw_cqs);
+    const uint32_t issue_queue_bytes = calculate_issue_queue_size_bytes(cq_size_bytes);
+    if (issue_queue_bytes == 0 || max_prefetch_command_size == 0) {
+        return 0;
+    }
+    const uint32_t max_entries = issue_queue_bytes / max_prefetch_command_size;
+    if (max_entries <= 2) {
+        return 0;
+    }
+    return max_entries - 2;
+}
 }  // namespace
 
 DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+    const uint32_t max_prefetch_cmd_size = 128_KB;
     uint32_t prefetch_q_entries;
     if (cluster.is_galaxy_cluster()) {
         prefetch_q_entries = 1532 / num_hw_cqs;
@@ -68,11 +124,16 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         prefetch_q_entries = 1534;
     }
 
+    const uint32_t prefetch_entry_budget = calculate_prefetch_entry_budget(cluster, num_hw_cqs, max_prefetch_cmd_size);
+    if (prefetch_entry_budget > 0) {
+        prefetch_q_entries = std::min(prefetch_q_entries, prefetch_entry_budget);
+    }
+
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::WORKER)
         .prefetch_q_entries(prefetch_q_entries)
-        .prefetch_max_cmd_size(128_KB)
+        .prefetch_max_cmd_size(max_prefetch_cmd_size)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
         .prefetch_ringbuffer_size(1024_KB)

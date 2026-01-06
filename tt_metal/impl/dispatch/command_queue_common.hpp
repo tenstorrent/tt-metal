@@ -55,7 +55,7 @@ uint16_t get_umd_channel(uint16_t channel);
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
-uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size);
+uint32_t get_absolute_cq_offset(ChipId chip_id, uint16_t channel, uint8_t cq_id, uint32_t cq_size);
 
 // mostly used in debug_tools
 template <bool addr_16B>

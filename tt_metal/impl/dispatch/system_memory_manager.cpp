@@ -87,7 +87,8 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
     char* hugepage_start =
         (char*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
-    hugepage_start += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+    const uint32_t channel_share_offset = (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+    hugepage_start += channel_share_offset;
     this->cq_sysmem_start = hugepage_start;
 
     // TODO(abhullar): Remove env var and expose sizing at the API level
@@ -96,17 +97,19 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
         uint32_t cq_size_override = std::stoi(std::string(cq_size_override_env));
         this->cq_size = cq_size_override;
     } else {
-        this->cq_size =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel) /
-            num_hw_cqs;
+        uint32_t host_channel_size =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel);
+        this->cq_size = host_channel_size / num_hw_cqs;
         if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            // We put 4 galaxy devices per huge page since number of hugepages available is less than number of
-            // devices.
-            this->cq_size = this->cq_size / DispatchSettings::DEVICES_PER_UMD_CHANNEL;
+            // Galaxy devices share host channels, so divide by the number of devices carved out of the huge page.
+            uint32_t devices_per_channel = std::max(1u, host_channel_size / DispatchSettings::MAX_DEV_CHANNEL_SIZE);
+            this->cq_size = this->cq_size / devices_per_channel;
         }
     }
-    this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
-                           (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+    uint32_t host_channel_stride = static_cast<uint32_t>(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_stride(mmio_device_id, channel));
+    TT_ASSERT(host_channel_stride != 0, "Host channel stride must be non-zero.");
+    this->channel_offset = host_channel_stride * get_umd_channel(channel) + channel_share_offset;
 
     CoreType core_type = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
@@ -151,7 +154,7 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
                 completion_queue_writer_virtual.x,
                 completion_queue_writer_virtual.y)));
 
-        this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
+        this->cq_interfaces.push_back(SystemMemoryCQInterface(device_id, channel, cq_id, this->cq_size, cq_start));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
         // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping Plus
         // 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue

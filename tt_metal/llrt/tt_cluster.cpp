@@ -9,6 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -34,6 +35,7 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/hugepage.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
@@ -42,8 +44,31 @@
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
+static constexpr uint64_t HOST_MEM_DEVICE_GRANULARITY = 1ull << 26;
 
 namespace {
+
+uint64_t get_host_channel_size_override() {
+    const char* env = std::getenv("TT_METAL_HOST_CHANNEL_SIZE_MB");
+    if (env == nullptr) {
+        return tt::umd::HUGEPAGE_REGION_SIZE;
+    }
+    char* end_ptr = nullptr;
+    errno = 0;
+    unsigned long long value_mb = std::strtoull(env, &end_ptr, 10);
+    if (errno != 0 || end_ptr == env) {
+        TT_FATAL(false, "Invalid TT_METAL_HOST_CHANNEL_SIZE_MB value: {}", env);
+    }
+    uint64_t bytes = value_mb * (1ull << 20);
+    if (bytes == 0 || bytes > tt::umd::HUGEPAGE_REGION_SIZE) {
+        TT_FATAL(
+            false, "TT_METAL_HOST_CHANNEL_SIZE_MB must be between 1 and {} MB", tt::umd::HUGEPAGE_REGION_SIZE >> 20);
+    }
+    if (bytes % HOST_MEM_DEVICE_GRANULARITY != 0) {
+        TT_FATAL(false, "TT_METAL_HOST_CHANNEL_SIZE_MB must be a multiple of {}", HOST_MEM_DEVICE_GRANULARITY >> 20);
+    }
+    return bytes;
+}
 
 inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
@@ -356,6 +381,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+    const uint64_t host_channel_size_bytes = get_host_channel_size_override();
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
@@ -365,6 +391,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
+            .host_mem_channel_size_bytes = host_channel_size_bytes,
             .sdesc_path = sdesc_path,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
@@ -373,6 +400,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
+                .host_mem_channel_size_bytes = host_channel_size_bytes,
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
@@ -380,6 +408,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
+                .host_mem_channel_size_bytes = host_channel_size_bytes,
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -391,6 +420,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
+            .host_mem_channel_size_bytes = host_channel_size_bytes,
             .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
         });
@@ -902,6 +932,11 @@ uint32_t Cluster::get_num_host_channels(ChipId device_id) const {
 uint32_t Cluster::get_host_channel_size(ChipId device_id, uint32_t channel) const {
     TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(device_id));
     return this->driver_->get_host_channel_size(device_id, channel & HOST_MEM_CHANNELS_MASK);
+}
+
+uint64_t Cluster::get_host_channel_stride(ChipId device_id, uint32_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(device_id));
+    return this->driver_->get_host_channel_stride(device_id, channel & HOST_MEM_CHANNELS_MASK);
 }
 
 void* Cluster::host_dma_address(uint64_t offset, ChipId src_device_id, uint16_t channel) const {

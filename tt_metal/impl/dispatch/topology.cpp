@@ -775,7 +775,7 @@ void configure_dispatch_cores(IDevice* device) {
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
                 uint32_t completion_queue_start_addr =
-                    cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                    cq_start + issue_queue_size + get_absolute_cq_offset(serviced_device_id, channel, cq_id, cq_size);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 detail::WriteToDeviceL1(

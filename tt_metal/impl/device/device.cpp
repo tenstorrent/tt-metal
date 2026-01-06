@@ -227,22 +227,22 @@ void Device::configure_command_queue_programs() {
                 this->sysmem_manager_->reset(cq_id);
 
                 pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                    (cq_start + get_absolute_cq_offset(serviced_device_id, channel, cq_id, cq_size)) >> 4;
                 pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                    (cq_start + get_absolute_cq_offset(serviced_device_id, channel, cq_id, cq_size)) >> 4;
                 pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
+                     get_absolute_cq_offset(serviced_device_id, channel, cq_id, cq_size)) >>
                     4;
                 pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
+                     get_absolute_cq_offset(serviced_device_id, channel, cq_id, cq_size)) >>
                     4;
 
                 tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
                     pointers.data(),
                     pointers.size() * sizeof(uint32_t),
-                    get_absolute_cq_offset(channel, cq_id, cq_size),
+                    get_absolute_cq_offset(serviced_device_id, channel, cq_id, cq_size),
                     mmio_device_id,
                     get_umd_channel(channel));
             }

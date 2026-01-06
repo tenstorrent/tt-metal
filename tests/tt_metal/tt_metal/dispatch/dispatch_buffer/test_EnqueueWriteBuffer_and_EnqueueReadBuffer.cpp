@@ -314,7 +314,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
         cq_zeros.data(),
         (cq_size - cq_start),
-        get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
+        get_absolute_cq_offset(device->id(), channel, 0, cq_size) + cq_start,
         mmio_device_id,
         channel);
 

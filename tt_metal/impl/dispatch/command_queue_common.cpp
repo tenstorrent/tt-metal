@@ -15,9 +15,13 @@ uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size) { return cq_id 
 
 uint16_t get_umd_channel(uint16_t channel) { return channel & 0x3; }
 
-uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size) {
-    return (DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel)) +
-           ((channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE) + get_relative_cq_offset(cq_id, cq_size);
+uint32_t get_absolute_cq_offset(ChipId chip_id, uint16_t channel, uint8_t cq_id, uint32_t cq_size) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+    uint32_t host_channel_stride = static_cast<uint32_t>(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_stride(mmio_device_id, channel));
+    uint32_t channel_offset =
+        host_channel_stride * get_umd_channel(channel) + ((channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE);
+    return channel_offset + get_relative_cq_offset(cq_id, cq_size);
 }
 
 template <bool addr_16B>
