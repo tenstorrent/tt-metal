@@ -8,7 +8,7 @@
 
 inline void print_cb_details(uint32_t cb_id) {
     DPRINT << "cb_id " << cb_id << ": { "
-           << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
+           << "size:  " << get_local_cb_interface(cb_id).fifo_size << ", "
            << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
            << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
            << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
