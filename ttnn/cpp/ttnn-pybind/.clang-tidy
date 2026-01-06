@@ -1,2 +1,0 @@
-InheritParentConfig: true
-Checks: -bugprone-unused-raii, -misc-redundant-expression

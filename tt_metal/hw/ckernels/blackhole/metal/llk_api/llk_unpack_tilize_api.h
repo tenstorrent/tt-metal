@@ -11,29 +11,6 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t *unpack_tilize_params) {
-    constexpr bool within_face_16x16_transpose = false;
-    constexpr StochRndType stoch_rnd_mode = StochRndType::None;
-
-    const uint32_t unpA_operand_id = get_operand_id(unpack_tilize_params->unpA_operand);
-    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-
-    _llk_unpack_tilize_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpA_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_tilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_A_params_t unpack_tilize_params = {.unpA_operand = unpA_operand};
-    llk_unpack_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
-}
-
 inline void llk_unpack_tilize_mop_config(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
@@ -100,42 +77,6 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 /*************************************************************************
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
-
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_tilizeA_B_hw_configure(
-    const llk_unpack_AB_params_t *unpack_tilizeA_B_params, const int within_face_16x16_transpose = 0) {
-    // In0 -> unpA
-    // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpack_tilizeA_B_params->unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpack_tilizeA_B_params->unpB_operand);
-
-    // unpA -> srcA
-    // Unpack only 1x16 row of datums to SrcA per UNPACK instruction
-    const uint32_t num_faces_a = get_operand_num_faces(unpA_operand_id);
-    const uint32_t face_r_dim_a = get_operand_face_r_dim(unpA_operand_id);
-
-    // unpB -> srcB
-    const uint32_t num_faces_b = get_operand_num_faces(unpB_operand_id);
-    const uint32_t face_r_dim_b = get_operand_face_r_dim(unpB_operand_id);
-    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
-        unpack_src_format[unpA_operand_id],
-        unpack_src_format[unpB_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpack_dst_format[unpB_operand_id],
-        face_r_dim_a,
-        face_r_dim_b,
-        within_face_16x16_transpose,
-        num_faces_a,
-        num_faces_b);
-}
-
-template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
-    const llk_unpack_AB_params_t unpack_tilizeA_B_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
-    llk_unpack_tilizeA_B_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        &unpack_tilizeA_B_params, within_face_16x16_transpose);
-}
 
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
