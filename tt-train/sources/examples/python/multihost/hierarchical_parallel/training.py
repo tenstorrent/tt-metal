@@ -125,8 +125,12 @@ def main(config: str, worker_type: str):
     model = model_factory.create_model()
     print(f"Rank {rank}: Model created")
 
-    training_cfg = TrainingConfig(yaml_config["training_config"])
-    device_config = DeviceConfig(yaml_config["device_config"])
+    training_cfg = TrainingConfig(yaml_config)
+    device_config = DeviceConfig(yaml_config)
+
+    print(
+        f"Device config DDP: {device_config.enable_ddp}, TP: {device_config.enable_tp} on rank {rank}"
+    )
 
     # Execute appropriate worker function
     if worker_type == "worker":
