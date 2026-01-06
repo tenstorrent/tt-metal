@@ -427,7 +427,7 @@ inline ttnn::Tensor create_height_distributed_height_sharded_bfloat16_tensor(
 /**
  * @brief Calculate maximum number of pages any gcore will process
  */
-inline uint32_t get_max_pages_per_gcore(const tt::tt_metal::experimental::udm::GcoresInfo& gcores_info) {
+inline uint32_t get_max_pages_per_gcore(const tt::tt_metal::experimental::udm::GlobalCoresInfo& gcores_info) {
     uint32_t max_pages = 0;
     for (size_t gcore_idx = 0; gcore_idx < gcores_info.gcores.size(); ++gcore_idx) {
         uint32_t total_pages = 1;
@@ -465,12 +465,12 @@ inline void log_tensor_shape_info(
  * @brief Debug helper to log gcores info details
  */
 inline void log_gcores_info(
-    const tt::tt_metal::experimental::udm::GcoresInfo& gcores_info,
+    const tt::tt_metal::experimental::udm::GlobalCoresInfo& gcores_info,
     const tt::tt_metal::experimental::udm::MeshBuilder& mesh_builder) {
     const auto& mesh_shape = mesh_builder.get_mesh().shape();
     const auto& grid_shape = mesh_builder.get_flattened_grid();
 
-    log_info(tt::LogTest, "=== Gcores Info ===");
+    log_info(tt::LogTest, "=== GlobalCores Info ===");
     log_info(
         tt::LogTest,
         "Mesh shape: [{}x{}], Grid shape: [{}x{}]",
@@ -479,7 +479,7 @@ inline void log_gcores_info(
         grid_shape[0],
         grid_shape[1]);
     log_info(tt::LogTest, "Total gcores in result: {}", gcores_info.gcores.size());
-    log_info(tt::LogTest, "Gcores with work: {}", gcores_info.num_cores);
+    log_info(tt::LogTest, "GlobalCores with work: {}", gcores_info.num_cores);
 
     std::string partition_dims_str;
     for (size_t d = 0; d < gcores_info.partition_dims.size(); ++d) {
@@ -501,7 +501,7 @@ inline void log_gcores_info(
         if (total_pages > 0) {
             log_debug(
                 tt::LogTest,
-                "Gcore[{}]: local_id={}, global_id={}, local_coord={}, global_coord={}",
+                "GlobalCore[{}]: local_id={}, global_id={}, local_coord={}, global_coord={}",
                 i,
                 gcore.local_id,
                 gcore.global_id,

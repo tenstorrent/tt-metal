@@ -12,12 +12,12 @@
 #endif
 
 // Forward declaration
-struct MeshGcoreAccessorArgs;
+struct MeshGlobalCoreAccessorArgs;
 
 /**
  * @brief Accessor for direct core-to-core access across devices in a mesh
  *
- * MeshGcoreAccessor allows a kernel on global core (x0, y0) to send requests to
+ * MeshGlobalCoreAccessor allows a kernel on global core (x0, y0) to send requests to
  * global core (x1, y1) in a multi-device mesh. It converts global core coordinates
  * to grid_id and local bank_id.
  *
@@ -30,8 +30,8 @@ struct MeshGcoreAccessorArgs;
  *
  * **Example:**
  * @code
- *   auto args = MeshGcoreAccessorArgs();
- *   MeshGcoreAccessor accessor(args);
+ *   auto args = MeshGlobalCoreAccessorArgs();
+ *   MeshGlobalCoreAccessor accessor(args);
  *   uint32_t gcore[3] = {1, 5, 10};
  *   auto result = accessor.get_fabric_node_and_noc_addr(gcore);
  * @endcode
@@ -110,7 +110,7 @@ struct WorkerCoreNocMapping {
  * @tparam NumWorkerCores Compile-time number of worker cores
  */
 template <uint32_t MeshNumDims, uint32_t GridNumDims, uint32_t NumGrids, uint32_t NumWorkerCores>
-struct MeshGcoreAccessor {
+struct MeshGlobalCoreAccessor {
 private:
     MeshConfig<MeshNumDims> mesh_config_;
     GridConfig<GridNumDims> grid_config_;
@@ -124,23 +124,23 @@ public:
      * Must call init() before use. No member initialization to avoid
      * generating .init_array entries (bare-metal compatible).
      */
-    MeshGcoreAccessor() = default;
+    MeshGlobalCoreAccessor() = default;
 
     /**
-     * @brief Initialize accessor from MeshGcoreAccessorArgs
+     * @brief Initialize accessor from MeshGlobalCoreAccessorArgs
      *
-     * @param args MeshGcoreAccessorArgs containing preprocessor define readers
-     * @note Implementation defined after MeshGcoreAccessorArgs is fully declared
+     * @param args MeshGlobalCoreAccessorArgs containing preprocessor define readers
+     * @note Implementation defined after MeshGlobalCoreAccessorArgs is fully declared
      */
-    void init(const MeshGcoreAccessorArgs& args);
+    void init(const MeshGlobalCoreAccessorArgs& args);
 
     /**
-     * @brief Construct a MeshGcoreAccessor from MeshGcoreAccessorArgs
+     * @brief Construct a MeshGlobalCoreAccessor from MeshGlobalCoreAccessorArgs
      *
-     * @param args MeshGcoreAccessorArgs containing preprocessor define readers
-     * @note Implementation defined after MeshGcoreAccessorArgs is fully declared
+     * @param args MeshGlobalCoreAccessorArgs containing preprocessor define readers
+     * @note Implementation defined after MeshGlobalCoreAccessorArgs is fully declared
      */
-    MeshGcoreAccessor(const MeshGcoreAccessorArgs& args);
+    MeshGlobalCoreAccessor(const MeshGlobalCoreAccessorArgs& args);
 
     // ==================== Methods ====================
 
@@ -215,10 +215,10 @@ public:
     const GcoreGridToFabricNodeMapping<NumGrids>& fabric_node_mapping() const { return fabric_node_mapping_; }
 };
 
-// ==================== MeshGcoreAccessorArgs ====================
+// ==================== MeshGlobalCoreAccessorArgs ====================
 
 /**
- * @brief Arguments parser for constructing MeshGcoreAccessor from preprocessor defines
+ * @brief Arguments parser for constructing MeshGlobalCoreAccessor from preprocessor defines
  *
  * This class reads configuration from preprocessor defines provided at compile time.
  * The CTA_OFFSET template parameter is kept for API compatibility but is not used.
@@ -235,7 +235,7 @@ public:
  * 9. FABRIC_CHIP_IDS - constexpr array of fabric chip IDs {id0, id1, ...}
  *
  */
-struct MeshGcoreAccessorArgs {
+struct MeshGlobalCoreAccessorArgs {
     static constexpr uint32_t MAX_DIMS = tensor_accessor::MAX_RANK;
 
     /**
@@ -347,12 +347,12 @@ struct MeshGcoreAccessorArgs {
     }
 };
 
-// ==================== MeshGcoreAccessor Method Implementations ====================
-// Defined after MeshGcoreAccessorArgs to avoid incomplete type errors
+// ==================== MeshGlobalCoreAccessor Method Implementations ====================
+// Defined after MeshGlobalCoreAccessorArgs to avoid incomplete type errors
 
 template <uint32_t MeshNumDims, uint32_t GridNumDims, uint32_t NumGrids, uint32_t NumWorkerCores>
-inline void MeshGcoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores>::init(
-    const MeshGcoreAccessorArgs& args) {
+inline void MeshGlobalCoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores>::init(
+    const MeshGlobalCoreAccessorArgs& args) {
     args.populate_mesh_config(mesh_config_);
     args.populate_grid_config(grid_config_);
     args.populate_fabric_node_mapping(fabric_node_mapping_);
@@ -360,14 +360,14 @@ inline void MeshGcoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores
 }
 
 template <uint32_t MeshNumDims, uint32_t GridNumDims, uint32_t NumGrids, uint32_t NumWorkerCores>
-inline MeshGcoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores>::MeshGcoreAccessor(
-    const MeshGcoreAccessorArgs& args) :
+inline MeshGlobalCoreAccessor<MeshNumDims, GridNumDims, NumGrids, NumWorkerCores>::MeshGlobalCoreAccessor(
+    const MeshGlobalCoreAccessorArgs& args) :
     mesh_config_(), grid_config_(), fabric_node_mapping_(), worker_core_noc_mapping_() {
     init(args);
 }
 
-// ==================== Default MeshGcoreAccessor Type ====================
+// ==================== Default MeshGlobalCoreAccessor Type ====================
 // Use preprocessor defines to create a concrete type alias
 // These defines are set at kernel compile time
 
-using DefaultMeshGcoreAccessor = MeshGcoreAccessor<MESH_NUM_DIMS, GRID_NUM_DIMS, NUM_GRIDS, NUM_WORKER_CORES>;
+using DefaultMeshGlobalCoreAccessor = MeshGlobalCoreAccessor<MESH_NUM_DIMS, GRID_NUM_DIMS, NUM_GRIDS, NUM_WORKER_CORES>;

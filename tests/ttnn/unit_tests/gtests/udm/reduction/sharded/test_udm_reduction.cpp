@@ -63,7 +63,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
 
     // ===== GRID SETUP - Use flattened mesh =====
     const auto& mesh_shape = mesh_builder.get_flattened_mesh();  // Mesh with dims
-    const auto& gcores = mesh_builder.get_all_gcores_in_mesh();  // Array of Gcores
+    const auto& gcores = mesh_builder.get_all_gcores_in_mesh();  // Array of GlobalCores
 
     // For row-wise reduction: cores in the same row reduce together
     uint32_t num_cores_y = mesh_shape[-2];  // Number of rows in mesh (independent reduction groups)
@@ -165,9 +165,9 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
     // Each row has independent reduction: first core in row is sender, rest are receivers
     // No reduction between rows - each row operates independently
 
-    std::vector<tt::tt_metal::experimental::udm::Gcore> sender_gcores;
-    std::vector<tt::tt_metal::experimental::udm::Gcore> receiver_gcores;
-    std::vector<tt::tt_metal::experimental::udm::Gcore> all_gcores;
+    std::vector<tt::tt_metal::experimental::udm::GlobalCore> sender_gcores;
+    std::vector<tt::tt_metal::experimental::udm::GlobalCore> receiver_gcores;
+    std::vector<tt::tt_metal::experimental::udm::GlobalCore> all_gcores;
 
     for (uint32_t y = 0; y < num_cores_y; ++y) {
         // First core in this row is sender
@@ -255,7 +255,7 @@ tt::tt_metal::experimental::udm::MeshProgram create_program(
         const auto& sender_gcore = gcores[y * num_cores_x + 0];
 
         // Collect all cores' gcores in this row (sender + receivers)
-        std::vector<const tt::tt_metal::experimental::udm::Gcore*> row_gcores;
+        std::vector<const tt::tt_metal::experimental::udm::GlobalCore*> row_gcores;
         row_gcores.reserve(num_cores_x);
         for (uint32_t x = 0; x < num_cores_x; ++x) {
             row_gcores.push_back(&gcores[y * num_cores_x + x]);

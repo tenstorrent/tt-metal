@@ -69,8 +69,8 @@ void adjust_shape_ranks(
  *   }
  * @endcode
  */
-struct GcoresInfo {
-    std::vector<Gcore> gcores;  // Vector of gcores assigned to work
+struct GlobalCoresInfo {
+    std::vector<GlobalCore> gcores;  // Vector of gcores assigned to work
     uint32_t num_cores{};       // Number of cores
 
     // Multi-dimensional partitioning info (all in page units)
@@ -88,9 +88,9 @@ struct GcoresInfo {
  * @param tensor_builder The MeshTensorBuilder containing tensor information
  * @param mesh_builder The MeshBuilder containing mesh and grid dimension information
  * @param partition_dim The dimension to partition work on (-1 for last dim)
- * @return GcoresInfo containing gcore assignment and work distribution
+ * @return GlobalCoresInfo containing gcore assignment and work distribution
  */
-GcoresInfo map_tensor_to_gcores(
+GlobalCoresInfo map_tensor_to_gcores(
     const class MeshTensorBuilder& tensor_builder, const class MeshBuilder& mesh_builder, int partition_dim = -1);
 
 /**
@@ -99,7 +99,7 @@ GcoresInfo map_tensor_to_gcores(
  * Partitions tensor across multiple dimensions simultaneously. Work is distributed
  * by iterating grid dimensions first, then mesh dimensions, to evenly spread work
  * across different mesh devices (grids). All gcores in the mesh×grid space will be
- * assigned entries, with edge/corner gcores receiving empty GcoresInfo if they have no work.
+ * assigned entries, with edge/corner gcores receiving empty GlobalCoresInfo if they have no work.
  *
  * For example, with 4 workloads and 4 grids (mesh devices):
  * Iteration order: grid[0], grid[1], then mesh[0], mesh[1], mesh[2], mesh[3]
@@ -113,9 +113,9 @@ GcoresInfo map_tensor_to_gcores(
  * @param tensor_builder The MeshTensorBuilder containing tensor information
  * @param mesh_builder The MeshBuilder containing mesh and grid dimension information
  * @param partition_dims The dimensions to partition work on (e.g., {0, 2})
- * @return GcoresInfo containing gcore assignment and work distribution for all gcores
+ * @return GlobalCoresInfo containing gcore assignment and work distribution for all gcores
  */
-GcoresInfo map_tensor_to_gcores_nd(
+GlobalCoresInfo map_tensor_to_gcores_nd(
     const class MeshTensorBuilder& tensor_builder,
     const class MeshBuilder& mesh_builder,
     const std::vector<int>& partition_dims);

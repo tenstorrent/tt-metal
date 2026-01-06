@@ -197,13 +197,13 @@ bool core_has_work(
 
 }  // anonymous namespace
 
-GcoresInfo map_tensor_to_gcores(
+GlobalCoresInfo map_tensor_to_gcores(
     const MeshTensorBuilder& tensor_builder, const MeshBuilder& mesh_builder, int partition_dim) {
     // Single-dimension partitioning - just call the ND version
     return map_tensor_to_gcores_nd(tensor_builder, mesh_builder, {partition_dim});
 }
 
-GcoresInfo map_tensor_to_gcores_nd(
+GlobalCoresInfo map_tensor_to_gcores_nd(
     const MeshTensorBuilder& tensor_builder, const MeshBuilder& mesh_builder, const std::vector<int>& partition_dims) {
     TT_FATAL(!partition_dims.empty(), "partition_dims cannot be empty");
 
@@ -248,7 +248,7 @@ GcoresInfo map_tensor_to_gcores_nd(
     // We need to distribute work across mesh×grid dimensions
     std::vector<uint32_t> cores_per_dim = factor_cores_into_dims(total_gcores, partition_dims.size());
 
-    GcoresInfo info;
+    GlobalCoresInfo info;
     info.partition_dims = normalized_dims;
 
     // Reserve space for all gcores (including those with no work)
@@ -309,7 +309,7 @@ GcoresInfo map_tensor_to_gcores_nd(
             strides.reserve(tensor_rank);
 
             if (has_work) {
-                // Gcore has work: compute actual workload
+                // GlobalCore has work: compute actual workload
                 for (uint32_t d = 0; d < tensor_rank; ++d) {
                     // Check if this dimension is partitioned
                     int partition_idx = find_partition_index(static_cast<int>(d), normalized_dims);
@@ -334,7 +334,7 @@ GcoresInfo map_tensor_to_gcores_nd(
                 }
                 assigned_cores++;
             } else {
-                // Gcore has no work: assign empty workload (0 pages for all dimensions)
+                // GlobalCore has no work: assign empty workload (0 pages for all dimensions)
                 for (uint32_t d = 0; d < tensor_rank; ++d) {
                     offsets.push_back(0);
                     pages.push_back(0);

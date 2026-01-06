@@ -26,7 +26,7 @@ MeshKernelHandle CreateMeshKernel(
     MeshBuilder& builder,
     MeshProgram& program,
     const std::string& file_name,
-    const std::vector<Gcore>& gcores,
+    const std::vector<GlobalCore>& gcores,
     const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig, tt::tt_metal::EthernetConfig>&
         config);
 
@@ -43,7 +43,7 @@ void SetMeshKernelRuntimeArgs(
     MeshBuilder& builder,
     MeshProgram& program,
     const MeshKernelHandle& mesh_kernel_handle,
-    const Gcore& gcore,
+    const GlobalCore& gcore,
     const std::vector<uint32_t>& runtime_args);
 
 }  // namespace tt::tt_metal::experimental::udm

@@ -235,10 +235,10 @@ void run_udm_copy_test(
  * Worker assignment:
  * - 4 rows per device → 4 workers per device
  * - Total: 16 gcores (4 per device × 4 devices)
- * - Gcore 0-3: device 0, rows 0-3
- * - Gcore 4-7: device 1, rows 0-3
- * - Gcore 8-11: device 2, rows 0-3
- * - Gcore 12-15: device 3, rows 0-3
+ * - GlobalCore 0-3: device 0, rows 0-3
+ * - GlobalCore 4-7: device 1, rows 0-3
+ * - GlobalCore 8-11: device 2, rows 0-3
+ * - GlobalCore 12-15: device 3, rows 0-3
  */
 using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFixture;
 

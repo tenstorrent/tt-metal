@@ -13,7 +13,7 @@ MeshKernelHandle CreateMeshKernel(
     MeshBuilder& builder,
     MeshProgram& program,
     const std::string& file_name,
-    const std::vector<Gcore>& gcores,
+    const std::vector<GlobalCore>& gcores,
     const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig, tt::tt_metal::EthernetConfig>&
         config) {
     // Get mesh compile-time defines and append to config
@@ -65,7 +65,7 @@ void SetMeshKernelRuntimeArgs(
     MeshBuilder& builder,
     MeshProgram& program,
     const MeshKernelHandle& mesh_kernel_handle,
-    const Gcore& gcore,
+    const GlobalCore& gcore,
     const std::vector<uint32_t>& runtime_args) {
     // Find which grid this gcore belongs to
     const auto& all_grids = builder.get_all_grids_in_mesh();
@@ -74,7 +74,7 @@ void SetMeshKernelRuntimeArgs(
         const auto& grid_gcores = builder.get_all_gcores_in_grid(grid);
 
         // Check if this gcore is in this grid
-        auto it = std::find_if(grid_gcores.begin(), grid_gcores.end(), [&gcore](const Gcore& gc) {
+        auto it = std::find_if(grid_gcores.begin(), grid_gcores.end(), [&gcore](const GlobalCore& gc) {
             return gc.global_id == gcore.global_id;
         });
 
@@ -93,7 +93,7 @@ void SetMeshKernelRuntimeArgs(
         }
     }
 
-    TT_FATAL(false, "Gcore with global_id {} not found in any grid", gcore.global_id);
+    TT_FATAL(false, "GlobalCore with global_id {} not found in any grid", gcore.global_id);
 }
 
 }  // namespace tt::tt_metal::experimental::udm

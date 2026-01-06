@@ -123,7 +123,7 @@ FORCE_INLINE void semaphore_inc_impl(
     }
 }
 
-// ==================== Gcore Accessor Management ====================
+// ==================== GlobalCore Accessor Management ====================
 
 /**
  * @brief Get or initialize the global gcore accessor (lazy initialization)
@@ -136,13 +136,13 @@ FORCE_INLINE void semaphore_inc_impl(
  *
  * @return Pair of [accessor reference, is_newly_initialized]
  */
-FORCE_INLINE std::pair<DefaultMeshGcoreAccessor&, bool> get_or_init_gcore_accessor() {
-    static DefaultMeshGcoreAccessor* accessor_ptr = nullptr;
+FORCE_INLINE std::pair<DefaultMeshGlobalCoreAccessor&, bool> get_or_init_gcore_accessor() {
+    static DefaultMeshGlobalCoreAccessor* accessor_ptr = nullptr;
     static bool initialized = false;
 
     if (!initialized) {
-        static DefaultMeshGcoreAccessor accessor;
-        auto gcore_args = MeshGcoreAccessorArgs();
+        static DefaultMeshGlobalCoreAccessor accessor;
+        auto gcore_args = MeshGlobalCoreAccessorArgs();
         accessor.init(gcore_args);
         accessor_ptr = &accessor;
         initialized = true;

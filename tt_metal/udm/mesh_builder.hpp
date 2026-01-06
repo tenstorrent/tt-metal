@@ -17,7 +17,7 @@
 namespace tt::tt_metal::experimental::udm {
 
 /**
- * @brief Builder class for constructing abstraction of Mesh/Grid/Gcore
+ * @brief Builder class for constructing abstraction of Mesh/Grid/GlobalCore
  *
  */
 class MeshBuilder {
@@ -61,17 +61,17 @@ public:
 
     const std::vector<Grid>& get_all_grids_in_mesh() const;
 
-    const std::vector<Gcore>& get_all_gcores_in_grid(const Grid& grid) const;
+    const std::vector<GlobalCore>& get_all_gcores_in_grid(const Grid& grid) const;
 
-    const std::vector<Gcore>& get_all_gcores_in_mesh() const;
+    const std::vector<GlobalCore>& get_all_gcores_in_mesh() const;
 
     const Grid& get_grid_from_coord(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
-    const Gcore& get_gcore_with_local_coord(
+    const GlobalCore& get_gcore_with_local_coord(
         const tt::tt_metal::distributed::MeshCoordinate& grid_coord,
         const tt::tt_metal::distributed::MeshCoordinate& gcore_coord) const;
 
-    const Gcore& get_gcore_with_global_coord(const tt::tt_metal::distributed::MeshCoordinate& gcore_coord) const;
+    const GlobalCore& get_gcore_with_global_coord(const tt::tt_metal::distributed::MeshCoordinate& gcore_coord) const;
 
     /**
      * @brief Get grid IDs and CoreRangeSets from global cores
@@ -80,12 +80,12 @@ public:
      * @return Map from grid_id to CoreRangeSet of local coordinates
      */
     std::unordered_map<uint32_t, tt::tt_metal::CoreRangeSet> get_grid_core_range_set_from_gcores(
-        const std::vector<Gcore>& gcores) const;
+        const std::vector<GlobalCore>& gcores) const;
 
     tt::tt_metal::distributed::MeshDevice* mesh_device() const;
 
     /**
-     * @brief Get compile-time arguments for MeshGcoreAccessor
+     * @brief Get compile-time arguments for MeshGlobalCoreAccessor
      *
      * @return Vector of compile-time arguments containing mesh and grid topology
      */
@@ -102,7 +102,7 @@ public:
     std::vector<uint32_t> get_fabric_nodes_compile_args() const;
 
     /**
-     * @brief Get compile-time defines for MeshGcoreAccessor
+     * @brief Get compile-time defines for MeshGlobalCoreAccessor
      *
      * @return Map of define names to values containing mesh and grid topology
      *         Defines include (as constexpr arrays):

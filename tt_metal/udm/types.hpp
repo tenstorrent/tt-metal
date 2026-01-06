@@ -22,37 +22,37 @@ class MeshBuilder;
 class MeshProgram;
 
 // ==================================================
-//                  Gcore (Global Core)
+//                  GlobalCore
 // ==================================================
 
 /**
  * @brief Global core identifier that abstracts cores across devices
  *
- * A Gcore represents a compute core in the global view, abstracting away
+ * A GlobalCore represents a compute core in the global view, abstracting away
  * the underlying device and local core coordinates.
  */
-struct Gcore {
+struct GlobalCore {
     uint32_t local_id;                                       // ID within the local grid
-    uint32_t global_id;                                      // ID in the global gcore space
+    uint32_t global_id;                                      // ID in the global GlobalCore space
     tt::tt_metal::distributed::MeshCoordinate local_coord;   // Coordinate within the grid
     tt::tt_metal::distributed::MeshCoordinate global_coord;  // Global coordinate across all devices
 
-    Gcore() :
+    GlobalCore() :
         local_id(0),
         global_id(0),
         local_coord(tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(1)),
         global_coord(tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(1)) {}
 
-    Gcore(
+    GlobalCore(
         uint32_t local_id,
         uint32_t global_id,
         const tt::tt_metal::distributed::MeshCoordinate& local_coord,
         const tt::tt_metal::distributed::MeshCoordinate& global_coord) :
         local_id(local_id), global_id(global_id), local_coord(local_coord), global_coord(global_coord) {}
 
-    bool operator==(const Gcore& other) const { return global_id == other.global_id; }
-    bool operator!=(const Gcore& other) const { return !(*this == other); }
-    bool operator<(const Gcore& other) const { return global_id < other.global_id; }
+    bool operator==(const GlobalCore& other) const { return global_id == other.global_id; }
+    bool operator!=(const GlobalCore& other) const { return !(*this == other); }
+    bool operator<(const GlobalCore& other) const { return global_id < other.global_id; }
 
     /**
      * @brief Convert local_coord to CoreCoord for use with SetRuntimeArgs
@@ -60,7 +60,8 @@ struct Gcore {
      * @return CoreCoord(x, y) where x=local_coord[1], y=local_coord[0]
      */
     tt::tt_metal::CoreCoord to_core_coord() const {
-        TT_FATAL(local_coord.dims() >= 2, "Gcore local_coord must be at least 2D, got dims={}", local_coord.dims());
+        TT_FATAL(
+            local_coord.dims() >= 2, "GlobalCore local_coord must be at least 2D, got dims={}", local_coord.dims());
         // Note that in udm we always specify coord and dims from outer dim to inner dim, which is reverse of CoreCoord
         return tt::tt_metal::CoreCoord(local_coord[1], local_coord[0]);
     }
