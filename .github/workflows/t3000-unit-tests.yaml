@@ -13,8 +13,9 @@ on:
           - n150
           - n300
           - p150
-          - wh-quietbox
-          - bh-quietbox
+          - p300
+          - wh-qb
+          - bh-qb
       model:
         description: 'Select model to test'
         required: false
@@ -32,12 +33,6 @@ on:
         required: false
         type: boolean
         default: false
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'models/tt_transformers/**'
-      - '.github/workflows/tt-transformers-demo-tests*.yaml'
   workflow_call:
     inputs:
       device:
@@ -64,10 +59,8 @@ jobs:
       version: 22.04
 
   # N150 Tests (Wormhole single chip)
-  # For PR triggers: only runs N150 by default
-  # For manual/workflow_call triggers: runs based on device input
   n150-tests:
-    if: ${{ github.event_name == 'pull_request' || inputs.device == 'all' || inputs.device == 'n150' }}
+    if: ${{ inputs.device == 'all' || inputs.device == 'n150' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
@@ -116,6 +109,23 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
+  # P300 Tests (Blackhole dual chip)
+  p300-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'p300' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'p300'
+      runner-label: 'P300'
+      arch: 'blackhole'
+      mesh-device-env: 'P300'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
   # WH QuietBox Tests (T3K - Wormhole 8 chips)
   wh-quietbox-tests:
     if: ${{ inputs.device == 'all' || inputs.device == 'wh-quietbox' }}
@@ -123,8 +133,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
     with:
-      device-type: 'wh-quietbox'
-      runner-label: 'T3K'
+      device-type: 'WH-QB'
+      runner-label: 'config-t3000'
       arch: 'wormhole_b0'
       mesh-device-env: 'T3K'
       model: ${{ inputs.model || 'llama3.1-8b' }}
@@ -140,8 +150,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
     with:
-      device-type: 'bh-quietbox'
-      runner-label: 'BH-QuietBox'
+      device-type: 'BH-QB'
+      runner-label: 'BH-QB-GE'
       arch: 'blackhole'
       mesh-device-env: 'P150x8'
       model: ${{ inputs.model || 'llama3.1-8b' }}
