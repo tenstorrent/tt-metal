@@ -16,7 +16,8 @@ from transformers.models.t5.modeling_t5 import T5EncoderModel
 from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 
-from models.experimental.tt_dit.encoders.t5.model_t5 import RelativeTextEmbeddings, T5Config
+from models.experimental.tt_dit.encoders.t5.model_t5 import TokenEmbeddings, RelativePositionEmbeddings, T5Config
+from models.experimental.tt_dit.utils.substate import substate
 from models.experimental.tt_dit.utils.check import assert_quality
 
 
@@ -83,7 +84,7 @@ def test_t5_embeddings(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
+    # logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
 
     # === TT-DiT T5 ====
     config = T5Config(
@@ -99,18 +100,17 @@ def test_t5_embeddings(
         relative_attention_max_distance=hf_model.config.relative_attention_max_distance,
     )
 
-    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    embeddings_state_dict = {}
-    for key, value in hf_model.state_dict().items():
-        if key.startswith("encoder.embed_tokens.") or key.startswith(
-            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
-        ):
-            embeddings_state_dict[key] = value
-
-    tt_embedding.load_state_dict(embeddings_state_dict)
+    tt_token_embed = TokenEmbeddings(config, encoder_submesh)
+    tt_token_embed.load_torch_state_dict(substate(hf_model.state_dict(), "encoder.embed_tokens"))
+    tt_relative_position_embed = RelativePositionEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
+    tt_relative_position_embed.load_torch_state_dict(
+        substate(hf_model.state_dict(), "encoder.block.0.layer.0.SelfAttention.relative_attention_bias")
+    )
 
     tt_start_time = time.time()
-    tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
+    tt_embeddings_output, tt_position_bias = tt_token_embed(tt_prompt, encoder_submesh), tt_relative_position_embed(
+        tt_prompt
+    )
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
@@ -119,20 +119,35 @@ def test_t5_embeddings(
 
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
 
+        hf_position_bias = (
+            hf_model.encoder.block[0]
+            .layer[0]
+            .SelfAttention.compute_bias(
+                hf_token_embeddings.size(1), hf_token_embeddings.size(1), device=hf_token_embeddings.device
+            )
+        )
+
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
     tt_embeddings_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_embeddings_output)[0])
-    tt_position_bias_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_position_bias)[0])
+    mesh_shape = list(encoder_submesh.shape)
+    mesh_shape[1 - parallel_config.tensor_parallel.mesh_axis] = 1
+
+    tt_position_bias_torch = ttnn.to_torch(
+        tt_position_bias,
+        mesh_composer=ttnn.create_mesh_composer(
+            encoder_submesh, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(mesh_shape))
+        ),  # [0,1] is the mesh dimensions to concatenate. Set replicated dimensions to 1.
+    )
 
     logger.info(f"TT embeddings execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF embeddings execution time: {hf_execution_time:.4f} seconds")
 
-    assert hf_token_embeddings.shape == tt_embeddings_output_torch.shape
-
     assert_quality(hf_token_embeddings, tt_embeddings_output_torch, pcc=0.95)
+    assert_quality(hf_position_bias, tt_position_bias_torch, pcc=0.95)
 
 
 if __name__ == "__main__":

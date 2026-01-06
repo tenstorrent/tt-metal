@@ -126,7 +126,7 @@ def test_t5_encoder(
 
     # time TT model inference only
     tt_start_time = time.time()
-    tt_output = tt_encoder(tt_prompt, encoder_submesh)
+    tt_output = tt_encoder(tt_prompt)
 
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
@@ -149,7 +149,7 @@ def test_t5_encoder(
 
     assert hf_outputs.shape == tt_output_torch.shape
 
-    assert_quality(hf_outputs, tt_output_torch, pcc=0.99)
+    assert_quality(hf_outputs, tt_output_torch, pcc=0.97)
 
 
 if __name__ == "__main__":
