@@ -4,9 +4,7 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_COL
-
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -33,51 +31,23 @@ void kernel_main() {
         if (Ht == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            reduce_tile_to_cb<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, cb_max, Ht, /*pop0=*/1, /*pop1=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::single());
         } else {
-            cb_reserve_back(cb_max, onetile);
-
-            tile_regs_acquire();
-            reduce_init_delta_with_dt<PoolType::MAX, REDUCE_DIM>(cb_max, cb_in0, cb_bcast_scaler);
-            for (uint32_t h = 0; h < Ht - 1; ++h) {
-                cb_wait_front(cb_in0, onetile);
-
-                constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-                reduce_tile<PoolType::MAX, REDUCE_DIM>(cb_in0, cb_bcast_scaler, 0, bcast_scaler0, dst0);
-
-                cb_pop_front(cb_in0, onetile);
-            }
-            reduce_uninit();
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_max);
-            tile_regs_release();
-
-            cb_push_back(cb_max, onetile);
+            // Phase 1: Reduce Ht-1 tiles
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::TileShape::col(Ht - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            cb_wait_front(cb_max, onetile);
-            cb_wait_front(cb_tmp, onetile);
-
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_max);
-            copy_tile(cb_max, 0, dst0);
-
-            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_init_delta_with_dt<PoolType::MAX, REDUCE_DIM>(cb_max, cb_tmp, cb_bcast_scaler);
-            reduce_tile<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, 0, bcast_scaler0, dst0);
-            reduce_uninit();
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_max);
-            tile_regs_release();
-
-            cb_pop_front(cb_max, onetile);
-            cb_pop_front(cb_tmp, onetile);
-            cb_push_back(cb_max, onetile);
+            // Phase 2: Reduce final masked tile with accumulation
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                cb_tmp,
+                cb_bcast_scaler,
+                cb_max,
+                compute_kernel_lib::TileShape::single(),
+                {},                                              // layout (use default)
+                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
 
         for (uint32_t h = 0; h < Ht; h += onetile) {
@@ -124,13 +94,33 @@ void kernel_main() {
         }
 
 #ifdef LOG
-        // compute log(sum)
-        reduce_and_log_tile_to_cb<PoolType::SUM, REDUCE_DIM>(
-            cb_add, cb_bcast_scaler, cb_recipsumexps, /*size=*/1, /*pop0=*/1, /*pop1=*/0);
+        // compute log(sum) - pop tile after reduce
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_add,
+                cb_bcast_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::TileShape::single(),
+                {},
+                {},  // accum parameter (use default NoAccumulation)
+                [](uint32_t dst_idx) {
+                    log_tile_init();
+                    log_tile(dst_idx);
+                });
 #else
-        // compute 1/sum(exp(x))
-        reduce_and_recip_tile_to_cb<PoolType::SUM, REDUCE_DIM>(
-            cb_add, cb_bcast_scaler, cb_recipsumexps, /*size=*/1, /*pop0=*/1, /*pop1=*/0);
+        // compute 1/sum(exp(x)) - pop tile after reduce
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputMode::STREAMING_BATCHED>(
+                cb_add,
+                cb_bcast_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::TileShape::single(),
+                {},
+                {},  // accum parameter (use default NoAccumulation)
+                [](uint32_t dst_idx) {
+                    recip_tile_init();
+                    recip_tile(dst_idx);
+                });
 #endif
 
         // step 3, compute final result

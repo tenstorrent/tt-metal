@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -125,22 +126,9 @@ void kernel_main() {
                 cb_push_back(cb_xpowadd, onetile);
             }
         }
-        // Sum(|x|^p)
-        tile_regs_acquire();
-        cb_wait_front(cb_xpowadd, onetile);
-        cb_reserve_back(cb_xpowsum, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_xpowsum, cb_xpowadd, cb_one);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_xpowadd, cb_one, 0, 0, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_xpowsum);
-        tile_regs_release();
-
-        cb_pop_front(cb_xpowadd, onetile);
-        cb_push_back(cb_xpowsum, onetile);
+        // Sum(|x|^p) - reduce single pre-accumulated tile
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_xpowadd, cb_one, cb_xpowsum, compute_kernel_lib::TileShape::single());
 
         power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);
     }

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -267,54 +268,52 @@ void kernel_main() {
 
         if (gamma_grad_has_value) {
             // Compute cb_dgamma
-            tile_regs_acquire();
-            cb_wait_front(cb_ydyadd, onetile);
-            cb_reserve_back(cb_dgamma, onetile);
-
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
-                reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_dgamma, cb_ydyadd, cb_scaler);
-                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ydyadd, cb_scaler, 0, 0, dst0);
-                reduce_uninit();
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_ydyadd, cb_scaler, cb_dgamma, compute_kernel_lib::TileShape::single());
             } else {
                 // Just copy
+                tile_regs_acquire();
+                cb_wait_front(cb_ydyadd, onetile);
+                cb_reserve_back(cb_dgamma, onetile);
+
                 copy_tile_init_with_dt(cb_ydyadd);
                 copy_tile(cb_ydyadd, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_dgamma);
+
+                cb_pop_front(cb_ydyadd, onetile);
+                cb_push_back(cb_dgamma, onetile);
+                tile_regs_release();
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dgamma);
-
-            cb_pop_front(cb_ydyadd, onetile);
-            cb_push_back(cb_dgamma, onetile);
-            tile_regs_release();
         }  // gamma_grad_has_value
 
         if (beta_grad_has_value) {
             // Compute cb_dbeta
-            tile_regs_acquire();
-            cb_wait_front(cb_dyadd, onetile);
-            cb_reserve_back(cb_dbeta, onetile);
-
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
-                reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_dbeta, cb_dyadd, cb_scaler);
-                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_dyadd, cb_scaler, 0, 0, dst0);
-                reduce_uninit();
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_dyadd, cb_scaler, cb_dbeta, compute_kernel_lib::TileShape::single());
             } else {
                 // Just copy
+                tile_regs_acquire();
+                cb_wait_front(cb_dyadd, onetile);
+                cb_reserve_back(cb_dbeta, onetile);
+
                 copy_tile_init_with_dt(cb_dyadd);
                 copy_tile(cb_dyadd, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_dbeta);
+
+                cb_pop_front(cb_dyadd, onetile);
+                cb_push_back(cb_dbeta, onetile);
+                tile_regs_release();
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dbeta);
-
-            cb_pop_front(cb_dyadd, onetile);
-            cb_push_back(cb_dbeta, onetile);
-            tile_regs_release();
         }  // beta_grad_has_value
 
     }  // outer_idx loop
