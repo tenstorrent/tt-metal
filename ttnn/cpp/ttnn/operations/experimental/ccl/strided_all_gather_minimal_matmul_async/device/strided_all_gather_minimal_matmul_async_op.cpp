@@ -38,8 +38,10 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
 StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalMatmulAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
-    ttnn::TensorSpec strided_all_gather_output_shape = attributes.ag_op.compute_output_specs(
-        attributes.strided_all_gather_async_struct, strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
+    ttnn::TensorSpec strided_all_gather_output_shape =
+        strided_all_gather_async::StridedAllGatherAsync::compute_output_specs(
+            attributes.strided_all_gather_async_struct,
+            strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
 
     // Matmul shape
     ttnn::TensorSpec minimal_matmul_output_specs =
@@ -51,9 +53,10 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
 StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinimalMatmulAsync::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather output tensor
-    ttnn::Tensor strided_all_gather_output_tensor = attributes.ag_op.create_output_tensors(
-        attributes.strided_all_gather_async_struct,
-        strided_all_gather_async::tensor_args_t{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
+    ttnn::Tensor strided_all_gather_output_tensor =
+        strided_all_gather_async::StridedAllGatherAsync::create_output_tensors(
+            attributes.strided_all_gather_async_struct,
+            strided_all_gather_async::tensor_args_t{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
     // Matmul output tensor
     ttnn::Tensor minimal_matmul_output_tensor = attributes.matmul_struct.create_output_tensors(

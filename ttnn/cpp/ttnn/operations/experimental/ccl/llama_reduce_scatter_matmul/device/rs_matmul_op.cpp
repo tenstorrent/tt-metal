@@ -31,7 +31,7 @@ void Matmul_RS::validate_on_program_cache_hit(
         operation_attributes.matmul.validate(
             {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {});
     }
-    operation_attributes.rs.validate_on_program_cache_hit(operation_attributes.rs_op, tensor_args.rs);
+    LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(operation_attributes.rs_op, tensor_args.rs);
 }
 
 void Matmul_RS::validate_on_program_cache_miss(
@@ -47,14 +47,14 @@ void Matmul_RS::validate_on_program_cache_miss(
         operation_attributes.matmul.validate(
             {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {});
     }
-    operation_attributes.rs.validate_on_program_cache_miss(operation_attributes.rs_op, tensor_args.rs);
+    LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(operation_attributes.rs_op, tensor_args.rs);
 }
 
 Matmul_RS::spec_return_value_t Matmul_RS::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Reduce Scatter shape
     ttnn::TensorSpec reduce_scatter_output_spec =
-        operation_attributes.rs.compute_output_specs(operation_attributes.rs_op, tensor_args.rs);
+        LlamaReduceScatterDeviceOperation::compute_output_specs(operation_attributes.rs_op, tensor_args.rs);
     // Matmul shape
     if (tensor_args.second_weight_tensor.has_value()) {
         auto matmul_output_specs = operation_attributes.matmul.compute_output_specs(
@@ -73,7 +73,8 @@ Matmul_RS::spec_return_value_t Matmul_RS::compute_output_specs(
 Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Matmul output tensor
-    Tensor rs_output_tensor = operation_attributes.rs.create_output_tensors(operation_attributes.rs_op, tensor_args.rs);
+    Tensor rs_output_tensor =
+        LlamaReduceScatterDeviceOperation::create_output_tensors(operation_attributes.rs_op, tensor_args.rs);
     if (tensor_args.second_weight_tensor.has_value()) {
         return {tensor_args.matmul_output_tensors.at(0), tensor_args.matmul_output_tensors.at(1), rs_output_tensor};
     } else {
