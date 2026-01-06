@@ -529,6 +529,8 @@ void kernel_main() {
             uint64_t ed_table_noc_addr =
                 get_noc_addr(drain_tilize_core_noc_x, drain_tilize_core_noc_y, ed_table_l1_addr);
 
+            DPRINT << "  Token " << local_token << " from D" << dispatch_index << " selected expert " << expert_chosen
+                   << " (local " << local_expert << ") -> output[" << global_token << "]" << ENDL();
             if (send_preparation_buffer[(local_token * num_devices) + d] == 0) {
                 if (d == linearized_mesh_coord) {
                     // if the expert lives on the current device, we dispatch the input token to it

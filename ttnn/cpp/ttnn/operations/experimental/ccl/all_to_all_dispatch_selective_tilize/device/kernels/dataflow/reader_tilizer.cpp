@@ -67,6 +67,124 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
+// Tile indexing helpers for 32x32 tiles with 4 faces (16x16 each)
+// Face layout in memory: top-left, top-right, bottom-left, bottom-right
+template <typename DataType>
+FORCE_INLINE DataType* tile_row_offset(DataType* indices_address, uint32_t row) {
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    constexpr uint32_t num_face_width = 2;
+    uint32_t offset = 0;
+    uint32_t local_row = row;
+    if (row >= FaceHeight) {
+        offset += num_face_width * FaceHeight * FaceWidth;  // Skip top two faces
+        local_row -= FaceHeight;
+    }
+    offset += local_row * FaceWidth;
+    return (DataType*)(indices_address + offset);
+}
+
+template <typename DataType>
+FORCE_INLINE DataType* tile_col_offset(DataType* indices_address, uint32_t col) {
+    constexpr uint32_t FaceWidth = 16;
+    constexpr uint32_t FaceHeight = 16;
+    uint32_t offset = 0;
+    uint32_t local_col = col;
+    if (col >= FaceWidth) {
+        offset += FaceHeight * FaceWidth;  // Skip to right face
+        local_col -= FaceWidth;
+    }
+    offset += local_col;
+    return (DataType*)(indices_address + offset);
+}
+
+// Process a chunk of tokens that have arrived for a given (local_expert, src_dev) pair.
+// Scans metadata to find which tokens selected this expert and prints their info.
+template <
+    uint32_t TileHeight,
+    uint32_t SelectedExpertsK,
+    uint32_t ExpertsPerDevice,
+    uint32_t TokensPerDevice,
+    typename AddrGenT>
+FORCE_INLINE void process_chunk(
+    uint32_t local_expert,
+    uint32_t src_dev,
+    uint32_t chunk_boundary,
+    uint32_t linearized_mesh_coord,
+    uint32_t indices_pages,
+    uint32_t& last_scanned_token,
+    uint32_t& tokens_found_count,
+    uint32_t metadata_cb_addr,
+    const AddrGenT& metadata_tensor_addr_gen,
+    uint16_t* devices_for_experts) {
+    // Calculate how many tokens we need to find in this chunk
+    uint32_t tokens_to_find = chunk_boundary - tokens_found_count;
+    uint32_t tokens_found_in_chunk = 0;
+
+    // Metadata pages for src_dev are at: src_dev * indices_pages to (src_dev + 1) * indices_pages - 1
+    uint32_t base_metadata_page = src_dev * indices_pages;
+
+    // Start scanning from where we left off
+    uint32_t scan_token = last_scanned_token;
+
+    DPRINT << "Chunk E[" << local_expert << "][D" << src_dev << "]: finding " << tokens_to_find
+           << " tokens starting from token " << scan_token << ENDL();
+
+    while (tokens_found_in_chunk < tokens_to_find && scan_token < TokensPerDevice) {
+        uint32_t page_in_src = scan_token / TileHeight;
+        uint32_t row_in_page = scan_token % TileHeight;
+
+        // Read this metadata page
+        uint32_t metadata_page = base_metadata_page + page_in_src;
+        noc_async_read_page(metadata_page, metadata_tensor_addr_gen, metadata_cb_addr);
+        noc_async_read_barrier();
+
+        uint16_t* page_ptr = reinterpret_cast<uint16_t*>(metadata_cb_addr);
+
+        // Process rows in this page starting from row_in_page
+        while (row_in_page < TileHeight && tokens_found_in_chunk < tokens_to_find) {
+            uint32_t token_idx = page_in_src * TileHeight + row_in_page;
+            if (token_idx >= TokensPerDevice) {
+                break;
+            }
+
+            // Get pointer to this row's expert indices
+            uint16_t* row_ptr = tile_row_offset(page_ptr, row_in_page);
+
+            // Check each of the K selected experts for this token
+            for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+                uint16_t expert_id = tile_col_offset(row_ptr, k)[0];
+                uint16_t device_for_expert = devices_for_experts[expert_id];
+
+                // Check if this expert is on our device
+                if (device_for_expert == linearized_mesh_coord) {
+                    uint32_t expert_local_idx = expert_id % ExpertsPerDevice;
+
+                    // Check if this matches the local_expert we're processing
+                    if (expert_local_idx == local_expert) {
+                        // Found a matching token!
+                        // Output offset = token_idx + src_dev * tokens_per_device
+                        uint32_t output_offset = token_idx + src_dev * TokensPerDevice;
+
+                        DPRINT << "  Token " << token_idx << " from D" << src_dev << " selected expert " << expert_id
+                               << " (local " << local_expert << ") -> output[" << output_offset << "]" << ENDL();
+
+                        tokens_found_in_chunk++;
+                        break;  // Found match for this token, move to next token
+                    }
+                }
+            }
+
+            row_in_page++;
+            scan_token++;
+        }
+    }
+
+    // Update tracking variables
+    last_scanned_token = scan_token;
+    tokens_found_count = chunk_boundary;
+}
+
 // DEBUG: Print E-D table contents
 template <uint32_t ExpertsPerDevice, uint32_t DispatchDevices, uint32_t EntriesPerL1Alignment>
 void print_ed_table(volatile tt_l1_ptr uint32_t* ed_table, uint32_t device_id, const char* label) {
@@ -106,6 +224,7 @@ void poll_ed_table_loop(volatile tt_l1_ptr uint32_t* ed_table, uint32_t lineariz
 }
 
 void kernel_main() {
+    DPRINT << "Reader tilizer core started" << ENDL();
     constexpr uint32_t input_tensor_cb_id = get_named_compile_time_arg_val("input_tensor_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
@@ -137,6 +256,7 @@ void kernel_main() {
     constexpr uint32_t max_indices_pages_per_packet = get_named_compile_time_arg_val("max_indices_pages_per_packet");
 
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
 
     // Multicast coordinates for signaling sender cores that E-D buffer is ready
@@ -155,6 +275,8 @@ void kernel_main() {
     constexpr uint32_t ed_table_computed_semaphore_id =
         get_named_compile_time_arg_val("ed_table_computed_semaphore_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_width = 32;
 
     constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
 
@@ -256,6 +378,32 @@ void kernel_main() {
     }
 
     uint32_t entries_matched = 0;
+    // Track the last scanned token index for each (local_expert, src_dev) pair
+    // This allows us to resume scanning from where we left off and avoid re-reading pages
+    uint32_t last_scanned_token[experts_per_device][dispatch_devices];
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        for (uint32_t d = 0; d < dispatch_devices; d++) {
+            last_scanned_token[e][d] = 0;
+        }
+    }
+    // Track how many matching tokens we've found for each (local_expert, src_dev) pair
+    uint32_t tokens_found_count[experts_per_device][dispatch_devices];
+    for (uint32_t e = 0; e < experts_per_device; e++) {
+        for (uint32_t d = 0; d < dispatch_devices; d++) {
+            tokens_found_count[e][d] = 0;
+        }
+    }
+
+    // Reserve CB space once for metadata reading - we'll reuse this buffer
+    cb_reserve_back(indices_tensor_cb_id, 1);
+    uint32_t metadata_cb_addr = get_write_ptr(indices_tensor_cb_id);
+
+    // Wait for writer_tilizer (BRISC) to read the mapping tensor into the CB
+    // The writer produces pages, we consume by waiting for them all to arrive
+    DPRINT << "Waiting for mapping tensor from writer" << ENDL();
+    cb_wait_front(mapping_tensor_cb_id, mapping_pages);
+    uint16_t* devices_for_experts = reinterpret_cast<uint16_t*>(get_read_ptr(mapping_tensor_cb_id));
+    DPRINT << "Mapping tensor ready" << ENDL();
 
     // Poll until all entries reach their ground truth values
     while (entries_matched < total_entries) {
@@ -302,6 +450,19 @@ void kernel_main() {
                                 temp_buffer_offset, ed_entry_mcast_addr, num_tilizer_cores);
                         }
 
+                        // CHUNK PROCESSING: Scan metadata to find tokens that selected this local_expert
+                        process_chunk<tile_height, selected_experts_k, experts_per_device, tokens_per_device>(
+                            local_expert,
+                            src_dev,
+                            next_chunk_boundary,
+                            linearized_mesh_coord,
+                            indices_pages,
+                            last_scanned_token[local_expert][src_dev],
+                            tokens_found_count[local_expert][src_dev],
+                            metadata_cb_addr,
+                            metadata_tensor_addr_gen,
+                            devices_for_experts);
+
                         // Update last_signaled and print
                         last_signaled[flat_idx] = next_chunk_boundary;
                         DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << next_chunk_boundary << ENDL();
@@ -321,13 +482,43 @@ void kernel_main() {
                 } else {
                     // Non-drain core: detect when a new chunk value has arrived
                     if (current_val > last_signaled[flat_idx]) {
-                        // New chunk arrived, update and print
-                        last_signaled[flat_idx] = current_val;
-                        DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << current_val << ENDL();
+                        // Process all chunk boundaries between last_signaled and current_val
+                        uint32_t next_chunk_boundary =
+                            ((last_signaled[flat_idx] / tokens_per_chunk) + 1) * tokens_per_chunk;
+                        if (next_chunk_boundary > ground_truth_val) {
+                            next_chunk_boundary = ground_truth_val;
+                        }
 
-                        // Check if we've reached ground truth
-                        if (last_signaled[flat_idx] >= ground_truth_val) {
-                            entries_matched++;
+                        while (current_val >= next_chunk_boundary && last_signaled[flat_idx] < ground_truth_val) {
+                            // CHUNK PROCESSING: Scan metadata to find tokens that selected this local_expert
+                            process_chunk<tile_height, selected_experts_k, experts_per_device, tokens_per_device>(
+                                local_expert,
+                                src_dev,
+                                next_chunk_boundary,
+                                linearized_mesh_coord,
+                                indices_pages,
+                                last_scanned_token[local_expert][src_dev],
+                                tokens_found_count[local_expert][src_dev],
+                                metadata_cb_addr,
+                                metadata_tensor_addr_gen,
+                                devices_for_experts);
+
+                            // Update last_signaled
+                            last_signaled[flat_idx] = next_chunk_boundary;
+                            DPRINT << "E[" << local_expert << "][D" << src_dev << "] = " << next_chunk_boundary
+                                   << ENDL();
+
+                            // Check if we've reached ground truth
+                            if (last_signaled[flat_idx] >= ground_truth_val) {
+                                entries_matched++;
+                                break;
+                            }
+
+                            // Calculate next chunk boundary
+                            next_chunk_boundary = ((last_signaled[flat_idx] / tokens_per_chunk) + 1) * tokens_per_chunk;
+                            if (next_chunk_boundary > ground_truth_val) {
+                                next_chunk_boundary = ground_truth_val;
+                            }
                         }
                     }
                 }
