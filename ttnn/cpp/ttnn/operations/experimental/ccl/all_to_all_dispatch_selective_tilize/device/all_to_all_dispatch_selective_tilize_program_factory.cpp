@@ -433,16 +433,16 @@ AllToAllDispatchSelectiveTilizeDeviceOperation::AllToAllDispatchSelectiveTilizeS
     // tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes
     constexpr uint32_t TILE_WIDTH = 32;
     uint32_t element_size = input_tensor.element_size();
-    uint32_t tile_size_bytes = operation_attributes.tokens_per_chunk * TILE_WIDTH * element_size;
+    uint32_t bfp8_tile_size = 1088 * sizeof(uint8_t);
     uint32_t tile_width_bytes = TILE_WIDTH * element_size;
     uint32_t tiles_per_chunk = max_tilizer_subtoken_size / tile_width_bytes;
     tt::tt_metal::create_cb(
         tilizer_output_cb_id,
         program,
         selective_tilize_core_range_set,
-        tile_size_bytes,
+        bfp8_tile_size,
         tiles_per_chunk * buffering_factor,  // double-buffered
-        input_data_format);
+        tt::DataFormat::Bfp8_b);
 
     // Sync CB for passing total_chunks from writer to compute
     // One page with one uint32_t value, aligned to l1_alignment

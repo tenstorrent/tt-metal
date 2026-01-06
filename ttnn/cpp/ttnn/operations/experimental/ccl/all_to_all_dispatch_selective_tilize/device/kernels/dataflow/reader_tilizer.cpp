@@ -180,8 +180,8 @@ FORCE_INLINE void process_chunk(
                         // Output offset = token_idx + src_dev * tokens_per_device
                         uint32_t output_offset = token_idx + src_dev * TokensPerDevice;
 
-                        DPRINT << "  Token " << token_idx << " from D" << src_dev << " selected expert " << expert_id
-                               << " (local " << local_expert << ") -> output[" << output_offset << "]" << ENDL();
+                        // DPRINT << "  Token " << token_idx << " from D" << src_dev << " selected expert " << expert_id
+                        //        << " (local " << local_expert << ") -> output[" << output_offset << "]" << ENDL();
 
                         // Calculate write address for this token in the CB
                         // Each token slot is tilizer_subtoken_size bytes
