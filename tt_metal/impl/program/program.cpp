@@ -364,7 +364,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
             std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
             for (CoreCoord coreCoord : kernel_logical_cores) {
                 TT_FATAL(
-                    !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end()),
+                    !check_kernel_logical_cores.contains(coreCoord),
                     "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
                     check_kernel->name(),
                     kernel->name(),
@@ -384,7 +384,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     // this->id);
     //  find coretype based on kernel_id
     for (const auto& kernels : this->kernels_) {
-        if (kernels.find(kernel_id) != kernels.end()) {
+        if (kernels.contains(kernel_id)) {
             return kernels.at(kernel_id);
         }
     }
@@ -795,7 +795,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
-    if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
+    if (!this->circular_buffer_by_id_.contains(cb_id)) {
         TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
     }
     return this->circular_buffer_by_id_.at(cb_id);
@@ -980,8 +980,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
         unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
             for (auto core : kernel->logical_cores()) {
-                if (unique_cores[programmable_core_type_index].find(core) !=
-                    unique_cores[programmable_core_type_index].end()) {
+                if (unique_cores[programmable_core_type_index].contains(core)) {
                     continue;
                 }
                 unique_cores[programmable_core_type_index].insert(core);
@@ -996,8 +995,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     const auto& kernel_defines = kernel->defines();
     const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
     for (const auto& str : reserved_defines) {
-        TT_FATAL(
-            kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
+        TT_FATAL(!kernel_defines.contains(str), "{} is a reserved define and can't be manually set", str);
     }
     std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
@@ -1311,7 +1309,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically
     // allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
-    if (this->kernels_buffer_.find(device->id()) == this->kernels_buffer_.end() and binary_data_size_bytes) {
+    if (!this->kernels_buffer_.contains(device->id()) and binary_data_size_bytes) {
         std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
             device,
             binary_data_size_bytes,

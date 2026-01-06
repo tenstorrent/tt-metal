@@ -4,11 +4,13 @@ set(UNIT_TESTS_LLK_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dropout_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_golden_impls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pack_rows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_single_core_binary_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_single_core_matmul_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_stochastic_rounding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_transpose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_unary_broadcast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_untilize_tilize.cpp

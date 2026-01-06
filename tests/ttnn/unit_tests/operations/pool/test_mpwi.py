@@ -171,3 +171,58 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
         memory_config=None,
         run_twice=True,
     )
+
+
+@pytest.mark.skip(reason="DRAM slicing with return_indices is not yet supported")
+@pytest.mark.parametrize(
+    "input_spec",
+    [
+        # Contains following parameters
+        # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices]
+        # DILATION / MULTI-BATCH CASES
+        [2, 40, 1024, 1024, 3, 3, 2, 2, 0, 1, 2, 2, True, 8],
+        [3, 56, 512, 512, 3, 3, 3, 3, 1, 0, 2, 2, False, 8],
+        [4, 24, 768, 768, 3, 3, 2, 1, 1, 1, 3, 2, True, 8],
+    ],
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_mpwi_dram_slice(device, ttnn_dtype, input_spec):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+        num_slices,
+    ) = input_spec
+    dram_slice_config = ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
+    run_max_pool2d_with_indices(
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ttnn_dtype,
+        device,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode,
+        None,  # no memory_config
+        False,  # not in place
+        dram_slice_config=dram_slice_config,
+    )

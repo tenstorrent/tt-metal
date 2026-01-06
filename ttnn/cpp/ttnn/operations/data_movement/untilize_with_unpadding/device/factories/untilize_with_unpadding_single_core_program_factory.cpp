@@ -4,7 +4,7 @@
 
 #include "untilize_with_unpadding_single_core_program_factory.hpp"
 
-#include <math.h>
+#include <cmath>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"

@@ -9,6 +9,9 @@ Usage:
 
 Description:
     Checking that we can reach all NOC endpoints through NOC0 and NOC1.
+
+Owner:
+    tt-vjovanovic
 """
 
 from ttexalens.coordinate import OnChipCoordinate
