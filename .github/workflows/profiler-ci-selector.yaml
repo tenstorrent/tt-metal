@@ -1,0 +1,164 @@
+name: "Profiler CI"
+run-name: "Profiler CI"
+
+on:
+  workflow_call:
+    inputs:
+      debug_build:
+        description: "Run ALL profiler jobs using a debug build (RelWithDebInfo) instead of Release."
+        required: false
+        type: boolean
+        default: false
+      run_t3k_profiler:
+        description: "T3K profiler"
+        required: false
+        type: boolean
+        default: false
+      run_galaxy_profiler:
+        description: "Galaxy profiler"
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: false
+      run_n300_profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: false
+      run_n150_profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: false
+      enable-watcher:
+        description: "Enable watcher (profiler regressions only)"
+        default: false
+        type: boolean
+      enable-lightweight-kernel-asserts:
+        description: "Enable lightweight kernel asserts (profiler regressions only)"
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: "Enable LLK asserts (profiler regressions only)"
+        default: false
+        type: boolean
+
+jobs:
+  build-artifact-profiler:
+    if: >-
+      ${{
+        inputs.debug_build ||
+        inputs.run_t3k_profiler ||
+        inputs.run_galaxy_profiler ||
+        inputs.run_blackhole_profiler ||
+        inputs.run_n300_profiler ||
+        inputs.run_n150_profiler
+      }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.debug_build && 'RelWithDebInfo' || 'Release' }}
+      tracy: true
+      build-wheel: true
+      version: "22.04"
+
+  t3k-profiler-tests:
+    if: >-
+      ${{
+        inputs.debug_build ||
+        inputs.run_t3k_profiler
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: config-t3000
+      test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
+
+  galaxy-profiler-tests:
+    if: >-
+      ${{
+        inputs.debug_build ||
+        inputs.run_galaxy_profiler
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: topology-6u
+      test-script: ./tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh
+
+  blackhole-profiler:
+    if: >-
+      ${{
+        inputs.debug_build ||
+        inputs.run_blackhole_profiler
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    with:
+      arch: blackhole
+      runner-label: P150b
+      # Full profiler regression (non post-commit)
+      post_commit_only: false
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  n300-profiler:
+    if: >-
+      ${{
+        inputs.debug_build ||
+        inputs.run_n300_profiler
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N300
+      # Full profiler regression (non post-commit)
+      post_commit_only: false
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  n150-profiler:
+    if: >-
+      ${{
+        inputs.debug_build ||
+        inputs.run_n150_profiler
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      # Full profiler regression (non post-commit)
+      post_commit_only: false
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
