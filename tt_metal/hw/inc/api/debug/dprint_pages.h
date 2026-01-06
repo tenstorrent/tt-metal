@@ -6,6 +6,17 @@
 #pragma once
 #include "api/debug/dprint.h"
 
+inline void print_cb_details(uint32_t cb_id) {
+    DPRINT << "cb_id " << cb_id << ": { "
+           << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
+           << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
+           << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
+           << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
+           << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
+           << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
+           << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }" << ENDL();
+}
+
 #if (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)) && defined(DEBUG_PRINT_ENABLED) && \
     !defined(FORCE_DPRINT_OFF)
 
@@ -56,6 +67,7 @@ inline void print_u16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t n
     }
 }
 
+inline void print_cb_details(uint32_t cb_id);
 }  // namespace tt::data_movement::common
 
 #endif
@@ -114,6 +126,7 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
     DPRINT << "++++++" << ENDL();
 }
 
+inline void print_cb_details(uint32_t cb_id);
 }  // namespace tt::compute::common
 
 #endif
