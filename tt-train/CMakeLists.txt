@@ -39,15 +39,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 #   build/tt-train/tests/ttml_tests
 # And they need to find shared libraries at:
 #   build/lib/libtt_metal.so
-#   ttnn/ttnn/_ttnncpp.so
+#   ttnn/ttnn/_ttnncpp.so (in the SOURCE tree, not build tree)
 #
-# NOTE: tt-train is built as a subdirectory, so CMAKE_BINARY_DIR is build/tt-train,
-# not the top-level build/. We must go up one level to reach the correct paths.
+# NOTE: CMAKE_BINARY_DIR is always the top-level build directory (e.g., /work/build/).
+# CMAKE_SOURCE_DIR is always the top-level source directory (e.g., /work/).
 # The tar artifact is created directly from build/ without cmake --install, so
 # BUILD_RPATH is what gets embedded in the binaries (not INSTALL_RPATH).
 set(CMAKE_BUILD_RPATH
-    "${CMAKE_BINARY_DIR}/../lib" # build/tt-train/../lib = build/lib
-    "${CMAKE_BINARY_DIR}/../../ttnn/ttnn" # build/tt-train/../../ttnn/ttnn = ttnn/ttnn
+    "${CMAKE_BINARY_DIR}/lib" # /work/build/lib (for libtt_metal.so)
+    "${CMAKE_SOURCE_DIR}/ttnn/ttnn" # /work/ttnn/ttnn (for _ttnncpp.so)
 )
 set(CMAKE_INSTALL_RPATH
     "$ORIGIN/../lib" # FHS: /usr/libexec/tt-train/tests/../lib = /usr/lib64
