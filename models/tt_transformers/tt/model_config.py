@@ -727,15 +727,16 @@ class ModelArgs:
                 # We want 256 if seqlen >= 2048 else 64. BUT:
                 # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
                 # Here (x & -x) is the highest power of 2 that divides x.
-                q_chunk_size=256 if seqlen >= 2048 and chunk_start_idx is None
-                        else 64 if seqlen < 2048 and chunk_start_idx is None
+                # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
+                q_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                        else 64 if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
                         else min(256, chunk_start_idx & -chunk_start_idx) if seqlen >= 2048
                         else min(64, chunk_start_idx & -chunk_start_idx),
                 # Original:
                 # k_chunk_size=256 if seqlen >= 2048 else 64,
                 # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225 :
-                k_chunk_size=256 if seqlen >= 2048 and chunk_start_idx is None
-                        else 64 if seqlen < 2048 and chunk_start_idx is None
+                k_chunk_size=256 if seqlen >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                        else 64 if seqlen < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
                         else min(256, chunk_start_idx & -chunk_start_idx) if seqlen >= 2048
                         else min(64, chunk_start_idx & -chunk_start_idx),
             )
