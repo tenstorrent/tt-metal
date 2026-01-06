@@ -60,6 +60,7 @@ on:
       - "(Galaxy) DeepSeek tests"
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
+      - "Profiler CI"
 
     types:
       - completed
