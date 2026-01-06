@@ -140,10 +140,7 @@ for base_param in base_params:
 
 def filter_params_with_constraints(all_params):
     """Filter valid parameter combinations based on hardware constraints"""
-    arch = get_chip_architecture()
-    is_wormhole = arch == ChipArchitecture.WORMHOLE
     valid_params = []
-
     for params in all_params:
         # Extract parameters from tuple
         (
