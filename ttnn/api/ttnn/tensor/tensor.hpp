@@ -159,9 +159,6 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
-    template <typename T>
-    [[nodiscard]] T item(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
-
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
