@@ -26,6 +26,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
