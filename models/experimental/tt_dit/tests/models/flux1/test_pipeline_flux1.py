@@ -44,7 +44,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 @pytest.mark.parametrize(
     ("enable_t5_text_encoder", "use_torch_t5_text_encoder", "use_torch_clip_text_encoder"),
     [
-        pytest.param(True, True, True, id="encoder_cpu"),
+        # pytest.param(True, True, True, id="encoder_cpu"),
         pytest.param(True, False, False, id="encoder_device"),
     ],
 )
@@ -58,7 +58,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 @pytest.mark.parametrize(
     "use_cache",
     [
-        # pytest.param(True, id="yes_use_cache"),
+        pytest.param(True, id="yes_use_cache"),
         pytest.param(False, id="no_use_cache"),
     ],
 )

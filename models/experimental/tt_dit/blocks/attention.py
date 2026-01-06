@@ -58,12 +58,13 @@ class Attention(Module):
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
 
-        common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager)
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         padded_inner_dim = head_dim * self.padded_heads
 
         # FSDP: shard weights on sequence parallel axis to reduce memory
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+
+        common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager, fsdp_mesh_axis=fsdp_mesh_axis)
 
         self.sdpa_worker_grid = (
             self.mesh_device.compute_with_storage_grid_size().x,
@@ -82,17 +83,13 @@ class Attention(Module):
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
 
-        self.to_qkv = ColParallelLinear(
-            query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, fsdp_mesh_axis=fsdp_mesh_axis, **common_args
-        )
+        self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
         self.norm_q = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
         self.norm_k = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
 
         self.to_out = (
-            ColParallelLinear(
-                padded_inner_dim, out_dim, mesh_axis=tp_axis, fsdp_mesh_axis=fsdp_mesh_axis, **common_args
-            )
+            ColParallelLinear(padded_inner_dim, out_dim, mesh_axis=tp_axis, **common_args)
             if not self.pre_only
             else None
         )
@@ -104,16 +101,14 @@ class Attention(Module):
             self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
             self.add_qkv_proj = ColParallelLinear(
-                added_kv_proj_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, fsdp_mesh_axis=fsdp_mesh_axis, **common_args
+                added_kv_proj_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args
             )
 
             self.norm_added_q = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
             self.norm_added_k = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
 
             self.to_add_out = (
-                ColParallelLinear(
-                    padded_inner_dim, out_dim, mesh_axis=tp_axis, fsdp_mesh_axis=fsdp_mesh_axis, **common_args
-                )
+                ColParallelLinear(padded_inner_dim, out_dim, mesh_axis=tp_axis, **common_args)
                 if not context_pre_only
                 else None
             )

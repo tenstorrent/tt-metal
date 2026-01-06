@@ -968,6 +968,10 @@ class QwenImagePipeline:
 
         return embeds[:, PROMPT_DROP_IDX:], mask[:, PROMPT_DROP_IDX:]
 
+    def synchronize_devices(self):
+        for device in self._submesh_devices:
+            ttnn.synchronize_device(device)
+
 
 def _schedule(
     scheduler: FlowMatchEulerDiscreteScheduler,
