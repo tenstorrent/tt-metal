@@ -463,9 +463,9 @@ void device_module(nb::module_& m_device) {
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "ReadDeviceProfiler",
-        [](MeshDevice* device) {
+        [](MeshDevice* mesh_device) {
             ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-            tt::tt_metal::ReadMeshDeviceProfilerResults(*device, ProfilerReadState::NORMAL, prof_metadata);
+            tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::NORMAL, prof_metadata);
         },
         nb::arg("device"),
         R"doc(

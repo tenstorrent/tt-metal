@@ -388,7 +388,6 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
-    LayerNormDistributedDefaultProgramConfig,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
@@ -424,6 +423,11 @@ from ttnn.operations.conv2d import (
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
+    Op2DSliceConfig,
+    Op2DDRAMSliceHeight,
+    Op2DDRAMSliceWidth,
+    Op2DL1Full,
+    Op2DL1FullSliceConfig,
 )
 
 from ttnn.operations.pool import (
