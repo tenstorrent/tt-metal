@@ -64,6 +64,24 @@ jobs:
           pip install multiprocess psutil loguru
           pip install ./wheels/*.whl
 
+      - name: Create stub modules for collection
+        run: |
+          # Create minimal stubs to satisfy imports during pytest collection
+          mkdir -p models/common
+          touch models/__init__.py
+          touch models/common/__init__.py
+          
+          # Create stub utility_functions with minimal implementations
+          cat > models/common/utility_functions.py << 'EOF'
+          """Stub module for pytest collection - not used during collection"""
+          def comp_pcc(*args, **kwargs): pass
+          def comp_allclose(*args, **kwargs): pass
+          def comp_ulp(*args, **kwargs): pass
+          def comp_equal(*args, **kwargs): pass
+          def divup(*args, **kwargs): pass
+          def roundup(*args, **kwargs): pass
+          EOF
+
       - name: Count and compare tests
         run: |
           # Define locked directories to check
