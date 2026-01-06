@@ -1,7 +1,6 @@
 {
   "analyzer": [
     "--analyzers", "clangsa",
-    "--skip", "/work/.codechecker.skiplist",
-    "--jobs", "32"
+    "--skip", "/work/.codechecker.skiplist"
   ]
 }
