@@ -64,7 +64,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install uv (not available via apt, install via pip)
-RUN python3 -m pip install --no-cache-dir uv
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+
+RUN python3 -m pip install --no-cache-dir --break-system-packages uv
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -125,17 +126,9 @@ RUN umask 000 && \
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
-# Install the debugger (tt-exalens) using uv instead of pip
-# The install_debugger.sh script uses pip, but uv venvs don't include pip by default
 RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
-    REF=$(head -n1 ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt | tr -d '[:space:]') && \
-    PYTHON_CP_VERSION=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")') && \
-    DOWNLOAD_LINK="https://github.com/tenstorrent/tt-exalens/releases/download/v${REF}/tt_exalens-${REF}-${PYTHON_CP_VERSION}-${PYTHON_CP_VERSION}-linux_x86_64.whl" && \
-    if curl --head --silent --fail "$DOWNLOAD_LINK" >/dev/null 2>&1; then \
-        uv pip install --no-cache "$DOWNLOAD_LINK"; \
-    else \
-        uv pip install --no-cache "git+https://github.com/tenstorrent/tt-exalens.git@v${REF}"; \
-    fi && \
+    echo "Installing debugger for Ubuntu 22.04..." && \
+    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh; \
     echo "Debugger installation completed" && \
     python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi
@@ -200,7 +193,8 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 FROM base AS release
 
 # Install uv (not available via apt, install via pip)
-RUN python3 -m pip install --no-cache-dir uv
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+
+RUN python3 -m pip install --no-cache-dir --break-system-packages uv
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv

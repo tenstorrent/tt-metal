@@ -38,7 +38,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (not available via apt, install via pip)
-RUN python3 -m pip install --no-cache-dir uv
+# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+
+RUN python3 -m pip install --no-cache-dir --break-system-packages uv
 
 # Install the SFPI compiler
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
