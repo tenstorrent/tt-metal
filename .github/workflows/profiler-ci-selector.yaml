@@ -119,10 +119,12 @@ jobs:
       build-type: >-
         ${{
           (
-            (github.event_name == 'workflow_call' && inputs.debug_build) ||
-            (github.event_name == 'workflow_dispatch' && (github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true))
-          )
-          && 'RelWithDebInfo' || 'Release'
+            (
+              (github.event_name == 'workflow_call' && inputs.debug_build) ||
+              (github.event_name == 'workflow_dispatch' && (github.event.inputs.debug_build == 'true' || github.event.inputs.debug_build == true))
+            )
+            && 'RelWithDebInfo'
+          ) || 'Release'
         }}
       tracy: true
       build-wheel: true
