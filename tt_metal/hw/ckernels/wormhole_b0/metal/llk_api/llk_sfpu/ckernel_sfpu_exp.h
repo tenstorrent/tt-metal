@@ -17,11 +17,16 @@ namespace sfpu {
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
 /*
- * Both _float_to_int32_ and _float_to_int32_positive_ use branch to handle special cases
- * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
+ * Convert an float value to a 32-bit integer value (specialized function for exp21f and exp61f)
+
+ * exp21f and exp61f rely on a float -> int conversion to compute the exponent of the integer part of the input.
+ * Two functions are available: _float_to_int32_ and _float_to_int32_positive_, which use branch to handle special cases
+ * With exp21f/exp61f function, some of these cases never happen (e.g. negative exponent, overflow)
  * This allow for a branch free (and much smaller algorithm) to compute integer value
+ *
+ * The constraint on `val` is: 0 <= val < 128.0f
  */
-sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
+sfpi_inline sfpi::vInt _float_to_int32_for_exp21f_(sfpi::vFloat val) {
     sfpi::vInt exp = exexp(val);
     sfpi::vInt man = exman8(val);  // get mantissa with implicit bit (man in [1; 2])
     sfpi::vInt shift = exp - 23;
@@ -63,7 +68,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // Fundamentally, this computes exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
     // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
-    sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+    sfpi::vInt z = _float_to_int32_for_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
     sfpi::vInt exponential_part =
         exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vInt fractional_part =
@@ -83,7 +88,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vFloat p2 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + fractional_part, 0);
 
     // Compute 2**(adjusted fractional part) through float -> int conversion
-    fractional_part = _float_to_int32_exp21f_(p1 * p2);
+    fractional_part = _float_to_int32_for_exp21f_(p1 * p2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     exponential_part = sfpi::reinterpret<sfpi::vInt>(
@@ -109,7 +114,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         // z = (bias + x * factor * N_m); where:
         // factor = 0x00b8aa3b (computed through log(e))
         // bias = 0x3f800000
-        sfpi::vInt z = sfpu::_float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt z = _float_to_int32_for_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
         sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
