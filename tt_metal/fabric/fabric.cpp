@@ -260,11 +260,12 @@ void append_fabric_connection_rt_args(
 }
 
 // append runtime parameter for RoutingPlaneConnectionManager
+template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
-    tt::tt_metal::Program& worker_program,
+    ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
@@ -320,19 +321,34 @@ void append_routing_plane_connection_manager_rt_args(
             link_idx = links[0];
         }
 
-        append_fabric_connection_rt_args(
-            src_fabric_node_id, dst_node, link_idx, worker_program, worker_core, worker_args, core_type);
+        append_fabric_connection_rt_args<ProgramOrDescriptor>(
+            src_fabric_node_id, dst_node, link_idx, worker_program_or_desc, worker_core, worker_args, core_type);
     }
 
-    auto kernel = worker_program.impl().get_kernel(kernel_id);
+    auto add_kernel_defines = [&, kernel_ref = [&]() {
+        if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
+            return &worker_program_or_desc.kernels[kernel_id];
+        } else {
+            return worker_program_or_desc.impl().get_kernel(kernel_id);
+        }
+    }()](std::initializer_list<std::pair<std::string, std::string>> defines) {
+        if constexpr (std::is_same_v<std::decay_t<ProgramOrDescriptor>, tt::tt_metal::ProgramDescriptor>) {
+            for (const auto& define : defines) {
+                kernel_ref->defines.push_back(define);
+            }
+        } else {
+            kernel_ref->add_defines(std::map<std::string, std::string>(defines.begin(), defines.end()));
+        }
+    };
+
     switch (api_type) {
-        case FabricApiType::Linear: kernel->add_defines({{"API_TYPE_Linear", "1"}}); break;
-        case FabricApiType::Mesh: kernel->add_defines({{"API_TYPE_Mesh", "1"}}); break;
+        case FabricApiType::Linear: add_kernel_defines({{"API_TYPE_Linear", "1"}}); break;
+        case FabricApiType::Mesh: add_kernel_defines({{"API_TYPE_Mesh", "1"}}); break;
         default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
     }
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        kernel->add_defines({{"FABRIC_2D", "1"}});
+        add_kernel_defines({{"FABRIC_2D", "1"}});
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
@@ -468,6 +484,28 @@ template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     tt::tt_metal::ProgramDescriptor&,
     const CoreCoord&,
     std::vector<uint32_t>&,
+    CoreType);
+
+template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricNodeId&,
+    const std::vector<FabricNodeId>&,
+    const std::vector<uint32_t>&,
+    tt::tt_metal::ProgramDescriptor&,
+    tt::tt_metal::KernelHandle&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    FabricApiType,
+    CoreType);
+
+template void append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
+    const FabricNodeId&,
+    const std::vector<FabricNodeId>&,
+    const std::vector<uint32_t>&,
+    tt::tt_metal::Program&,
+    tt::tt_metal::KernelHandle&,
+    const CoreCoord&,
+    std::vector<uint32_t>&,
+    FabricApiType,
     CoreType);
 
 }  // namespace tt::tt_fabric

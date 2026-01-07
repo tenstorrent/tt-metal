@@ -272,7 +272,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
         args.push_back(static_cast<uint32_t>(size));
     }
 
-    tt::tt_fabric::append_fabric_connection_rt_args(
+    tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
         src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
 
     return args;
