@@ -17,11 +17,9 @@ tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     if (reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
         if (num_tiles > 1) {
             return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
-        } else {
-            return tt::tt_metal::ReduceOpParallelizationStrategy::SINGLE_CORE_HW;
         }
-    } else {
-        TT_THROW("Unsupported reduce dim");
+        return tt::tt_metal::ReduceOpParallelizationStrategy::SINGLE_CORE_HW;
     }
+    TT_THROW("Unsupported reduce dim");
 }
 }  // namespace ttnn::operations::reduction::generic::detail

@@ -90,18 +90,16 @@ uint32_t get_input_channels_alignment(
             }
             if (shard_width % 8 == 0) {
                 return 8U;
-            } else {
-                return tt::constants::TILE_WIDTH;
             }
-        } else {
-            // The minimum valid value for input channels alignment is 8.
-            // This requirement comes from the L1 alignment, which is 16 bytes.
-            // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
-            // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
-            // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
-            // (Network on Chip) in a single, aligned operation.
-            return tt::tt_metal::hal::get_l1_alignment() / 2;
+            return tt::constants::TILE_WIDTH;
         }
+        // The minimum valid value for input channels alignment is 8.
+        // This requirement comes from the L1 alignment, which is 16 bytes.
+        // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
+        // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
+        // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
+        // (Network on Chip) in a single, aligned operation.
+        return tt::tt_metal::hal::get_l1_alignment() / 2;
     }
     return tt::constants::TILE_WIDTH;
 }

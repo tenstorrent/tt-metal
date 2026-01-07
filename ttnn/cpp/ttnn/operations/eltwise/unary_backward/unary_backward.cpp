@@ -1665,7 +1665,8 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
             std::nullopt);
         grad_tensor.emplace_back(result);
         return grad_tensor;
-    } else if (shape[1] > 1) {
+    }
+    if (shape[1] > 1) {
         ttnn::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
@@ -1779,7 +1780,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
-    } else if (*dim == 1 || *dim == -3) {
+    }
+    if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttnn::SmallVector<std::array<uint32_t, 2>> padding = {

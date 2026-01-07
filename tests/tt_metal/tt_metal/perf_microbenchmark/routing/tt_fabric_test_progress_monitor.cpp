@@ -229,9 +229,8 @@ std::string TestProgressMonitor::format_duration(double seconds) const {
         uint32_t minutes = static_cast<uint32_t>(seconds / 60);
         uint32_t secs = static_cast<uint32_t>(seconds - (minutes * 60));
         return std::to_string(minutes) + "m" + std::to_string(secs) + "s";
-    } else {
-        return std::to_string(static_cast<uint32_t>(seconds)) + "s";
     }
+    return std::to_string(static_cast<uint32_t>(seconds)) + "s";
 }
 
 std::optional<double> TestProgressMonitor::estimate_eta(

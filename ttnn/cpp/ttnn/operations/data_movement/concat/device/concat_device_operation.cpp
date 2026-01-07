@@ -47,11 +47,9 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
         }  // Multi-tensor s2s case
         return program::ConcatS2SMultiProgramFactory{};
-
-    } else {
-        // Sharded-to-interleaved (s2i) case
-        return program::ConcatS2IProgramFactory{};
     }
+    // Sharded-to-interleaved (s2i) case
+    return program::ConcatS2IProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_hit(

@@ -61,9 +61,8 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
         size_t diff_dim = diff_dims[0];
         return std::max(a.start_coord()[diff_dim], b.start_coord()[diff_dim]) <=
                std::min(a.end_coord()[diff_dim], b.end_coord()[diff_dim]) + 1;
-    } else {
-        return a.contains(b) || b.contains(a);
     }
+    return a.contains(b) || b.contains(a);
 }
 
 int32_t normalize_index(int32_t index, int32_t size) {

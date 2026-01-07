@@ -57,32 +57,31 @@ ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t ch
             }
             if ((ubb_id.asic_id == 4 || ubb_id.asic_id == 8) && (8 <= chan && chan <= 11)) {
                 return ConnectorType::LK3;
-            } else {
-                return ConnectorType::TRACE;
             }
-        } else {
-            auto mmio_device_id = cluster.get_associated_mmio_device(chip_id);
-            if (mmio_device_id == chip_id) {
-                if (chan == 14 || chan == 15) {
-                    return ConnectorType::WARP;
-                }
-                if (chan == 0 || chan == 1 || chan == 6 || chan == 7) {
-                    return ConnectorType::QSFP;
-                }
-                if ((chan == 8 || chan == 9) && board_type == BoardType::N300) {
-                    return ConnectorType::TRACE;
-                }
-                return ConnectorType::UNUSED;
-            }
-            if (chan == 6 || chan == 7) {
+            return ConnectorType::TRACE;
+        }
+        auto mmio_device_id = cluster.get_associated_mmio_device(chip_id);
+        if (mmio_device_id == chip_id) {
+            if (chan == 14 || chan == 15) {
                 return ConnectorType::WARP;
             }
-            if (chan == 0 || chan == 1) {
+            if (chan == 0 || chan == 1 || chan == 6 || chan == 7) {
+                return ConnectorType::QSFP;
+            }
+            if ((chan == 8 || chan == 9) && board_type == BoardType::N300) {
                 return ConnectorType::TRACE;
             }
             return ConnectorType::UNUSED;
         }
-    } else if (arch == tt::ARCH::BLACKHOLE) {
+        if (chan == 6 || chan == 7) {
+            return ConnectorType::WARP;
+        }
+        if (chan == 0 || chan == 1) {
+            return ConnectorType::TRACE;
+        }
+        return ConnectorType::UNUSED;
+    }
+    if (arch == tt::ARCH::BLACKHOLE) {
         if (board_type == BoardType::P150) {
             if (4 <= chan && chan <= 11) {
                 return ConnectorType::QSFP;
@@ -98,19 +97,18 @@ ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t ch
                 }
                 if (chan == 8 || chan == 9) {
                     return ConnectorType::TRACE;
-                } else {
-                    return ConnectorType::UNUSED;
                 }
-            } else if (asic_loc == 0) {
+                return ConnectorType::UNUSED;
+            }
+            if (asic_loc == 0) {
                 // Right Chip
                 if (chan == 4 || chan == 5 || chan == 7 || chan == 9) {
                     return ConnectorType::WARP;
                 }
                 if (chan == 2 || chan == 3) {
                     return ConnectorType::TRACE;
-                } else {
-                    return ConnectorType::UNUSED;
                 }
+                return ConnectorType::UNUSED;
             }
         }
     }

@@ -56,9 +56,8 @@ ttnn::DataType get_output_dtype(
     }
     if (output_tensor.has_value()) {
         return output_tensor->dtype();
-    } else {
-        return default_dtype;
     }
+    return default_dtype;
 }
 
 void check_per_tensor_scale(const ttnn::Tensor& scale) {

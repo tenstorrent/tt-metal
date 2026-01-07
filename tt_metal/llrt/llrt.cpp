@@ -128,11 +128,11 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
 
     if (is_active_eth_core) {
         return tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    } else if (is_inactive_eth_core) {
-        return tt_metal::HalProgrammableCoreType::IDLE_ETH;
-    } else {
-        return tt_metal::HalProgrammableCoreType::TENSIX;
     }
+    if (is_inactive_eth_core) {
+        return tt_metal::HalProgrammableCoreType::IDLE_ETH;
+    }
+    return tt_metal::HalProgrammableCoreType::TENSIX;
 }
 
 void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {

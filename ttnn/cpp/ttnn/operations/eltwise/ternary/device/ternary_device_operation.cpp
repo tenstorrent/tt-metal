@@ -103,7 +103,8 @@ CoreRangeSet get_worker_grid(
     }
     if (input_tensor_c && input_tensor_c->is_sharded()) {
         return get_tensor_grid(*input_tensor_c);
-    } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
+    }
+    if (output_tensor.has_value() && output_tensor->is_sharded()) {
         return get_tensor_grid(*output_tensor);
     }
 

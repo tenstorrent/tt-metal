@@ -74,9 +74,8 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
             .packer_l1_acc = default_l1_acc,
             .dst_full_sync_en = default_dst_full_sync_en,
             .throttle_level = default_throttle_level};
-    } else {
-        TT_THROW("arch not supported");
     }
+    TT_THROW("arch not supported");
 }
 
 tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

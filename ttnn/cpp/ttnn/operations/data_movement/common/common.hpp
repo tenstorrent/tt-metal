@@ -165,9 +165,8 @@ public:
             }
             if (*t2_required) {
                 return t2(output);
-            } else {
-                return output;
             }
+            return output;
         };
 
         return MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...>{

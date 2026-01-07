@@ -81,37 +81,33 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
                 return program::ReshardSameHeightFactory</*local_is_output*/ true>{};
             }
             return program::ReshardSameHeightFactory</*local_is_output*/ false>{};
-
-        } else {
-            return program::ReshardGenericFactory{};
         }
-    } else {
-        auto input_buffer_type = input_tensor.memory_config().buffer_type();
-        auto output_buffer_type = out_mem_config.buffer_type();
-        auto input_page_size = input_tensor.buffer()->page_size();
-        auto output_tensor_spec = compute_output_specs(args, tensor_args);
-        auto output_page_size = output_tensor_spec.compute_page_size_bytes();
+        return program::ReshardGenericFactory{};
+    }
+    auto input_buffer_type = input_tensor.memory_config().buffer_type();
+    auto output_buffer_type = out_mem_config.buffer_type();
+    auto input_page_size = input_tensor.buffer()->page_size();
+    auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
-        TT_FATAL(
-            input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
-            "Input buffer type must be DRAM or L1");
-        TT_FATAL(
-            output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
-            "Output buffer type must be DRAM or L1");
+    TT_FATAL(
+        input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
+        "Input buffer type must be DRAM or L1");
+    TT_FATAL(
+        output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
+        "Output buffer type must be DRAM or L1");
 
-        if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
-            return program::NdReshardCopyPagesFactory{};
-        }
-        if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
-            input_page_size != output_page_size) {
-            return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
-        }
-
-        if (input_buffer_type == BufferType::DRAM) {
-            return program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
-        }
+    if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
+        return program::NdReshardCopyPagesFactory{};
+    }
+    if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
+        input_page_size != output_page_size) {
         return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
     }
+
+    if (input_buffer_type == BufferType::DRAM) {
+        return program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
+    }
+    return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
 }
 
 void ReshardDeviceOperation::validate_on_program_cache_hit(

@@ -62,17 +62,16 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
             }
             if (input_tot_h != output_tot_h) {
                 return program::PadRmShardedHeightOnlyProgramFactory{};
-            } else {
-                // for no padding, we just use the height-only padding program
-                return program::PadRmShardedHeightOnlyProgramFactory{};
             }
-        } else {
-            if (operation_attributes.use_multicore) {
-                return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
-            }
-            return program::PadRmReaderWriterProgramFactory{};
+            // for no padding, we just use the height-only padding program
+            return program::PadRmShardedHeightOnlyProgramFactory{};
         }
-    } else if (input_tensor.layout() == Layout::TILE) {
+        if (operation_attributes.use_multicore) {
+            return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
+        }
+        return program::PadRmReaderWriterProgramFactory{};
+    }
+    if (input_tensor.layout() == Layout::TILE) {
         if (operation_attributes.use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&
             !(input_tensor.memory_config().buffer_type() == BufferType::L1)) {
             return program::PadTileMulticoreProgramFactory{};
@@ -82,10 +81,9 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
             "Only bfloat16 and non-L1 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 "
             "core. #29295");
         return program::PadTileCoreProgramFactory{};
-    } else {
-        TT_THROW("Unsupported layout for pad");
-        return {};
     }
+    TT_THROW("Unsupported layout for pad");
+    return {};
 }
 
 void PadDeviceOperation::validate_on_program_cache_hit(

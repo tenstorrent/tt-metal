@@ -54,7 +54,8 @@ DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& nod
             // Format: [mesh_id, chip_id]
             ChipId chip_id = parse_scalar<ChipId>(node[1]);
             return std::make_pair(mesh_id, chip_id);
-        } else if (node[1].IsSequence()) {
+        }
+        if (node[1].IsSequence()) {
             // Format: [mesh_id, [row, col]]
             MeshCoordinate mesh_coord = parse_mesh_coord(node[1]);
             return std::make_pair(mesh_id, mesh_coord);
@@ -427,31 +428,32 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 return false;
             }
             return test_config.fabric_setup.topology == topo;
-        } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
+        }
+        if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
                 return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
-            } else if (filter_value == "false") {
-                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
-                    filter_value);
-                return false;
             }
-        } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
+            if (filter_value == "false") {
+                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
+            }
+            log_info(
+                tt::LogTest,
+                "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
+                filter_value);
+            return false;
+        }
+        if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
             if (filter_value == "true") {
                 return test_config.global_sync;
-            } else if (filter_value == "false") {
-                return !test_config.global_sync;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported sync filter value: '{}'. Supported values are: true, false",
-                    filter_value);
-                return false;
             }
-        } else if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
+            if (filter_value == "false") {
+                return !test_config.global_sync;
+            }
+            log_info(
+                tt::LogTest, "Unsupported sync filter value: '{}'. Supported values are: true, false", filter_value);
+            return false;
+        }
+        if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -468,7 +470,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 }
             }
             return test_config.fabric_setup.num_links == stoi(filter_value.value());
-        } else if (filter_type.value() == "ntype") {
+        }
+        if (filter_type.value() == "ntype") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -514,7 +517,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().ntype.value() == ntype.value();
             }
             return checker;
-        } else if (filter_type.value() == "ftype") {
+        }
+        if (filter_type.value() == "ftype") {
             // soft filter
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
@@ -560,7 +564,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().ftype.value() == ftype.value();
             }
             return checker;
-        } else if (filter_type.value() == "num_packets") {
+        }
+        if (filter_type.value() == "num_packets") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -605,7 +610,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().num_packets.value() == num_packets;
             }
             return checker;
-        } else if (filter_type.value() == "size") {
+        }
+        if (filter_type.value() == "size") {
             if (fine_grained) {
                 if (test_config.parametrization_params.has_value() &&
                     !test_config.parametrization_params.value().empty()) {
@@ -650,7 +656,8 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 checker = test_config.defaults.value().size.value() == size;
             }
             return checker;
-        } else if (filter_type.value() == "pattern") {
+        }
+        if (filter_type.value() == "pattern") {
             bool checker = false;
             if (test_config.patterns.has_value()) {
                 for (auto& high_level_pattern : test_config.patterns.value()) {
@@ -661,14 +668,13 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 }
             }
             return checker;
-        } else {
-            log_info(
-                tt::LogTest,
-                "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
-                "sync, num_links, ntype, ftype, num_packets, size, pattern",
-                filter_type.value());
-            return false;
         }
+        log_info(
+            tt::LogTest,
+            "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
+            "sync, num_links, ntype, ftype, num_packets, size, pattern",
+            filter_type.value());
+        return false;
     }
     return true;
 }

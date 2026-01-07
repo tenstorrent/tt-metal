@@ -523,12 +523,11 @@ PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_
     }
     if (pattern_string == "all_device_broadcast") {
         return PatternType::AllDeviceBroadcast;
-    } else {
-        TT_THROW(
-            "Invalid pattern type: '{}'. Valid types are: all_to_all_device_unicast, all_hosts_random_sockets, "
-            "all_device_broadcast",
-            pattern_string);
     }
+    TT_THROW(
+        "Invalid pattern type: '{}'. Valid types are: all_to_all_device_unicast, all_hosts_random_sockets, "
+        "all_device_broadcast",
+        pattern_string);
 }
 
 std::vector<std::vector<EthCoord>> MeshSocketYamlParser::parse_eth_coord_mapping(const YAML::Node& yaml_node) {

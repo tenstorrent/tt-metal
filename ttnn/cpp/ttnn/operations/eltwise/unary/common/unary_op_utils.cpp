@@ -572,9 +572,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             if (input_dtype == DataType::UINT16) {
                 return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint16({});", idst)};
-            } else {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             }
+            return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
         case UnaryOpType::I0: return {"i0_tile_init();", fmt::format("i0_tile({});", idst)};
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
@@ -601,9 +600,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             if (input_dtype.value() == DataType::UINT16) {
                 return {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0},         {0}, {0});", idst)};
-            } else {
-                return {"        square_tile_init();", fmt::format("square_tile({});", idst)};
             }
+            return {"        square_tile_init();", fmt::format("square_tile({});", idst)};
         case UnaryOpType::TILED_PROD: return {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)};
         case UnaryOpType::EQZ:
             TT_FATAL(
@@ -616,9 +614,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             if (input_dtype.value() == DataType::UINT32) {
                 return {"eqz_tile_init();", fmt::format("eqz_tile_uint32({});", idst)};
-            } else {
-                return {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
+            return {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
         case UnaryOpType::NEZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -630,9 +627,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             if (input_dtype.value() == DataType::UINT32) {
                 return {"nez_tile_init();", fmt::format("nez_tile_uint32({});", idst)};
-            } else {
-                return {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
             }
+            return {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
         case UnaryOpType::LTZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -752,59 +748,86 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     }
     if (name == "gelu") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(false));
-    } else if (name == "gelu_approx") {
+    }
+    if (name == "gelu_approx") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
-    } else if (name == "silu") {
+    }
+    if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
-    } else if (name == "sigmoid") {
+    }
+    if (name == "sigmoid") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(false)});
-    } else if (name == "sigmoid_approx") {
+    }
+    if (name == "sigmoid_approx") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
-    } else if (name == "hardsigmoid") {
+    }
+    if (name == "hardsigmoid") {
         return UnaryWithParam(UnaryOpType::HARDSIGMOID);
-    } else if (name == "sqrt") {
+    }
+    if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT, {static_cast<float>(false)});
-    } else if (name == "rsqrt") {
+    }
+    if (name == "rsqrt") {
         return UnaryWithParam(UnaryOpType::RSQRT, {static_cast<float>(false)});
-    } else if (name == "exp") {
+    }
+    if (name == "exp") {
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
-    } else if (name == "recip") {
+    }
+    if (name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
-    } else if (name == "log") {
+    }
+    if (name == "log") {
         return UnaryWithParam(UnaryOpType::LOG, static_cast<float>(true));
-    } else if (name == "log1p") {
+    }
+    if (name == "log1p") {
         return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
-    } else if (name == "tanh") {
+    }
+    if (name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH, static_cast<float>(false));
-    } else if (name == "log2") {
+    }
+    if (name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
-    } else if (name == "log10") {
+    }
+    if (name == "log10") {
         return UnaryWithParam(UnaryOpType::LOG10, static_cast<float>(true));
-    } else if (name == "sin") {
+    }
+    if (name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
-    } else if (name == "cos") {
+    }
+    if (name == "cos") {
         return UnaryWithParam(UnaryOpType::COS);
-    } else if (name == "cosh") {
+    }
+    if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
-    } else if (name == "sinh") {
+    }
+    if (name == "sinh") {
         return UnaryWithParam(UnaryOpType::SINH);
-    } else if (name == "abs") {
+    }
+    if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
-    } else if (name == "abs_int32") {
+    }
+    if (name == "abs_int32") {
         return UnaryWithParam(UnaryOpType::ABS_INT32);
-    } else if (name == "sign") {
+    }
+    if (name == "sign") {
         return UnaryWithParam(UnaryOpType::SIGN);
-    } else if (name == "square") {
+    }
+    if (name == "square") {
         return UnaryWithParam(UnaryOpType::SQUARE);
-    } else if (name == "softplus") {
+    }
+    if (name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
-    } else if (name == "selu") {
+    }
+    if (name == "selu") {
         return UnaryWithParam(UnaryOpType::SELU);
-    } else if (name == "alt_complex_rotate90") {
+    }
+    if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
-    } else if (name == "hardmish") {
+    }
+    if (name == "hardmish") {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
-    } else if (name == "mish") {
+    }
+    if (name == "mish") {
         return UnaryWithParam(UnaryOpType::MISH);
     }
     TT_THROW("Unknown unary op: {}", name);

@@ -65,10 +65,9 @@ Tensor MorehNorm::invoke(
         }
         return ttnn::prim::moreh_norm(
             tmp_output, p, dims.back(), keepdim, output, memory_config, compute_kernel_config);
-    } else {
-        auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
-        tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
-        return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
     }
+    auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
+    tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
+    return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_norm

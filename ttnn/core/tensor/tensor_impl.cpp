@@ -1329,9 +1329,8 @@ tt::tt_metal::HostStorage preprocess_storage(
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
-    } else {
-        return input_storage;
     }
+    return input_storage;
 }
 
 template <typename SrcType, typename DstType>

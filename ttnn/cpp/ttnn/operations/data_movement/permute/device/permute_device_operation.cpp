@@ -27,12 +27,12 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
     if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
         (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
         return MultiCoreTileInvariant{};
-    } else if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {  // When only one of the tiled dimensions
-                                                                            // is moved
-        return MultiCoreTileRowInvariant{};
-    } else {
-        return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
     }
+    if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {  // When only one of the tiled dimensions
+                                                                     // is moved
+        return MultiCoreTileRowInvariant{};
+    }
+    return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(

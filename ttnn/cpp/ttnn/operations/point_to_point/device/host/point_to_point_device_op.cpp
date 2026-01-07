@@ -58,10 +58,9 @@ auto fabric_1d_routing_vector(const MeshCoordinate& sender_coord, const MeshCoor
         bool is_fwd = (hops > 0);
 
         return std::make_tuple(std::abs(hops), is_fwd, dim);
-    } else {
-        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
-        return std::make_tuple(0, false, 0);
     }
+    TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
+    return std::make_tuple(0, false, 0);
 }
 
 Fabric1DRoute fabric_1d_routing(

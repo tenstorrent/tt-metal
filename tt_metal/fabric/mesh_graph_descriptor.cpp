@@ -1149,8 +1149,8 @@ GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
         }
 
         return global_instance_id;
-
-    } else if (node_ref.has_graph()) {
+    }
+    if (node_ref.has_graph()) {
         const auto instance_id = node_ref.graph().graph_id();
         const auto it = parent_instance.sub_instances_local_id_to_global_id.find(instance_id);
         TT_FATAL(

@@ -58,7 +58,8 @@ inline std::string_view::size_type AnchoredGlobEndsAt(
         }
         if (pattern[idx] == '?') {
             continue;
-        } else if (str[idx] != pattern[idx]) {
+        }
+        if (str[idx] != pattern[idx]) {
             return str.npos;
         }
     }

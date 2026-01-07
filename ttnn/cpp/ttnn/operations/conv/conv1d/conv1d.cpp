@@ -88,9 +88,8 @@ Result Conv1dOperation::invoke(
     }
     if (return_weights_and_bias) {
         return Result(std::tuple(output_tensor, weights_and_bias));
-    } else {
-        return Result(output_tensor);
-    };
+    }
+    return Result(output_tensor);
 }
 
 }  // namespace ttnn::operations::conv::conv1d

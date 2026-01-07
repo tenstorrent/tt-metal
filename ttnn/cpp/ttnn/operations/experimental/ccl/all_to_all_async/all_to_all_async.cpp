@@ -49,18 +49,17 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
             memory_config,
             topology,
             subdevice_id);
-    } else {
-        std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
-        return ttnn::experimental::all_to_all_async_generic(
-            input_tensor,
-            optional_persistent_output_buffer,
-            in_dim,
-            out_dim,
-            num_links,
-            memory_config,
-            topology,
-            subdevice_id);
     }
+    std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
+    return ttnn::experimental::all_to_all_async_generic(
+        input_tensor,
+        optional_persistent_output_buffer,
+        in_dim,
+        out_dim,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

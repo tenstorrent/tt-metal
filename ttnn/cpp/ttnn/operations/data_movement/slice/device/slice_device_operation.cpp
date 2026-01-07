@@ -254,11 +254,9 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
             return program::SliceRmStrideProgramFactory{};
         }
         return program::SliceRmProgramFactory{};
-
-    } else {
-        // Layout::TILE
-        return program::SliceTileProgramFactory{};
     }
+    // Layout::TILE
+    return program::SliceTileProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

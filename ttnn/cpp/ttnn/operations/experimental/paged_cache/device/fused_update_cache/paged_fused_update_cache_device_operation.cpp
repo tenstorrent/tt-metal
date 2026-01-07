@@ -27,10 +27,8 @@ PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDev
             return program::rm::PagedRowMajorFusedUpdateCacheMeshWorkloadFactory{};
         }
         return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
-
-    } else {
-        TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
     }
+    TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
 }
 
 void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_hit(

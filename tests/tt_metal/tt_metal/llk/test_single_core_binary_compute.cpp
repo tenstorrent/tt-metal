@@ -243,18 +243,18 @@ bool single_core_binary(
             }
             if (test_config.binary_op == "sub") {
                 return (static_cast<float>(lhs) - static_cast<float>(rhs));
-            } else if (test_config.binary_op == "mul") {
+            }
+            if (test_config.binary_op == "mul") {
                 return (
                     static_cast<float>(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
                     static_cast<float>(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(rhs) & srcb_fid_mask))));
-            } else if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
-                return static_cast<float>(lhs);
-            } else {
-                TT_THROW("Unsupported binary_op={}", test_config.binary_op);
-                return 0.0f;
             }
+            if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
+                return static_cast<float>(lhs);
+            }
+            TT_THROW("Unsupported binary_op={}", test_config.binary_op);
         });
 
     std::vector<bfloat16> golden(input0.size());
@@ -273,9 +273,8 @@ bool single_core_binary(
                         std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(lhs) & srca_fid_mask))) *
                     static_cast<float>(std::bit_cast<bfloat16>(
                         static_cast<uint16_t>(std::bit_cast<uint16_t>(bfloat16(rhs)) & srcb_fid_mask))));
-            } else {
-                return rhs;
             }
+            return rhs;
         });
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
