@@ -38,8 +38,9 @@ void py_module_types(nb::module_& m) {
 void py_module(nb::module_& m) {
     {
         auto py_optimizer_base = static_cast<nb::class_<OptimizerBase>>(m.attr("OptimizerBase"));
-        py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad, "Zero out gradient");
-        py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
+        py_optimizer_base.def(
+            "zero_grad", &OptimizerBase::zero_grad, "Zero out gradient", nb::call_guard<nb::gil_scoped_release>());
+        py_optimizer_base.def("step", &OptimizerBase::step, "Step function", nb::call_guard<nb::gil_scoped_release>());
         py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
         py_optimizer_base.def(
             "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
@@ -72,7 +73,10 @@ void py_module(nb::module_& m) {
     {
         auto py_sgd = static_cast<nb::class_<SGD, OptimizerBase>>(m.attr("SGD"));
         py_sgd.def(
-            nb::init<serialization::NamedParameters, const SGDConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            nb::init<serialization::NamedParameters, const SGDConfig&>(),
+            nb::arg("parameters"),
+            nb::arg("config"),
+            nb::call_guard<nb::gil_scoped_release>());
     }
 
     {
@@ -95,19 +99,28 @@ void py_module(nb::module_& m) {
     {
         auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
         py_adamw.def(
-            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            nb::init<serialization::NamedParameters, const AdamWConfig&>(),
+            nb::arg("parameters"),
+            nb::arg("config"),
+            nb::call_guard<nb::gil_scoped_release>());
     }
 
     {
         auto py_moreh_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("MorehAdamW"));
         py_moreh_adamw.def(
-            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+            nb::init<serialization::NamedParameters, const AdamWConfig&>(),
+            nb::arg("parameters"),
+            nb::arg("config"),
+            nb::call_guard<nb::gil_scoped_release>());
     }
 
     {
         auto py_remote_optimizer = static_cast<nb::class_<RemoteOptimizer, OptimizerBase>>(m.attr("RemoteOptimizer"));
         py_remote_optimizer.def(
-            nb::init<serialization::NamedParameters, int>(), nb::arg("parameters"), nb::arg("aggregator_rank"));
+            nb::init<serialization::NamedParameters, int>(),
+            nb::arg("parameters"),
+            nb::arg("aggregator_rank"),
+            nb::call_guard<nb::gil_scoped_release>());
         py_remote_optimizer.def("send_gradients", &RemoteOptimizer::send_gradients);
         py_remote_optimizer.def("receive_weights", &RemoteOptimizer::receive_weights);
         py_remote_optimizer.def("get_sorted_parameters", &RemoteOptimizer::get_sorted_parameters);

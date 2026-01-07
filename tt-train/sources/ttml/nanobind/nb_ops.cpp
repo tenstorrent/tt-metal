@@ -3,13 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/concat_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
@@ -18,9 +22,11 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -192,6 +198,13 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+        py_multi_head_utils.def(
+            "scaled_dot_product_attention",
+            &ttml::ops::scaled_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nb::none());
     }
 
     {
@@ -277,6 +290,16 @@ void py_module(nb::module_& m) {
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
     }
+
+    m.def("concat", &ttml::ops::concat, nb::arg("tensors"), nb::arg("dim"));
+
+    m.def(
+        "reshape",
+        [](const autograd::TensorPtr& tensor, const std::vector<uint32_t>& shape) {
+            return ttml::ops::reshape_op(tensor, ttnn::Shape(shape));
+        },
+        nb::arg("tensor"),
+        nb::arg("shape"));
 }
 
 }  // namespace ttml::nanobind::ops

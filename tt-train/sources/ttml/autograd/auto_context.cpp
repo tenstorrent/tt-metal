@@ -44,6 +44,13 @@ GradMode AutoContext::get_gradient_mode() const {
     return m_grads_mode;
 }
 
+void AutoContext::set_init_mode(InitMode mode) {
+    m_init_mode = mode;
+}
+InitMode AutoContext::get_init_mode() const {
+    return m_init_mode;
+}
+
 void AutoContext::reset_graph() {
     m_graph.reset();
 }

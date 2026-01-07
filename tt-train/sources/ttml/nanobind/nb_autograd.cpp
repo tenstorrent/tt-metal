@@ -30,6 +30,7 @@ using namespace ttml::autograd;
 void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ttnn::DataType>(m);
     ttml::nanobind::util::export_enum<GradMode>(m);
+    ttml::nanobind::util::export_enum<InitMode>(m);
     ttml::nanobind::util::export_enum<PreferredPrecision>(m);
 
     nb::class_<AutoContext>(m, "AutoContext");
@@ -84,7 +85,11 @@ void py_module(nb::module_& m) {
         py_tensor.def("get_shape", &Tensor::get_shape, "Get shape");
         py_tensor.def("get_rank", &Tensor::get_rank, "Get rank");
         py_tensor.def(
-            "backward", &Tensor::backward, nb::arg("retain_graph"), "Call gradient function on graph nodes in reverse");
+            "backward",
+            &Tensor::backward,
+            nb::arg("retain_graph"),
+            "Call gradient function on graph nodes in reverse",
+            nb::call_guard<nb::gil_scoped_release>());
 
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
         py_tensor.def(
@@ -206,6 +211,9 @@ void py_module(nb::module_& m) {
             "Add backward graph node");
         py_auto_context.def("reset_graph", &AutoContext::reset_graph, "Reset graph");
         py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"), "Set gradient mode");
+        py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
+        py_auto_context.def("set_init_mode", &AutoContext::set_init_mode, nb::arg("mode"), "Set init mode");
+        py_auto_context.def("get_init_mode", &AutoContext::get_init_mode, "Get init mode");
         py_auto_context.def(
             "open_device",
             [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {

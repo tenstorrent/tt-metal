@@ -41,20 +41,22 @@ void py_module(nb::module_& m) {
         py_module_base.def(nb::init<ModuleBase&&>());
         py_module_base.def("get_name", &ModuleBase::get_name, "Get name");
         py_module_base.def("parameters", &ModuleBase::parameters, "Get parameters");
-        py_module_base.def("train", &ModuleBase::train, "Set mode to train");
+        py_module_base.def("train", &ModuleBase::train, "Set mode to train", nb::call_guard<nb::gil_scoped_release>());
         py_module_base.def("eval", &ModuleBase::eval, "Set mode to eval");
         py_module_base.def("set_run_mode", &ModuleBase::set_run_mode, "Set run mode");
         py_module_base.def("get_run_mode", &ModuleBase::get_run_mode, "Get run mode");
         py_module_base.def(
             "__call__",
             static_cast<autograd::TensorPtr (ModuleBase::*)(const autograd::TensorPtr&)>(&ModuleBase::operator()),
-            nb::arg("tensor"));
+            nb::arg("tensor"),
+            nb::call_guard<nb::gil_scoped_release>());
         py_module_base.def(
             "__call__",
             static_cast<autograd::TensorPtr (ModuleBase::*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
                 &ModuleBase::operator()),
             nb::arg("tensor"),
-            nb::arg("other"));
+            nb::arg("other"),
+            nb::call_guard<nb::gil_scoped_release>());
     }
 
     {

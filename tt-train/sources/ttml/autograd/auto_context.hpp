@@ -18,6 +18,8 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
+enum class InitMode { ENABLED, DISABLED };
+
 class AutoContext {
 public:
     // Delete copy constructor and assignment operator to prevent copying
@@ -42,6 +44,10 @@ public:
     void set_gradient_mode(GradMode mode);
 
     [[nodiscard]] GradMode get_gradient_mode() const;
+
+    void set_init_mode(InitMode mode);
+
+    [[nodiscard]] InitMode get_init_mode() const;
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
@@ -75,6 +81,7 @@ private:
     std::mt19937 m_generator;
 
     GradMode m_grads_mode = GradMode::ENABLED;
+    InitMode m_init_mode = InitMode::ENABLED;
 
     Graph m_graph;
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);

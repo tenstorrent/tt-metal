@@ -26,11 +26,7 @@ def get_tt_metal_home() -> str:
     Returns:
         Path to TT-Metal home directory
     """
-    tt_metal_home = (
-        os.environ["TT_METAL_HOME"]
-        if "TT_METAL_HOME" in os.environ
-        else os.path.expanduser("~/.tt-metal")
-    )
+    tt_metal_home = os.environ["TT_METAL_HOME"] if "TT_METAL_HOME" in os.environ else os.path.expanduser("~/.tt-metal")
     return tt_metal_home
 
 
@@ -58,29 +54,25 @@ def initialize_device(yaml_config: dict):
     device_config = DeviceConfig(yaml_config)
     if device_config.total_devices() > 1:
         ttml.core.distributed.enable_fabric(device_config.total_devices())
-    ttml.autograd.AutoContext.get_instance().open_device(
-        device_config.mesh_shape, device_config.device_ids
-    )
+    ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
-def create_optimizer(model, yaml_config: dict):
+def create_optimizer(model, config):
     """Create AdamW or MorehAdamW optimizer from configuration.
 
     Args:
         model: Model to optimize
-        yaml_config: Dictionary containing optimizer configuration
+        config: TrainingConfig object containing optimizer configuration
 
     Returns:
         AdamW or MorehAdamW optimizer instance based on configuration
     """
-    optimizer_config = yaml_config.get("training_config", {})
-
-    lr = optimizer_config.get("learning_rate", 0.0003)
-    beta1 = optimizer_config.get("beta1", 0.9)
-    beta2 = optimizer_config.get("beta2", 0.999)
-    eps = optimizer_config.get("eps", 1e-8)
-    weight_decay = optimizer_config.get("weight_decay", 0.01)
-    use_moreh_adamw = optimizer_config.get("use_moreh_adamw", False)
+    lr = getattr(config, "lr", getattr(config, "learning_rate", 0.0003))
+    beta1 = getattr(config, "beta1", 0.9)
+    beta2 = getattr(config, "beta2", 0.999)
+    eps = getattr(config, "eps", 1e-8)
+    weight_decay = getattr(config, "weight_decay", 0.01)
+    use_moreh_adamw = getattr(config, "use_moreh_adamw", False)
 
     adamw_cfg = ttml.optimizers.AdamWConfig.make(
         float(lr),
@@ -112,9 +104,7 @@ class PerformanceMeter:
         if time_window == 0:
             return 0, 0
 
-        samples = (
-            len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
-        )
+        samples = len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
         samples_per_second = samples / time_window
         tokens_per_second = samples * self.cfg.seq_len / time_window
         return samples_per_second, tokens_per_second
@@ -139,11 +129,7 @@ class no_grad:
 
     def __enter__(self):
         self._ctx = ttml.autograd.AutoContext.get_instance()
-        self._prev = (
-            self._ctx.get_gradient_mode()
-            if hasattr(self._ctx, "get_gradient_mode")
-            else None
-        )
+        self._prev = self._ctx.get_gradient_mode() if hasattr(self._ctx, "get_gradient_mode") else None
         self._ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
         return self
 

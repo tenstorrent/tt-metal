@@ -1,0 +1,10 @@
+---
+alwaysApply: true
+---
+
+for build use
+source /home/ubuntu/tt-metal/python_env/bin/activate
+export TT_METAL_HOME=/home/ubuntu/tt-metal
+./build_metal.sh  --build-tt-train --release
+cd tt-train/
+pip install -e . -v
