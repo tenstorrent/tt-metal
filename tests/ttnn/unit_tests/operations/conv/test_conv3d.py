@@ -75,7 +75,7 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
 
     print(f"Final Weights shape after per-group padding: {w.shape}")
 
-    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16)
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
         device=device,
@@ -200,14 +200,14 @@ def run_conv3d_test(
 @pytest.mark.parametrize("B", [1, 2])
 @pytest.mark.parametrize("C_in", [12, 64])
 @pytest.mark.parametrize("C_out", [64])
-@pytest.mark.parametrize("T", [2])
-@pytest.mark.parametrize("H", [2])
-@pytest.mark.parametrize("W", [2])
+@pytest.mark.parametrize("T", [8, 11])
+@pytest.mark.parametrize("H", [10, 13])
+@pytest.mark.parametrize("W", [9, 12])
 @pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
-@pytest.mark.parametrize("groups", [1, 2])
+@pytest.mark.parametrize("groups", [2])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
-@pytest.mark.parametrize("padding_mode", ["zeros"])
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
