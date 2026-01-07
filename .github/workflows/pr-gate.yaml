@@ -271,7 +271,7 @@ jobs:
       product: tt-nn
 
   APC-test-count-check:
-    needs: [ build, find-changed-files ]
+    # needs: [ build, find-changed-files ]
     # if: ${{
     #     github.ref_name == 'main' ||
     #     needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -279,8 +279,8 @@ jobs:
     #   }}
     uses: ./.github/workflows/validate-test-count.yaml
     with:
-      wheel-artifact-name: eager-dist-cp310-any-71934aba584a1abf4a4aab4fcf75fadd87073928-20788440471
-      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      # wheel-artifact-name: eager-dist-cp310-any-71934aba584a1abf4a4aab4fcf75fadd87073928-20788440471
+      # package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       # wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   ttsim-integration-tests:
