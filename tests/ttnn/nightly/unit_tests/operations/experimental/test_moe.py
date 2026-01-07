@@ -31,13 +31,26 @@ def get_accuracy_metrics(torch_output, tt_output):
 def run_test_moe(device, M, K, N, check_accuracy):
     logger.info(f"Running test_moe with M={M}, K={K}, N={N}, check_accuracy={check_accuracy}")
 
-    NUM_EXPERTS = 64  # 8x8 core grid
-
     if check_accuracy:
         torch_input = torch.randn((M, K), dtype=torch.float32)
-        torch_w0 = torch.randn((K, N), dtype=torch.float32)
-        torch_w1 = torch.randn((K, N), dtype=torch.float32)
-        torch_w2 = torch.randn((N, K), dtype=torch.float32)
+        torch_w0 = torch.randn((K, 12 * 5 * 32), dtype=torch.float32)
+        torch_w1 = torch.randn((K, 12 * 5 * 32), dtype=torch.float32)
+        torch_w2 = torch.randn((N, 12 * 18 * 32), dtype=torch.float32)
+
+    # Generate shard specs for weights
+    shard_grid_all_12_dram = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})
+    shard_grid_first_4_dram = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_grid_last_8_dram = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(11, 0))})
+
+    weight0_1_shard_spec = ttnn.ShardSpec(shard_grid_all_12_dram, [K, 5 * 32], ttnn.ShardOrientation.ROW_MAJOR)
+    weight0_1_shard_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, weight0_1_shard_spec
+    )
+
+    weight2_shard_spec = ttnn.ShardSpec(shard_grid_all_12_dram, [N, 18 * 32], ttnn.ShardOrientation.ROW_MAJOR)
+    weight2_shard_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, weight2_shard_spec
+    )
 
     # Create HEIGHT_SHARDED memory config for input
     # Each core (expert) gets a copy of the original (M, K) input
@@ -51,32 +64,52 @@ def run_test_moe(device, M, K, N, check_accuracy):
 
     # Prepare TT tensors
     if check_accuracy:
-        # Replicate input 64 times so each core gets a copy
-        torch_input_replicated = torch_input.repeat(NUM_EXPERTS, 1)  # Shape: (64*M, K)
-        tt_input = ttnn.from_torch(
-            torch_input_replicated,
-            dtype=ttnn.bfloat16,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=input_sharded_mem_config,
-        )
-        tt_weight0 = ttnn.from_torch(torch_w0, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight1 = ttnn.from_torch(torch_w1, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight2 = ttnn.from_torch(torch_w2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    else:
-        # Replicate empty input 64 times for performance testing
-        torch_input_replicated = torch.empty((NUM_EXPERTS * M, K), dtype=torch.bfloat16)
-        tt_input = ttnn.from_torch(
-            torch_input_replicated,
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.from_torch(
+            torch_w0,
             dtype=ttnn.bfloat8_b,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=input_sharded_mem_config,
+            memory_config=weight0_1_shard_memory_config,
         )
-        tt_weight0 = ttnn.empty((K, N), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight1 = ttnn.empty((K, N), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight2 = ttnn.empty((N, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight1 = ttnn.from_torch(
+            torch_w1,
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight0_1_shard_memory_config,
+        )
+        tt_weight2 = ttnn.from_torch(
+            torch_w2,
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight2_shard_memory_config,
+        )
+        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+    else:
+        tt_input = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.empty(
+            (K, 12 * 5 * 32),
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight0_1_shard_memory_config,
+        )
+        tt_weight1 = ttnn.empty(
+            (K, 12 * 5 * 32),
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight0_1_shard_memory_config,
+        )
+        tt_weight2 = ttnn.empty(
+            (N, 12 * 18 * 32),
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight2_shard_memory_config,
+        )
         tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
 
     if check_accuracy:
@@ -100,10 +133,23 @@ def run_test_moe(device, M, K, N, check_accuracy):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 450_000,
+    (32, 7168, 2048): 360_000,
+    (32, 7168, 2048): 360.0,
 }
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            },
+            id="dispatch_col",
+        )
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "M, K, N",
     SHAPE2TIME.keys(),
@@ -123,23 +169,22 @@ def test_moe(device, M, K, N, check_accuracy):
         assert accuracy_metrics["relative_rmse"] < 0.02
 
 
-# @pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N",
     SHAPE2TIME.keys(),
 )
 @pytest.mark.parametrize("check_accuracy", ["default", "no_check"])
 def test_moe_performance(M, K, N, check_accuracy):
-    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[{check_accuracy}-M={M}-K={K}-N={N}]"
+    command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe.py::test_moe[{check_accuracy}-M={M}-K={K}-N={N}-dispatch_col]"
 
     run_device_profiler(command, "ttnn_moe_performance", device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log("ttnn_moe_performance", float_columns=["DEVICE KERNEL DURATION [ns]"])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
-    logger.info(f"Performance: {duration_ns} ns")
+    duration_us = int(r["DEVICE KERNEL DURATION [ns]"].min()) / 1000.0
+    logger.info(f"Performance: {duration_us} us")
 
     assert (
-        duration_ns < SHAPE2TIME[(M, K, N)]
-    ), f"Performance {duration_ns} ns is greater than expected {SHAPE2TIME[(M, K, N)]} ns"
+        duration_us < SHAPE2TIME[(M, K, N)]
+    ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N)]} us"
 
 
 def post_process_ops_log(output_logs_subdir: str, float_columns: list[str]) -> dict[str, float]:
