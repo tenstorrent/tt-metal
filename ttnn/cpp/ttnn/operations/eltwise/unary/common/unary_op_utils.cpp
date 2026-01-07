@@ -522,7 +522,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
         case UnaryOpType::SQRT: {
-            return {"sqrt_tile_init<false>();", fmt::format("sqrt_tile<false, {1}>({0});", idst, param0_raw)};
+            return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };

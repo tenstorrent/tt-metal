@@ -223,7 +223,8 @@ Tensor ExecuteDiv::invoke(
                 rhs_activations,
                 std::nullopt,
                 sub_core_grids);
-        } else if (round_mode == "trunc") {
+        }
+        if (round_mode == "trunc") {
             return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
                 input,
                 value,
@@ -235,25 +236,24 @@ Tensor ExecuteDiv::invoke(
                 rhs_activations,
                 std::nullopt,
                 sub_core_grids);
-        } else {
-            // round_mode = None
-            TT_FATAL(
-                (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
-                "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
-                "ttnn.float32");
-            return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
-                input,
-                value,
-                std::nullopt,
-                output_mem_config,
-                output_tensor,
-                post_activations,
-                lhs_activations,
-                rhs_activations,
-                std::nullopt,  // use_legacy
-                std::nullopt,  // fast_and_approximate_mode
-                sub_core_grids);
         }
+        // round_mode = None
+        TT_FATAL(
+            (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
+            "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+            "ttnn.float32");
+        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+            input,
+            value,
+            std::nullopt,
+            output_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            std::nullopt,  // use_legacy
+            std::nullopt,  // fast_and_approximate_mode
+            sub_core_grids);
     }
 
     if (!(use_legacy ? *use_legacy
