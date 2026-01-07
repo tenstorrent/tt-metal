@@ -32,6 +32,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_layernorm_distributed/dit_layernorm_distributed_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
@@ -74,6 +75,7 @@ void py_module(nb::module_& mod) {
     transformer::detail::bind_all_reduce_create_qkv_heads(mod);
 
     transformer::bind_wan_fused_distributed_rmsnorm(mod);
+    transformer::bind_dit_layernorm_distributed(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
