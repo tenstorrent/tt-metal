@@ -107,6 +107,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable trace for decode forward pass",
     )
+    p.add_argument(
+        "--repeat-batches",
+        type=int,
+        default=1,
+        help="Number of times to repeat the generation process.",
+    )
     return p
 
 

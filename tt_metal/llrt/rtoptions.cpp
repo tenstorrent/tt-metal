@@ -19,6 +19,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+// NOLINTBEGIN(bugprone-branch-clone)
+
 using std::vector;
 
 namespace tt::llrt {
@@ -120,6 +122,7 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
+    TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
 
     // ========================================
     // WATCHER SYSTEM
@@ -838,6 +841,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only disable pushing to Tracy GUI if device profiler is also enabled
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
+
+        // TT_METAL_DEVICE_DEBUG_DUMP_ENABLED
+        // Enable and sets the polling interval in seconds for experimental debug dump mode for profiler. In this mode,
+        // the profiler infrastructure will be used to continuously dump debug packets to a file. Default: false (debug
+        // dump mode disabled) Usage: export TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1
+        case EnvVarID::TT_METAL_DEVICE_DEBUG_DUMP_ENABLED: {
+            if (is_env_enabled(value)) {
+                this->profiler_enabled = true;
+                this->profiler_noc_events_enabled = true;
+                this->experimental_device_debug_dump_interval_seconds = std::stoi(value);
             }
             break;
         }
@@ -1595,3 +1611,5 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
 }
 
 }  // namespace tt::llrt
+
+// NOLINTEND(bugprone-branch-clone)
