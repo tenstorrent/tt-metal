@@ -93,21 +93,28 @@ CoreRangeSet get_worker_grid(
         return get_tensor_grid(*output_tensor);
     }
 
-    if (memory_config.has_value() && memory_config->is_sharded()) {
-        // Use the shard spec from memory config if provided
-        const auto& shard_spec_opt = memory_config->shard_spec();
-        if (shard_spec_opt.has_value()) {
-            log_debug(tt::LogOp, "Using memory config shard spec grid for worker grid {}", shard_spec_opt->grid.str());
-            auto* device = input_tensor_a.device();
-            for (const auto& sub_device_id : device->get_sub_device_ids()) {
-                const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-                if (sub_device_workers.intersects(shard_spec_opt->grid)) {
-                    return sub_device_workers;
+    if (memory_config.has_value()) {
+        if (memory_config->is_sharded()) {
+            // Use the shard spec from memory config if provided
+            const auto& shard_spec_opt = memory_config->shard_spec();
+            if (shard_spec_opt.has_value()) {
+                log_debug(
+                    tt::LogOp, "Using memory config shard spec grid for worker grid {}", shard_spec_opt->grid.str());
+                auto* device = input_tensor_a.device();
+                for (const auto& sub_device_id : device->get_sub_device_ids()) {
+                    const auto& sub_device_workers =
+                        device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+                    if (sub_device_workers.intersects(shard_spec_opt->grid)) {
+                        return sub_device_workers;
+                    }
                 }
             }
+        } else {
+            log_debug(tt::LogOp, "Memory config not sharded");
         }
+    } else {
+        log_debug(tt::LogOp, "No memory config provided");
     }
-
     if (output_tensor.has_value() || memory_config.has_value()) {
         // If output tensor or memory config is provided but not sharded, use all worker cores
         log_debug(
@@ -528,17 +535,30 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
     MemoryConfig mem_config = input_tensor_a.memory_config();
     if (!memory_config.has_value() && !output_tensor.has_value()) {
-        if (input_tensor_b.memory_config().is_sharded()) {
-            if (!input_tensor_a.memory_config().is_sharded()) {
-                mem_config = input_tensor_b.memory_config();
-            } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
-                mem_config = input_tensor_b.memory_config();
+        // if a is interleaved but in L1 (not DRAM), still use a's memory config
+        if (!input_tensor_a.memory_config().is_sharded() &&
+            input_tensor_a.memory_config().buffer_type() == BufferType::DRAM) {
+            if (input_tensor_b.memory_config().is_sharded()) {
+                if (!input_tensor_a.memory_config().is_sharded()) {
+                    mem_config = input_tensor_b.memory_config();
+                    log_debug(
+                        tt::LogOp,
+                        "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
+                } else if (input_tensor_b.shard_spec()->grid.size() > input_tensor_a.shard_spec()->grid.size()) {
+                    mem_config = input_tensor_b.memory_config();
+                    log_debug(
+                        tt::LogOp,
+                        "BinaryNgDeviceOperation: Using memory config from input tensor B since it has a larger shard "
+                        "grid");
+                }
             }
         }
     } else if (memory_config.has_value()) {
         mem_config = *memory_config;
+        log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
     } else {
         mem_config = output_tensor->memory_config();
+        log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
     }
 
     return {

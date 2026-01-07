@@ -4173,3 +4173,47 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
     golden_fn = ttnn.get_golden_function(ttnn.remainder)
     expected = golden_fn(inp_a, 2.0, device=device)
     assert_with_pcc(out, expected)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+def test_binary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
+    torch.manual_seed(0)
+    a_shape = torch.Size([1, 1, 4096, 640])
+    b_shape = torch.Size([1, 1, 4096, 640])
+
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        [512, 128],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 7))}),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_combinations = ((ttnn.L1_MEMORY_CONFIG, a_sharded_config),)
+
+    for a_config, b_config in input_combinations:
+        a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
+
+        a_tt = ttnn.from_torch(
+            a_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=a_config,
+        )
+        b_tt = ttnn.from_torch(
+            b_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b_config,
+        )
+
+        out_pt = torch.add(a_pt, b_pt)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
