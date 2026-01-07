@@ -240,8 +240,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
     log_trace(tt::LogOp, "compute_program_hash is called");
 
     const ttnn::Tensor& input_tensor = input_tensors[0];
-    const std::optional<ttnn::Tensor>& persistent_output_buffer = input_tensors[1];
-    // TODO: Update after AG op infra migration PR (also update the log)
+    // TODO: Update after AG op infra migration PR (also update the log) (also update the program factory index thing)
 
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
@@ -263,8 +262,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->use_all_gather_async_llama_sharded,
         this->use_optimal_ccl_for_llama,
         this->reverse_order,
-        input_tensor,
-        persistent_output_buffer);
+        input_tensor);
 }
 
 namespace operations::experimental::ccl {

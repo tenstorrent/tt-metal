@@ -239,6 +239,8 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,
         args.output_mem_config,
@@ -258,7 +260,8 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         residual_input_tensor,
         weight_tensor,
         stats_tensor,
-        preallocated_output_tensor);
+        preallocated_output_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::fused::normalization

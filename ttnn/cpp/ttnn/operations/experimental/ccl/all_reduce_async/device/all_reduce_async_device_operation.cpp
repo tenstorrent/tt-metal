@@ -108,6 +108,8 @@ tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllReduceAsyncDeviceOperation>(
         args.num_links,
         args.ring_size,
@@ -119,7 +121,8 @@ tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
         args.cluster_axis,
         subdevice_core_range_set,
         input_tensor,
-        buffer_tensor);
+        buffer_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_reduce_async

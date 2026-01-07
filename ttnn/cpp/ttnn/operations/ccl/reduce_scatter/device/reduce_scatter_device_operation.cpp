@@ -110,6 +110,8 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -122,7 +124,8 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.num_buffers_per_channel,
         subdevice_core_range_set,
         input_tensor,
-        optional_output_tensor);
+        optional_output_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::ccl

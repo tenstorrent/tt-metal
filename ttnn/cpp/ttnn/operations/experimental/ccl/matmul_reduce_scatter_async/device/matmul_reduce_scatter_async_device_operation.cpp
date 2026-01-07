@@ -100,6 +100,8 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
     const ttnn::Tensor& persistent_intermediate_tensor = tensor_args.persistent_intermediate;
     const ttnn::Tensor& persistent_output_tensor = tensor_args.persistent_output;
 
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<MatmulReduceScatterAsyncDeviceOperation>(
         args.reduce_scatter_params.dim,
         args.reduce_scatter_params.num_links,
@@ -136,7 +138,8 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
         weight_tensor,
         bias_tensor,
         persistent_intermediate_tensor,
-        persistent_output_tensor);
+        persistent_output_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async

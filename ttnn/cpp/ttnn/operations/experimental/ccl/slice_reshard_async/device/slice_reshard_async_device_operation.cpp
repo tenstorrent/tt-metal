@@ -63,6 +63,8 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
 
     const ttnn::Tensor& input_tensor = tensor_args.input;
 
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
         args.dim,
         args.output_dim_offset,
@@ -72,7 +74,8 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
         args.output_mem_config,
         args.topology,
         args.ring_size,
-        input_tensor);
+        input_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::slice_reshard_async

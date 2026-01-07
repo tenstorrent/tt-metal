@@ -48,7 +48,10 @@ tt::stl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
 
     const ttnn::Tensor& output_tensor = tensor_args.output_tensor;
 
-    return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(args.mesh_socket, output_tensor);
+    auto program_factory = select_program_factory(args, tensor_args);
+
+    return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(
+        args.mesh_socket, output_tensor, program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::recv_async

@@ -129,6 +129,8 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
     const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
 
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
         operation_attributes.all_gather_async_attributes.dim,
         operation_attributes.all_gather_async_attributes.num_links,
@@ -164,7 +166,8 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         input_tensor,
         weight_tensor,
         bias_tensor,
-        persistent_output_buffer);
+        persistent_output_buffer,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async

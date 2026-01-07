@@ -144,6 +144,8 @@ tt::stl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncGenericDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
@@ -154,7 +156,8 @@ tt::stl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
         operation_attributes.cluster_axis,
         subdevice_core_range_set,
         input_tensor,
-        persistent_output_buffer);
+        persistent_output_buffer,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

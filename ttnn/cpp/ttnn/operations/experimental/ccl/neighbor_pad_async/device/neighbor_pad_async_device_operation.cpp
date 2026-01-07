@@ -108,6 +108,8 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const std::optional<ttnn::Tensor>& preallocated_output_tensor = tensor_args.preallocated_output;
 
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
         args.dim,
         args.padding_left,
@@ -121,7 +123,8 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
         input_tensor,
-        preallocated_output_tensor);
+        preallocated_output_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::neighbor_pad

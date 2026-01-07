@@ -72,6 +72,8 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
     const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
     const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
 
+    auto program_factory = select_program_factory(attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.strided_all_gather_async_struct.dim,
@@ -97,7 +99,8 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         input_tensor,
         weight_tensor,
         persistent_output_buffer,
-        bias_tensor);
+        bias_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async

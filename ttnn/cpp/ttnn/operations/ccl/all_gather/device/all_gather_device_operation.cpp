@@ -159,6 +159,8 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         subdevice_core_range_set.num_cores() != 0,
         "There are no cores available to run ALL Gather after considering sub device and sub core grid");
 
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -170,7 +172,8 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         operation_attributes.num_buffers_per_channel,
         subdevice_core_range_set,
         input_tensor,
-        optional_output_tensor);
+        optional_output_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::ccl

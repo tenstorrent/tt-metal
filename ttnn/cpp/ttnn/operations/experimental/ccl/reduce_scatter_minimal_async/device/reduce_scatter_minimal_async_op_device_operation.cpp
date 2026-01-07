@@ -146,6 +146,8 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor = tensor_args.optional_intermediate_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor = tensor_args.optional_output_tensor;
 
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return tt::stl::hash::hash_objects(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -166,7 +168,8 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         operation_attributes.num_buffers_per_channel,
         input_tensor,
         optional_intermediate_tensor,
-        optional_output_tensor);
+        optional_output_tensor,
+        program_factory.index());
 }
 
 // Common validation function implementation

@@ -99,6 +99,8 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllGatherConcatDeviceOperation>(
         args.dim,
         args.num_links,
@@ -109,7 +111,8 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
         args.use_noc1_only,
         args.cluster_axis,
         subdevice_core_range_set,
-        input_tensor);
+        input_tensor,
+        program_factory.index());
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused
