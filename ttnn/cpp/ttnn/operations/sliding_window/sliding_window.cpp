@@ -1131,7 +1131,6 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
         return broadcast_config_per_row(config, factor);
     }
     return sliding_window::replicate_config(config, factor);
-    ;
 }
 
 Tensor construct_on_host_config_tensor(
