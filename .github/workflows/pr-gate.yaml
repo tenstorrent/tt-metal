@@ -279,7 +279,8 @@ jobs:
     #   }}
     uses: ./.github/workflows/validate-test-count.yaml
     with:
-      # wheel-artifact-name: eager-dist-cp310-any-71934aba584a1abf4a4aab4fcf75fadd87073928-20788440471
+      wheel-artifact-name: eager-dist-cp310-any-71934aba584a1abf4a4aab4fcf75fadd87073928-20788440471
+      package-artifact-name: packages-ubuntu-22.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-no-distributed-7f5ee7b1d03e6570a27680cabb2f0e662aa87be3-20796940884
       # package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       # wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
