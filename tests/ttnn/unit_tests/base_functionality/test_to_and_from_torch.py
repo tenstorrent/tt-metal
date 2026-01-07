@@ -174,8 +174,8 @@ def test_to_torch_with_mesh_composer_none(shape, layout):
     "shape",
     [
         #        (1, 1, 3, 3),
-        #        (1, 1, 16, 16),
-        (1, 1, 32, 32),
+        (1, 1, 16, 16),
+        # (1, 1, 32, 32),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -199,13 +199,21 @@ def test_tilize_untilize(shape, layout):
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    if ttnn_tensor1.layout == ttnn.TILE_LAYOUT:
-        ttnn_tensor1 = ttnn.tilize(ttnn.untilize(ttnn_tensor1))
+    # Pad on device to (1, 1, 32, 32)
+    padded_tensor = ttnn.pad(ttnn_tensor1, padding=((0, 0), (0, 0), (0, 16), (0, 16)), value=0.0)
+
+    if padded_tensor.layout == ttnn.TILE_LAYOUT:
+        # padded_tensor = ttnn.tilize(ttnn.untilize(padded_tensor))
+        padded_tensor = ttnn.untilize(padded_tensor)
     else:
-        ttnn_tensor1 = ttnn.untilize(ttnn.tilize(ttnn_tensor1))
+        padded_tensor = ttnn.tilize(padded_tensor)
+        # padded_tensor = ttnn.untilize(ttnn.tilize(padded_tensor))
+
+    # Extract original region and compare
+    # result_cropped = padded_tensor[:, :, :16, :16]
 
     # Element-wise equality comparison on device
-    comparison_result = ttnn.eq(ttnn_tensor1, ttnn_tensor2)
+    comparison_result = ttnn.eq(result_cropped, ttnn_tensor2)
     # Bring to host and verify all elements match
     comparison_torch = ttnn.to_torch(comparison_result)
     assert torch.all(comparison_torch), "Tensors are not equal"
