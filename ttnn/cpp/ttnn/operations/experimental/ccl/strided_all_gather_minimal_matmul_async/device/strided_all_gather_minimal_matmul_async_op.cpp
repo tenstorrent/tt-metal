@@ -65,6 +65,11 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
 
 tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
+    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
+
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.strided_all_gather_async_struct.dim,
@@ -73,13 +78,24 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.strided_all_gather_async_struct.output_mem_config,
         attributes.strided_all_gather_async_struct.topology,
         attributes.strided_all_gather_async_struct.cluster_axis,
+        attributes.strided_all_gather_async_struct.tiles_per_chunk,
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
+        attributes.strided_all_gather_async_struct.mm_cores_y,
+        attributes.strided_all_gather_async_struct.mm_block_ht,
+        attributes.strided_all_gather_async_struct.mm_block_wt,
+        attributes.matmul_struct.config,
+        attributes.matmul_struct.fused_activation,
+        attributes.matmul_struct.output_mem_config,
+        attributes.matmul_struct.output_dtype,
+        attributes.matmul_struct.compute_kernel_config,
         attributes.all_gather_core_grid_offset,
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.layout(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config());
+        attributes.read_local_slice_from_input,
+        attributes.ag_op,
+        input_tensor,
+        weight_tensor,
+        persistent_output_buffer,
+        bias_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
