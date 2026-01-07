@@ -57,8 +57,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     input_a_memory_config = test_vector.get("input_a_memory_config")
     input_shape = test_vector.get("input_shape")
 
-    # Skip HEIGHT_SHARDED config with large grid that causes hangs
+    # Skip HEIGHT_SHARDED config with large grid that causes TT_FATAL validation error
+    # Error: "physical_width == physical_shard_width" check fails
     # Specific case: shape (8, 12, 384, 64) with HEIGHT_SHARDED on grid [0,0] to [5,7]
+    # GitHub Issue: #35358
 
     # Handle both dict (from JSON) and ttnn.MemoryConfig object (during generation)
     if isinstance(input_a_memory_config, dict):
@@ -71,7 +73,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             if grid and len(grid) > 0:
                 end = grid[0].get("end", {})
                 if end.get("x", 0) >= 5 and end.get("y", 0) >= 7:
-                    return True, "HEIGHT_SHARDED with large grid (48 cores) causes hang"
+                    return True, "HEIGHT_SHARDED with large grid: physical_width != shard_width (TT_FATAL)"
 
     elif hasattr(input_a_memory_config, "memory_layout") and hasattr(input_a_memory_config, "shard_spec"):
         # ttnn.MemoryConfig object format (during parameter generation)
@@ -90,7 +92,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                             end = core_range.end
                             if hasattr(end, "x") and hasattr(end, "y"):
                                 if end.x >= 5 and end.y >= 7:
-                                    return True, "HEIGHT_SHARDED with large grid (48 cores) causes hang"
+                                    return (
+                                        True,
+                                        "HEIGHT_SHARDED with large grid: physical_width != shard_width (TT_FATAL)",
+                                    )
 
     return False, None
 
