@@ -78,38 +78,24 @@ uint32_t FabricContext::get_max_2d_hops_from_topology() const {
 uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const {
     // Precondition: max_hops validated by compute_packet_specifications()
 
-    // Two discrete header sizes based on hop count
-    // ExtensionWords=0: 48B header for 0-16 hops
-    // ExtensionWords=1: 64B header for 17-32 hops
-    static_assert(sizeof(LowLatencyPacketHeaderT<0>) == 48, "ExtensionWords=0 must be 48B header");
-    static_assert(sizeof(LowLatencyPacketHeaderT<1>) == 64, "ExtensionWords=1 must be 64B header");
+    // Base routing word supports 16 hops; extension words add 16 hops each
+    // ExtensionWords=0: 1-16 hops (48B header)
+    // ExtensionWords=1: 17-32 hops (64B header)
 
-    return (max_hops <= 16) ? 0 : 1;
+    return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
 }
 
 uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const {
     // Precondition: max_hops validated by compute_packet_specifications()
 
-    // Alignment-driven sizing: 16-byte boundaries create two discrete tiers
-    // Tier 1 (80B headers): route buffers 8B and 16B both align to 80B
-    // Tier 2 (96B headers): route buffers 24B and 32B both align to 96B
-    // Breakpoints chosen to maximize buffer size within each tier
-    static_assert(sizeof(HybridMeshPacketHeaderT<8>) == 80, "8B buffer must be 80B tier");
-    static_assert(sizeof(HybridMeshPacketHeaderT<16>) == 80, "16B buffer must be 80B tier");
-    static_assert(sizeof(HybridMeshPacketHeaderT<24>) == 96, "24B buffer must be 96B tier");
-    static_assert(sizeof(HybridMeshPacketHeaderT<32>) == 96, "32B buffer must be 96B tier");
-
-    // Map hop count to discrete route buffer sizes (8, 16, 24, 32 bytes)
-    // These sizes provide good coverage for common mesh sizes without excessive granularity
-    if (max_hops <= 8) {
-        return 8;
-    } else if (max_hops <= 16) {
-        return 16;
-    } else if (max_hops <= 24) {
-        return 24;
-    } else {
-        return Limits::MAX_2D_ROUTE_BUFFER_SIZE;  // Maximum route buffer size
+    // Route buffer tiers aligned to packet header size boundaries
+    for (const auto& tier : ROUTING_2D_BUFFER_TIERS) {
+        if (max_hops <= tier.max_hops) {
+            return tier.buffer_size;
+        }
     }
+
+    return Limits::MAX_2D_ROUTE_BUFFER_SIZE;
 }
 
 void FabricContext::compute_packet_specifications() {
@@ -128,12 +114,10 @@ void FabricContext::compute_packet_specifications() {
         // Each byte in route buffer encodes 1 hop, so max_hops cannot exceed buffer size
         TT_FATAL(
             max_2d_hops_ <= Limits::MAX_2D_HOPS,
-            "2D routing with {} hops exceeds maximum supported {} hops. "
-            "Current route buffer size ({} bytes) cannot encode paths longer than {} hops.",
+            "2D routing with {} hops exceeds maximum {} hops supported by {}B route buffer.",
             max_2d_hops_,
             Limits::MAX_2D_HOPS,
-            Limits::MAX_2D_ROUTE_BUFFER_SIZE,
-            Limits::MAX_2D_HOPS);
+            Limits::MAX_2D_ROUTE_BUFFER_SIZE);
 
         routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(max_2d_hops_);
     } else {
@@ -150,10 +134,8 @@ void FabricContext::compute_packet_specifications() {
         // ROUTING_PATH_SIZE_1D = 256 bytes / 8 bytes per entry = 32 chips max
         TT_FATAL(
             max_1d_hops_ <= Limits::MAX_1D_HOPS,
-            "1D routing with {} hops exceeds maximum supported {} hops. "
-            "Current allocation (ROUTING_PATH_SIZE_1D = 256 bytes) supports max {} hops.",
+            "1D routing with {} hops exceeds maximum {} hops (ROUTING_PATH_SIZE_1D = 256 bytes limit).",
             max_1d_hops_,
-            Limits::MAX_1D_HOPS,
             Limits::MAX_1D_HOPS);
 
         routing_1d_extension_words_ = compute_1d_pkt_hdr_extension_words(max_1d_hops_);
