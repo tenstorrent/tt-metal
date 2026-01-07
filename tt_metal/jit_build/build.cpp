@@ -77,9 +77,8 @@ std::string get_default_root_path() {
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
-    } else {
-        return "/tmp/tt-metal-cache/";
     }
+    return "/tmp/tt-metal-cache/";
 }
 
 JitBuildEnv::JitBuildEnv() = default;
@@ -104,14 +103,14 @@ void JitBuildEnv::init(
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(
-            std::filesystem::directory_iterator{root_path},
-            [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
+        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+            check_built_dir(dir_entry.path(), git_hash_path);
+        });
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
 
-    this->out_root_ = this->out_root_  + git_hash + "/";
+    this->out_root_ = this->out_root_ + git_hash + "/";
 #endif
 
     // Tools
@@ -125,10 +124,7 @@ void JitBuildEnv::init(
     // Use local sfpi for development
     // Use system sfpi for production to avoid packaging it
     // Ordered by precedence
-    const std::array<std::string, 2> sfpi_roots = {
-        this->root_ + "runtime/sfpi",
-        "/opt/tenstorrent/sfpi"
-    };
+    const std::array<std::string, 2> sfpi_roots = {this->root_ + "runtime/sfpi", "/opt/tenstorrent/sfpi"};
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
@@ -569,7 +565,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
-    static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
+    static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     if (this->firmware_is_kernel_object_) {
         elf.ObjectifyExecutable();

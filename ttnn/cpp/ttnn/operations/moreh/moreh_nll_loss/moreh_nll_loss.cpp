@@ -52,7 +52,8 @@ Tensor MorehNllLoss::invoke(
             compute_kernel_config_val);
         return ttnn::moreh_sum(
             step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
-    } else if (reduction == SUM) {
+    }
+    if (reduction == SUM) {
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
             target_tensor,

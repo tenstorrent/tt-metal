@@ -32,10 +32,8 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
         return program::Conv2dWidthShardedProgramFactory{};
-    } else {
-        // Use regular sharded implementation
-        return program::Conv2dShardedProgramFactory{};
-    }
+    }  // Use regular sharded implementation
+    return program::Conv2dShardedProgramFactory{};
 }
 
 spec_return_value_t Conv2dDeviceOperation::compute_output_specs(

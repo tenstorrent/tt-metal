@@ -505,12 +505,11 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;
-    } else {
-        auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
-        defines["BINARY_SFPU_INIT"] = std::move(tile_init);
-        defines["BINARY_SFPU_OP"] = std::move(tile_fn);
-        return defines;
     }
+    auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
+    defines["BINARY_SFPU_INIT"] = std::move(tile_init);
+    defines["BINARY_SFPU_OP"] = std::move(tile_fn);
+    return defines;
 }
 
 void add_activation_defines(

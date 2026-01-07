@@ -160,8 +160,12 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
         }
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
-            { result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result); }
-            { result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result); }
+            {
+                result = ttnn::where(ttnn::eq(x, 1.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
+            {
+                result = ttnn::where(ttnn::eq(x, 2.0f, std::nullopt, output_mem_config), 0.0f, result);
+            }
         }
     }
     return result;
@@ -300,12 +304,10 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
             max.has_value() ? std::get<int32_t>(max.value())
                             : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
-    } else {
-        // All scalars are float (or null)
-        float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
-        float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
-        return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
-    }
+    }  // All scalars are float (or null)
+    float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
+    float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
+    return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
 }
 
 Tensor ExecuteUnaryCompositeClamp::invoke(
@@ -319,7 +321,8 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     if (!max.has_value()) {
         return ttnn::where(
             ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
-    } else if (!min.has_value()) {
+    }
+    if (!min.has_value()) {
         return ttnn::where(
             ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
     }

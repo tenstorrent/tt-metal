@@ -214,9 +214,8 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
-        } else {
-            ncores--;
         }
+        ncores--;
     }
     TT_FATAL(
         (ntiles % (ncores) == 0), "{} num of tiles are not split uniformly across {} num of cores", ntiles, ncores);

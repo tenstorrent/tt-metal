@@ -12,9 +12,8 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.is_sharded()) {
         return program::SplitFusedQKVAndSplitHeadsShardedProgramFactory{};
-    } else {
-        return program::SplitFusedQKVAndSplitHeadsProgramFactory{};
     }
+    return program::SplitFusedQKVAndSplitHeadsProgramFactory{};
 }
 
 void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_on_program_cache_hit(

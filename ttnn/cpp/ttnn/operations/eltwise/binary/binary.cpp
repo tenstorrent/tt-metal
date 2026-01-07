@@ -423,27 +423,26 @@ inline auto invoke_binary_ng(
         }
 
         return result;
-    } else {
-        const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
-        const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
-        const auto output_tensor =
-            output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
-
-        Tensor result = ttnn::prim::binary_ng(
-            input_a,
-            input_b,
-            binary_op_type,
-            input_a.dtype(),
-            mem_config,
-            output_tensor,
-            fast_and_approximate_mode,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            std::nullopt,
-            sub_core_grids);
-        return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
     }
+    const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
+    const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
+    const auto output_tensor =
+        output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
+
+    Tensor result = ttnn::prim::binary_ng(
+        input_a,
+        input_b,
+        binary_op_type,
+        input_a.dtype(),
+        mem_config,
+        output_tensor,
+        fast_and_approximate_mode,
+        lhs_activations,
+        rhs_activations,
+        post_activations,
+        std::nullopt,
+        sub_core_grids);
+    return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
 }
 
 }  // namespace detail

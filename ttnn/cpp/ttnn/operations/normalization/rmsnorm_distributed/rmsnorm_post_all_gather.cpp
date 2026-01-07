@@ -39,20 +39,19 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
             LayerNormType::RMSNORM,
             DistributedLayerNormStage::POST_ALL_GATHER,
             stats);
-    } else {
-        return ttnn::prim::layer_norm_post_all_gather(
-            input_tensor,
-            stats,
-            LayerNormDistributedType::RMSNORM,
-            epsilon,
-            weight,
-            bias,
-            memory_config.value_or(input_tensor.memory_config()),
-            kernel_config_val,
-            dtype,
-            use_2d_core_grid,
-            program_config.value_or(LayerNormDefaultProgramConfig{}));
     }
+    return ttnn::prim::layer_norm_post_all_gather(
+        input_tensor,
+        stats,
+        LayerNormDistributedType::RMSNORM,
+        epsilon,
+        weight,
+        bias,
+        memory_config.value_or(input_tensor.memory_config()),
+        kernel_config_val,
+        dtype,
+        use_2d_core_grid,
+        program_config.value_or(LayerNormDefaultProgramConfig{}));
 }
 
 }  // namespace ttnn::operations::normalization

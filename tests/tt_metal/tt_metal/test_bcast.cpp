@@ -58,7 +58,8 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
     if (bcast_dim == BcastDim::H) {
         return multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h_8bank.cpp"
                          : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h.cpp";
-    } else if (bcast_dim == BcastDim::W) {
+    }
+    if (bcast_dim == BcastDim::W) {
         return multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_w_8bank.cpp"
                          : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_w.cpp";
     }

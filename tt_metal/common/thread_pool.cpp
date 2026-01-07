@@ -63,12 +63,10 @@ uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
     if (cpu_cores_per_numa_node.contains(numa_node)) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
         return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
-
-    } else {
-        uint32_t num_threads = std::thread::hardware_concurrency();
-        TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
-        return physical_device_id % num_threads;
     }
+    uint32_t num_threads = std::thread::hardware_concurrency();
+    TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
+    return physical_device_id % num_threads;
 }
 
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {

@@ -120,17 +120,16 @@ Tensor reduce(
             output_dtype.value_or(input_tensor.dtype()),
             config,
             sub_core_grids);
-    } else {
-        return ttnn::prim::reduce(
-            tilized_input,
-            reduce_math,
-            reduce_dim,
-            scaler,
-            output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
-            config,
-            sub_core_grids);
     }
+    return ttnn::prim::reduce(
+        tilized_input,
+        reduce_math,
+        reduce_dim,
+        scaler,
+        output_mem_config,
+        output_dtype.value_or(input_tensor.dtype()),
+        config,
+        sub_core_grids);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

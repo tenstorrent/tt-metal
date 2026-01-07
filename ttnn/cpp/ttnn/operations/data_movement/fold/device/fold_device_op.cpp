@@ -11,7 +11,8 @@ Fold::program_factory_t Fold::select_program_factory(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     if (op_attr.is_sharded) {
         return MultiCore{};
-    } else if (op_attr.is_dram_interleaved) {
+    }
+    if (op_attr.is_dram_interleaved) {
         return MultiCoreDRAMFold{};
     }
     return SingleCore{};
@@ -89,7 +90,8 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             output_shape,
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
-    } else if (op_attr.is_dram_interleaved) {
+    }
+    if (op_attr.is_dram_interleaved) {
         ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
         if (input_tensor.layout() == Layout::ROW_MAJOR) {
             output_logical_shape = ttnn::Shape(
@@ -133,7 +135,10 @@ ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
     bool is_dram_interleaved =
         input_tensor.storage_type() == StorageType::DEVICE && input_tensor.memory_config().is_dram();
     auto operation_attributes = OperationType::operation_attributes_t{
-        .stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded, .is_dram_interleaved = is_dram_interleaved};
+        .stride_h = stride_h,
+        .stride_w = stride_w,
+        .is_sharded = is_sharded,
+        .is_dram_interleaved = is_dram_interleaved};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

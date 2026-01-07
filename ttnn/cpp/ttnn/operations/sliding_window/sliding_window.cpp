@@ -250,26 +250,24 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
             }
         }
         return pad_metadata;
+    }
+    uint32_t ceil_padding_h = config.get_ceil_pad_h();
+    uint32_t ceil_padding_w = config.get_ceil_pad_w();
+    uint32_t padded_input_h = config.input_hw.first + config.get_pad_h() + ceil_padding_h;
+    uint32_t padded_input_w = config.input_hw.second + config.get_pad_w() + ceil_padding_w;
+    std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
 
-    } else {
-        uint32_t ceil_padding_h = config.get_ceil_pad_h();
-        uint32_t ceil_padding_w = config.get_ceil_pad_w();
-        uint32_t padded_input_h = config.input_hw.first + config.get_pad_h() + ceil_padding_h;
-        uint32_t padded_input_w = config.input_hw.second + config.get_pad_w() + ceil_padding_w;
-        std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
-
-        for (uint32_t b = 0; b < config.batch_size; ++b) {
-            for (uint32_t h = 0; h < padded_input_h; ++h) {
-                for (uint32_t w = 0; w < padded_input_w; ++w) {
-                    if (h < config.padding[0] || h >= (config.padding[0] + config.input_hw.first) ||
-                        w < config.padding[2] || w >= (config.padding[2] + config.input_hw.second)) {
-                        pad_metadata[(b * padded_input_h * padded_input_w) + (h * padded_input_w) + w] = true;
-                    }
+    for (uint32_t b = 0; b < config.batch_size; ++b) {
+        for (uint32_t h = 0; h < padded_input_h; ++h) {
+            for (uint32_t w = 0; w < padded_input_w; ++w) {
+                if (h < config.padding[0] || h >= (config.padding[0] + config.input_hw.first) ||
+                    w < config.padding[2] || w >= (config.padding[2] + config.input_hw.second)) {
+                    pad_metadata[(b * padded_input_h * padded_input_w) + (h * padded_input_w) + w] = true;
                 }
             }
         }
-        return pad_metadata;
     }
+    return pad_metadata;
 }
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     if (config.is_bilinear) {
@@ -1097,11 +1095,11 @@ uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const Parallel
             uint32_t ncores_x = p_config.grid.ranges().begin()->end_coord.x + 1;
             if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) {
                 return ncores_x;
-            } else if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-                return ncores_y;
-            } else {
-                TT_FATAL(false, "Unsupported shard orientation");
             }
+            if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+                return ncores_y;
+            }
+            TT_FATAL(false, "Unsupported shard orientation");
         }
         default: TT_FATAL(false, "Unsupported shard scheme");
     }
@@ -1131,9 +1129,8 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
             return expanded;
         };
         return broadcast_config_per_row(config, factor);
-    } else {
-        return sliding_window::replicate_config(config, factor);
-    };
+    }
+    return sliding_window::replicate_config(config, factor);
 }
 
 Tensor construct_on_host_config_tensor(

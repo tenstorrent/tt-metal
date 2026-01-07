@@ -50,13 +50,14 @@ ttnn::DataType get_output_dtype(
     if (output_dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(output_dtype.value() == output_tensor->dtype(), "Mismatching output_dtype and output tensor dtype");
         return output_dtype.value();
-    } else if (output_dtype.has_value()) {
-        return output_dtype.value();
-    } else if (output_tensor.has_value()) {
-        return output_tensor->dtype();
-    } else {
-        return default_dtype;
     }
+    if (output_dtype.has_value()) {
+        return output_dtype.value();
+    }
+    if (output_tensor.has_value()) {
+        return output_tensor->dtype();
+    }
+    return default_dtype;
 }
 
 void check_per_tensor_scale(const ttnn::Tensor& scale) {

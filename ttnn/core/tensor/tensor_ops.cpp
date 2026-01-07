@@ -157,9 +157,8 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
             auto shard_spec = input_memory_config.shard_spec().value();
             shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
             return MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
-        } else {
-            return input_memory_config;
         }
+        return input_memory_config;
     };
 
     // Just edit shape if shape has a 0 dimension

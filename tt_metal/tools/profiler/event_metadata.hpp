@@ -198,18 +198,19 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
                 return data.fabric_scatter_event;
-            } else {
-                return data.fabric_event;
             }
-        } else if (isFabricRoutingFields1D(data.raw_event.noc_xfer_type)) {
-            return data.fabric_routing_fields_1d;
-        } else if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
-            return data.fabric_routing_fields_2d;
-        } else if (isLocalEventTrailer(data.raw_event.noc_xfer_type)) {
-            return data.local_event_trailer;
-        } else {
-            return data.local_event;
+            return data.fabric_event;
         }
+        if (isFabricRoutingFields1D(data.raw_event.noc_xfer_type)) {
+            return data.fabric_routing_fields_1d;
+        }
+        if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
+            return data.fabric_routing_fields_2d;
+        }
+        if (isLocalEventTrailer(data.raw_event.noc_xfer_type)) {
+            return data.local_event_trailer;
+        }
+        return data.local_event;
     }
 
     uint64_t asU64() const {

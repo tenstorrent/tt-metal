@@ -41,9 +41,8 @@ UntilizeMultiCoreSubCoreGridsProgramFactory::cached_program_t UntilizeMultiCoreS
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
             break;
-        } else {
-            ncores--;
         }
+        ncores--;
     }
 
     TT_ASSERT(ntiles % (ncores) == 0);

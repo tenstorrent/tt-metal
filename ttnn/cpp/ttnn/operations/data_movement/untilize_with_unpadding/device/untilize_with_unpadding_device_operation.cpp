@@ -232,7 +232,8 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
 }  // namespace ttnn::operations::data_movement::untilize_with_unpadding
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t untilize_with_unpadding(
+ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation::tensor_return_value_t
+untilize_with_unpadding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_tensor_end,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
@@ -242,7 +243,8 @@ ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingD
     bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation;
+    using OperationType =
+        ttnn::operations::data_movement::untilize_with_unpadding::UntilizeWithUnpaddingDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .output_tensor_end = output_tensor_end,

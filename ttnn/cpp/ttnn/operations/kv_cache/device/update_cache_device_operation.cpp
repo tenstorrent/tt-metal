@@ -13,9 +13,8 @@ UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.op_type == UpdateCacheOpType::FILL) {
         return program::FillCacheMultiCoreProgramFactory{};
-    } else {
-        return program::UpdateCacheMultiCoreProgramFactory{};
     }
+    return program::UpdateCacheMultiCoreProgramFactory{};
 }
 
 void UpdateKVCacheOperation::validate_on_program_cache_miss(

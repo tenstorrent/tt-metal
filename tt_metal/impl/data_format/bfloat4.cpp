@@ -230,7 +230,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 // Flush denormals to zero
                                 // Check if shift > exp and mantissa is not zero
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector0);
-                                simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                                simde__m256i mask_nonzero_mantissa =
+                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal0 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
 
                                 exp_vector0 = simde_mm256_blendv_epi8(
@@ -245,7 +246,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 // Flush denormals to zero
                                 // Check if shift > exp and mantissa is not zero
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector1);
-                                simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                                simde__m256i mask_nonzero_mantissa =
+                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal1 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
                                 exp_vector1 = simde_mm256_blendv_epi8(
                                     simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),

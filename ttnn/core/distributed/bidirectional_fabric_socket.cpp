@@ -23,9 +23,8 @@ tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_rank()
     auto socket_config = send_socket_.get_config();
     if (socket_config.distributed_context->rank() != socket_config.sender_rank) {
         return send_socket_.get_config().sender_rank;
-    } else {
-        return send_socket_.get_config().receiver_rank;
     }
+    return send_socket_.get_config().receiver_rank;
 }
 
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>

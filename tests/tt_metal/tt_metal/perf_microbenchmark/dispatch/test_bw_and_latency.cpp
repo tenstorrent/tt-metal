@@ -503,8 +503,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        log_fatal(LogTest, "Test Failed\n");
-        return 1;
     }
+    log_fatal(LogTest, "Test Failed\n");
+    return 1;
 }
