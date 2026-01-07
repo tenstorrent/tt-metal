@@ -111,11 +111,13 @@ def run_test_forward_pass_dpmodel(
         batch_size = batch_size_per_row * mesh_device.shape[0]
 
     # Get reference IO
+    logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
         use_real_weights, mode, seq_len, batch_size, hf_config_short, model_path, state_dict
     )
 
     # Set up page config
+    logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
     user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
@@ -133,6 +135,8 @@ def run_test_forward_pass_dpmodel(
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Set up ttnn inputs
+    logger.info("Setting up model inputs")
+
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
         device=mesh_device,
@@ -157,11 +161,11 @@ def run_test_forward_pass_dpmodel(
         MLA2D.create_page_table(page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device)
         for torch_page_table in torch_page_tables
     )
-
     rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
     # Forward pass
+    logger.info("Running TTNN forward pass")
     if mode == "prefill":
         tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
     else:
@@ -174,7 +178,6 @@ def run_test_forward_pass_dpmodel(
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
     )
-
     assert (
         tt_output_torch.shape[-1] == hf_config_short.vocab_size
     ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
