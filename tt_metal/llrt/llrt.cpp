@@ -273,6 +273,10 @@ void write_binary_to_address(const ll_api::memory& mem, tt::ChipId chip_id, cons
 namespace internal_ {
 
 bool is_active_eth_core(tt::ChipId chip_id, const CoreCoord& core) {
+    bool is_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id);
+    if (!is_eth_core) {
+        return false;
+    }
     auto active_eth_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
     return active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, core));
