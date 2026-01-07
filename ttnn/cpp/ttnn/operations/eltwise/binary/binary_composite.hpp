@@ -104,7 +104,7 @@ struct ExecuteDiv {
     static Tensor invoke(
         const Tensor& input_a,
         const Tensor& input_b,
-        bool accurate_mode = false,
+        bool fast_and_approximate_mode = false,
         const std::optional<std::string>& round_mode = std::nullopt,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
@@ -118,7 +118,7 @@ struct ExecuteDiv {
     static Tensor invoke(
         const Tensor& input,
         float value,
-        bool accurate_mode = false,
+        bool fast_and_approximate_mode = false,
         const std::optional<std::string>& round_mode = std::nullopt,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,

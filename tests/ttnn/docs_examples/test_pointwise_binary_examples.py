@@ -483,7 +483,7 @@ def test_div(device):
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    output = ttnn.div(tensor1, tensor2, accurate_mode=False, round_mode=None)
+    output = ttnn.div(tensor1, tensor2, fast_and_approximate_mode=True, round_mode=None)
     logger.info(f"Division result: {output}")
 
     # Create tensor and scalar for division

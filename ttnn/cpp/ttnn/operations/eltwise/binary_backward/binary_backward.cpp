@@ -383,7 +383,7 @@ std::vector<Tensor> ExecuteBackwardRemainder::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::div(input, other, true, "floor", std::nullopt, output_mem_config);
+    Tensor result_div = ttnn::div(input, other, false, "floor", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
@@ -403,7 +403,7 @@ std::vector<Tensor> ExecuteBackwardFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::div(input, other, true, "trunc", std::nullopt, output_mem_config);
+    Tensor result_div = ttnn::div(input, other, false, "trunc", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;

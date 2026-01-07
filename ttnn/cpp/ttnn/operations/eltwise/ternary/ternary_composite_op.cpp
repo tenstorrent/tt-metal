@@ -39,7 +39,7 @@ Tensor _addcdiv(
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
-    Tensor t_div = ttnn::div(input_b, input_c, true, std::nullopt, std::nullopt, output_mem_config);
+    Tensor t_div = ttnn::div(input_b, input_c, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor t_factor = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
     t_div.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
