@@ -314,10 +314,10 @@ class DistributedLayerNorm(Module):
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
 
-        stats = ttnn.layer_norm_pre_all_gather(
+        stats = ttnn.experimental.dit_layernorm_pre_allgather(
             x,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-            program_config=self.program_config,
+            # program_config=self.program_config,
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
@@ -334,14 +334,14 @@ class DistributedLayerNorm(Module):
                 num_links=self.ccl_manager.num_links,
             )
 
-        x = ttnn.layer_norm_post_all_gather(
+        x = ttnn.experimental.dit_layernorm_post_allgather(
             x,
             stats,
             weight=weight,
             bias=bias,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
-            program_config=self.program_config,
+            # program_config=self.program_config,
         )
         return x
 
