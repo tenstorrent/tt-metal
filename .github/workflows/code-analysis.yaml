@@ -2,7 +2,7 @@ name: "Code analysis"
 
 on:
   schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+    - cron: "0 2 * * 1,3,5" # Static analysis: 2 AM UTC on Mon/Wed/Fri
   workflow_call:
     inputs:
       distro:
@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: "amd64"
+      enable-static-analysis:
+        description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       distro:
@@ -31,6 +36,11 @@ on:
         required: false
         type: string
         default: "amd64"
+      enable-static-analysis:
+        description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   determine-scan-type:
@@ -73,8 +83,6 @@ jobs:
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
-        CARGO_HOME: /tmp/.cargo
-        TT_FROM_PRECOMPILED_DIR: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
@@ -194,3 +202,79 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  clang-static-analyzer:
+    name: 🔬 Clang Static Analyzer
+    needs: [ build-docker-image ]
+    if: ${{ inputs.enable-static-analysis == true || github.event_name == 'schedule' }}
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions # HACK: make actions available inside container
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
+      - name: 🔧 CMake configure
+        run: cmake --preset clang-static-analyzer
+
+      - name: 🛠️ Generate files
+        run: cmake --build .build/clang-static-analyzer --target all_generated_files
+
+      - name: Setup clang symlinks for CodeChecker
+        run: |
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
+
+      - name: 🔬 Analyze with CodeChecker
+        uses: whisperity/codechecker-analysis-action@v1.0.4
+        id: codechecker
+        with:
+          logfile: /work/.build/clang-static-analyzer/compile_commands.json
+          llvm-version: ignore # Already installed in our Docker container
+          config: /work/.codechecker.json
+
+      - name: Upload CodeChecker reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        timeout-minutes: 10
+        with:
+          name: CodeChecker-Static-Analysis-Reports
+          path: ${{ steps.codechecker.outputs.result-html-dir }}
+
+  publish-clangsa-pages:
+    name: 📄 Publish CSA HTML to GitHub Pages
+    needs: [ clang-static-analyzer ]
+    if: ${{ always() && needs.clang-static-analyzer.result != 'skipped' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download CodeChecker reports artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-Static-Analysis-Reports
+          path: site
+
+      - name: Add .nojekyll
+        run: touch site/.nojekyll
+
+      - name: Publish to blozano-tt/clangsa-results (gh-pages)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.WILDER_PAT }}
+          external_repository: blozano-tt/clangsa-results
+          publish_branch: gh-pages
+          publish_dir: site
+          force_orphan: true
+          commit_message: "Update CSA reports from tt-metal @ ${{ github.sha }}"

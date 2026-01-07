@@ -154,18 +154,18 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
 
     static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? MAX_CHIPS_LOWLAT_1D : MAX_CHIPS_LOWLAT_2D;
     static constexpr uint16_t COMPRESSED_ROUTE_SIZE = (dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D;
-    static constexpr uint16_t SINGLE_ROUTE_SIZE =
-        compressed ? ((dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D)
-                   : ((dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D);
+    static constexpr uint16_t UNCOMPRESSED_ROUTE_SIZE = (dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D;
+    static constexpr uint16_t SINGLE_ROUTE_SIZE = compressed ? COMPRESSED_ROUTE_SIZE : UNCOMPRESSED_ROUTE_SIZE;
 
-    typename std::conditional<
+    std::conditional_t<
         !compressed,
         std::uint8_t[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE],  // raw for uncompressed
-        typename std::conditional<
+        std::conditional_t<
             dim == 1,
             std::uint8_t[0],                         // empty for compressed 1D (0 bytes)
             compressed_route_2d_t[MAX_CHIPS_LOWLAT]  // two for compressed 2D
-            >::type>::type paths = {};
+            >>
+        paths = {};
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods

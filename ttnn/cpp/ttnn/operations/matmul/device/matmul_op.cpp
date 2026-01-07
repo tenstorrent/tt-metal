@@ -8,6 +8,7 @@
 #include <cmath>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -217,6 +218,7 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t bias_single_tile_size) {
     // Circular Buffer sizes:
     // src0   CB: per_core_M * in0_block_w * 2 (for double buffer)
+    // in0_transpose_tile CB: same as src0 CB, needed if in0 needs to be transposed
     // src1   CB: per_core_N * in0_block_w * 2 (for double buffer)
     // interm CB: per_core_M * per_core_N * interm_single_tile_size
     // out    CB: per_core_M * per_core_N
@@ -230,14 +232,10 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t output_single_tile_size = in0_single_tile_size;
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
+    const auto in0_tile = get_matmul_tile(input_tensor_a, transpose_a);
     if (input_tensor_a.is_sharded()) {
         auto* in0_buffer = input_tensor_a.buffer();
-        const auto in0_tile = get_matmul_tile(input_tensor_a, transpose_a);
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
-        if (transpose_a) {
-            // An intermediate CB (c_10) of same size is needed to hold the transposed data
-            in0_shard_width_in_tiles *= 2;
-        }
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
 
@@ -248,7 +246,9 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in2_size = in2_block_tiles * in0_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
     uint32_t bias_size = in0_block_w * bias_single_tile_size;
-    return in0_size + in1_size + out_size + interm_size + bias_size + in2_size;
+    uint32_t in0_transpose_size =
+        (in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face()) ? in0_size : 0;
+    return in0_size + in1_size + out_size + interm_size + bias_size + in2_size + in0_transpose_size;
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
@@ -381,9 +381,9 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
         if (in0_block_w % per_core_factor_k != 0) {
             continue;
         }
-        for (auto it = factors.crbegin(); it != factors.crend(); ++it) {
-            uint32_t per_core_factor_m = std::get<0>(it->second);
-            uint32_t per_core_factor_n = std::get<1>(it->second);
+        for (const auto& factor : std::ranges::reverse_view(factors)) {
+            uint32_t per_core_factor_m = std::get<0>(factor.second);
+            uint32_t per_core_factor_n = std::get<1>(factor.second);
 
             size = get_estimated_size_of_cbs(
                 per_core_factor_m,

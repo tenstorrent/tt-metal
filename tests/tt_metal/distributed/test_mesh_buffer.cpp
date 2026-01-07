@@ -4,7 +4,7 @@
 
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
@@ -51,24 +51,24 @@ struct DeviceLocalShardedBufferTestConfig {
     TensorMemoryLayout mem_config = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 
-    Shape2D tensor2d_shape_in_pages() {
+    Shape2D tensor2d_shape_in_pages() const {
         return {num_pages_per_core.height() * num_cores.height(), num_pages_per_core.width() * num_cores.width()};
     }
 
-    uint32_t num_pages() { return tensor2d_shape_in_pages().height() * tensor2d_shape_in_pages().width(); }
+    uint32_t num_pages() const { return tensor2d_shape_in_pages().height() * tensor2d_shape_in_pages().width(); }
 
-    std::array<uint32_t, 2> shard_shape() {
+    std::array<uint32_t, 2> shard_shape() const {
         return {num_pages_per_core.height() * page_shape.height(), num_pages_per_core.width() * page_shape.width()};
     }
 
-    CoreRangeSet shard_grid() {
+    CoreRangeSet shard_grid() const {
         return CoreRangeSet(std::set<CoreRange>(
             {CoreRange(CoreCoord(0, 0), CoreCoord(this->num_cores.height() - 1, this->num_cores.width() - 1))}));
     }
 
-    uint32_t page_size() { return page_shape.height() * page_shape.width() * element_size; }
+    uint32_t page_size() const { return page_shape.height() * page_shape.width() * element_size; }
 
-    ShardSpecBuffer shard_parameters() {
+    ShardSpecBuffer shard_parameters() const {
         return ShardSpecBuffer(
             this->shard_grid(),
             this->shard_shape(),
@@ -374,8 +374,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
 
     std::vector<Shape2D> global_buffer_shapes = {{64, 256}, {128, 128}, {256, 2048}, {32, 512}, {512, 1024}};
 
-    for (int i = 0; i < global_buffer_shapes.size(); i++) {
-        auto global_buffer_shape = global_buffer_shapes[i];
+    for (auto global_buffer_shape : global_buffer_shapes) {
         Shape2D shard_shape = {0, global_buffer_shape.width() / mesh_device_->num_cols()};
         // Mesh-Level Sharding Parameters for the MeshBufferView that will be read to verify correctness
         Shape2D global_buffer_read_shape = {
@@ -425,8 +424,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
 
     std::vector<Shape2D> global_buffer_shapes = {{256, 64}, {1024, 1024}, {128, 32}, {512, 64}, {2048, 256}};
 
-    for (int i = 0; i < global_buffer_shapes.size(); i++) {
-        auto global_buffer_shape = global_buffer_shapes[i];
+    for (auto global_buffer_shape : global_buffer_shapes) {
         Shape2D shard_shape = {global_buffer_shape.height() / mesh_device_->num_rows(), 0};
         uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
         Shape2D global_buffer_read_shape = {

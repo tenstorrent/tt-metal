@@ -37,11 +37,9 @@
 #   potential flush dependency.
 Checks: >
   *,
-  -bugprone-branch-clone,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-implicit-widening-of-multiplication-result,
-  -bugprone-integer-division,
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
   -bugprone-unchecked-optional-access,
@@ -91,12 +89,9 @@ Checks: >
   -misc-use-internal-linkage,
   -modernize-avoid-bind,
   -modernize-avoid-c-arrays,
-  -modernize-deprecated-headers,
-  -modernize-loop-convert,
   -modernize-macro-to-enum,
   -modernize-pass-by-value,
   -modernize-return-braced-init-list,
-  -modernize-type-traits,
   -modernize-use-auto,
   -modernize-use-constraints,
   -modernize-use-designated-initializers,
@@ -104,8 +99,6 @@ Checks: >
   -modernize-use-integer-sign-comparison,
   -modernize-use-nodiscard,
   -modernize-use-ranges,
-  -modernize-use-starts-ends-with,
-  -modernize-use-std-numbers,
   -modernize-use-trailing-return-type,
   -modernize-use-transparent-functors,
   -performance-avoid-endl,
@@ -114,23 +107,18 @@ Checks: >
   -performance-no-int-to-ptr,
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
-  -readability-avoid-nested-conditional-operator,
   -readability-avoid-unconditional-preprocessor-if,
-  -readability-container-contains,
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
   -readability-enum-initial-value,
   -readability-function-size,
   -readability-identifier-length,
   -readability-implicit-bool-conversion,
-  -readability-inconsistent-declaration-parameter-name,
   -readability-isolate-declaration,
   -readability-magic-numbers,
-  -readability-make-member-function-const,
   -readability-math-missing-parentheses,
   -readability-named-parameter,
   -readability-redundant-casting,
-  -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof,
@@ -190,7 +178,7 @@ CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
   - key: readability-function-cognitive-complexity.Threshold
-    value: 339
+    value: 308
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch

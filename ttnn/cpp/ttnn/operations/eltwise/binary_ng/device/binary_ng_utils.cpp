@@ -52,33 +52,21 @@ BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcas
             break;
 
         case SubtileBroadcastType::ROW_A:
-            compute_kernel = KernelName::ComputeNoBcast;
-            bcast_input = std::nullopt;
-            break;
-
         case SubtileBroadcastType::ROW_B:
             compute_kernel = KernelName::ComputeNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::ROW_B_COL_A:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-
         case SubtileBroadcastType::ROW_A_COL_B:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 1;
-            break;
-
-        case SubtileBroadcastType::ROW_B_COL_A:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
             break;
     }
 }
@@ -414,7 +402,11 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {
-                return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+                return {"rsub_int_tile_init();", "rsub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"rsub_int_tile_init();", "rsub_uint32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"rsub_int_tile_init();", "rsub_uint16_tile"};
             } else {
                 return {"rsub_binary_tile_init();", "rsub_binary_tile"};
             }

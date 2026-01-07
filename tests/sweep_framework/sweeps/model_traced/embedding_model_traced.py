@@ -78,6 +78,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, etc.
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
@@ -93,7 +94,7 @@ def run(
     )(weight_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze(dim=0)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
     # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weight_tensor)
 
     input_tensor = ttnn.from_torch(
