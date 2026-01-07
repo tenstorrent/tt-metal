@@ -18,6 +18,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 cmake/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+scripts/detect_undocumented_ttnn_ops.py @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
 
 # Testing scripts and infra
 conftest.py @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
