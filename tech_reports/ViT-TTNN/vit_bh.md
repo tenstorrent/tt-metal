@@ -129,7 +129,7 @@ def vit(
     return classifier_output
 ```
 
-> Note: the final LayerNorm output is resharded to a batch-dependent (variable) core grid before the classifier in the current Blackhole demo. This is described in the Deep Dive section.
+> Note: the final LayerNorm output is resharded to a batch-dependent (variable) core grid before the classifier in the current Blackhole implementation. This is described in the Deep Dive section.
 
 ### 3.2 Embeddings module
 ViT embeddings include patch embeddings + position embeddings + CLS token concat.
@@ -279,6 +279,14 @@ The Multi-Head Self-Attention implementation (`vit_attention`) is described in d
 
 This section is a step-by-step walkthrough of the Blackhole ViT encoder layer implementation in TT-NN. It covers the sharding strategy, matmul program configs, and the attention flow (including resharding, explicit scaling, in-place softmax, and any required reallocations).
 
+This diagram represents the TT-NN module `vit_layer()`:
+
+![encoder_layer](images/diagram.png)
+
+The graph legend:
+
+![legend](images/legend.png)
+
 ### 4.1 Input
 The input to a ViT encoder layer is a sequence of patch embeddings with shape:
 
@@ -315,7 +323,7 @@ For ViT-Base:
 - `head_size_t = head_size / 32 = 2` (head size in tiles)
 
 #### 4.2.2 Core grids used by the Blackhole ViT implementation
-The Blackhole demo uses two related core grids:
+The Blackhole implementation uses two related core grids:
 
 1) **Fixed 10×12 grid (120 cores)**:
 - `core_grid_10x12 = CoreGrid(y=10, x=12)`
@@ -399,7 +407,7 @@ The LayerNorm program configs are defined in `update_model_config()` and are siz
 ```
 
 #### 4.3.3 LayerNorm compute kernel configuration
-The Blackhole demo also provides a compute kernel configuration for LayerNorm:
+The Blackhole implementation also provides a compute kernel configuration for LayerNorm:
 
 ```python
 "ln_compute_config": ttnn.WormholeComputeKernelConfig(
@@ -411,6 +419,8 @@ The Blackhole demo also provides a compute kernel configuration for LayerNorm:
 ```
 
 This configuration controls math fidelity and some kernel-level performance options for the LayerNorm implementation.
+
+![input](images/layernorm.png)
 
 ### 4.4 Multi-Head Self-Attention
 The multi-head self-attention (MHA) block computes:
@@ -621,7 +631,7 @@ ttnn.deallocate(context_layer)
 #### 4.4.8 Reallocate/defragmentation notes
 The attention path contains optional `ttnn.reallocate()` calls controlled by `config.should_reallocate_in_attention`, which is set by `update_model_config()` based on batch regime.
 
-In the current Blackhole demo:
+In the current Blackhole implementation:
 - For some batch regimes (notably `batch_size > 10`), `should_reallocate_in_attention` is enabled.
 - When enabled, the code reallocates intermediate tensors in the attention block:
 
@@ -652,6 +662,10 @@ This produces the “attention residual” tensor which remains **block-sharded*
 The subsequent normalization (the second LayerNorm in the layer) is described in Section **4.3**:
 - `layernorm_after_output_program_config`
 - `ln_compute_config`
+
+**Add and Norm Diagram**:
+
+![addnorm](images/addnorm.png)
 
 ### 4.6 Feed-Forward Network (FFN/MLP)
 The feed-forward network (FFN/MLP) expands the embedding dimension and projects it back down:
@@ -731,6 +745,10 @@ intermediate = vit_intermediate(config, hidden_states, parameters=parameters.int
 hidden_states = vit_output(config, intermediate, attention_output, parameters=parameters.output)
 return hidden_states
 ```
+
+**FFN Diagram**:
+
+![ffn](images/ffn.png)
 
 ### 4.7 Output
 The output of the encoder layer after the FFN residual add has shape:
