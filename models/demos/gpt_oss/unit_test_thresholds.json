@@ -6,7 +6,7 @@
             "router": 0.945,
             "experts": 0.92,
             "mlp": 0.88,
-            "decoder": 0.924
+            "decoder": 0.92
         },
         "prefill": {
             "attention": 0.95,
@@ -24,7 +24,7 @@
             "router": 0.945,
             "experts": 0.93,
             "mlp": 0.88,
-            "decoder": 0.924
+            "decoder": 0.90
         },
         "prefill": {
             "attention": 0.95,

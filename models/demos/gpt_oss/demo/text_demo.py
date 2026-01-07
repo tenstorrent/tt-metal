@@ -225,6 +225,7 @@ def prepare_gpt_oss_generator_args(
             state_dict=state_dict,
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
+            use_throughput_experts=mesh_device.shape[0] > 1 and global_batch_size > 1,
         )
         model_args.append(model_args_i)
         model.append(model_i)
