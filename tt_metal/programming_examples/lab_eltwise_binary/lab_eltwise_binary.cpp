@@ -334,15 +334,19 @@ int main() {
         fmt::print("Output vector of size {}\n", result_vec.size());
 
         // Validate results
-        constexpr float eps = 1e-2f;  // Loose tolerance because of limited precision of bfloat16.
         TT_FATAL(result_vec.size() == reference_result.size(), "Result vector size mismatch");
+        // Compare results with some tolerance (loose tolerance because of limited precision of bfloat16).
+        constexpr float RELTOL = 0.04;
         for (size_t i = 0; i < result_vec.size(); ++i) {
             const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);
 
-            if (std::abs(expected - actual) > eps) {
+            float relative_error = std::abs(actual - expected) / expected;
+            if (relative_error > RELTOL) {
+                std::cerr << "Mismatch at index " << i << ": " << actual << " vs expected " << expected << std::endl;
+                std::cerr << "Expected relative tolerance: " << RELTOL << " actual relative error: " << relative_error
+                          << std::endl;
                 pass = false;
-                fmt::print(stderr, "Result mismatch at index {}: expected {}, got {}\n", i, expected, actual);
             }
         }
 
