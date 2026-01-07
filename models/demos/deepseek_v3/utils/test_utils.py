@@ -289,7 +289,7 @@ def run_reference_with_attention(
 
     For long sequences, the code splits processing into chunks to limit peak memory usage.
     All model calls are wrapped with torch.no_grad() to avoid building computation graphs and storing gradients.
-    Intermediate tensors are explicitly freed between chunks using del and torch.cuda.empty_cache().
+    Intermediate tensors are explicitly freed between chunks using del.
     Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
     """
     (batch_size,) = position_ids_or_seq_lens.shape
@@ -355,10 +355,6 @@ def run_reference_with_attention(
 
     kv_arg_name = "past_key_value" if layer_idx is not None else "past_key_values"
     deepcopied_cache = deepcopy(input_cache)
-
-    # Clear CUDA cache before model call
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
     # For sequences longer than 8192 tokens, use chunked processing
     CHUNK_SIZE = 8192
@@ -426,16 +422,12 @@ def run_reference_with_attention(
 
                 # Free intermediate tensors to reduce memory usage
                 del activation_chunk, position_ids_chunk, mask_chunk, chunk_cache, chunk_output
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
 
             # Concatenate all chunk outputs
             model_output_tensor = torch.cat(output_chunks, dim=1)
 
             # Clean up chunk list
             del output_chunks
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
             # Create a mock output object for compatibility
             class MockOutput:
