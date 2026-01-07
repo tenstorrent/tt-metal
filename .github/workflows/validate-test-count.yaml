@@ -44,7 +44,7 @@ jobs:
       - name: Install tt-metal wheel and dependencies
         if: ${{ inputs.wheel-artifact-name != '' }}
         run: |
-          pip install pytest torch numpy
+          pip install pytest torch multiprocess psutil
           pip install ./wheels/*.whl
 
       - name: Count and compare tests
