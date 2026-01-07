@@ -14,6 +14,7 @@ from models.tt_symbiote.modules.conv import (
     TTNNConv2dBNNHWC,
     TTNNConv2dNHWC,
 )
+from models.tt_symbiote.utils.device_management import set_device
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
@@ -28,7 +29,7 @@ def test_conv(device):
     outputs_torch = model(inputs)
 
     ttnn_model = TTNNConv2dNHWC.from_torch(conv)
-    ttnn_model.to_device(device)
+    set_device(ttnn_model, device)
     outputs_ttnn = ttnn_model(inputs)
     outputs_ttnn.elem = None  # Force using TTNN tensor only
     compare_fn_outputs(outputs_torch, outputs_ttnn, "Conv2dNHWC")
@@ -47,7 +48,7 @@ def test_conv_bn(device):
     outputs_torch = model(inputs)
 
     ttnn_model = TTNNConv2dBNNHWC.from_torch(conv, bn)
-    ttnn_model.to_device(device)
+    set_device(ttnn_model, device)
     outputs_ttnn = ttnn_model(inputs)
     outputs_ttnn.elem = None  # Force using TTNN tensor only
     compare_fn_outputs(outputs_torch, outputs_ttnn, "Conv2dBNNHWC")
@@ -67,7 +68,7 @@ def test_conv_bn_relu(device):
     outputs_torch = model(inputs)
 
     ttnn_model = TTNNConv2dBNActivationNHWC.from_torch(conv, bn, relu)
-    ttnn_model.to_device(device)
+    set_device(ttnn_model, device)
     outputs_ttnn = ttnn_model(inputs)
     outputs_ttnn.elem = None  # Force using TTNN tensor only
     compare_fn_outputs(outputs_torch, outputs_ttnn, "Conv2dBNActivationNHWC")
