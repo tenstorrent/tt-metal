@@ -162,17 +162,15 @@ class RMSNormSingleCore:
         ]
 
         # Runtime args: epsilon + scalar (no buffer addresses since CBs are backed by sharded tensors)
-        reader_rt_args = [
-            epsilon_packed,
-            scalar_packed,
-        ]
+        reader_rt_args = []
+        reader_rt_args.append((ttnn.CoreCoord(0, 0), [epsilon_packed, scalar_packed]))
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=reader_compile_time_args,
-            runtime_args=[[reader_rt_args]],
+            runtime_args=reader_rt_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
 
@@ -210,7 +208,7 @@ class RMSNormSingleCore:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=compute_compile_time_args,
-            runtime_args=[[[]]],
+            runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
