@@ -14,7 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-void RunFillUpAllBuffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool fast_dispatch) {
+void RunFillUpAllBuffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     constexpr CoreCoord core = {0, 0};
 
     // Mesh workload + device range span the mesh; program encapsulates kernels
@@ -50,7 +50,12 @@ int main() {
 
     const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-    RunFillUpAllBuffers(mesh_device, USE_FAST_DISPATCH);
+    if (!USE_FAST_DISPATCH) {
+        fmt::print("Fast Dispatch Required\n");
+        return 0;
+    }
+
+    RunFillUpAllBuffers(mesh_device);
 
     return 0;
 }

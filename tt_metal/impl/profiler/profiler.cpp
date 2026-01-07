@@ -771,7 +771,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                             // This is the trailer for this LocalNocEvent - merge dst_addr into the event data
                             auto local_noc_event_trailer =
                                 std::get<EMD::LocalNocEventTrailer>(EMD(next_device_marker.data).getContents());
-                            data["dst_addr"] = local_noc_event_trailer.dst_addr;
+                            uint32_t dst_addr = local_noc_event_trailer.dst_addr;
+                            data["dst_addr"] = dst_addr;
                             // Mark this trailer as matched so we skip it when processing trailers
                             matched_trailers.insert(std::make_tuple(
                                 next_device_marker.timestamp,
