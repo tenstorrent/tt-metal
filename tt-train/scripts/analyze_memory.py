@@ -35,13 +35,6 @@ def bytes_to_mb(bytes_val: float) -> float:
 
 def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     """Extract number of parameters from logs before the memory summary"""
-    # Search backwards from start_pos for "Number of parameters:"
-    text_before = content[:start_pos]
-    match = re.search(r"Number of parameters:\s*(\d+)", text_before[::-1])
-    if match:
-        # Since we searched backwards, we need to reverse and extract properly
-        pass
-
     # Search forward from a reasonable position before start
     search_start = max(0, start_pos - 500)
     text_before = content[search_start:start_pos]
