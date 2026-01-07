@@ -22,6 +22,7 @@ def create_tt_model(
     mesh_config=None,
     create_kv_cache=True,
     users_row_sharded=False,
+    use_throughput_experts=False,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -65,6 +66,7 @@ def create_tt_model(
         mesh_config=mesh_config,  # Pass explicit MeshConfig
         create_kv_cache=create_kv_cache,
         users_row_sharded=users_row_sharded,
+        use_throughput_experts=use_throughput_experts,
     )
 
     # Extract tt_kv_cache like tt_transformers does
