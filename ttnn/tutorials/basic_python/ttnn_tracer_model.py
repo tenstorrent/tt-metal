@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 
 def main():
-    # os.environ["TTNN_CONFIG_OVERRIDES"] = "{\"enable_fast_runtime_mode\": false}"
+    os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
 
     transformers.logging.set_verbosity_error()
 
@@ -58,7 +58,7 @@ def main():
             model_location = Path(cache_dir) / Path("config_google_bert.json")
 
         # Load model weights (download if cache_dir was not set)
-        config = transformers.BertConfig.from_pretrained(model_location, cache_dir="/localdev/mgajewski/model_cache")
+        config = transformers.BertConfig.from_pretrained(model_location)
         model = transformers.models.bert.modeling_bert.BertSelfOutput(config).eval()
 
         return model, config
@@ -72,7 +72,7 @@ def main():
             config_location = Path(cache_dir) / Path("config_ttnn_bert.json")
 
         # Load config (download if cache_dir was not set)
-        config = transformers.BertConfig.from_pretrained(config_location, cache_dir="/localdev/mgajewski/model_cache")
+        config = transformers.BertConfig.from_pretrained(config_location)
 
         return config
 
@@ -87,9 +87,7 @@ def main():
             model_location = Path(cache_dir)
 
         # Load model weights (download if cache_dir was not set)
-        model = transformers.BertForQuestionAnswering.from_pretrained(
-            model_location, config=config, cache_dir="/localdev/mgajewski/model_cache"
-        ).eval()
+        model = transformers.BertForQuestionAnswering.from_pretrained(model_location, config=config).eval()
 
         return model
 
@@ -156,17 +154,19 @@ def main():
         with trace():
             # Create dummy input tensors
             # input_ids: Token IDs from vocabulary
-            input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
+            input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.uint32)
 
             # token_type_ids: Segment IDs (0 for question, 1 for context in QA)
-            torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+            torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.uint32)
 
             # position_ids: Position embeddings (usually just 0 to sequence_length-1)
-            torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+            torch_position_ids = torch.ones((batch_size, sequence_size), dtype=torch.uint32)
 
             # attention_mask: Mask for padding tokens (only for optimized version)
             # Shape differs between regular and optimized BERT implementations
-            torch_attention_mask = torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None
+            torch_attention_mask = (
+                torch.zeros(1, sequence_size, dtype=torch.bfloat16) if bert == ttnn_optimized_bert else None
+            )
 
             # Preprocess inputs for TT-NN format
             # This converts PyTorch tensors to device tensors with appropriate layout
