@@ -730,7 +730,7 @@ ALWI void reduce(
 
     // Cleanup
     if constexpr (uninit) {
-        reduce_uninit();
+        reduce_uninit<enforce_fp32_accumulation>();
     }
 }
 
