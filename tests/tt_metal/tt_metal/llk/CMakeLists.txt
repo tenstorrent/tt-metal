@@ -35,3 +35,4 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(unit_tests_llk)

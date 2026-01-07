@@ -26,4 +26,5 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+tt_set_runtime_rpath(single_host_mp_tests)
 target_link_libraries(single_host_mp_tests PRIVATE TT::Metalium::Test::Distributed::Multihost::mp)

@@ -61,6 +61,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal
     )
+    tt_set_runtime_rpath(${TEST})
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 

@@ -95,6 +95,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR}
     )
+    tt_set_runtime_rpath(${TEST_TARGET})
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()

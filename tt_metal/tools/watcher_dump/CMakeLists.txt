@@ -20,5 +20,6 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
+tt_set_runtime_rpath(watcher_dump)
 
 target_precompile_headers(watcher_dump REUSE_FROM TT::CommonPCH)

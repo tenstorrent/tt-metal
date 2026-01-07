@@ -39,6 +39,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
             RUNTIME_OUTPUT_DIRECTORY
                 ${PROJECT_BINARY_DIR}/test/ttnn//benchmark/${TEST_DIR}
     )
+    tt_set_runtime_rpath(${TEST_TARGET} TTNN)
     message(STATUS "TEST_TARGET: ${TEST_TARGET}")
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
 endforeach()

@@ -82,6 +82,7 @@ target_link_libraries(
         TTNN::Test::Smoke
         TTNN::Test::Basic
 )
+tt_set_runtime_rpath(unit_tests_ttnn TTNN)
 
 # unit_tests_ttnn_ccl
 
@@ -109,6 +110,7 @@ target_link_libraries(
 
 add_executable(unit_tests_ttnn_ccl)
 target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
+tt_set_runtime_rpath(unit_tests_ttnn_ccl TTNN)
 
 # unit_tests_ttnn_ccl_ops
 
@@ -135,12 +137,14 @@ target_link_libraries(
 
 add_executable(unit_tests_ttnn_ccl_ops)
 target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
+tt_set_runtime_rpath(unit_tests_ttnn_ccl_ops TTNN)
 
 # unit_tests_ttnn_ccl_multi_tensor
 
 add_executable(unit_tests_ttnn_ccl_multi_tensor)
 target_sources(unit_tests_ttnn_ccl_multi_tensor PRIVATE ccl/test_multi_tensor_ccl.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
+tt_set_runtime_rpath(unit_tests_ttnn_ccl_multi_tensor TTNN)
 
 # unit_tests_ttnn_accessor
 
@@ -156,6 +160,7 @@ target_sources(
 # needs access to "compile_time_args.h"
 target_link_libraries(unit_tests_ttnn_accessor PRIVATE Metalium::Metal::Hardware)
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
+tt_set_runtime_rpath(unit_tests_ttnn_accessor TTNN)
 
 # unit_tests_ttnn_tensor
 
@@ -186,6 +191,7 @@ target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
 
 add_executable(unit_tests_ttnn_tensor)
 target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
+tt_set_runtime_rpath(unit_tests_ttnn_tensor TTNN)
 
 # test_ccl_multi_cq_multi_device
 
@@ -199,11 +205,13 @@ target_link_libraries(
         Boost::lockfree
         test_common_utils
 )
+tt_set_runtime_rpath(test_ccl_multi_cq_multi_device TTNN)
 
 # unit_tests_ttnn_emitc
 
 add_executable(unit_tests_ttnn_emitc)
 target_sources(unit_tests_ttnn_emitc PRIVATE emitc/test_sanity.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_emitc)
+tt_set_runtime_rpath(unit_tests_ttnn_emitc TTNN)
 
 add_subdirectory(multiprocess)

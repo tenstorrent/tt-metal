@@ -38,6 +38,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
                 RUNTIME_OUTPUT_DIRECTORY
                     ${PROJECT_BINARY_DIR}/test/tt_eager/${TEST_DIR}
         )
+        tt_set_runtime_rpath(${TEST_TARGET} TTNN)
         list(APPEND EAGER_TEST_TARGETS ${TEST_TARGET})
     endforeach()
     set(EAGER_TEST_TARGETS "${EAGER_TEST_TARGETS}" PARENT_SCOPE)
@@ -64,6 +65,7 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
                 RUNTIME_OUTPUT_DIRECTORY
                     ${PROJECT_BINARY_DIR}/programming_examples/${SUBDIR}
         )
+        tt_set_runtime_rpath(${TEST_TARGET})
         list(APPEND PROGRAMMING_EXAMPLES_TEST_TARGETS ${TEST_TARGET})
     endforeach()
     set(PROGRAMMING_EXAMPLES_TEST_TARGETS "${PROGRAMMING_EXAMPLES_TEST_TARGETS}" PARENT_SCOPE)
