@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -104,16 +103,16 @@ def run(
         q_heads_torch = torch_input_tensor_a[:, :, :batch, : head_dim * num_heads].view(
             seq_len, batch, num_heads, head_dim
         )
-        # K heads: next num_kv_heads * head_dim elements
-        k_heads_torch = torch_input_tensor_a[
+        # K and V heads: computed for completeness but only Q is used for PCC
+        # (operation returns tuple of (Q, K, V) but we only validate Q)
+        _ = torch_input_tensor_a[  # k_heads
             :, :, :batch, head_dim * num_heads : head_dim * (num_heads + num_kv_heads)
         ].view(seq_len, batch, num_kv_heads, head_dim)
-        # V heads: remaining num_kv_heads * head_dim elements
-        v_heads_torch = torch_input_tensor_a[:, :, :batch, head_dim * (num_heads + num_kv_heads) :].view(
+        _ = torch_input_tensor_a[:, :, :batch, head_dim * (num_heads + num_kv_heads) :].view(  # v_heads
             seq_len, batch, num_kv_heads, head_dim
         )
 
-        # For comparison, use Q heads (the first output)
+        # For comparison, use Q heads (the first output from operation)
         torch_output_tensor = q_heads_torch
     else:
         torch_output_tensor = torch_input_tensor_a.clone()

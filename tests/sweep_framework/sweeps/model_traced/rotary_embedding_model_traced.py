@@ -5,8 +5,6 @@
 # This is a placeholder test file for experimental::rotary_embedding
 # The implementation may need to be customized based on the actual operation signature
 
-import torch
-import ttnn
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.

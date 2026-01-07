@@ -5,14 +5,12 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Master config loader intentionally not imported (model_traced suite disabled)
 
 TIMEOUT = 30
 
@@ -28,8 +26,10 @@ TIMEOUT = 30
 #
 # The sample suite below still exercises the operation shape/layout path; the
 # traced configurations will be wired in a follow‑up once a proper golden exists.
-loader = MasterConfigLoader()
-_model_traced_params = None  # reserved for future enablement
+# Model traced params intentionally disabled (see NOTE above)
+# from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# loader = MasterConfigLoader()
+# model_traced_params = None  # reserved for future enablement
 
 parameters = {
     "model_traced_sample": {
@@ -112,8 +112,7 @@ def run(
         raise ValueError("input_e_layout is None - required parameter missing")
     layout_b = input_b_layout
     layout_c = input_c_layout
-    layout_d = input_d_layout
-    layout_e = input_e_layout
+    # layout_d and layout_e validated but overridden later (must be ROW_MAJOR)
 
     # Use provided memory configs - fail if not provided (no fallbacks)
     mem_config_a = input_a_memory_config
