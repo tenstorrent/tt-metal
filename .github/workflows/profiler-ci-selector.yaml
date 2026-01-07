@@ -3,7 +3,7 @@ run-name: "Profiler CI"
 
 on:
   schedule:
-    - cron: "0 2 * * *" # Run daily at 2am UTC (matches T3K/Galaxy profiler schedules)
+    - cron: "0 2 * * *" # Run daily at 2am UTC
   workflow_dispatch:
     inputs:
       run_t3k_profiler:
