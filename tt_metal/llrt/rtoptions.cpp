@@ -149,6 +149,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
     TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
     TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_JIT_ANALYTICS,                            // Enable JIT analytics
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
@@ -1065,6 +1066,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_RISCV_COMPILER_ANALYTICS
+        // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
+        // Default: Inherits from inspector setting
+        // Usage: export TT_METAL_RISCV_COMPILER_ANALYTICS=1  # or =0 to disable
+        case EnvVarID::TT_METAL_JIT_ANALYTICS: {
+            jit_analytics_enabled = false;
+            if (value) {
+                if (strcmp(value, "1") == 0) {
+                    jit_analytics_enabled = true;  // Default to true if set
+                }
+            }
+            this->set_jit_analytics_enabled(jit_analytics_enabled);
+            break;
+        }        
+
         // TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS
         // Sets the RPC server address for the inspector. Format: "host:port" or just "host" (uses default port).
         // Default: localhost:50051
@@ -1246,6 +1262,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
         HandleEnvVar(EnvVarID::TT_METAL_RISCV_DEBUG_INFO, nullptr);
+    }
+
+    // TT_METAL_JIT_ANALYTICS: Inherit from inspector if not explicitly set
+    if (std::getenv("TT_METAL_JIT_ANALYTICS") == nullptr) {
+        HandleEnvVar(EnvVarID::TT_METAL_JIT_ANALYTICS, nullptr);
     }
     ParseWatcherEnv();
 }
