@@ -45,8 +45,9 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other) noexcept;
-    Device& operator=(Device&& other) noexcept;
+    // Move constructor/assignment deleted due to active_programs_mutex_ (std::mutex is not movable)
+    Device(Device&& other) noexcept = delete;
+    Device& operator=(Device&& other) noexcept = delete;
 
     tt::ARCH arch() const override;
 
@@ -189,6 +190,11 @@ public:
     // Returns statistics for the specified command queue (or current one if not specified)
     RingbufferUsage get_ringbuffer_usage(std::optional<uint8_t> cq_id = std::nullopt) const override;
 
+    // Program tracking for accurate CB memory reporting
+    void register_program(detail::ProgramImpl* program);
+    void unregister_program(detail::ProgramImpl* program);
+    uint64_t get_total_cb_allocated() const;
+
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
@@ -247,6 +253,10 @@ private:
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
     std::shared_ptr<Buffer> dram_debug_buffer_;
+
+    // Program tracking for accurate CB memory reporting
+    mutable std::mutex active_programs_mutex_;
+    std::unordered_set<detail::ProgramImpl*> active_programs_;
 
     program_cache::detail::ProgramCache program_cache_;
 

@@ -8,8 +8,8 @@ import sys
 import time
 
 try:
-    from tt_smi import get_devices, cleanup_dead_processes, format_bytes
-    from tt_smi.ui.dashboard import Dashboard
+    from tt_smi_ui import get_devices, cleanup_dead_processes, format_bytes
+    from tt_smi_ui.ui.dashboard import Dashboard
     from rich.console import Console
 except ImportError as e:
     print(f"Error: {e}")

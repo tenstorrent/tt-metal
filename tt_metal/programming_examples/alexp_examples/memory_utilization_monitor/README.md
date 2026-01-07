@@ -134,7 +134,7 @@ tt-smi-ui --reset
 ### Python API
 
 ```python
-from tt_smi import get_devices, update_telemetry_parallel, cleanup_dead_processes
+from tt_smi_ui import get_devices, update_telemetry_parallel, cleanup_dead_processes
 
 # Get all devices
 devices = get_devices()
@@ -161,9 +161,9 @@ print(f"Cleaned {cleaned} dead processes")
 ### Dashboard UI
 
 ```python
-from tt_smi import get_devices, update_telemetry_parallel, update_memory
-from tt_smi.ui.dashboard import Dashboard
-from tt_smi.ui.graphs import GraphWindow
+from tt_smi_ui import get_devices, update_telemetry_parallel, update_memory
+from tt_smi_ui.ui.dashboard import Dashboard
+from tt_smi_ui.ui.graphs import GraphWindow
 from rich.console import Console
 
 console = Console()

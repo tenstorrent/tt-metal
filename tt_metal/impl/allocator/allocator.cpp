@@ -183,16 +183,17 @@ void AllocatorImpl::deallocate_buffers() {
 
     // DEBUG: Log if there are still buffers allocated
     if (!allocated_buffers_.empty()) {
-        std::cout << "⚠️  [Device " << device_id_ << "] deallocate_buffers() called with " << allocated_buffers_.size()
-                  << " buffers still in allocated_buffers_ set:" << std::endl;
-        for (const auto* buffer : allocated_buffers_) {
-            std::cout << "   • Buffer " << buffer->address() << ": " << buffer->size() << " bytes of "
-                      << (buffer->buffer_type() == BufferType::DRAM       ? "DRAM"
-                          : buffer->buffer_type() == BufferType::L1       ? "L1"
-                          : buffer->buffer_type() == BufferType::L1_SMALL ? "L1_SMALL"
-                                                                          : "TRACE")
-                      << std::endl;
-        }
+        // std::cout << "⚠️  [Device " << device_id_ << "] deallocate_buffers() called with " <<
+        // allocated_buffers_.size()
+        //           << " buffers still in allocated_buffers_ set:" << std::endl;
+        // for (const auto* buffer : allocated_buffers_) {
+        //     std::cout << "   • Buffer " << buffer->address() << ": " << buffer->size() << " bytes of "
+        //               << (buffer->buffer_type() == BufferType::DRAM       ? "DRAM"
+        //                   : buffer->buffer_type() == BufferType::L1       ? "L1"
+        //                   : buffer->buffer_type() == BufferType::L1_SMALL ? "L1_SMALL"
+        //                                                                   : "TRACE")
+        //               << std::endl;
+        // }
 
         // Track deallocations for remaining buffers before clearing bank managers
         std::vector<Buffer*> buffers_to_track(allocated_buffers_.begin(), allocated_buffers_.end());

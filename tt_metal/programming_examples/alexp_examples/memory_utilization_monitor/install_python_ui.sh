@@ -39,7 +39,7 @@ echo "  tt-smi-ui -w          # Watch mode"
 echo "  tt-smi-ui --help      # Show all options"
 echo
 echo "Python API:"
-echo "  python3 -c 'from tt_smi import get_devices; print(get_devices())'"
+echo "  python3 -c 'from tt_smi_ui import get_devices; print(get_devices())'"
 echo
 echo "Run tests:"
 echo "  python3 test_python_ui.py"

@@ -18,6 +18,13 @@
 #include <vector>
 #include <memory>
 
+// Forward declarations to avoid circular dependencies
+namespace tt::tt_metal {
+class Device;
+class Allocator;
+enum class BufferType : uint8_t;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal {
 
 // Implementation of SharedMemoryStatsProvider
@@ -473,6 +480,9 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
             duration_ns);
     }
 }
+
+// NOTE: Implementation moved to update_allocator_stats.cpp to avoid circular dependencies
+// (profiler is compiled before device, so we can't include device.hpp here)
 
 SharedMemoryStatsProvider::DeviceStats SharedMemoryStatsProvider::get_device_stats() const {
     if (!region_) {

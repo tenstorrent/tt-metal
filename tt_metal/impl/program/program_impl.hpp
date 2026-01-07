@@ -23,6 +23,8 @@
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 
+#include <optional>
+
 #include <atomic>
 #include <bitset>
 #include <cstddef>
@@ -231,6 +233,20 @@ public:
     void allocate_circular_buffers(const IDevice* device);
     void deallocate_circular_buffers();
     void deallocate_kernel_buffers();
+
+    // Get total CB memory allocated by this program (accurate, real-time)
+    // If device_id is specified, only counts CBs allocated on that specific device
+    uint64_t get_total_cb_allocated_bytes(std::optional<int> device_id = std::nullopt) const;
+
+    // Get actual L1 address regions used by this program's circular buffers, per core
+    // Returns map of core -> list of L1 regions
+    // For mesh programs, returns only the cores on the specified device
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
+        int device_id, size_t num_devices) const;
+
+    // Get number of devices this program has CBs allocated on
+    size_t get_num_cb_devices() const { return cb_devices_.size(); }
+
     bool is_finalized() const;
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
@@ -331,10 +347,14 @@ private:
     std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
     struct CircularBufferAllocator {
-        CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
+        CircularBufferAllocator(const CoreRange& core_range_, int device_id_ = std::numeric_limits<int>::max()) :
+            core_range(core_range_), device_id(device_id_) {}
 
         // Circular buffers are created and allocated at core range granularity
         CoreRange core_range;
+
+        // Device ID this allocator belongs to (max value means "any device" for backward compat)
+        int device_id;
 
         // Holds vector of addresses where circular buffers are allocated [start, end)
         // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
@@ -346,6 +366,21 @@ private:
         // Circular buffers are placed sequentially on a core so the next available address gets appended to the
         // last L1 region
         uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
+
+        // Get total bytes allocated in this CB allocator (PER CORE)
+        uint64_t get_allocated_bytes() const {
+            uint64_t total = 0;
+            for (const auto& [start, end] : l1_regions) {
+                total += (end - start);
+            }
+            return total;
+        }
+
+        // Get total bytes allocated across ALL cores in this CoreRange
+        uint64_t get_total_allocated_bytes() const {
+            uint64_t num_cores = core_range.size();
+            return get_allocated_bytes() * num_cores;
+        }
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added

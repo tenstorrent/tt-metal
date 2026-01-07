@@ -14,7 +14,7 @@ COMMAND LINE:
   tt-smi-ui --help       Show all options
 
 PYTHON API:
-  from tt_smi import get_devices, cleanup_dead_processes
+  from tt_smi_ui import get_devices, cleanup_dead_processes
 
   devices = get_devices()
   for dev in devices:

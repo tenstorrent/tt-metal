@@ -16,20 +16,14 @@ from .ui.graphs import GraphWindow
 @click.option("-w", "--watch", is_flag=True, help="Watch mode (continuous updates)")
 @click.option("-r", "--refresh", default=500, type=int, help="Refresh interval in milliseconds")
 @click.option("-g", "--graph", is_flag=True, help="Show telemetry graphs (watch mode only)")
-@click.option("--shm-only", is_flag=True, help="Only read SHM (no device access)")
 @click.option("--cleanup/--no-cleanup", default=True, help="Enable/disable dead process cleanup")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-@click.option("--reset", is_flag=True, help="Reset all Tenstorrent devices and exit")
-@click.option("--reset-m3", is_flag=True, help="Reset with M3 board-level reset (deeper, slower)")
 def main(
     watch: bool,
     refresh: int,
     graph: bool,
-    shm_only: bool,
     cleanup: bool,
     output_json: bool,
-    reset: bool,
-    reset_m3: bool,
 ):
     """TT-SMI: Tenstorrent System Management Interface
 
@@ -45,11 +39,7 @@ def main(
 
         tt-smi-ui -w -r 500          # Watch mode, 500ms refresh
 
-        tt-smi-ui --shm-only         # SHM-only (non-invasive)
-
         tt-smi-ui --json             # JSON output
-
-        tt-smi-ui --reset            # Reset all devices
     """
     console = Console()
 
@@ -61,23 +51,27 @@ def main(
                 console.print(f"[green]✓ Cleaned up {cleaned} dead process(es)[/green]")
 
         # Get devices
-        devices = get_devices(shm_only=shm_only)
+        devices = get_devices()
 
         if not devices:
             console.print("[red]No Tenstorrent devices found![/red]")
             return 1
 
-        # Update telemetry and memory for all devices (unless in shm_only mode)
-        if not shm_only:
-            from .core import update_telemetry_parallel, update_memory
+        # Update telemetry and memory for all devices
+        from .core import update_telemetry_parallel, update_memory
 
+        try:
             update_telemetry_parallel(devices, timeout=1.0)
-            # Also update memory stats (from SHM)
-            for dev in devices:
-                try:
-                    update_memory(dev)
-                except Exception:
-                    pass
+        except Exception as e:
+            # Telemetry update failed (devices may be unavailable/resetting)
+            if not watch:  # Only show error in non-watch mode
+                console.print(f"[yellow]⚠ Telemetry update failed: {e}[/yellow]")
+        # Also update memory stats (from SHM)
+        for dev in devices:
+            try:
+                update_memory(dev)
+            except Exception:
+                pass
 
         # JSON output
         if output_json:
@@ -122,9 +116,9 @@ def main(
             graph_window = GraphWindow(console, history_size=100) if graph else None
 
             dashboard.watch(
-                lambda: get_devices(shm_only=shm_only),
+                lambda: get_devices(),
                 refresh_ms=refresh,
-                update_telemetry_parallel_func=None if shm_only else update_telemetry_parallel,
+                update_telemetry_parallel_func=update_telemetry_parallel,
                 update_memory_func=update_memory,
                 graph_window=graph_window,
             )

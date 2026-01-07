@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -49,6 +51,15 @@ public:
 
     // Used in ops.
     std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+
+    // Get total CB memory allocated by this program (for memory tracking)
+    // If device_id is specified, only counts CBs allocated on that specific device
+    uint64_t get_total_cb_allocated_bytes(std::optional<int> device_id = std::nullopt) const;
+
+    // Get actual L1 address regions used by this program's circular buffers, per core
+    // For physical memory tracking (accounts for address reuse across cached programs)
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
+        int device_id, size_t num_devices) const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

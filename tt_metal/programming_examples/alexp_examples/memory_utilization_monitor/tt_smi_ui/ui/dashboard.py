@@ -161,21 +161,30 @@ class Dashboard:
         """Render complete snapshot."""
         layout = Layout()
 
-        layout.split_column(
-            Layout(self.render_header(), size=4),
-            Layout(self.render_device_table(devices), name="devices"),
-            Layout(name="processes", size=0),
-        )
-
+        # Check if there are any processes to display
         proc_table = self.render_process_table(devices)
+
         if proc_table:
+            # Split with processes section
+            layout.split_column(
+                Layout(self.render_header(), size=4),
+                Layout(self.render_device_table(devices), name="devices"),
+                Layout(name="processes"),
+            )
             layout["processes"].update(proc_table)
             # Dynamic size based on terminal height and actual process count
-            # Count devices with processes
-            devices_with_procs = sum(1 for dev in devices if dev.processes)
+            # Count total number of PIDs across all devices
+            total_pids = sum(len(dev.processes) for dev in devices if dev.processes)
             max_size = self.console.height // 2  # Use up to half the terminal for process table
-            estimated_size = devices_with_procs * 3 + 5  # Header + rows
+            # Size = header (4 lines) + title (1) + each process row (1) + padding (2)
+            estimated_size = 7 + total_pids
             layout["processes"].size = min(estimated_size, max_size, 50)  # Cap at 50 to leave room
+        else:
+            # No processes, only show header and devices
+            layout.split_column(
+                Layout(self.render_header(), size=4),
+                Layout(self.render_device_table(devices), name="devices"),
+            )
 
         return layout
 
@@ -212,7 +221,11 @@ class Dashboard:
         try:
             devices = get_devices_func()
             if update_telemetry_parallel_func:
-                update_telemetry_parallel_func(devices, timeout=1.0)
+                try:
+                    update_telemetry_parallel_func(devices, timeout=1.0)
+                except Exception:
+                    # Initial telemetry update failed (devices may be resetting)
+                    pass
             if update_memory_func:
                 for dev in devices:
                     try:
@@ -245,11 +258,23 @@ class Dashboard:
                         except Exception:
                             pass
 
-                        devices = get_devices_func()
+                        # Re-enumerate devices (handles chip reset/removal)
+                        try:
+                            devices = get_devices_func()
+                        except Exception:
+                            # Device enumeration failed (chip reset in progress?)
+                            # Keep using previous device list
+                            pass
 
                         # Update telemetry each iteration (parallel)
                         if update_telemetry_parallel_func:
-                            update_telemetry_parallel_func(devices, timeout=1.0)
+                            try:
+                                update_telemetry_parallel_func(devices, timeout=1.0)
+                            except Exception:
+                                # Telemetry update failed (chip reset/unavailable)
+                                # Mark all devices as unavailable
+                                for dev in devices:
+                                    dev.telemetry_status = "Unavailable"
 
                         # Update memory stats
                         if update_memory_func:
@@ -260,10 +285,13 @@ class Dashboard:
                                     pass
 
                         # Update graph history
-                        for dev in devices:
-                            graph_window.update_device(dev)
-
-                        live.update(graph_window.render_all_devices(devices))
+                        try:
+                            for dev in devices:
+                                graph_window.update_device(dev)
+                            live.update(graph_window.render_all_devices(devices))
+                        except Exception:
+                            # Rendering failed, skip this update
+                            pass
             else:
                 # Normal table view
                 with Live(
@@ -281,11 +309,23 @@ class Dashboard:
                         except Exception:
                             pass
 
-                        devices = get_devices_func()
+                        # Re-enumerate devices (handles chip reset/removal)
+                        try:
+                            devices = get_devices_func()
+                        except Exception:
+                            # Device enumeration failed (chip reset in progress?)
+                            # Keep using previous device list
+                            pass
 
                         # Update telemetry each iteration (parallel)
                         if update_telemetry_parallel_func:
-                            update_telemetry_parallel_func(devices, timeout=1.0)
+                            try:
+                                update_telemetry_parallel_func(devices, timeout=1.0)
+                            except Exception:
+                                # Telemetry update failed (chip reset/unavailable)
+                                # Mark all devices as unavailable
+                                for dev in devices:
+                                    dev.telemetry_status = "Unavailable"
 
                         # Update memory stats
                         if update_memory_func:
@@ -295,6 +335,11 @@ class Dashboard:
                                 except Exception:
                                     pass
 
-                        live.update(self.render_snapshot(devices))
+                        # Update display
+                        try:
+                            live.update(self.render_snapshot(devices))
+                        except Exception:
+                            # Rendering failed, skip this update
+                            pass
         except KeyboardInterrupt:
             pass

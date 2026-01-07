@@ -53,7 +53,7 @@ PYBIND11_MODULE(native, m) {
         .def_readwrite("processes", &tt_smi::Device::processes)
         .def_readwrite("has_shm", &tt_smi::Device::has_shm);
 
-    m.def("enumerate_devices", &tt_smi::enumerate_devices, py::arg("shm_only") = false, "Enumerate all TT devices");
+    m.def("enumerate_devices", &tt_smi::enumerate_devices, "Enumerate all TT devices");
 
     m.def("update_device_telemetry", &tt_smi::update_device_telemetry, "Update telemetry for a device");
 
@@ -62,11 +62,4 @@ PYBIND11_MODULE(native, m) {
     m.def("cleanup_dead_processes", &tt_smi::cleanup_dead_processes, "Clean up dead processes from SHM");
 
     m.def("format_bytes", &tt_smi::format_bytes, "Format bytes with units (KiB, MiB, GiB)");
-
-    m.def(
-        "reset_devices",
-        &tt_smi::reset_devices,
-        py::arg("device_ids") = std::vector<int>{},
-        py::arg("reset_m3") = false,
-        "Reset TT devices. Empty device_ids resets ALL devices. reset_m3=True for deeper M3 board reset.");
 }

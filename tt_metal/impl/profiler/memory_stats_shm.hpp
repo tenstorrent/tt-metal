@@ -142,6 +142,13 @@ public:
     };
     std::vector<ProcessInfo> get_process_stats() const;
 
+    // Update SHM with current allocator statistics (queries allocator directly)
+    // This replaces cumulative allocation/deallocation tracking with ground truth
+    // Call this periodically or on-demand to sync SHM with actual allocator state
+    // device: Device to query (can be nullptr to skip update)
+    // pid: Process ID for per-process tracking
+    void update_from_allocator(const class Device* device, pid_t pid);
+
     // Get per-chip statistics (for remote device tracking)
     struct ChipInfo {
         uint32_t chip_id;

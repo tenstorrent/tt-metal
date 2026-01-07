@@ -24,7 +24,6 @@
 #include "umd/device/chip/chip.hpp"
 #include "umd/device/types/arch.hpp"
 #include "umd/device/firmware/firmware_info_provider.hpp"
-#include "umd/device/warm_reset.hpp"
 
 using namespace tt::umd;
 
@@ -220,22 +219,30 @@ static void set_memory_sizes(Device& dev, Chip* chip) {
 static bool query_telemetry(Device& dev) {
     auto chip_it = g_topology_cache.chips.find(dev.chip_id);
     if (chip_it == g_topology_cache.chips.end()) {
+        dev.telemetry.status = "No chip";
+        dev.telemetry.available = false;
         return false;
     }
 
     Chip* chip = chip_it->second.get();
     if (!chip) {
+        dev.telemetry.status = "No chip";
+        dev.telemetry.available = false;
         return false;
     }
 
     try {
         TTDevice* tt_device = chip->get_tt_device();
         if (!tt_device) {
+            dev.telemetry.status = "No device";
+            dev.telemetry.available = false;
             return false;
         }
 
         auto firmware_info = tt_device->get_firmware_info_provider();
         if (!firmware_info) {
+            dev.telemetry.status = "No FW info";
+            dev.telemetry.available = false;
             return false;
         }
 
@@ -276,77 +283,75 @@ static bool query_telemetry(Device& dev) {
 }
 
 // Public API implementations
-std::vector<Device> enumerate_devices(bool shm_only) {
+std::vector<Device> enumerate_devices() {
     std::vector<Device> devices;
 
-    if (!shm_only) {
-        if (!g_topology_cache.initialized) {
-            g_topology_cache.initialize();
-        }
+    if (!g_topology_cache.initialized) {
+        g_topology_cache.initialize();
+    }
 
-        if (g_topology_cache.initialized && !g_topology_cache.chips.empty()) {
-            for (const auto& [chip_id, chip] : g_topology_cache.chips) {
-                Device dev;
-                dev.chip_id = chip_id;
-                dev.arch_name = "Unknown";
+    if (g_topology_cache.initialized && !g_topology_cache.chips.empty()) {
+        for (const auto& [chip_id, chip] : g_topology_cache.chips) {
+            Device dev;
+            dev.chip_id = chip_id;
+            dev.arch_name = "Unknown";
 
-                try {
-                    dev.is_remote = !chip->is_mmio_capable();
-                } catch (...) {
-                    dev.is_remote = false;
-                }
+            try {
+                dev.is_remote = !chip->is_mmio_capable();
+            } catch (...) {
+                dev.is_remote = false;
+            }
 
-                try {
-                    TTDevice* tt_device = chip->get_tt_device();
-                    if (tt_device) {
-                        dev.arch_name = get_arch_name(tt_device->get_arch());
-                        set_memory_sizes(dev, chip.get());
+            try {
+                TTDevice* tt_device = chip->get_tt_device();
+                if (tt_device) {
+                    dev.arch_name = get_arch_name(tt_device->get_arch());
+                    set_memory_sizes(dev, chip.get());
 
-                        uint64_t board_serial = tt_device->get_board_id();
-                        const auto& chip_info = chip->get_chip_info();
-                        dev.asic_location = chip_info.asic_location;
+                    uint64_t board_serial = tt_device->get_board_id();
+                    const auto& chip_info = chip->get_chip_info();
+                    dev.asic_location = chip_info.asic_location;
 
-                        // Compute display ID and asic_id
-                        if (chip_info.board_type == tt::BoardType::UBB && tt_device->get_pci_device()) {
-                            uint16_t pci_bus = tt_device->get_pci_device()->get_device_info().pci_bus;
-                            static const std::vector<uint16_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
-                            uint16_t bus_upper = pci_bus & 0xF0;
-                            auto tray_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_upper);
+                    // Compute display ID and asic_id
+                    if (chip_info.board_type == tt::BoardType::UBB && tt_device->get_pci_device()) {
+                        uint16_t pci_bus = tt_device->get_pci_device()->get_device_info().pci_bus;
+                        static const std::vector<uint16_t> tray_bus_ids = {0xC0, 0x80, 0x00, 0x40};
+                        uint16_t bus_upper = pci_bus & 0xF0;
+                        auto tray_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_upper);
 
-                            if (tray_it != tray_bus_ids.end()) {
-                                dev.tray_id = static_cast<uint32_t>(tray_it - tray_bus_ids.begin()) + 1;
-                                dev.chip_in_tray = pci_bus & 0x0F;
-                                uint32_t asic_location_composite = (dev.tray_id << 4) | dev.chip_in_tray;
-                                dev.asic_id = (board_serial << 8) | asic_location_composite;
+                        if (tray_it != tray_bus_ids.end()) {
+                            dev.tray_id = static_cast<uint32_t>(tray_it - tray_bus_ids.begin()) + 1;
+                            dev.chip_in_tray = pci_bus & 0x0F;
+                            uint32_t asic_location_composite = (dev.tray_id << 4) | dev.chip_in_tray;
+                            dev.asic_id = (board_serial << 8) | asic_location_composite;
 
-                                char buf[16];
-                                snprintf(buf, sizeof(buf), "T%u:N%u", dev.tray_id, dev.chip_in_tray);
-                                dev.display_id = buf;
-                            } else {
-                                dev.asic_id = (board_serial << 8) | dev.asic_location;
-                                char buf[16];
-                                snprintf(buf, sizeof(buf), "%llx", (unsigned long long)chip_id);
-                                dev.display_id = buf;
-                            }
+                            char buf[16];
+                            snprintf(buf, sizeof(buf), "T%u:N%u", dev.tray_id, dev.chip_in_tray);
+                            dev.display_id = buf;
                         } else {
                             dev.asic_id = (board_serial << 8) | dev.asic_location;
                             char buf[16];
-                            if (dev.is_remote) {
-                                snprintf(buf, sizeof(buf), "%llxR", (unsigned long long)chip_id);
-                            } else {
-                                snprintf(buf, sizeof(buf), "%llx", (unsigned long long)chip_id);
-                            }
+                            snprintf(buf, sizeof(buf), "%llx", (unsigned long long)chip_id);
                             dev.display_id = buf;
                         }
+                    } else {
+                        dev.asic_id = (board_serial << 8) | dev.asic_location;
+                        char buf[16];
+                        if (dev.is_remote) {
+                            snprintf(buf, sizeof(buf), "%llxR", (unsigned long long)chip_id);
+                        } else {
+                            snprintf(buf, sizeof(buf), "%llx", (unsigned long long)chip_id);
+                        }
+                        dev.display_id = buf;
                     }
-                } catch (...) {
                 }
-
-                // Read memory stats
-                read_memory_from_shm(dev);
-
-                devices.push_back(dev);
+            } catch (...) {
             }
+
+            // Read memory stats
+            read_memory_from_shm(dev);
+
+            devices.push_back(dev);
         }
     }
 
@@ -399,16 +404,6 @@ int cleanup_dead_processes() {
     }
     closedir(dir);
     return total_cleaned;
-}
-
-void reset_devices(const std::vector<int>& device_ids, bool reset_m3) {
-    // Clear topology cache after reset (devices will be re-discovered)
-    g_topology_cache.chips.clear();
-    g_topology_cache.cluster_descriptor.reset();
-    g_topology_cache.initialized = false;
-
-    // Call UMD warm reset
-    WarmReset::warm_reset(device_ids, reset_m3);
 }
 
 }  // namespace tt_smi

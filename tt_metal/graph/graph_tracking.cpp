@@ -8,6 +8,7 @@
 #include "tt_metal/impl/allocator/allocation_client.hpp"
 #include "tt_metal/impl/profiler/memory_stats_shm.hpp"
 #include "tt_metal/impl/device/device_impl.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 // DISABLED: TracyMemoryMonitor feature disabled
 // #include "tt_metal/impl/profiler/tracy_memory_monitor.hpp"
 #include <tt-metalium/mesh_device.hpp>
@@ -71,15 +72,8 @@ struct L1Stats {
         std::lock_guard<std::mutex> lock(mutex);
         init();
         if (device_l1_allocated[device_id] >= size) {
-            uint64_t before = device_l1_allocated[device_id];
             device_l1_allocated[device_id] -= size;
             device_alloc_count[device_id]--;
-            // Log significant drops (> 10MB freed)
-            if (before > 10 * 1024 * 1024 && device_l1_allocated[device_id] < 1024 * 1024) {
-                std::cout << "[" << std::fixed << std::setprecision(0) << elapsed_ms() << "ms] L1 Drop on device "
-                          << device_id << ": " << (before / (1024.0 * 1024.0)) << " MB -> "
-                          << (device_l1_allocated[device_id] / (1024.0 * 1024.0)) << " MB" << std::endl;
-            }
         }
     }
 
@@ -109,7 +103,7 @@ tt::tt_metal::ShmBufferType to_shm_buffer_type(tt::tt_metal::BufferType type) {
         case BufferType::L1: return ShmBufferType::L1;
         case BufferType::L1_SMALL: return ShmBufferType::L1_SMALL;
         case BufferType::TRACE: return ShmBufferType::TRACE;
-        case BufferType::SYSTEM_MEMORY: return ShmBufferType::DRAM;  // Map system memory to DRAM for stats
+        case BufferType::SYSTEM_MEMORY: return ShmBufferType::DRAM;
         default: return ShmBufferType::UNKNOWN;
     }
 }
@@ -169,18 +163,11 @@ void GraphTracker::track_allocate(const Buffer* buffer) {
         }
 
         // Report to shared memory tracking (if enabled)
-        // The provider is created by Device::initialize(), so it's owned by the device
+        // Use cumulative tracking for all buffer allocations
         auto* device = dynamic_cast<const Device*>(buffer->device());
         if (device && device->get_shm_stats_provider()) {
-            // NOTE: For now, use device()->id() as chip_id (represents the gateway/board)
-            // Future enhancement: determine actual physical chip from DRAM bank assignment
-            // For N300: each Device manages 2 chips, but we currently track them together
             device->get_shm_stats_provider()->record_allocation(
-                getpid(),
-                buffer->size(),
-                to_shm_buffer_type(buffer->buffer_type()),
-                buffer->device()->id()  // chip_id: gateway device ID (board-level tracking)
-            );
+                getpid(), buffer->size(), to_shm_buffer_type(buffer->buffer_type()), buffer->device()->id());
         }
 
         // Report to Tracy-based memory monitor (always enabled, checks Tracy at runtime)
@@ -226,15 +213,11 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
         }
 
         // Report to shared memory tracking (if enabled)
-        // The provider is created by Device::initialize(), so it's owned by the device
+        // Use cumulative tracking for all buffer deallocations
         auto* device = dynamic_cast<Device*>(buffer->device());
         if (device && device->get_shm_stats_provider()) {
             device->get_shm_stats_provider()->record_deallocation(
-                getpid(),
-                buffer->size(),
-                to_shm_buffer_type(buffer->buffer_type()),
-                buffer->device()->id()  // chip_id: which chip this buffer was allocated on
-            );
+                getpid(), buffer->size(), to_shm_buffer_type(buffer->buffer_type()), buffer->device()->id());
         }
 
         // Report to Tracy-based memory monitor (always enabled, checks Tracy at runtime)
@@ -263,6 +246,14 @@ void GraphTracker::track_allocate_cb(
         device_cb_allocations[device].push_back({addr, size});
     }
 
+    // CUMULATIVE CB TRACKING DISABLED
+    //
+    // Why: CBs are allocated via the L1 allocator and already counted in L1 statistics.
+    // Cumulative tracking causes double-counting and shows impossible values (e.g. 160 MiB / 91 MiB).
+    //
+    // Solution: tt-smi now queries the L1 allocator directly via update_from_allocator()
+    // to get accurate, real-time L1 usage that includes CBs.
+    //
     // Report circular buffer allocation to tracking server
     if (device != nullptr) {
         // CRITICAL: Serialize tracking calls to prevent race conditions
@@ -274,11 +265,13 @@ void GraphTracker::track_allocate_cb(
             AllocationClient::report_cb_allocation(device->id(), size, addr);
         }
 
-        // Report to shared memory tracking (if enabled)
-        auto* dev = dynamic_cast<const Device*>(device);
-        if (dev && dev->get_shm_stats_provider()) {
-            dev->get_shm_stats_provider()->record_allocation(getpid(), size, ShmBufferType::CB, device->id());
-        }
+        // CB tracking DISABLED: Cumulative tracking causes accumulation due to program caching
+        // Globally-allocated CBs are already tracked as L1 Buffers
+        // Locally-allocated CBs cannot be accurately tracked with cumulative approach
+        // auto* dev = dynamic_cast<const Device*>(device);
+        // if (dev && dev->get_shm_stats_provider()) {
+        //     dev->get_shm_stats_provider()->record_allocation(getpid(), size, ShmBufferType::CB, device->id());
+        // }
 
         // Report to Tracy-based memory monitor (circular buffers are L1)
         // DISABLED: TracyMemoryMonitor feature disabled
@@ -319,11 +312,12 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
                 AllocationClient::report_cb_deallocation(device->id(), cb.size, cb.addr);
             }
 
-            // Report to shared memory tracking (if enabled)
-            auto* dev = dynamic_cast<const Device*>(device);
-            if (dev && dev->get_shm_stats_provider()) {
-                dev->get_shm_stats_provider()->record_deallocation(getpid(), cb.size, ShmBufferType::CB, device->id());
-            }
+            // CB tracking DISABLED: See allocation comment above
+            // auto* dev = dynamic_cast<const Device*>(device);
+            // if (dev && dev->get_shm_stats_provider()) {
+            //     dev->get_shm_stats_provider()->record_deallocation(getpid(), cb.size, ShmBufferType::CB,
+            //     device->id());
+            // }
 
             // Report to Tracy-based memory monitor
             // DISABLED: TracyMemoryMonitor feature disabled
@@ -376,12 +370,20 @@ void GraphTracker::track_kernel_load(
             AllocationClient::report_kernel_load(device->id(), total_l1_size, kernel_id, kernel_type);
         }
 
-        // Report to shared memory tracking (if enabled)
-        auto* dev = dynamic_cast<const Device*>(device);
-        if (dev && dev->get_shm_stats_provider()) {
-            dev->get_shm_stats_provider()->record_allocation(
-                getpid(), total_l1_size, ShmBufferType::KERNEL, device->id());
-        }
+        // KERNEL TRACKING DISABLED FOR TT-SMI
+        //
+        // Why: The KERNEL_CONFIG region size cannot be queried from HAL for TENSIX cores
+        // (hal.hpp line 579 explicitly blocks this). Additionally, programs are cached forever
+        // by TTNN and never destroyed, making load/unload tracking meaningless.
+        //
+        // The kernel region is a reserved L1 space that doesn't grow with the number of
+        // programs - it's essentially static. Users should be aware that:
+        // - L1 usage shown in tt-smi reflects ALLOCATABLE memory (buffers, CBs, L1_SMALL)
+        // - Kernel binaries live in a separate RESERVED region not tracked here
+        // - Total core L1 (~1.5MB) = Reserved kernel region + Allocatable region
+        //
+        // For accurate L1 pressure monitoring, focus on the dynamic allocations (CB, L1, L1_SMALL)
+        // which are properly tracked and represent the memory pressure users can control.
     }
 }
 
@@ -415,12 +417,9 @@ void GraphTracker::track_kernel_unload(uint64_t kernel_id, const IDevice* device
                 AllocationClient::report_kernel_unload(device->id(), kernel.size, kernel.kernel_id);
             }
 
-            // Report to shared memory tracking (if enabled)
-            auto* dev = dynamic_cast<const Device*>(device);
-            if (dev && dev->get_shm_stats_provider()) {
-                dev->get_shm_stats_provider()->record_deallocation(
-                    getpid(), kernel.size, ShmBufferType::KERNEL, device->id());
-            }
+            // Kernel region is tracked as a FIXED reservation in track_kernel_load
+            // Individual kernel unloads don't change the reserved region size
+            // So we don't report deallocation to tt-smi
         }
     }
 }

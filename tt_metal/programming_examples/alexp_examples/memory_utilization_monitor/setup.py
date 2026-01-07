@@ -7,74 +7,74 @@ from setuptools import setup, Extension, find_packages
 import os
 import sys
 
-# Check if we should build C++ bindings
-BUILD_NATIVE = os.environ.get("TT_SMI_BUILD_NATIVE", "1") == "1"
-
+# Native C++ bindings are required
 ext_modules = []
 cmdclass = {}
 
-if BUILD_NATIVE:
-    try:
-        from pybind11.setup_helpers import Pybind11Extension, build_ext
-    except ImportError:
-        print("Warning: pybind11 not found. Install with: pip install pybind11")
-        print("Falling back to pure Python mode (no C++ bindings)")
-        BUILD_NATIVE = False
+try:
+    from pybind11.setup_helpers import Pybind11Extension, build_ext
+except ImportError:
+    print("\n" + "=" * 80)
+    print("ERROR: pybind11 is required to build tt-smi-ui")
+    print("Install with: pip install pybind11")
+    print("=" * 80 + "\n")
+    sys.exit(1)
 
-if BUILD_NATIVE:
-    # Get TT-Metal include paths
-    tt_metal_root = os.environ.get("TT_METAL_HOME", os.path.abspath("../../../.."))
-    build_dir = os.environ.get("TT_METAL_BUILD_DIR", f"{tt_metal_root}/build_Release")
+# Get TT-Metal include paths
+tt_metal_root = os.environ.get("TT_METAL_HOME", os.path.abspath("../../../.."))
+build_dir = os.environ.get("TT_METAL_BUILD_DIR", f"{tt_metal_root}/build_Release")
 
-    # Check if build directory exists
-    if not os.path.exists(build_dir):
-        print(f"\nWarning: Build directory not found: {build_dir}")
-        print("Build TT-Metal first with: ./build_metal_with_flags.sh")
-        print("Falling back to pure Python mode (no C++ bindings)\n")
-        BUILD_NATIVE = False
-    else:
-        # Find CPM cache for dependencies (fmt, yaml-cpp, etc.)
-        import glob
+# Check if build directory exists
+if not os.path.exists(build_dir):
+    print("\n" + "=" * 80)
+    print(f"ERROR: TT-Metal build directory not found: {build_dir}")
+    print("Build TT-Metal first with: ./build_metal_with_flags.sh")
+    print("Or set TT_METAL_BUILD_DIR environment variable to the correct path")
+    print("=" * 80 + "\n")
+    sys.exit(1)
 
-        fmt_include = glob.glob(f"{tt_metal_root}/.cpmcache/fmt/*/include")
-        yaml_include = glob.glob(f"{tt_metal_root}/.cpmcache/yaml-cpp/*/include")
+# Find CPM cache for dependencies (fmt, yaml-cpp, etc.)
+import glob
 
-        include_dirs = [
-            "tt_smi",
-            f"{tt_metal_root}",
-            f"{tt_metal_root}/tt_metal",
-            f"{tt_metal_root}/tt_metal/third_party/umd/device/api",  # UMD headers
-        ]
+fmt_include = glob.glob(f"{tt_metal_root}/.cpmcache/fmt/*/include")
+yaml_include = glob.glob(f"{tt_metal_root}/.cpmcache/yaml-cpp/*/include")
 
-        # Add CPM dependencies if found
-        if fmt_include:
-            include_dirs.extend(fmt_include)
-        if yaml_include:
-            include_dirs.extend(yaml_include)
+include_dirs = [
+    "tt_smi_ui",
+    f"{tt_metal_root}",
+    f"{tt_metal_root}/tt_metal",
+    f"{tt_metal_root}/tt_metal/third_party/umd/device/api",  # UMD headers
+]
 
-        # Build directory exists, configure native extension
-        native_module = Pybind11Extension(
-            "tt_smi.bindings.native",
-            sources=[
-                "tt_smi/bindings/native.cpp",
-                "tt_smi/tt_smi_backend.cpp",
-            ],
-            include_dirs=include_dirs,
-            library_dirs=[
-                f"{build_dir}/lib",
-            ],
-            libraries=[
-                "device",
-            ],
-            runtime_library_dirs=[
-                f"{build_dir}/lib",
-            ],
-            extra_compile_args=["-std=c++20", "-O3"],
-            cxx_std=20,
-        )
-        ext_modules.append(native_module)
-        cmdclass = {"build_ext": build_ext}
-        print(f"Building with C++ bindings (TT_METAL_HOME={tt_metal_root})\n")
+# Add CPM dependencies if found
+if fmt_include:
+    include_dirs.extend(fmt_include)
+if yaml_include:
+    include_dirs.extend(yaml_include)
+
+# Build directory exists, configure native extension
+native_module = Pybind11Extension(
+    "tt_smi_ui.bindings.native",
+    sources=[
+        "tt_smi_ui/bindings/native.cpp",
+        "tt_smi_ui/tt_smi_backend.cpp",
+    ],
+    include_dirs=include_dirs,
+    library_dirs=[
+        f"{build_dir}/lib",
+    ],
+    libraries=[
+        "device",
+    ],
+    runtime_library_dirs=[
+        f"{build_dir}/lib",
+    ],
+    extra_compile_args=["-std=c++20", "-O3"],
+    cxx_std=20,
+)
+ext_modules.append(native_module)
+cmdclass = {"build_ext": build_ext}
+print(f"Building with C++ bindings (TT_METAL_HOME={tt_metal_root})\n")
 
 setup(
     name="tt-smi-ui",
@@ -99,8 +99,8 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "tt-smi-ui=tt_smi.cli:main",
-            "ttsmi-ui=tt_smi.cli:main",  # Short alias
+            "tt-smi-ui=tt_smi_ui.cli:main",
+            "ttsmi-ui=tt_smi_ui.cli:main",  # Short alias
         ],
     },
     python_requires=">=3.8",

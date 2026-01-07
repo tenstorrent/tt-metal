@@ -67,13 +67,10 @@ struct Device {
 };
 
 // API Functions
-std::vector<Device> enumerate_devices(bool shm_only = false);
+std::vector<Device> enumerate_devices();
 bool update_device_telemetry(Device& device);
 bool update_device_memory(Device& device);
 int cleanup_dead_processes();
 std::string format_bytes(uint64_t bytes);
-
-// Device reset (warm reset via UMD)
-void reset_devices(const std::vector<int>& device_ids = {}, bool reset_m3 = false);
 
 }  // namespace tt_smi
