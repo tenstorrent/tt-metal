@@ -100,12 +100,6 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.layout() == Layout::TILE,
-            "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
-            "tensor layout: {}",
-            static_cast<int>(input_tensor.layout()));
-
-        TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Unary operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
@@ -124,8 +118,10 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
         if(!input_tensor.is_sharded()){
             TT_FATAL(
-                (preallocated_output_tensor.value().layout() == Layout::TILE),
-                "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
+                (preallocated_output_tensor.value().layout() == input_tensor.layout()),
+                "Unary operation requires output tensor layout ({}) to match input tensor layout ({}) when working with non-sharded tensor.",
+                static_cast<int>(preallocated_output_tensor.value().layout()),
+                static_cast<int>(input_tensor.layout()));
         }
     }
 }
@@ -136,10 +132,7 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input.layout();
-    }
+    const auto output_layout = tensor_args.input.layout();
 
     const auto output_shape = tensor_args.input.logical_shape();
     return TensorSpec(output_shape, TensorLayout::fromPaddedShape(
@@ -168,6 +161,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         args,
         program_factory.index(),
         input_tensor.dtype(),
+        input_tensor.layout(),
         input_tensor.memory_config(),
         args.sub_core_grids,
         input_shape.volume());

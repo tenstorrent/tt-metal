@@ -57,6 +57,7 @@ def run_test(mesh_device, run_op_proc, check_op_proc, enable_trace):
         ttnn.release_trace(mesh_device, trace_id)
 
         # Get results
+        # op_time = profiler.get("op_perf")
         profiler.print(units="us")
 
         # Every device executes the same op, check that each device returned the
