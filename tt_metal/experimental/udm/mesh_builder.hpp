@@ -19,6 +19,18 @@ namespace tt::tt_metal::experimental::udm {
 /**
  * @brief Builder class for constructing abstraction of Mesh/Grid/GlobalCore
  *
+ * In multi-device programming, cores exist across multiple devices with separate
+ * local coordinate systems. MeshBuilder solves this by constructing a unified
+ * global view where:
+ * - A Mesh represents the arrangement of devices (e.g., 2x4 device grid)
+ * - A Grid represents a single device's compute cores (Currenlty in 2D dimensions, same as the physical grid dimension)
+ * - A GlobalCore provides a single identifier for any core across all devices,
+ *   abstracting away the device boundary and local coordinates
+ *
+ * This enables users to write device-agnostic code that addresses cores by
+ * global coordinates, while MeshBuilder handles the translation to/from
+ * device-local coordinates and generates the necessary compile-time arguments and compile-time defines
+ * for kernel code to understand the mesh topology.
  */
 class MeshBuilder {
 public:
