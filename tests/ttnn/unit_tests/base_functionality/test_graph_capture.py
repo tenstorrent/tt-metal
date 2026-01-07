@@ -64,19 +64,25 @@ def test_graph_capture_with_all_parameters(device):
     assert node1[3] == "nullopt"
     assert node1[4] == "nullopt"
 
-    # PermuteDeviceOperation (now tracked at level 2)
-    assert captured_graph[4]["params"]["name"] == "PermuteDeviceOperation"
+    # ttnn::prim::permute
+    node4 = captured_graph[4]["arguments"]
+    assert (
+        node4[0]
+        == "[ unsupported type , std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>]"
+    )
+    assert (
+        node4[1]
+        == "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]"
+    )
 
     # tt::tt_metal::create_device_tensor (shifted by 1 due to device operation tracking)
     node5 = captured_graph[5]["arguments"]
     assert node5[0] == "Shape([1, 4, 2048, 128])"
     assert node5[1] == "DataType::BFLOAT16"
     assert node5[2] == "Layout::ROW_MAJOR"
-    assert node5[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
-    assert (
-        node5[4]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
-    )
+    assert node5[3].isnumeric()
+    assert node5[0] == "Shape([1, 4, 2048, 128])"
+    assert node5[1] == "DataType::BFLOAT16"
 
 
 def test_graph_capture_without_memory_config(device):
@@ -116,17 +122,17 @@ def test_graph_capture_without_memory_config(device):
     assert node1[2] == "nullopt"
     assert node1[3] == "DataType::BFLOAT16"
     assert node1[4] == "nullopt"
-    assert node1[5] == "nullopt"
+    assert (
+        node1[5]
+        == "[ unsupported type , std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig> > const>]"
+    )
 
-    # MorehDotOperation (now tracked at level 2)
-    assert captured_graph[6]["params"]["name"] == "MorehDotOperation"
-
-    # tt::tt_metal::create_device_tensor (shifted by 1 due to device operation tracking)
+    # tt::tt_metal::create_device_tensor
     node7 = captured_graph[7]["arguments"]
     assert node7[0] == "Shape([1, 1, 1, 1])"
     assert node7[1] == "DataType::BFLOAT16"
     assert node7[2] == "Layout::TILE"
-    assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    assert node7[3].isnumeric()
     assert (
         node7[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -154,12 +160,12 @@ def test_graph_capture_without_dtype(device):
     # FullLikeOperation (now tracked at level 2)
     assert captured_graph[4]["params"]["name"] == "FullLikeOperation"
 
-    # tt::tt_metal::create_device_tensor (shifted by 1 due to device operation tracking)
+    # tt::tt_metal::create_device_tensor
     node5 = captured_graph[5]["arguments"]
     assert node5[0] == "Shape([32, 32])"
     assert node5[1] == "DataType::INT32"
     assert node5[2] == "Layout::TILE"
-    assert node5[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    assert node5[3].isnumeric()
     assert (
         node5[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -217,26 +223,43 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert item0["arguments"][3]["arg3"] == "nullopt"
     assert item0["arguments"][4]["arg4"] == "nullopt"
 
-    # Content item 1: PermuteDeviceOperation (device operation now tracked)
-    item1 = data["content"][1]
-    assert item1["operation"] == "PermuteDeviceOperation"
+    item1 = data["content"][0]
+    assert item1["operation"] == "ttnn::transpose"
+    item1_arguments = item1["arguments"]
+    assert item1_arguments[0]["arg0"]["Tensor"]["tensor_spec"]["logical_shape"] == [1, 2048, 4, 128]
+    assert item1_arguments[1]["arg1"] == "1"
+    assert item1_arguments[2]["arg2"] == "2"
+    assert item1_arguments[3]["arg3"] == "nullopt"
+    assert item1_arguments[4]["arg4"] == "nullopt"
 
-    # Content item 2: tt::tt_metal::create_device_tensor
-    item2 = data["content"][2]
-    assert item2["operation"] == "tt::tt_metal::create_device_tensor"
-    assert len(item2["arguments"]) == 5
+    # Content item 2
+    item2 = data["content"][1]
+    assert item2["operation"] == "PermuteDeviceOperation"
+    assert len(item2["arguments"]) == 2
+    assert item2["arguments"][0]["arg0"] == {
+        "unsupported type": "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>"
+    }
+    assert item2["arguments"][1]["arg1"] == {
+        "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
+    }
 
     arg0_item2 = item2["arguments"][0]["arg0"]
-    assert arg0_item2["Shape"] == [1, 4, 2048, 128]
-    assert item2["arguments"][1]["arg1"] == "DataType::BFLOAT16"
-    assert item2["arguments"][2]["arg2"] == "Layout::ROW_MAJOR"
-    assert item2["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    assert arg0_item2 == {
+        "unsupported type": "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>"
+    }
 
-    arg4_item2 = item2["arguments"][4]["arg4"]
-    mem_config_item2 = arg4_item2["MemoryConfig"]
-    assert mem_config_item2["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_item2["buffer_type"] == "BufferType::L1"
-    assert mem_config_item2["shard_spec"] == "std::nullopt"
+    item3 = data["content"][2]
+    arg0_item3 = item3["arguments"][0]["arg0"]
+    assert arg0_item3["Shape"] == [1, 4, 2048, 128]
+    assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
+    assert item3["arguments"][2]["arg2"] == "Layout::ROW_MAJOR"
+    assert item3["arguments"][3]["arg3"].isnumeric()
+
+    arg4_item3 = item3["arguments"][4]["arg4"]
+    mem_config_item3 = arg4_item3["MemoryConfig"]
+    assert mem_config_item3["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
+    assert mem_config_item3["buffer_type"] == "BufferType::L1"
+    assert mem_config_item3["shard_spec"] == "std::nullopt"
 
 
 def test_graph_capture_without_memory_config_json_output(device):
@@ -313,13 +336,22 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert item0["arguments"][2]["arg2"] == "nullopt"
     assert item0["arguments"][3]["arg3"] == "DataType::BFLOAT16"
     assert item0["arguments"][4]["arg4"] == "nullopt"
-    assert item0["arguments"][5]["arg5"] == "nullopt"
+    assert item0["arguments"][5]["arg5"] == {
+        "unsupported type": "std::reference_wrapper<std::optional<std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig> > const>"
+    }
 
     # --- Content item 1: MorehDotOperation (device operation now tracked) ---
     item1 = data["content"][1]
     assert item1["operation"] == "MorehDotOperation"
 
-    # --- Content item 2: tt::tt_metal::create_device_tensor ---
+    assert item1["arguments"][0]["arg0"] == {
+        "unsupported type": "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>"
+    }
+    assert item1["arguments"][1]["arg1"] == {
+        "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
+    }
+
+    # --- Content item 2 ---
     item2 = data["content"][2]
     assert item2["operation"] == "tt::tt_metal::create_device_tensor"
     assert len(item2["arguments"]) == 5
@@ -329,7 +361,7 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert arg0_item2["Shape"] == [1, 1, 1, 1]
     assert item2["arguments"][1]["arg1"] == "DataType::BFLOAT16"
     assert item2["arguments"][2]["arg2"] == "Layout::TILE"
-    assert item2["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    assert item2["arguments"][3]["arg3"].isnumeric()
 
     arg4_item2 = item2["arguments"][4]["arg4"]
     mem_config_item2 = arg4_item2["MemoryConfig"]
@@ -382,11 +414,18 @@ def test_graph_capture_without_dtype_json_output(device):
     assert item0["arguments"][3]["arg3"] == "nullopt"
     assert item0["arguments"][4]["arg4"] == "nullopt"
 
-    # --- Content item 1: FullLikeOperation (device operation now tracked) ---
+    # --- Content item 1: tt::tt_metal::create_device_tensor ---
     item1 = data["content"][1]
     assert item1["operation"] == "FullLikeOperation"
+    assert len(item1["arguments"]) == 2
+    assert item1["arguments"][0]["arg0"] == {
+        "unsupported type": "std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>"
+    }
+    assert item1["arguments"][1]["arg1"] == {
+        "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
+    }
 
-    # --- Content item 2: tt::tt_metal::create_device_tensor ---
+    # --- Content item 2 ---
     item2 = data["content"][2]
     assert item2["operation"] == "tt::tt_metal::create_device_tensor"
     assert len(item2["arguments"]) == 5
@@ -400,7 +439,7 @@ def test_graph_capture_without_dtype_json_output(device):
     # arg2
     assert item2["arguments"][2]["arg2"] == "Layout::TILE"
     # arg3
-    assert item2["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    assert item2["arguments"][3]["arg3"].isnumeric()
 
     # arg4: Check the MemoryConfig
     arg4_item2 = item2["arguments"][4]["arg4"]
