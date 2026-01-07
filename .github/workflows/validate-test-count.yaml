@@ -6,6 +6,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      package-artifact-name:
+        required: true
+        type: string
   pull_request:
     paths:
       - 'tests/ttnn/unit_tests/operations/eltwise/**'
@@ -34,14 +37,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Download built wheel
-        if: ${{ inputs.wheel-artifact-name != '' }}
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-          path: ./wheels
-          run_id: 20788440471
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Download built wheel
+      #   if: ${{ inputs.wheel-artifact-name != '' }}
+      #   uses: dawidd6/action-download-artifact@v6
+      #   with:
+      #     name: ${{ inputs.wheel-artifact-name }}
+      #     path: ./wheels
+      #     run_id: 20788440471
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
       # - name: Download built wheel
       #   if: ${{ inputs.wheel-artifact-name != '' }}
       #   uses: actions/download-artifact@v4
@@ -49,11 +52,28 @@ jobs:
       #     name: ${{ inputs.wheel-artifact-name }}
       #     path: ./wheels
 
-      - name: Install tt-metal wheel and dependencies
-        if: ${{ inputs.wheel-artifact-name != '' }}
+      # - name: Install tt-metal wheel and dependencies
+      #   if: ${{ inputs.wheel-artifact-name != '' }}
+      #   run: |
+      #     pip install pytest torch loguru transformers
+      #     pip install ./wheels/*.whl
+
+      - name: Download build packages
+        if: ${{ inputs.package-artifact-name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.package-artifact-name }}
+          path: ./packages
+
+      - name: Install tt-metal packages
+        if: ${{ inputs.package-artifact-name != '' }}
+        run: |
+          sudo apt update
+          sudo apt install -y ./packages/*.deb
+
+      - name: Install Python dependencies
         run: |
           pip install pytest torch loguru transformers
-          pip install ./wheels/*.whl
 
       - name: Count and compare tests
         run: |
