@@ -83,7 +83,7 @@ inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t w
     // Compute grid area and initial blocks-per-core using integer math.
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
 
-    // Adjust nblocks_per_core and determine the optimal block size.
+    // Find the closest square larger than nblocks_per_core
     auto [adjusted_nblocks_per_core, single_block_size] =
         closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
     nblocks_per_core = adjusted_nblocks_per_core;

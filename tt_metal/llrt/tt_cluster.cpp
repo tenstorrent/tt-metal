@@ -22,6 +22,7 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "common/executor.hpp"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -333,7 +334,7 @@ void Cluster::initialize_device_drivers() {
             auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = pci->is_mapping_buffer_to_noc_supported();
+                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
         }
     }
@@ -437,9 +438,21 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     this->driver_->start_device(device_params);
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
-        for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
-            ll_api::configure_static_tlbs(
-                this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+        // Configure TLBs on all MMIO devices in parallel
+        std::vector<std::shared_future<void>> futures;
+        const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
+        futures.reserve(mmio_device_ids.size());
+
+        for (const auto& mmio_device_id : mmio_device_ids) {
+            futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
+                ll_api::configure_static_tlbs(
+                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+            }));
+        }
+
+        // Wait for all TLB configurations to complete
+        for (auto& future : futures) {
+            future.get();
         }
     }
 }
