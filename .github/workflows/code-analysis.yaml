@@ -254,3 +254,29 @@ jobs:
         with:
           name: CodeChecker-Static-Analysis-Reports
           path: ${{ steps.codechecker.outputs.result-html-dir }}
+
+  publish-clangsa-pages:
+    name: 📄 Publish CSA HTML to GitHub Pages
+    needs: [ clang-static-analyzer ]
+    if: ${{ always() && needs.clang-static-analyzer.result != 'skipped' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download CodeChecker reports artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-Static-Analysis-Reports
+          path: site
+
+      - name: Add .nojekyll
+        run: touch site/.nojekyll
+
+      - name: Publish to blozano-tt/clangsa-results (gh-pages)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.WILDER_PAT }}
+          external_repository: blozano-tt/clangsa-results
+          publish_branch: gh-pages
+          publish_dir: site
+          force_orphan: true
+          commit_message: "Update CSA reports from tt-metal @ ${{ github.sha }}"
