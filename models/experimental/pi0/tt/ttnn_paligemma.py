@@ -37,31 +37,6 @@ from .ttnn_siglip import (
 )
 
 
-# Helper function to precompute RoPE in PyTorch format (for compatibility)
-def precompute_freqs_cis_torch(
-    head_dim: int,
-    max_seq_len: int,
-    base: float = 10000.0,
-    dtype: torch.dtype = torch.float32,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Precompute cos and sin for rotary embeddings.
-
-    Args:
-        head_dim: Dimension per head (must be even)
-        max_seq_len: Maximum sequence length
-        base: Base for frequency computation
-        dtype: Output dtype
-
-    Returns:
-        Tuple of (cos, sin) each of shape (max_seq_len, head_dim // 2)
-    """
-    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=dtype) / head_dim))
-    t = torch.arange(max_seq_len, dtype=dtype)
-    freqs_outer = torch.outer(t, freqs)
-    return torch.cos(freqs_outer), torch.sin(freqs_outer)
-
-
 class PaliGemmaBackboneTTNN:
     """
     PaliGemma backbone using TTNN operations.
@@ -125,23 +100,7 @@ class PaliGemmaBackboneTTNN:
         # Store torch weights for blocks (converted on demand)
         self.torch_weights = weights
 
-        # Precompute RoPE for PyTorch fallback (old format: [seq, head_dim/2])
-        cos, sin = precompute_freqs_cis_torch(
-            config.vlm_config.head_dim,
-            config.max_seq_len,
-        )
-        self.cos = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.sin = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-        # Expert RoPE (old format for PyTorch fallback)
-        expert_cos, expert_sin = precompute_freqs_cis_torch(
-            config.expert_config.head_dim,
-            config.max_seq_len,
-        )
-        self.expert_cos = ttnn.from_torch(expert_cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        self.expert_sin = ttnn.from_torch(expert_sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-        # OPTIMIZATION: Precompute Meta format for native TTNN RoPE (pure TTNN, no torch)
+        # Precompute RoPE using pure TTNN for native ttnn.experimental.rotary_embedding
         # This format is required by ttnn.experimental.rotary_embedding (split-half pattern)
         self.cos_meta, self.sin_meta = precompute_freqs_cis_meta_format(
             config.vlm_config.head_dim,
@@ -202,21 +161,35 @@ class PaliGemmaBackboneTTNN:
         v_key = f"{prefix}self_attn.v_proj.weight"
 
         if q_key in weights and k_key in weights and v_key in weights:
-            # Get Q, K, V weights and transpose for TTNN linear
-            wq = weights[q_key].T  # [hidden, num_heads * head_dim]
-            wk = weights[k_key].T  # [hidden, num_kv_heads * head_dim]
-            wv = weights[v_key].T  # [hidden, num_kv_heads * head_dim]
-
-            # Concatenate: [hidden, Q_dim + K_dim + V_dim]
-            wqkv = torch.cat([wq, wk, wv], dim=-1)
-
-            block_weights["self_attn.wqkv"] = ttnn.from_torch(
-                wqkv.contiguous(),
+            # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
+            wq_ttnn = ttnn.from_torch(
+                weights[q_key].T.contiguous(),  # [hidden, num_heads * head_dim]
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
+            )
+            wk_ttnn = ttnn.from_torch(
+                weights[k_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            wv_ttnn = ttnn.from_torch(
+                weights[v_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+
+            # Concatenate using TTNN: [hidden, Q_dim + K_dim + V_dim]
+            block_weights["self_attn.wqkv"] = ttnn.concat(
+                [wq_ttnn, wk_ttnn, wv_ttnn],
+                dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            ttnn.deallocate(wq_ttnn)
+            ttnn.deallocate(wk_ttnn)
+            ttnn.deallocate(wv_ttnn)
 
         for key, value in weights.items():
             if key.startswith(prefix):
@@ -260,21 +233,35 @@ class PaliGemmaBackboneTTNN:
         v_key = f"{prefix}self_attn.v_proj.weight"
 
         if q_key in weights and k_key in weights and v_key in weights:
-            # Get Q, K, V weights and transpose for TTNN linear
-            wq = weights[q_key].T
-            wk = weights[k_key].T
-            wv = weights[v_key].T
-
-            # Concatenate: [hidden, Q_dim + K_dim + V_dim]
-            wqkv = torch.cat([wq, wk, wv], dim=-1)
-
-            block_weights["self_attn.wqkv"] = ttnn.from_torch(
-                wqkv.contiguous(),
+            # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
+            wq_ttnn = ttnn.from_torch(
+                weights[q_key].T.contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
+            )
+            wk_ttnn = ttnn.from_torch(
+                weights[k_key].T.contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            wv_ttnn = ttnn.from_torch(
+                weights[v_key].T.contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+
+            # Concatenate using TTNN: [hidden, Q_dim + K_dim + V_dim]
+            block_weights["self_attn.wqkv"] = ttnn.concat(
+                [wq_ttnn, wk_ttnn, wv_ttnn],
+                dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            ttnn.deallocate(wq_ttnn)
+            ttnn.deallocate(wk_ttnn)
+            ttnn.deallocate(wv_ttnn)
 
         for key, value in weights.items():
             if key.startswith(prefix):
@@ -355,8 +342,8 @@ class PaliGemmaBackboneTTNN:
             past_kv = past_key_values[i] if past_key_values else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
-                self.cos,
-                self.sin,
+                None,  # cos - unused, native TTNN RoPE uses cos_meta stored in block
+                None,  # sin - unused, native TTNN RoPE uses sin_meta stored in block
                 attention_mask,
                 position_ids,
                 past_kv,
@@ -402,8 +389,8 @@ class PaliGemmaBackboneTTNN:
             past_kv = past_key_values[i] if past_key_values else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
-                self.expert_cos,
-                self.expert_sin,
+                None,  # cos - unused, native TTNN RoPE uses cos_meta stored in block
+                None,  # sin - unused, native TTNN RoPE uses sin_meta stored in block
                 attention_mask,
                 position_ids,
                 past_kv,
