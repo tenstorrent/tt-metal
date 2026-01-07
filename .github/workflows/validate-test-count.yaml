@@ -44,12 +44,12 @@ jobs:
         run: |
           pip install pytest torch numpy
           # Install other common test dependencies
-          pip install multiprocess psutil loguru transformers
+          # pip install multiprocess psutil loguru transformers
           pip install ./wheels/*.whl
 
       - name: Count and compare tests
         run: |          
-          # Define locked directories to check (matching paths from workflow trigger)
+          # Define the paths to check for test counts
           declare -a PATHS=(
             "tests/ttnn/unit_tests/operations/eltwise"
             "tests/ttnn/unit_tests/operations/conv"
@@ -64,7 +64,7 @@ jobs:
             "tests/ttnn/unit_tests/benchmarks"
           )
           
-          # Function to count test functions using pytest
+          # Function to count test functions using pytest collect-only
           count_tests() {
             local dir=$1
             echo "Collecting from: $dir" >&2
@@ -132,15 +132,3 @@ jobs:
           
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ **No new tests added - validation passed**" >> $GITHUB_STEP_SUMMARY
-
-      - name: Comment on PR if validation fails
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '❌ **Test Count Validation Failed**\n\nThis PR adds new tests in APC. A fixed test count to set to maintain stable APC runtime.\n\nIf you need to add new tests, please:\n1. Look through the current list of tests and check if a lower priority test can be removed to add your new test. \n2. Consider adding tests to the ttnn/nightly directory to run in L2-nightly pipeline \n3. Note down an explanation on why the new tests are necessary\n\nSee the workflow summary for details.'
-            })
