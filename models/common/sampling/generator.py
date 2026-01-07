@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import random
+import secrets
 from dataclasses import dataclass, fields, replace
 from typing import List, Optional
 
@@ -60,6 +61,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        self.seed_manager = SeedManager(self.tt_sampling)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -263,24 +265,6 @@ class SamplingGenerator:
                 self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
 
-    def reset_seed(self, seed):
-        for i, s in enumerate(seed):
-            if s is None:
-                # set to random seed to have variability while using tensor manual_seed
-                seed[i] = random.randint(0, 1000000)
-        seed = torch.tensor(seed)
-        user_ids = torch.arange(seed.shape[0])
-
-        user_ids_tt = ttnn.from_torch(
-            user_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        seeds_tt = ttnn.from_torch(seed, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # reset seed for each user_id
-        ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grids)
-        seeds_tt.deallocate()
-        user_ids_tt.deallocate()
-
 
 def clamp(value, min_value, max_value):
     if value < min_value:
@@ -307,7 +291,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "seed": None,
+        "seed": random.randint(0, 1000000),  # set to random seed to have variability while using tensor manual_seed
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
@@ -369,3 +353,20 @@ def format_sampling_params(sampling_params, max_batch_size):
         if sampling_params.top_k[i] < 1:
             sampling_params.top_k[i] = 32  # k<1 means no restriction so set it to max k (32)
     return sampling_params
+
+
+class SeedManager:
+    def __init__(self, tt_sampling):
+        self.rngs = [random.Random(secrets.randbits(64)) for _ in range(32)]
+        self.tt_sampling = tt_sampling
+
+    def reset_seed(self, seeds, user_ids):
+        for i, user in enumerate(user_ids):
+            self.rngs[user].seed(seeds[i])
+
+    def get_new_values(self, empty_slots=range(32)):
+        # get new seeds for each user in empty_slots otherwise 0
+        new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
+        # send new seeds to sampling module
+        new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
