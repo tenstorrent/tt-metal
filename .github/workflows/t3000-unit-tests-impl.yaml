@@ -185,6 +185,14 @@ jobs:
               "cmd": "run_t3000_tt_dit_tests",
               "timeout": 20,
               "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+              "name": "t3k deepseek tests",
+              "model": "deepseek",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_deepseek_tests",
+              "timeout": 30,
+              "owner_id": "U03HY7MK4BT"
             }
           ]')
 
