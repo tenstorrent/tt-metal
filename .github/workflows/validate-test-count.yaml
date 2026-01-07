@@ -34,14 +34,20 @@ jobs:
         with:
           python-version: '3.10'
 
+      # - name: Download built wheel
+      #   if: ${{ inputs.wheel-artifact-name != '' }}
+      #   uses: dawidd6/action-download-artifact@v6
+      #   with:
+      #     name: ${{ inputs.wheel-artifact-name }}
+      #     path: ./wheels
+      #     run_id: 20788440471
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Download built wheel
         if: ${{ inputs.wheel-artifact-name != '' }}
-        uses: dawidd6/action-download-artifact@v6
+        uses: actions/download-artifact@v3
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: ./wheels
-          run_id: 20788440471
-          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install tt-metal wheel and dependencies
         if: ${{ inputs.wheel-artifact-name != '' }}
