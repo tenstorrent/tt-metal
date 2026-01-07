@@ -1077,15 +1077,24 @@ Exercise 7: Implementing Matrix Multiplication in TT-Metalium
 
 In this exercise, you will implement matrix multiplication on a Tenstorrent device. You can start with the lab_eltwise_binary example program and adjust it
 to perform matrix multiplication.
-Start by copying the files from the ``lab_eltwise_binary`` directory into a new directory e.g. ``lab1_matmul`` and adjusting code to perform matrix multiplication.
-You will need to make the following changes:
+Start by copying the files from the ``lab_eltwise_binary`` directory into a new directory (e.g. ``lab1_matmul``),
+and rename the copied ``lab_eltwise_binary.cpp`` file to match the directory name (e.g. ``lab1_matmul.cpp``).
+Then, adjust the code to perform matrix multiplication, by making the following changes:
 
 #. Update the host program to create input vectors to multiply matrix A of size 640x320 and matrix B of size 320x640 to produce matrix C of size 640x640.
    Copy reference (non-tiled) matrix multiplication code you created in Exercise 1 so it can be used to verify TT-Metalium results.
    Similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
    pass required parameters to kernels (you may need to complete some of the following steps to determine the correct parameters).
 
-#. Update the reader kernel to read the tiles of A and B in the correct order. The order should match the pattern of visiting one row of tiles of A
+#. Update the reader kernel to read the tiles of A and B in the correct order.
+   You should write your code to make the following assumptions about the matrix and tile sizes:
+   * All matrices will have dimensions that are divisible by the tile size.
+   * Tiles in the resulting matrix ``C``are of size ``TILE_HEIGHTxTILE_WIDTH``.
+   * Tiles in ``A`` are of size ``TILE_HEIGHTxTILE_WIDTH``.
+   * Tiles in ``B`` are of size ``TILE_WIDTHxTILE_WIDTH``.
+   Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in headers in the ``tt::constants`` namespace.
+
+   The order of reading tiles from ``A`` and ``B`` should match the pattern of visiting one row of tiles of ``A``
    with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
    not the actual memory address, so your code only needs to generate indices in the right order.
 
