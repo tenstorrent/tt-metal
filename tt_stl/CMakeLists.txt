@@ -59,6 +59,15 @@ target_link_libraries(metal_common_pch PRIVATE tt_stl)
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
 tt_set_library_rpath(tt_stl)
 
+# Output library to build/lib (not build/lib64) for CI tar artifacts
+# CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
+set_target_properties(
+    tt_stl
+    PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY
+            "${CMAKE_BINARY_DIR}/lib"
+)
+
 install(TARGETS tt_stl EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
 if(TT_METAL_BUILD_TESTS)

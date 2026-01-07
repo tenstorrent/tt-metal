@@ -14,6 +14,10 @@ set_target_properties(
         # $ORIGIN is first in RPATH (required by RPM's brp-check-rpaths)
         INSTALL_RPATH_USE_LINK_PATH
             FALSE
+        # Output library to build/lib (not build/lib64) for CI tar artifacts
+        # CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
+        LIBRARY_OUTPUT_DIRECTORY
+            "${CMAKE_BINARY_DIR}/lib"
 )
 
 include(flatbuffers)

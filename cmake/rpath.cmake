@@ -79,11 +79,28 @@ function(tt_set_runtime_rpath TARGET)
     # (not INSTALL_RPATH) is what's embedded in the binaries.
     # Build-time runpath for executables.
     #
-    # Important: different toolchains/packaging flows may place shared libs in different build-tree
-    # locations (e.g. build/lib, build/lib64, or a target's binary dir). To be robust, include:
-    # - The actual output dir of tt_metal / TTNN targets (via generator expressions)
-    # - Conventional aggregate dirs build/lib and build/${CMAKE_INSTALL_LIBDIR}
+    # Important: the dynamic loader interprets non-absolute RUNPATH entries relative to the
+    # *current working directory*, not the binary's location. To make running from arbitrary
+    # working directories reliable (ctest, python harnesses, etc), include $ORIGIN-relative
+    # paths in BUILD_RPATH in addition to absolute paths.
     set(BUILD_RPATH_ENTRIES "")
+
+    # $ORIGIN-relative paths to build/lib and build/${CMAKE_INSTALL_LIBDIR}
+    file(RELATIVE_PATH _rel_to_build_lib "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/lib")
+    if(_rel_to_build_lib STREQUAL "")
+        list(APPEND BUILD_RPATH_ENTRIES "$ORIGIN")
+    else()
+        list(APPEND BUILD_RPATH_ENTRIES "$ORIGIN/${_rel_to_build_lib}")
+    endif()
+    if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+        file(RELATIVE_PATH _rel_to_build_libdir "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+        if(_rel_to_build_libdir STREQUAL "")
+            list(APPEND BUILD_RPATH_ENTRIES "$ORIGIN")
+        else()
+            list(APPEND BUILD_RPATH_ENTRIES "$ORIGIN/${_rel_to_build_libdir}")
+        endif()
+    endif()
+
     if(TARGET tt_metal)
         list(APPEND BUILD_RPATH_ENTRIES "$<TARGET_FILE_DIR:tt_metal>")
     endif()
