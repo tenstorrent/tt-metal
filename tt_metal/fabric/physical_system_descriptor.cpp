@@ -97,6 +97,29 @@ std::pair<TrayID, ASICLocation> get_asic_position(
                 break;
             }
         }
+    } else if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
+        // Query ASIC Location from the Cluster Descriptor for BH/QUASAR.
+        asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};
+    } else {
+        TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
+    }
+    return {tray_id, asic_location};
+    auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
+    ASICLocation asic_location;
+    tt::ARCH arch = cluster_desc->get_arch(chip_id);
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        // Derive ASIC Location based on the tunnel depth for Wormhole systems
+        // TODO: Remove this once UMD populates the ASIC Location for WH systems.
+        auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
+        auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
+        const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
+        for (const auto& devices_on_tunnel : tunnels) {
+            auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
+            if (device_it != devices_on_tunnel.end()) {
+                asic_location = ASICLocation{static_cast<unsigned int>(device_it - devices_on_tunnel.begin())};
+                break;
+            }
+        }
     } else if (arch == tt::ARCH::BLACKHOLE) {
         // Query ASIC Location from the Cluster Descriptor for BH.
         asic_location = ASICLocation{cluster_desc->get_asic_location(chip_id)};

@@ -761,10 +761,7 @@ void CablingGenerator::get_all_connections_of_type(
 
 CableLength calc_cable_length(
     const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
-    if (host1.hall != host2.hall) {
-        return CableLength::UNKNOWN;
-    }
-    if (host1.aisle != host2.aisle) {
+    if (host1.hall != host2.hall || host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
 

@@ -60,10 +60,7 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
             if (input_w != output_w) {
                 return program::PadRmShardedWidthOnlyProgramFactory{};
             }
-            if (input_tot_h != output_tot_h) {
-                return program::PadRmShardedHeightOnlyProgramFactory{};
-            }
-            // for no padding, we just use the height-only padding program
+            // height-only padding or no padding
             return program::PadRmShardedHeightOnlyProgramFactory{};
         }
         if (operation_attributes.use_multicore) {

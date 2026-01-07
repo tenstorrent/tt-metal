@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <condition_variable>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <map>
 #include <mutex>
@@ -204,7 +205,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
 }
 
 std::string WatcherServer::Impl::log_file_name() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
@@ -235,19 +236,16 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 }
 
 void WatcherServer::Impl::read_kernel_ids_from_file() {
-    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    FILE* f = fopen(fname.c_str(), "r");
+    std::ifstream f(fname);
     if (!f) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
-    char* line = nullptr;
-    size_t len;
-    while (getline(&line, &len, f) != -1) {
-        std::string s(line);
-        s = s.substr(0, s.length() - 1);  // Strip newline
-        kernel_names_.push_back(s.substr(s.find(':') + 2));
+    std::string line;
+    while (std::getline(f, line)) {
+        kernel_names_.push_back(line.substr(line.find(':') + 2));
     }
 }
 
@@ -270,7 +268,7 @@ double WatcherServer::Impl::get_elapsed_secs() {
 void WatcherServer::Impl::create_log_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + LOG_FILE_NAME;
     if (rtoptions.get_watcher_skip_logging()) {
@@ -309,7 +307,7 @@ void WatcherServer::Impl::create_log_file() {
 void WatcherServer::Impl::create_kernel_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
     FILE* f = fopen(fname.c_str(), fmode);
@@ -326,7 +324,7 @@ void WatcherServer::Impl::create_kernel_file() {
 
 void WatcherServer::Impl::create_kernel_elf_file() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
     FILE* f = fopen(fname.c_str(), "w");
