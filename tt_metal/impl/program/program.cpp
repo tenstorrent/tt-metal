@@ -1907,11 +1907,6 @@ uint64_t Program::get_total_cb_allocated_bytes(std::optional<int> device_id) con
     return internal_->get_total_cb_allocated_bytes(device_id);
 }
 
-std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> Program::get_cb_l1_regions_per_core(
-    int device_id, size_t num_devices) const {
-    return internal_->get_cb_l1_regions_per_core(device_id, num_devices);
-}
-
 ProgramId detail::ProgramImpl::get_id() const { return this->id; }
 
 ProgramId detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }

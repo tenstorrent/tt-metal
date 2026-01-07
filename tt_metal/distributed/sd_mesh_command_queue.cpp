@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include <utility>
 #include <llrt/tt_cluster.hpp>
 

@@ -56,11 +56,6 @@ public:
     // If device_id is specified, only counts CBs allocated on that specific device
     uint64_t get_total_cb_allocated_bytes(std::optional<int> device_id = std::nullopt) const;
 
-    // Get actual L1 address regions used by this program's circular buffers, per core
-    // For physical memory tracking (accounts for address reuse across cached programs)
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> get_cb_l1_regions_per_core(
-        int device_id, size_t num_devices) const;
-
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
