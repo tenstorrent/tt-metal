@@ -2,7 +2,7 @@
 # to integrate tt_smi into the build system
 
 # TT-SMI Python UI module (optional)
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tt_smi/CMakeLists.txt)
-    add_subdirectory(tt_smi)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tt_smi_ui/CMakeLists.txt)
+    add_subdirectory(tt_smi_ui)
     message(STATUS "TT-SMI module added to build")
 endif()

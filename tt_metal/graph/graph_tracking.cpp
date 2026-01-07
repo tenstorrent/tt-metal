@@ -9,8 +9,6 @@
 #include "tt_metal/impl/profiler/memory_stats_shm.hpp"
 #include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-// DISABLED: TracyMemoryMonitor feature disabled
-// #include "tt_metal/impl/profiler/tracy_memory_monitor.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <iostream>
 #include <iomanip>
@@ -169,14 +167,6 @@ void GraphTracker::track_allocate(const Buffer* buffer) {
             device->get_shm_stats_provider()->record_allocation(
                 getpid(), buffer->size(), to_shm_buffer_type(buffer->buffer_type()), buffer->device()->id());
         }
-
-        // Report to Tracy-based memory monitor (always enabled, checks Tracy at runtime)
-        // DISABLED: TracyMemoryMonitor feature disabled
-        // TracyMemoryMonitor::instance().track_allocation(
-        //     buffer->device()->id(),
-        //     buffer->address(),
-        //     buffer->size(),
-        //     static_cast<TracyMemoryMonitor::BufferType>(buffer->buffer_type()));
     }
 
     // Original graph tracking
@@ -219,10 +209,6 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
             device->get_shm_stats_provider()->record_deallocation(
                 getpid(), buffer->size(), to_shm_buffer_type(buffer->buffer_type()), buffer->device()->id());
         }
-
-        // Report to Tracy-based memory monitor (always enabled, checks Tracy at runtime)
-        // DISABLED: TracyMemoryMonitor feature disabled
-        // TracyMemoryMonitor::instance().track_deallocation(buffer->device()->id(), buffer->address());
     }
 
     // Original graph tracking
@@ -272,11 +258,6 @@ void GraphTracker::track_allocate_cb(
         // if (dev && dev->get_shm_stats_provider()) {
         //     dev->get_shm_stats_provider()->record_allocation(getpid(), size, ShmBufferType::CB, device->id());
         // }
-
-        // Report to Tracy-based memory monitor (circular buffers are L1)
-        // DISABLED: TracyMemoryMonitor feature disabled
-        // TracyMemoryMonitor::instance().track_allocation(device->id(), addr, size,
-        // TracyMemoryMonitor::BufferType::L1);
     }
 
     // Original graph tracking
@@ -318,10 +299,6 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
             //     dev->get_shm_stats_provider()->record_deallocation(getpid(), cb.size, ShmBufferType::CB,
             //     device->id());
             // }
-
-            // Report to Tracy-based memory monitor
-            // DISABLED: TracyMemoryMonitor feature disabled
-            // TracyMemoryMonitor::instance().track_deallocation(device->id(), cb.addr);
         }
     }
 
