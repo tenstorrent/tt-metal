@@ -5,11 +5,8 @@
 """
 Fabric Manager CCL Tests
 Tests for CCL operations with fabric_manager enabled mode.
-Note: These tests were previously disabled in nightly/tg/ccl due to issue #35320
 """
 
-import pytest
-import torch
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
