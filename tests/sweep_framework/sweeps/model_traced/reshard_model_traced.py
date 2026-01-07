@@ -32,29 +32,35 @@ if model_traced_params:
 
 def invalidate_vector(test_vector) -> tuple:
     """
-    Invalidate test vectors with non-tile-aligned output shard shapes.
-    ttnn.reshard cannot create output tensors with non-tile-aligned shard dimensions.
+    Invalidate test vectors with non-tile-aligned shard shapes.
+    ttnn.reshard cannot work with tensors that have non-tile-aligned shard dimensions
+    in either input or output.
     """
-    output_mem_config = test_vector.get("output_memory_config")
+    # Check both input and output memory configs for non-tile-aligned shards
+    for config_key in ["input_a_memory_config", "output_memory_config"]:
+        mem_config = test_vector.get(config_key)
 
-    if output_mem_config:
-        # Check if it's a dict (during generation) or object (during execution)
-        if isinstance(output_mem_config, dict):
-            shard_spec = output_mem_config.get("data", {}).get("shard_spec")
-            if shard_spec and "shape" in shard_spec:
-                shard_shape = shard_spec["shape"]
-                if len(shard_shape) >= 2:
-                    height, width = shard_shape[-2], shard_shape[-1]
-                    if height % 32 != 0 or width % 32 != 0:
-                        return True, f"Output shard shape {shard_shape} not tile-aligned (must be divisible by 32)"
-        elif hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
-            shard_spec = output_mem_config.shard_spec
-            if hasattr(shard_spec, "shape"):
-                shard_shape = shard_spec.shape
-                if len(shard_shape) >= 2:
-                    height, width = shard_shape[-2], shard_shape[-1]
-                    if height % 32 != 0 or width % 32 != 0:
-                        return True, f"Output shard shape ({height}, {width}) not tile-aligned"
+        if mem_config:
+            # Check if it's a dict (during generation) or object (during execution)
+            if isinstance(mem_config, dict):
+                shard_spec = mem_config.get("data", {}).get("shard_spec")
+                if shard_spec and "shape" in shard_spec:
+                    shard_shape = shard_spec["shape"]
+                    if len(shard_shape) >= 2:
+                        height, width = shard_shape[-2], shard_shape[-1]
+                        if height % 32 != 0 or width % 32 != 0:
+                            return (
+                                True,
+                                f"{config_key} shard shape {shard_shape} not tile-aligned (must be divisible by 32)",
+                            )
+            elif hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
+                shard_spec = mem_config.shard_spec
+                if hasattr(shard_spec, "shape"):
+                    shard_shape = shard_spec.shape
+                    if len(shard_shape) >= 2:
+                        height, width = shard_shape[-2], shard_shape[-1]
+                        if height % 32 != 0 or width % 32 != 0:
+                            return True, f"{config_key} shard shape ({height}, {width}) not tile-aligned"
 
     return False, None
 
