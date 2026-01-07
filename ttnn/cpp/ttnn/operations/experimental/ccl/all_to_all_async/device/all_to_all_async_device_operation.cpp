@@ -180,11 +180,14 @@ AllToAllAsyncDeviceOperation::tensor_return_value_t AllToAllAsyncDeviceOperation
 
 tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    const auto& input_memory_config = input_tensor.memory_config();
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const ttnn::Tensor& persistent_intermediate_buffer = tensor_args.persistent_intermediate_buffer;
+    const ttnn::Tensor& persistent_output_buffer = tensor_args.persistent_output_buffer;
+
+    auto subdevice_id = operation_attributes.sub_device_id;
+    auto* mesh_device = input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,
@@ -193,10 +196,10 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
         operation_attributes.ring_size,
         operation_attributes.output_mem_config,
         operation_attributes.topology,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        subdevice_core_range_set,
+        input_tensor,
+        persistent_intermediate_buffer,
+        persistent_output_buffer);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
