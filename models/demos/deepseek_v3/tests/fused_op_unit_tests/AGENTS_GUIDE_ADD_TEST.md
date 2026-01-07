@@ -27,12 +27,13 @@ Follow these steps to add a new fused op unit test:
 	1. Creates all input tensors and function parameters (based on the actual use in the module code)
       - Parameters to the ops should be variables in an easily readable section in the code
       - Use pytest parameters for expected_pcc, expected_perf, mode+seqlen(add decode with seqlen 1, prefill with seqlen 128/1024/8k/128k)
-	2. Tests the NEW_FUSED_OP_ttnn using the reference code in NEW_FUSED_OP_reference
-    3. Contains a performance measurement wrapper, so that we measure device performance. See following notes on performance measurements.
-    4. Supports trace mode; add a pytest parameter to turn tracing on/off
+    2. Add a pytest parameter option to use real model weights/random weights
+	3. Tests the NEW_FUSED_OP_ttnn using the reference code in NEW_FUSED_OP_reference
+    4. Contains a performance measurement wrapper, so that we measure device performance. See following notes on performance measurements.
+    5. Supports trace mode; add a pytest parameter to turn tracing on/off
       - If it fails due to trace_region_size being too small, set the trace_region_size pytest parameter (see example test) based on the required size as printed in the log.
-    5. Contains a pytet parameter to turn program_caching on/off, this is only done when trace if off, with trace mode program_cache must be enabled too; use device.disable_and_clear_program_cache() for disabling, it's enabled by default
-	6. Compares PCC, ATOL, performance
+    6. Contains a pytet parameter to turn program_caching on/off, this is only done when trace if off, with trace mode program_cache must be enabled too; use device.disable_and_clear_program_cache() for disabling, it's enabled by default
+	7. Compares PCC, ATOL, performance
 8. *Verify NEW_FUSED_OP_reference* and the test code itself by running the unit test and comparing pcc to NEW_FUSED_OP_ttnn. The PCC should typically by > 0.99, otherwise there's likely something wrong. Add the result of this including a log file in the final summary of work. Do not proceed further in the TODOs unless this passes.
 	1. Update the expected_pcc with the pcc value from the test (if it's > 0.99 otherwise, debug the test to fix it!)
 	2. Use the current perf as expected_perf but add a TODO comment to add the actual target (based on theoretical numbers)
