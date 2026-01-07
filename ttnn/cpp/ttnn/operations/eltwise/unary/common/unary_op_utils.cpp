@@ -477,7 +477,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 "clamp_tile_init();",
                 fmt::format(
-                    "clamp_tile({},         {}, {});",
+                    "clamp_tile({}, {}, {});",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
