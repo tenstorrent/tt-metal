@@ -297,31 +297,16 @@ class Generator:
                     self.tt_logits_accumulated_batched.extend(tt_logits_list)
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
-                    ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[id])
+                    ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
 
             # Use batched list for batched prefill, persistent buffer for non-batched
-            logits_source = (
-                self.tt_logits_accumulated_batched
-                if use_batched_prefill
-                else self.tt_logits_accumulated[: len(empty_slots)]
-            )
+            logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
 
-            # lm_head output is a list [logits_tensor], extract the tensor
-            logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in logits_source]
-
-            # Prepare list of 32 tensors, one per slot
-            dummy_logits = ttnn.clone(logits_tensors[-1])
-            slot_logits = [dummy_logits for _ in range(padded_batch)]
-
-            # Put each real user's logits into the correct slot
-            for idx, empty_slot_idx in enumerate(empty_slots):
-                slot_logits[empty_slot_idx] = logits_tensors[idx]
-
-            # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
-            tt_logits_batch = ttnn.concat(slot_logits, dim=2)
+            # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
+            tt_logits_batch = ttnn.concat(logits_source, dim=2)
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
             # sampling_params are already padded to 32 by format_sampling_params
@@ -379,14 +364,9 @@ class Generator:
 
             sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0])
 
-            if use_batched_prefill:
-                # Batched prefill: sampled_tokens has 32 entries ordered by slot.
-                sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
-                output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
-            else:
-                # Non-batched prefill: first `batch` entries are our results in batch order.
-                for i in range(batch):
-                    output_toks[i] = sampled_tokens[0, 0, 0, i].item()
+            # sampled_tokens has 32 entries ordered by slot.
+            sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+            output_toks = sampled_tensor[empty_slots].reshape(batch, 1, 1)
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
