@@ -13,7 +13,6 @@ def tensor_map():
     return tensor_map
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
@@ -115,7 +114,6 @@ def test_avg_pool2d_post_commit(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, num_slices",  # NCHW
     (
@@ -199,4 +197,5 @@ def test_avg_pool2d_dram_post_commit(
         in_dtype=in_dtype,
         nightly_skips=False,
         dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=True,
     )

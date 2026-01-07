@@ -574,7 +574,8 @@ public:
             return_indices,
             dtype,
             output_layout,
-            this_ceil_pad);
+            this_ceil_pad,
+            config_tensor_in_dram);
     }
 
     std::string name() const override { return "Pool2D"; }
