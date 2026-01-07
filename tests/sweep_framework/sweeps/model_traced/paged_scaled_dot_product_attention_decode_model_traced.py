@@ -63,7 +63,6 @@ def run(
     input_e_layout=None,
     input_e_memory_config=None,
     output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,

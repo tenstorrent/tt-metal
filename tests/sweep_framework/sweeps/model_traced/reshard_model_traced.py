@@ -30,15 +30,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> tuple:
-    """
-    Adjust layout for non-tile-aligned shard shapes.
-    If shard shape is not tile-aligned, we need ROW_MAJOR layout.
-    """
-    # No configs need to be skipped - we'll adjust them in run()
-    return False, None
-
-
 def mesh_device_fixture():
     device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
     device_name = ttnn.get_arch_name()
@@ -53,7 +44,6 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,

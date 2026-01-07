@@ -66,14 +66,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> tuple:
-    """
-    No configs need to be skipped.
-    We'll adjust the layout in run() for bfloat8_b/bfloat4_b dtypes.
-    """
-    return False, None
-
-
 def run(
     input_shape,
     input_a_dtype,

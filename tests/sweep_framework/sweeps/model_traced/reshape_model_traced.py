@@ -49,7 +49,6 @@ def run(
     input_a_memory_config,
     output_memory_config,
     target_shape,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,

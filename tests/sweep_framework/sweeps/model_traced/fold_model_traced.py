@@ -56,7 +56,6 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
     stride_h=1,
     stride_w=1,
     storage_type="StorageType::DEVICE",

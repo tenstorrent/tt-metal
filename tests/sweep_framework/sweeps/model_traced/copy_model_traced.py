@@ -49,7 +49,6 @@ def run(
     input_b_layout,
     input_a_memory_config,
     input_b_memory_config,
-    output_memory_config,
     storage_type="StorageType::DEVICE",
     *,
     device,

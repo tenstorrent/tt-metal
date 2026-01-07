@@ -2,15 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# NOTE: ttnn.experimental.split_query_key_value_and_split_heads
-# - Operation EXISTS in ttnn
-# - Has 1 traced config from sentence_bert: shape=(8,1,384,2304), num_heads=12
-# - Config FAILS with TT_FATAL: "Physical shard shape (768, 48) must be tile {32, 32} sized!"
-# - This is a C++ implementation bug where the operation calculates non-tile-aligned output shards
-#
-# Status: 1/1 traced configs FAIL (skipped in invalidate_vector)
-# GitHub Issue: TBD - needs fix in C++ op implementation to handle this sharding correctly
-
 import torch
 import ttnn
 from functools import partial
@@ -36,22 +27,6 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> tuple:
-    """
-    Invalidate test vectors that will fail due to C++ implementation issues.
-
-    GitHub Issue: TBD
-    The traced config from sentence_bert (shape=(8,1,384,2304), num_heads=12)
-    fails with TT_FATAL: "Physical shard shape (768, 48) must be tile {32, 32} sized!"
-
-    This is a C++ implementation bug where the operation calculates non-tile-aligned
-    output shard shapes (48 is not divisible by 32). This needs to be fixed in the
-    C++ op implementation, not the sweep test.
-    """
-    # All traced configs currently fail with this error
-    return True, "C++ bug: operation produces non-tile-aligned shard shapes (768, 48) - needs fix in op implementation"
-
-
 def run(
     input_shape,
     input_a_dtype,
@@ -60,7 +35,6 @@ def run(
     output_memory_config=None,
     kv_input_height=None,
     num_heads=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,

@@ -46,17 +46,10 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    return False, None
-
-
 def run(
     input_specs,
     is_conv1d=False,
-    compute_config=None,
-    dtype=None,
     config_tensors_in_dram=False,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,

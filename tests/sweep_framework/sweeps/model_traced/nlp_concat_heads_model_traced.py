@@ -49,20 +49,6 @@ def mesh_device_fixture():
     del device
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Check if test vector is valid.
-    Returns (True, "reason") if invalid (should skip), (False, None) if valid.
-    """
-    # NOTE: The HEIGHT_SHARDED config with large grid (8,12,384,64) on 48 cores that was
-    # previously filtered actually WORKS when using the correct output_memory_config
-    # (BLOCK_SHARDED). The loader properly extracts both input and output memory configs
-    # from the JSON, so no filtering is needed.
-    # GitHub Issue: #35358
-
-    return False, None
-
-
 def run(
     input_shape,
     input_a_dtype,

@@ -95,7 +95,6 @@ def run(
     input_c_layout=None,
     input_c_memory_config=None,
     output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
