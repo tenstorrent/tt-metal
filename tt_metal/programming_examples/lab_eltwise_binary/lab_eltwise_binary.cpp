@@ -31,7 +31,7 @@ using namespace ttnn;
 // clang-format off
 /**
  * Reference implementation of element-wise addition.
- * This is intended to be used as a golden reference for testing the Metalium implementation.
+ * This is intended to be used for testing the Metalium implementation.
  *
  * | Argument | Description                         |
  * |----------|-------------------------------------|
@@ -40,7 +40,7 @@ using namespace ttnn;
  * | output   | Output vector (will be overwritten) |
  */
 // clang-format on
-void golden_add(const std::vector<bfloat16>& a, const std::vector<bfloat16>& b, std::vector<bfloat16>& output) {
+void reference_add(const std::vector<bfloat16>& a, const std::vector<bfloat16>& b, std::vector<bfloat16>& output) {
     TT_FATAL(a.size() == b.size(), "Input vectors must have the same size");
     TT_FATAL(output.size() == a.size(), "Output vector must have the same size as input vectors");
     for (size_t i = 0; i < a.size(); i++) {
@@ -288,7 +288,7 @@ void eltwise_add_tensix(
 // clang-format off
 /**
  * Main function that demonstrates single-core element-wise addition using ttnn::Tensor API.
- * Creates test data, runs golden reference implementation on CPU, executes addition on Tensix device,
+ * Creates test data, runs a reference implementation on host CPU, executes addition on Tensix device,
  * and verifies results.
  *
  * Return value: int (0 on success, non-zero on failure)
@@ -320,9 +320,9 @@ int main() {
             v = static_cast<bfloat16>(rng_dist(rng));
         }
 
-        // Golden addition running on x86 CPU so we can verify Tensix result.
-        std::vector<bfloat16> golden_vec(M * N);
-        golden_add(src0_vec, src1_vec, golden_vec);
+        // Reference addition running on x86 CPU so we can verify Tensix result.
+        std::vector<bfloat16> reference_result(M * N);
+        reference_add(src0_vec, src1_vec, reference_result);
 
         // Invoke the element-wise addition on the Tensix device
         std::vector<bfloat16> result_vec(M * N);
@@ -335,9 +335,9 @@ int main() {
 
         // Validate results
         constexpr float eps = 1e-2f;  // Loose tolerance because of limited precision of bfloat16.
-        TT_FATAL(result_vec.size() == golden_vec.size(), "Result vector size mismatch");
+        TT_FATAL(result_vec.size() == reference_result.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
-            const float expected = static_cast<float>(golden_vec[i]);
+            const float expected = static_cast<float>(reference_result[i]);
             const float actual = static_cast<float>(result_vec[i]);
 
             if (std::abs(expected - actual) > eps) {

@@ -146,6 +146,7 @@ Exercise 1: Tiled Matrix Multiplication
 
 In this part of the lab, you will implement two versions of matrix multiplication: a straightforward triply-nested loop, and a tiled version.
 The triply-nested loop version is simply a reference implementation provided at the beginning of the lab.
+
 The tiled version should be implemented as follows:
 
 1. Input to the matrix multiplication should be a vector to ensure data is contiguous in memory.
@@ -1000,10 +1001,10 @@ Consider the concrete example shown in Figure 6.
 
 Figure 6 shows an example where ``A`` is a ``9x4`` matrix, and ``B`` is a ``4x6`` matrix.
 If we choose ``3x3`` tiles for matrix ``C``, we need 3 rows of matrix ``A`` and 3 columns of matrix ``B`` to compute a single tile of matrix ``C``.
-This means that ``A`` must be tiled into 3 rows of tiles, and ``B`` must be tiled into 3 columns of tiles, with
-the number of columns in ``A``'s tiles matching the number of rows in ``B``'s tiles.
+This means that ``A`` tiles must have 3 rows, , and ``B`` tiles must have 3 columns, and 
+the number of columns in ``A`` tiles must match the number of rows in ``B`` tiles.
 If we choose ``3x2`` tiles for matrix ``A``, we can divide ``A`` into six tiles ``A0`` through ``A5``.
-The figure shows labeling of the tiles in row-major order, which is how tiled layout works on the Tenstorrent architecture, as described ealrier.
+The figure shows labeling of the tiles in row-major order, which is how tiled layout works on the Tenstorrent architecture, as described earlier.
 We can similarly divide ``B`` into four tiles ``B0`` through ``B3``, each of shape ``2x3``.
 Each ``C`` tile is computed by summing products of one tile row of ``A`` with one tile column of ``B``, exactly like scalar matrix multiplication,
 but with tiles instead of individual numbers. For instance, tile ``C0`` corresponds to tile row 0 of ``A`` and tile column 0 of ``B``, and therefore
@@ -1079,11 +1080,20 @@ to perform matrix multiplication.
 Start by copying the files from the ``lab_eltwise_binary`` directory into a new directory e.g. ``lab1_matmul`` and adjusting code to perform matrix multiplication.
 You will need to make the following changes:
 
-1. Update the host program to create input vectors of appropriate sizes for matrix multiplication, and copy golden reference matrix multiplication you created in
-   Exercise 1 to verify the results. Similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
-   pass required parameters to kernels.
+#. Update the host program to create input vectors to multiply matrix A of size 640x320 and matrix B of size 320x640 to produce matrix C of size 640x640.
+   Copy reference (non-tiled) matrix multiplication code you created in Exercise 1 so it can be used to verify TT-Metalium results.
+   Similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
+   pass required parameters to kernels (you may need to complete some of the following steps to determine the correct parameters).
 
-2. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
+#. Update the reader kernel to read the tiles of A and B in the correct order. The order should match the pattern of visiting one row of tiles of A
+   with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
+   not the actual memory address, so your code only needs to generate indices in the right order.
+
+#. Update the writer kernel to write the tiles of C in the correct order. The order should match the pattern of visiting tiles of C in row-major order.
+   Keep in mind that ``noc_async_write_tile`` function only requires the index of the tile to write, not the actual memory address,
+   so your code only needs to generate indices in the right order.
+
+#. Update the compute kernel to perform matrix multiplication rather than elementwise addition.
    To initialize the Tensix engine for matrix multiplication, you will need to use the ``mm_init`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
@@ -1092,32 +1102,31 @@ You will need to make the following changes:
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
    ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,
    you can ensure that the result for each output tile is accumulated correctly.
+   Your compute kernel code should process the required number of tiles provided by reader kernels and
+   produce the correct number of output tiles expected by the writer kernel.
 
-3. Update the reader kernel to read the tiles of A and B in the correct order. The order should match the pattern of visiting one row of tiles of A
-   with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
-   not the actual memory address, so your code only needs to generate indices in the right order.
+#. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile to match whatever file and directory names you chose.
 
-4. Update the writer kernel to write the tiles of C in the correct order. The order should match the pattern of visiting tiles of C in row-major order.
-   Keep in mind that ``noc_async_write_tile`` function only requires the index of the tile to write, not the actual memory address,
-   so your code only needs to generate indices in the right order.
+#. Update ``CMakeLists.txt`` in the parent folder to add the new subdirectory to the list of subdirectories to build.
 
-5. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile to match whatever file and directory names you chose.
-
-6. Update ``CMakeLists.txt`` in the parent folder to add the new subdirectory to the list of subdirectories to build.
-
-7. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in Exercise 1.
+#. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in Exercise 1.
    Note that because of limited precision of bfloat16, the results may not be exactly the same as the golden reference, but they should be
    numerically close (relative differences on the order of a few percent for input data in the range of 0-1).
 
-8. Profile the performance of the implementation, taking note of the total execution time on the device. This will be useful to compare
+#. Profile the performance of the implementation, taking note of the elapsed firmware time. This will be useful to compare
    against future labs when we optimize the implementation for performance.
    If you previously used the ``--build-type Debug`` flag, **do not forget to rebuild the programming examples**
-   with the ``--build-type Release`` flag before profiling performance.
+   with the ``--build-type Release`` flag, and also to disable DPRINT before profiling performance.
 
-Additional Resources
-====================
+Troubleshooting and Additional Resources
+========================================
 
-For additional information, please refer to the following resources:
+In rare cases, a Tensix device may enter an undefined operational state if a program performs actions outside the supported behavior.
+In such cases, the ``tt-smi -r`` command can be used to reset the device.
+This operation restores the device to a clean state, allowing normal operation to resume.
+If you encounter an unexplained behaviors, try resetting the device using this command.
+
+Additional information about TT-Metalium and the Tenstorrent architecture can be found in the following resources:
 
 * TT-Metalium Documentation: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/index.html
 * TT-Metalium GitHub Repository: https://github.com/tenstorrent/tt-metal
