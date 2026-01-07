@@ -16,7 +16,7 @@ from loguru import logger
 pytestmark = pytest.mark.use_module_device
 
 
-def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_math_unary_test(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, pcc=0.9999):
     torch.manual_seed(0)
 
     # Generate random [0; 1] tensor
@@ -28,17 +28,20 @@ def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
     output_tensor = ttnn_function(input_tensor)
+    # Verify output layout matches input layout
+    assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_i0(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.i0, pcc=0.998)
+def test_i0(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.i0, layout=layout, pcc=0.998)
 
 
 @pytest.mark.parametrize("h", [5])
@@ -99,34 +102,39 @@ def test_eq(device, h, w, output_dtype):
     assert_with_pcc(torch_output_tensor, torch_output_tensor_preallocated, 0.999)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log10(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.log10)
+def test_log10(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.log10, layout=layout)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log1p(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.log1p, pcc=0.999)
+def test_log1p(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.log1p, layout=layout, pcc=0.999)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_log2(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.log2, pcc=0.999)
+def test_log2(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.log2, layout=layout, pcc=0.999)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_neg(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.neg)
+def test_neg(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.neg, layout=layout)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_abs(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.abs)
+def test_abs(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.abs, layout=layout)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -153,10 +161,11 @@ def test_deg2rad(device, h, w):
     run_math_unary_test(device, h, w, ttnn.deg2rad)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_sqrt(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.sqrt)
+def test_sqrt(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.sqrt, layout=layout)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -183,10 +192,11 @@ def test_erfinv(device, h, w):
     run_math_unary_test(device, h, w, ttnn.erfinv, pcc=0.999)
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_square(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.square)
+def test_square(device, h, w, layout):
+    run_math_unary_test(device, h, w, ttnn.square, layout=layout)
 
 
 @pytest.mark.parametrize("h", [64])

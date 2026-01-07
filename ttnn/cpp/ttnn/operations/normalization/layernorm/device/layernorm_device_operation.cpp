@@ -19,9 +19,8 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return LayerNormShardedProgramFactory{};
-    } else {
-        return LayerNormMultiCoreProgramFactory{};
     }
+    return LayerNormMultiCoreProgramFactory{};
 }
 
 void LayerNormDeviceOperation::validate_on_program_cache_hit(
@@ -353,7 +352,8 @@ spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
                     auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
-                } else if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
+                }
+                if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     auto output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
