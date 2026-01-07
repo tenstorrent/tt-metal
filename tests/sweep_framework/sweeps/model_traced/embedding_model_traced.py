@@ -94,7 +94,7 @@ def run(
     )(weight_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze(dim=0)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
     # torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weight_tensor)
 
     input_tensor = ttnn.from_torch(

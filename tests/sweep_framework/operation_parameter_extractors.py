@@ -604,19 +604,45 @@ class OperationParameterExtractors:
             # Look for arg1 which should contain the dims parameter
             for arg in config:
                 if isinstance(arg, dict) and "arg1" in arg:
-                    dims_str = arg["arg1"]
-                    # The dims are in format '[0, 2, 3, 1]' or similar
-                    if isinstance(dims_str, str) and dims_str.startswith("[") and dims_str.endswith("]"):
-                        # Parse the list string
-                        dims_str = dims_str.strip("[]")
-                        if dims_str:
-                            dims = [int(x.strip()) for x in dims_str.split(",")]
-                            return dims
-                    elif isinstance(dims_str, list):
-                        return dims_str
+                    dims_data = arg["arg1"]
+
+                    # Handle direct list
+                    if isinstance(dims_data, list):
+                        # Check if list contains non-integer elements (unparsable)
+                        if any(isinstance(d, str) and ("unsupported" in d or "std::" in d) for d in dims_data):
+                            return None
+                        # Validate all elements are integers
+                        if all(isinstance(d, int) for d in dims_data):
+                            return dims_data
+
+                    # Handle dict with 'SmallVector' key
+                    elif isinstance(dims_data, dict) and "SmallVector" in dims_data:
+                        dims_list = dims_data["SmallVector"]
+                        if isinstance(dims_list, list) and all(isinstance(d, int) for d in dims_list):
+                            return dims_list
+
+                    # Handle string format '[0, 2, 3, 1]'
+                    elif isinstance(dims_data, str):
+                        # Skip corrupted strings containing 'unsupported type' or 'std::reference_wrapper'
+                        if "unsupported" in dims_data or "std::" in dims_data:
+                            return None
+
+                        if dims_data.startswith("[") and dims_data.endswith("]"):
+                            # Parse the list string
+                            dims_str = dims_data.strip("[]").strip()
+                            if dims_str:
+                                dims = [int(x.strip()) for x in dims_str.split(",")]
+                                return dims
             return None
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_permute_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for permute operation"""
+        dims = OperationParameterExtractors._extract_permute_dims(config)
+        # Always return dims (None is fine, will be inferred by loader based on shape)
+        return {"dims": dims}
 
     @staticmethod
     def _extract_shape_parameter(config: List, arg_name: str = "arg1") -> Optional[List[int]]:
@@ -752,7 +778,8 @@ class OperationParameterExtractors:
         shape = tensor_spec.get("logical_shape", [])
         # Handle both 'data_type' and 'dtype' fields
         dtype = tensor_layout.get("data_type", tensor_layout.get("dtype", ""))
-        layout = tensor_layout.get("layout", "")
+        # Layout is at top level of Tensor in new format, or inside tensor_layout in old format
+        layout = tensor_data.get("layout", tensor_layout.get("layout", ""))
         memory_config = tensor_layout.get("memory_config", {})
 
         # If layout is missing, default to TILE for linear operations
@@ -765,17 +792,7 @@ class OperationParameterExtractors:
         return None
 
     # Unary operation extractors
-    @staticmethod
-    def _extract_permute_parameters(config: List) -> Optional[Dict]:
-        """Extract parameters for permute operation"""
-        try:
-            dims = OperationParameterExtractors._extract_permute_dims(config)
-            if dims:
-                return {"dims": dims}
-            # Fallback to default if extraction fails
-            return {"dims": [0, 1, 3, 2]}  # N, C, W, H -> N, C, H, W
-        except Exception:
-            return None
+    # (permute extractor moved to earlier in file near _extract_permute_dims)
 
     @staticmethod
     def _extract_untilize_with_unpadding_parameters(config: List) -> Optional[Dict]:
@@ -847,7 +864,8 @@ class OperationParameterExtractors:
                 tensor_config = None
                 for arg in config:
                     if isinstance(arg, dict) and "arg0" in arg:
-                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+                        # Pass the whole arg dict so extract_tensor_config can handle nested structure
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(arg)
                         break
 
                 if tensor_config:
@@ -1110,6 +1128,260 @@ class OperationParameterExtractors:
             return None
         except Exception as e:
             return None
+
+    @staticmethod
+    def _extract_update_cache_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for update_cache operation
+
+        Extracts:
+        - arg0: cache_tensor (input_a)
+        - arg1: input_tensor (input_b)
+        - arg2: cache_idx (scalar)
+        - arg3: batch_offset (scalar_1)
+        - arg4: memory_config (optional, often nullopt)
+        """
+        try:
+            params = {}
+
+            # Extract first tensor (cache)
+            if len(config) > 0 and isinstance(config[0], dict) and "arg0" in config[0]:
+                tensor_config_a = OperationParameterExtractors.extract_tensor_config(config[0]["arg0"])
+                if tensor_config_a:
+                    cache_shape = tensor_config_a.shape
+                    params["input_a_dtype"] = tensor_config_a.dtype.replace("DataType::", "")
+                    params["input_a_layout"] = tensor_config_a.layout.replace("Layout::", "")
+                    params["input_a_memory_config"] = tensor_config_a.memory_config
+                else:
+                    return None
+
+            # Extract second tensor (input)
+            if len(config) > 1 and isinstance(config[1], dict) and "arg1" in config[1]:
+                tensor_config_b = OperationParameterExtractors.extract_tensor_config(config[1]["arg1"])
+                if tensor_config_b:
+                    input_shape = tensor_config_b.shape
+                    params["input_b_dtype"] = tensor_config_b.dtype.replace("DataType::", "")
+                    params["input_b_layout"] = tensor_config_b.layout.replace("Layout::", "")
+                    params["input_b_memory_config"] = tensor_config_b.memory_config
+                else:
+                    return None
+
+            # Store shapes separately for transform step
+            params["input_shape"] = cache_shape  # Primary input (cache)
+            params["input_b_shape"] = input_shape  # Secondary input
+
+            # Extract cache_idx (arg2)
+            if len(config) > 2 and isinstance(config[2], dict) and "arg2" in config[2]:
+                cache_idx = config[2]["arg2"]
+                # Extract batch_offset (arg3)
+                batch_offset = None
+                if len(config) > 3 and isinstance(config[3], dict) and "arg3" in config[3]:
+                    batch_offset = config[3]["arg3"]
+
+                # Store both scalars in a dict
+                params["scalar"] = {
+                    "update_index": str(cache_idx),
+                    "batch_offset": str(batch_offset) if batch_offset is not None else "0",
+                }
+
+            # Use cache tensor's memory config as output
+            params["output_memory_config"] = tensor_config_a.memory_config
+
+            return params
+
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting update_cache parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _extract_scale_mask_softmax_in_place_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for scale_mask_softmax_in_place operation
+
+        Extracts:
+        - arg0: input_tensor (input_a)
+        - arg1: scale (scalar)
+        - arg2: mask_tensor (input_b, optional - can be nullopt)
+        """
+        try:
+            params = {}
+
+            # Extract input tensor (arg0)
+            if len(config) > 0 and isinstance(config[0], dict) and "arg0" in config[0]:
+                tensor_config_a = OperationParameterExtractors.extract_tensor_config(config[0]["arg0"])
+                if tensor_config_a:
+                    params["input_shape"] = tensor_config_a.shape
+                    params["input_a_dtype"] = tensor_config_a.dtype.replace("DataType::", "")
+                    params["input_a_layout"] = tensor_config_a.layout.replace("Layout::", "")
+                    params["input_a_memory_config"] = tensor_config_a.memory_config
+                else:
+                    return None
+
+            # Extract scale (arg1)
+            if len(config) > 1 and isinstance(config[1], dict) and "arg1" in config[1]:
+                scale_value = config[1]["arg1"]
+                if scale_value != "nullopt":
+                    params["scalar"] = str(scale_value)
+
+            # Extract mask tensor (arg2, optional)
+            if len(config) > 2 and isinstance(config[2], dict) and "arg2" in config[2]:
+                arg2_value = config[2]["arg2"]
+                if arg2_value != "nullopt":
+                    tensor_config_b = OperationParameterExtractors.extract_tensor_config(arg2_value)
+                    if tensor_config_b:
+                        params["input_b_shape"] = tensor_config_b.shape
+                        params["input_b_dtype"] = tensor_config_b.dtype.replace("DataType::", "")
+                        params["input_b_layout"] = tensor_config_b.layout.replace("Layout::", "")
+                        params["input_b_memory_config"] = tensor_config_b.memory_config
+
+            # Use input tensor's memory config as output
+            params["output_memory_config"] = tensor_config_a.memory_config
+
+            return params
+
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting scale_mask_softmax_in_place parameters: {e}")
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def _transform_scale_mask_softmax_in_place_parameters(
+        extracted_params: List[Dict],
+        parse_dtype=None,
+        parse_layout=None,
+        parse_memory_config=None,
+    ) -> List[Dict]:
+        """Transform extracted scale_mask_softmax_in_place parameters to match test function signature"""
+        transformed = []
+
+        for params in extracted_params:
+            transformed_config = {}
+
+            # Transform input_shape
+            if "input_shape" in params:
+                transformed_config["input_shape"] = tuple(params["input_shape"])
+
+            # Transform input tensor properties
+            if "input_a_dtype" in params:
+                transformed_config["input_a_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_a_dtype']}") if parse_dtype else params["input_a_dtype"]
+                )
+            if "input_a_layout" in params:
+                transformed_config["input_a_layout"] = (
+                    parse_layout(f"Layout::{params['input_a_layout']}") if parse_layout else params["input_a_layout"]
+                )
+            if "input_a_memory_config" in params:
+                transformed_config["input_a_memory_config"] = (
+                    parse_memory_config(params["input_a_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_a_memory_config"]
+                )
+
+            # Transform mask tensor properties (optional)
+            if "input_b_shape" in params:
+                transformed_config["mask_shape"] = tuple(params["input_b_shape"])
+            if "input_b_dtype" in params:
+                transformed_config["input_b_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_b_dtype']}") if parse_dtype else params["input_b_dtype"]
+                )
+            if "input_b_layout" in params:
+                transformed_config["input_b_layout"] = (
+                    parse_layout(f"Layout::{params['input_b_layout']}") if parse_layout else params["input_b_layout"]
+                )
+            if "input_b_memory_config" in params:
+                transformed_config["input_b_memory_config"] = (
+                    parse_memory_config(params["input_b_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_b_memory_config"]
+                )
+
+            # Output memory config
+            if "output_memory_config" in params:
+                transformed_config["output_memory_config"] = (
+                    parse_memory_config(params["output_memory_config"], [])
+                    if parse_memory_config
+                    else params["output_memory_config"]
+                )
+
+            # Pass through scale value
+            if "scalar" in params:
+                transformed_config["scalar"] = float(params["scalar"])
+
+            transformed.append(transformed_config)
+
+        return transformed
+
+    @staticmethod
+    def _transform_update_cache_parameters(
+        extracted_params: List[Dict],
+        parse_dtype=None,
+        parse_layout=None,
+        parse_memory_config=None,
+    ) -> List[Dict]:
+        """Transform extracted update_cache parameters to match test function signature"""
+        transformed = []
+
+        for params in extracted_params:
+            transformed_config = {}
+
+            # Transform input_shape (build dict with 'self' and 'other' keys from separate shape fields)
+            input_shape_dict = {}
+            if "input_shape" in params:
+                # input_shape is the cache tensor shape (self)
+                input_shape_dict["self"] = tuple(params["input_shape"])
+            if "input_b_shape" in params:
+                # input_b_shape is the input tensor shape (other)
+                input_shape_dict["other"] = tuple(params["input_b_shape"])
+            transformed_config["input_shape"] = input_shape_dict
+
+            # Transform dtypes, layouts, memory configs for both tensors
+            if "input_a_dtype" in params:
+                transformed_config["input_a_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_a_dtype']}") if parse_dtype else params["input_a_dtype"]
+                )
+            if "input_b_dtype" in params:
+                transformed_config["input_b_dtype"] = (
+                    parse_dtype(f"DataType::{params['input_b_dtype']}") if parse_dtype else params["input_b_dtype"]
+                )
+
+            if "input_a_layout" in params:
+                transformed_config["input_a_layout"] = (
+                    parse_layout(f"Layout::{params['input_a_layout']}") if parse_layout else params["input_a_layout"]
+                )
+            if "input_b_layout" in params:
+                transformed_config["input_b_layout"] = (
+                    parse_layout(f"Layout::{params['input_b_layout']}") if parse_layout else params["input_b_layout"]
+                )
+
+            if "input_a_memory_config" in params:
+                transformed_config["input_a_memory_config"] = (
+                    parse_memory_config(params["input_a_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_a_memory_config"]
+                )
+            if "input_b_memory_config" in params:
+                transformed_config["input_b_memory_config"] = (
+                    parse_memory_config(params["input_b_memory_config"], [])
+                    if parse_memory_config
+                    else params["input_b_memory_config"]
+                )
+            if "output_memory_config" in params:
+                transformed_config["output_memory_config"] = (
+                    parse_memory_config(params["output_memory_config"], [])
+                    if parse_memory_config
+                    else params["output_memory_config"]
+                )
+
+            # Pass through scalar (cache_idx and batch_offset)
+            if "scalar" in params:
+                transformed_config["scalar"] = params["scalar"]
+
+            transformed.append(transformed_config)
+
+        return transformed
 
     @staticmethod
     def _extract_paged_update_cache_parameters(config: List) -> Optional[Dict]:
@@ -1696,6 +1968,30 @@ OperationParameterExtractors.register_extractor(
     "ttnn::transformer::paged_scaled_dot_product_attention_decode",
     extract_func=OperationParameterExtractors._extract_paged_scaled_dot_product_attention_decode_parameters,
     transform_func=OperationParameterExtractors._transform_paged_scaled_dot_product_attention_decode_parameters,
+)
+
+# Register scale_mask_softmax_in_place extractor (input, scale, optional mask)
+OperationParameterExtractors.register_extractor(
+    "scale_mask_softmax_in_place",
+    extract_func=OperationParameterExtractors._extract_scale_mask_softmax_in_place_parameters,
+    transform_func=OperationParameterExtractors._transform_scale_mask_softmax_in_place_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::scale_mask_softmax_in_place",
+    extract_func=OperationParameterExtractors._extract_scale_mask_softmax_in_place_parameters,
+    transform_func=OperationParameterExtractors._transform_scale_mask_softmax_in_place_parameters,
+)
+
+# Register update_cache extractor (custom extractor for cache, input, cache_idx, batch_offset)
+OperationParameterExtractors.register_extractor(
+    "update_cache",
+    extract_func=OperationParameterExtractors._extract_update_cache_parameters,
+    transform_func=OperationParameterExtractors._transform_update_cache_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::update_cache",
+    extract_func=OperationParameterExtractors._extract_update_cache_parameters,
+    transform_func=OperationParameterExtractors._transform_update_cache_parameters,
 )
 
 # Register paged_update_cache extractor (custom extractor for arg positions 0,1,3,5)
@@ -2556,6 +2852,118 @@ OperationParameterExtractors.register_extractor(
 )
 
 
+# Add multiply_ extractor method (scalar multiply - in-place operation)
+def _extract_multiply__parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for multiply_ operation (scalar multiply)
+
+    multiply_ is an in-place operation that multiplies a tensor by a scalar.
+    Args: tensor (arg0), scalar (arg1)
+    """
+    try:
+        params = {}
+        tensor_config = None
+        scalar_value = None
+
+        # Extract tensor and scalar
+        for arg in config:
+            if isinstance(arg, dict):
+                for key, val in arg.items():
+                    if key == "arg0":
+                        tensor_config = OperationParameterExtractors.extract_tensor_config(val)
+                    elif key == "arg1":
+                        # Extract scalar value
+                        if isinstance(val, (int, float)):
+                            scalar_value = float(val)
+                        elif isinstance(val, str):
+                            try:
+                                scalar_value = float(val)
+                            except ValueError:
+                                scalar_value = 1.0
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["scalar_value"] = scalar_value if scalar_value is not None else 1.0
+            params["output_memory_config"] = tensor_config.memory_config
+
+            return params
+        return None
+    except Exception as e:
+        return None
+
+
+def _transform_multiply__parameters(
+    configs: List, parse_dtype=None, parse_layout=None, parse_memory_config=None
+) -> List[Dict]:
+    """Transform multiply_ traced configs to run function format"""
+    transformed_configs = []
+
+    for config in configs:
+        try:
+            if not isinstance(config, dict):
+                continue
+
+            input_shape = config.get("input_shape")
+            if not input_shape:
+                continue
+
+            # Parse dtype and layout
+            input_a_dtype_str = config.get("input_a_dtype", "DataType::BFLOAT16")
+            input_a_layout_str = config.get("input_a_layout", "Layout::TILE")
+
+            # Parse memory config
+            input_a_mem_config = config.get("input_a_memory_config", {})
+            output_mem_config = config.get("output_memory_config", input_a_mem_config)
+
+            # Get scalar value
+            scalar_value = config.get("scalar_value", 1.0)
+
+            transformed_config = {
+                "input_shape": input_shape,
+                "input_a_dtype": input_a_dtype_str,
+                "input_a_layout": input_a_layout_str,
+                "input_a_memory_config": input_a_mem_config,
+                "output_memory_config": output_mem_config,
+                "scalar_value": scalar_value,
+            }
+
+            # Apply parsers if provided
+            if parse_dtype:
+                transformed_config["input_a_dtype"] = parse_dtype(input_a_dtype_str)
+            if parse_layout:
+                transformed_config["input_a_layout"] = parse_layout(input_a_layout_str)
+            if parse_memory_config:
+                transformed_config["input_a_memory_config"] = parse_memory_config(input_a_mem_config, input_shape)
+                transformed_config["output_memory_config"] = parse_memory_config(output_mem_config, input_shape)
+
+            transformed_configs.append(transformed_config)
+
+        except Exception as e:
+            print(f"Error transforming multiply_ config: {e}")
+            continue
+
+    return transformed_configs
+
+
+# Add methods to class
+OperationParameterExtractors._extract_multiply__parameters = staticmethod(_extract_multiply__parameters)
+OperationParameterExtractors._transform_multiply__parameters = staticmethod(_transform_multiply__parameters)
+
+# Register multiply_ extractor
+OperationParameterExtractors.register_extractor(
+    "multiply_",
+    extract_func=OperationParameterExtractors._extract_multiply__parameters,
+    transform_func=OperationParameterExtractors._transform_multiply__parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::multiply_",
+    extract_func=OperationParameterExtractors._extract_multiply__parameters,
+    transform_func=OperationParameterExtractors._transform_multiply__parameters,
+)
+
+
 # Example: How users can easily add their own operation extractors
 def example_custom_operation_setup():
     """
@@ -2592,6 +3000,483 @@ def example_custom_operation_setup():
     ```
     """
     pass
+
+
+# ============================================================================
+# Extractors for newly added operations
+# ============================================================================
+
+
+def _extract_pow_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for pow operation"""
+    try:
+        params = {}
+        tensor_config = None
+        exponent = 2.0  # default
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract exponent from arg1
+                elif "arg1" in arg:
+                    exponent_str = str(arg["arg1"])
+                    try:
+                        exponent = float(exponent_str)
+                    except ValueError:
+                        exponent = 2.0
+
+                # Extract output memory_config from arg2
+                elif "arg2" in arg and isinstance(arg["arg2"], dict):
+                    if "MemoryConfig" in arg["arg2"]:
+                        output_memory_config = arg["arg2"]["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["exponent"] = exponent
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_clamp_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for clamp operation"""
+    try:
+        params = {}
+        tensor_config = None
+        min_val = -10.0
+        max_val = 10.0
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract min from arg1
+                elif "arg1" in arg:
+                    try:
+                        min_val = float(str(arg["arg1"]))
+                    except ValueError:
+                        pass
+
+                # Extract max from arg2
+                elif "arg2" in arg:
+                    try:
+                        max_val = float(str(arg["arg2"]))
+                    except ValueError:
+                        pass
+
+                # Extract output memory_config from arg3
+                elif "arg3" in arg and isinstance(arg["arg3"], dict):
+                    if "MemoryConfig" in arg["arg3"]:
+                        output_memory_config = arg["arg3"]["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["min"] = min_val
+            params["max"] = max_val
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_argmax_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for argmax operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = -1
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1
+                elif "arg1" in arg:
+                    try:
+                        dim = int(str(arg["arg1"]))
+                    except ValueError:
+                        dim = -1
+
+                # Extract output memory_config from arg2 or arg3
+                elif ("arg2" in arg or "arg3" in arg) and isinstance(list(arg.values())[0], dict):
+                    arg_value = list(arg.values())[0]
+                    if "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_sum_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for sum operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = None
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1 (may be optional)
+                elif "arg1" in arg:
+                    dim_str = str(arg["arg1"])
+                    if dim_str and dim_str != "None" and dim_str != "nullopt":
+                        try:
+                            dim = int(dim_str)
+                        except ValueError:
+                            dim = None
+
+                # Extract output memory_config from later args
+                elif any(k.startswith("arg") for k in arg.keys()):
+                    arg_value = list(arg.values())[0]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_std_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for std operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = None
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1 (may be optional)
+                elif "arg1" in arg:
+                    dim_str = str(arg["arg1"])
+                    if dim_str and dim_str != "None" and dim_str != "nullopt":
+                        try:
+                            dim = int(dim_str)
+                        except ValueError:
+                            dim = None
+
+                # Extract output memory_config from later args
+                elif any(k.startswith("arg") for k in arg.keys()):
+                    arg_value = list(arg.values())[0]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_softmax_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for softmax operation"""
+    try:
+        params = {}
+        tensor_config = None
+        dim = -1
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract dim from arg1
+                elif "arg1" in arg:
+                    try:
+                        dim = int(str(arg["arg1"]))
+                    except ValueError:
+                        dim = -1
+
+                # Extract output memory_config from later args
+                elif any(k.startswith("arg") for k in arg.keys()):
+                    arg_value = list(arg.values())[0]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["dim"] = dim
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+def _extract_repeat_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for repeat operation"""
+    try:
+        params = {}
+        tensor_config = None
+        shape = [1, 1, 2, 1]  # default repetition vector
+        output_memory_config = None
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # Extract tensor config from arg0
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # Extract repetition vector from arg1
+                elif "arg1" in arg:
+                    shape_str = str(arg["arg1"])
+                    # Try to parse as list
+                    if "[" in shape_str:
+                        try:
+                            shape = eval(shape_str)
+                        except:
+                            pass
+
+                # Extract output memory_config from arg2
+                elif "arg2" in arg and isinstance(arg["arg2"], dict):
+                    if "MemoryConfig" in arg["arg2"]:
+                        output_memory_config = arg["arg2"]["MemoryConfig"]
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["shape"] = shape
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            return params
+        return None
+    except Exception:
+        return None
+
+
+# Register the new extractors
+OperationParameterExtractors.register_extractor("pow", extract_func=_extract_pow_parameters)
+OperationParameterExtractors.register_extractor("ttnn::pow", extract_func=_extract_pow_parameters)
+
+OperationParameterExtractors.register_extractor("clamp", extract_func=_extract_clamp_parameters)
+OperationParameterExtractors.register_extractor("ttnn::clamp", extract_func=_extract_clamp_parameters)
+
+OperationParameterExtractors.register_extractor("argmax", extract_func=_extract_argmax_parameters)
+OperationParameterExtractors.register_extractor("ttnn::argmax", extract_func=_extract_argmax_parameters)
+
+OperationParameterExtractors.register_extractor("sum", extract_func=_extract_sum_parameters)
+OperationParameterExtractors.register_extractor("ttnn::sum", extract_func=_extract_sum_parameters)
+
+OperationParameterExtractors.register_extractor("std", extract_func=_extract_std_parameters)
+OperationParameterExtractors.register_extractor("ttnn::std", extract_func=_extract_std_parameters)
+
+OperationParameterExtractors.register_extractor("softmax", extract_func=_extract_softmax_parameters)
+OperationParameterExtractors.register_extractor("ttnn::softmax", extract_func=_extract_softmax_parameters)
+
+OperationParameterExtractors.register_extractor("repeat", extract_func=_extract_repeat_parameters)
+OperationParameterExtractors.register_extractor("ttnn::repeat", extract_func=_extract_repeat_parameters)
+
+
+def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
+    """Extract parameters for group_norm operation (all 16 arguments)"""
+    try:
+        params = {}
+        tensor_config = None
+        num_groups = 32  # default
+        epsilon = 1e-6  # default
+        input_mask_config = None
+        weight_config = None
+        bias_config = None
+        reciprocals_config = None
+        output_memory_config = None
+        inplace = False
+        num_out_blocks = None
+        use_welford = False
+
+        for arg in config:
+            if isinstance(arg, dict):
+                # arg0: Extract input tensor config
+                if "arg0" in arg and isinstance(arg["arg0"], dict) and "Tensor" in arg["arg0"]:
+                    tensor_config = OperationParameterExtractors.extract_tensor_config(arg["arg0"])
+
+                # arg1: num_groups
+                elif "arg1" in arg:
+                    try:
+                        num_groups = int(str(arg["arg1"]))
+                    except ValueError:
+                        num_groups = 32
+
+                # arg2: epsilon
+                elif "arg2" in arg:
+                    try:
+                        epsilon = float(str(arg["arg2"]))
+                    except ValueError:
+                        epsilon = 1e-6
+
+                # arg3: input_mask tensor
+                elif "arg3" in arg and isinstance(arg["arg3"], dict) and "Tensor" in arg["arg3"]:
+                    input_mask_config = OperationParameterExtractors.extract_tensor_config(arg["arg3"])
+
+                # arg4: weight tensor
+                elif "arg4" in arg and isinstance(arg["arg4"], dict) and "Tensor" in arg["arg4"]:
+                    weight_config = OperationParameterExtractors.extract_tensor_config(arg["arg4"])
+
+                # arg5: bias tensor
+                elif "arg5" in arg and isinstance(arg["arg5"], dict) and "Tensor" in arg["arg5"]:
+                    bias_config = OperationParameterExtractors.extract_tensor_config(arg["arg5"])
+
+                # arg6: reciprocals tensor
+                elif "arg6" in arg and isinstance(arg["arg6"], dict) and "Tensor" in arg["arg6"]:
+                    reciprocals_config = OperationParameterExtractors.extract_tensor_config(arg["arg6"])
+
+                # arg7: output memory_config
+                elif "arg7" in arg:
+                    arg_value = arg["arg7"]
+                    if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
+                        output_memory_config = arg_value["MemoryConfig"]
+
+                # arg10: inplace
+                elif "arg10" in arg:
+                    try:
+                        inplace = bool(int(str(arg["arg10"])))
+                    except (ValueError, TypeError):
+                        inplace = False
+
+                # arg12: num_out_blocks
+                elif "arg12" in arg:
+                    try:
+                        val = str(arg["arg12"])
+                        if val != "nullopt":
+                            num_out_blocks = int(val)
+                    except (ValueError, TypeError):
+                        pass
+
+                # arg15: use_welford
+                elif "arg15" in arg:
+                    try:
+                        use_welford = bool(int(str(arg["arg15"])))
+                    except (ValueError, TypeError):
+                        use_welford = False
+
+        if tensor_config:
+            params["input_shape"] = tensor_config.shape
+            params["input_a_dtype"] = tensor_config.dtype
+            params["input_a_layout"] = tensor_config.layout
+            params["input_a_memory_config"] = tensor_config.memory_config
+            params["num_groups"] = num_groups
+            params["epsilon"] = epsilon
+            params["output_memory_config"] = (
+                output_memory_config if output_memory_config else tensor_config.memory_config
+            )
+            params["inplace"] = inplace
+            params["use_welford"] = use_welford
+
+            # Add optional tensor configs
+            if input_mask_config:
+                params["input_mask_shape"] = input_mask_config.shape
+                params["input_mask_dtype"] = input_mask_config.dtype
+                params["input_mask_layout"] = input_mask_config.layout
+                params["input_mask_memory_config"] = input_mask_config.memory_config
+
+            if weight_config:
+                params["weight_shape"] = weight_config.shape
+                params["weight_dtype"] = weight_config.dtype
+                params["weight_layout"] = weight_config.layout
+                params["weight_memory_config"] = weight_config.memory_config
+
+            if bias_config:
+                params["bias_shape"] = bias_config.shape
+                params["bias_dtype"] = bias_config.dtype
+                params["bias_layout"] = bias_config.layout
+                params["bias_memory_config"] = bias_config.memory_config
+
+            if reciprocals_config:
+                params["reciprocals_shape"] = reciprocals_config.shape
+                params["reciprocals_dtype"] = reciprocals_config.dtype
+                params["reciprocals_layout"] = reciprocals_config.layout
+                params["reciprocals_memory_config"] = reciprocals_config.memory_config
+
+            if num_out_blocks is not None:
+                params["num_out_blocks"] = num_out_blocks
+
+            return params
+        return None
+    except Exception:
+        return None
+
+
+# Register group_norm extractor
+OperationParameterExtractors.register_extractor("group_norm", extract_func=_extract_group_norm_parameters)
+OperationParameterExtractors.register_extractor("ttnn::group_norm", extract_func=_extract_group_norm_parameters)
+
+# Register permute extractor
+OperationParameterExtractors.register_extractor(
+    "permute", extract_func=OperationParameterExtractors._extract_permute_parameters
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::permute", extract_func=OperationParameterExtractors._extract_permute_parameters
+)
 
 
 if __name__ == "__main__":

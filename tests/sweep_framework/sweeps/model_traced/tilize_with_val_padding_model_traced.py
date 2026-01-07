@@ -66,6 +66,14 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    No configs need to be skipped.
+    We'll adjust the layout in run() for bfloat8_b/bfloat4_b dtypes.
+    """
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -77,6 +85,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
@@ -95,10 +104,19 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
+    # Check if we need to override layout for bfloat8_b/bfloat4_b
+    # These dtypes REQUIRE TILE layout, so we use TILE even though
+    # tilize_with_val_padding normally takes ROW_MAJOR input
+    dtype_str = str(input_a_dtype).upper() if input_a_dtype else ""
+    needs_tile_layout = "BFLOAT8_B" in dtype_str or "BFLOAT4_B" in dtype_str
+
+    # Use TILE layout for bfloat8_b/bfloat4_b, otherwise use specified layout
+    actual_layout = ttnn.TILE_LAYOUT if needs_tile_layout else input_a_layout
+
     # Build from_torch arguments based on storage_type
     from_torch_kwargs = {
         "dtype": input_a_dtype,
-        "layout": input_a_layout,
+        "layout": actual_layout,
     }
 
     # Only add device and memory_config if not HOST storage
