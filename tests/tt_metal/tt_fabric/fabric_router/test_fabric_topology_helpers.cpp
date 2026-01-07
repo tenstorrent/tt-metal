@@ -154,7 +154,7 @@ class MockClusterTopologyFixture : public ::testing::Test {
 protected:
     void SetUp() override {
         // Verify we're using mock cluster (required for CPU-only tests)
-        auto mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
         if (!mock_desc) {
             GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - skipping mock cluster tests";
         }
@@ -163,7 +163,7 @@ protected:
     // Helper to extract mesh shapes from ControlPlane
     std::vector<MeshShape> get_mesh_shapes_from_control_plane() {
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        auto& mesh_graph = control_plane.get_mesh_graph();
+        const auto& mesh_graph = control_plane.get_mesh_graph();
 
         std::vector<MeshShape> shapes;
         const auto& all_meshes = mesh_graph.get_all_mesh_ids();
