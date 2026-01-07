@@ -63,8 +63,6 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReshapeDeviceOperation::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input;
-
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
@@ -74,7 +72,7 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         operation_attributes.sub_core_grid.has_value(),
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
                                                        : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        input_tensor,
+        tensor_args,
         program_factory.index());
 }
 }  // namespace ttnn::operations::data_movement::reshape
