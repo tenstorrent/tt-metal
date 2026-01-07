@@ -441,7 +441,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         "decode_1",
         "decode_32",
         "decode_128",
-        "prefill_1",
+        "prefill_128",
         "prefill_4096",
     ],
 )
