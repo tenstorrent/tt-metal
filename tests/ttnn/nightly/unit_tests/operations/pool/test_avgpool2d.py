@@ -263,11 +263,11 @@ def run_avg_pool2d(
     )(torch_input_padded)
 
     # adjust the TTNN output to match the expected shape
-    out = ttnn.to_torch(ttnn_output)
-    out = out.reshape(
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    ttnn_output = ttnn_output.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
     )  # N, H, W, C
-    out = torch.permute(out, (0, 3, 1, 2))  # N, C, H, W
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
 
     # apply correction to TORCH output for asymmetric padding when needed
     torch_needs_correction = padding_is_4d and divisor_override is None and count_include_pad is False
@@ -281,7 +281,7 @@ def run_avg_pool2d(
             divisor_override,
             count_include_pad,
         )
-    ref = torch_output
+
     # test for equivalence
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN supports scalars only in Bfloat16 and from recently it uses
@@ -303,8 +303,8 @@ def run_avg_pool2d(
         atol = 0.35
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
-        out = out.to(torch.bfloat16)
-    allclose = torch.allclose(out, ref, atol=atol, rtol=rtol)
+        ttnn_output = ttnn_output.to(torch.bfloat16)
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     assert allclose
 
 
