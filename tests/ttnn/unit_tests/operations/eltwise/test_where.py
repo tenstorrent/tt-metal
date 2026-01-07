@@ -571,12 +571,12 @@ def test_div_edgcase(device):
 
     ttnn_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.div(ttnn_a, ttnn_b, accurate_mode=True)
+    output_tensor = ttnn.div(ttnn_a, ttnn_b, fast_and_approximate_mode=False)
     golden_tensor = torch.div(a, b)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # accurate_mode=True
+    # fast_and_approximate_mode=False (accurate mode)
     # output_tensor tensor([-1., inf, -inf, inf,  3.,  0.], dtype=torch.bfloat16)
     # golden_tensor tensor([-1., inf, -inf, nan,  3.,  0.], dtype=torch.bfloat16)
 
