@@ -15,10 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() {
-    constexpr bool legacy_compat = false;
-    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(sqrt, sfpu::sqrt_init, APPROX, legacy_compat));
-}
+ALWI void sqrt_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sqrt, sfpu::sqrt_init, APPROX)); }
 
 // clang-format off
 /**
@@ -36,8 +33,7 @@ ALWI void sqrt_tile_init() {
 // clang-format on
 template <bool FAST_APPROX = false>
 ALWI void sqrt_tile(uint32_t idst) {
-    constexpr bool legacy_compat = false;
-    MATH(SFPU_FIVE_PARAM_KERNEL_ITER_FIRST(sqrt, APPROX, 8, DST_ACCUM_MODE, FAST_APPROX, legacy_compat, idst, RC));
+    MATH(SFPU_FOUR_PARAM_KERNEL_ITER_FIRST(sqrt, APPROX, 8, DST_ACCUM_MODE, FAST_APPROX, idst, RC));
 }
 
 }  // namespace ckernel
