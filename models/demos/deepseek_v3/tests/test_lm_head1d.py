@@ -101,7 +101,6 @@ def test_forward_pass(
         actual_output_memory_config == expected_output_memory_config
     ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    # Get the actual shape of the tensor (it may be sharded)
     tt_output_shape = tt_output.shape
     logger.info(f"tt_output shape: {tt_output_shape}")
 

@@ -32,7 +32,15 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 @pytest.mark.parametrize(
     "EmbeddingClass,mode,batch_size_or_seq_len",
-    [(Embedding2D, "prefill", seq_len) for seq_len in (65536, 131072)],
+    [
+        (Embedding1D, "decode", 32),
+        (Embedding2D, "decode", 128),
+    ]
+    + [
+        (EmbeddingClass, "prefill", seq_len)
+        for seq_len in (128, 512, 2048)
+        for EmbeddingClass in (Embedding1D, Embedding2D)
+    ],
 )
 @pytest.mark.parametrize(
     "generate_reference_io",
