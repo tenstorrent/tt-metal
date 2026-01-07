@@ -322,6 +322,32 @@ For ViT-Base:
 - `head_size = dim / head_num = 64`
 - `head_size_t = head_size / 32 = 2` (head size in tiles)
 
+**Concrete example (ViT-Base on Blackhole, `grid_x = 12`)**:
+
+```python
+TILE_HEIGHT = 32
+
+# ViT-Base
+seqL = 14 * 14                  # 196
+seqL_padded = 224               # padded to TILE_HEIGHT
+seqL_t = seqL_padded // 32      # 7
+
+dim = 768
+dim_t = dim // 32               # 24
+
+head_num = 12
+head_size = dim // head_num     # 64
+head_size_t = head_size // 32   # 2
+
+# grid_x = 12
+dim_t__x_full_grid = dim_t // 12            # 2
+head_seqL_t__x = (head_num * seqL_t) // 12  # 7
+
+# classifier: 1000 classes padded to 1152
+class_tiles = 1152 // 32         # 36
+class__x = class_tiles // 12     # 3
+```
+
 #### 4.2.2 Core grids used by the Blackhole ViT implementation
 The Blackhole implementation uses two related core grids:
 
@@ -385,23 +411,28 @@ So the per-core shard shape for LayerNorm is:
 
 `[block_h, block_w] = [seqL_t, dim_t__x_full_grid] = [7, 2]` tiles
 
+**Sharding intuition (same style as the original report)**:
+- With 2D block sharding, each core owns a block of tokens (height) and a slice of the embedding dimension (width).
+- The shard height corresponds to one “tile-row” region of the sequence: `block_h = seqL_t`.
+- The shard width is the per-core slice of the embedding: `block_w = dim_t__x_full_grid`.
+
 #### 4.3.2 LayerNorm program configs (Blackhole)
 The LayerNorm program configs are defined in `update_model_config()` and are sized in tiles:
 
 ```python
 "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(12, 10),
-    subblock_w=2,
-    block_h=7,
-    block_w=2,
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
+    subblock_w=dim_t__x_full_grid,
+    block_h=seqL_t,
+    block_w=dim_t__x_full_grid,
     inplace=False,
 ),
 
 "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(12, 10),
-    subblock_w=2,
-    block_h=7,
-    block_w=2,
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
+    subblock_w=dim_t__x_full_grid,
+    block_h=seqL_t,
+    block_w=dim_t__x_full_grid,
     inplace=False,
 ),
 ```
@@ -457,16 +488,22 @@ This matmul uses a **block-sharded, reuse+mcast** program config sized for the f
 
 ```python
 "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(12, 10),
-    in0_block_w=2,
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
+    in0_block_w=dim_t__x_full_grid,
     out_subblock_h=1,
-    out_subblock_w=2,
-    per_core_M=7,
-    per_core_N=6,  # 3 * 2 tiles
+    out_subblock_w=dim_t__x_full_grid,
+    per_core_M=seqL_t,
+    per_core_N=3 * dim_t__x_full_grid,
     transpose_mcast=False,
     fused_activation=None,
 ),
 ```
+
+**Sharding Config (block sharded + multicast)**:
+- Output shape is `b × seqL × (3×dim)`; in tiles, `[seqL_t, 3×dim_t]`.
+- The output is block sharded, so each core produces `[seqL_t, (3×dim_t)/grid_x]` tiles.
+- Multicast is used to efficiently distribute slices of the input/weights across cores while computing the fused QKV projection.
+- The current Blackhole implementation uses `transpose_mcast=False` (row-major placement on the core grid).
 
 ![input](images/qkvlinear.png)
 
@@ -500,6 +537,10 @@ ttnn.deallocate(hidden_states)
 
 The output tensors are placed in **height-sharded** L1 memory, which matches the subsequent BMM-style matmuls.
 
+**Sharding intent (height sharding)**:
+- After splitting into heads, attention is computed over `b × head_count × seqL × head_size`.
+- Height sharding distributes the combined `(b × head_count × seqL)` dimension across cores so each core computes attention for a slice of tokens/heads.
+
 ![laynorm](images/qkvsplit.png)
 
 #### 4.4.4 Attention scores (Q×Kᵀ) + scale
@@ -521,12 +562,12 @@ Program config:
 
 ```python
 "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-    compute_with_storage_grid_size=(config.core_grid.x, config.core_grid.y),
-    in0_block_w=2,      # head_size_t
+    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+    in0_block_w=head_size_t,
     out_subblock_h=1,
-    out_subblock_w=7,   # seqL_t
+    out_subblock_w=seqL_t,
     per_core_M=head_seqL_t__x,
-    per_core_N=7,       # seqL_t
+    per_core_N=seqL_t,
 ),
 ```
 
@@ -538,6 +579,14 @@ attention_scores = ttnn.mul_(attention_scores, scale)
 ```
 
 ![attn](images/attention.png)
+
+**Sharding Config (height sharded BMM / reuse)**:
+- This matmul computes attention scores with logical shape `b × head_count × seqL × seqL` (per head, token-to-token scores).
+- Height sharding distributes work across cores over the `(b × head_count × seqL)` dimension.
+- The key tile parameters are:
+  - `in0_block_w = head_size_t` (head inner dimension in tiles)
+  - `per_core_N = seqL_t` (token dimension in tiles)
+  - `per_core_M = head_seqL_t__x` (how much of `(head_count×seqL)` each core row processes for the chosen `grid_x`)
 
 #### 4.4.5 Softmax (in-place)
 The Blackhole implementation applies softmax **in-place** over the attention scores:
@@ -553,10 +602,10 @@ Program config:
 
 ```python
 "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(config.core_grid.x, config.core_grid.y),
-    subblock_w=7,           # seqL_t
+    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+    subblock_w=seqL_t,
     block_h=head_seqL_t__x,
-    block_w=7,              # seqL_t
+    block_w=seqL_t,
 ),
 ```
 
@@ -579,16 +628,23 @@ Program config:
 
 ```python
 "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-    compute_with_storage_grid_size=(config.core_grid.x, config.core_grid.y),
-    in0_block_w=7,    # seqL_t
+    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+    in0_block_w=seqL_t,
     out_subblock_h=1,
-    out_subblock_w=2, # head_size_t
+    out_subblock_w=head_size_t,
     per_core_M=head_seqL_t__x,
-    per_core_N=2,     # head_size_t
+    per_core_N=head_size_t,
 ),
 ```
 
 ![attn](images/value.png)
+
+**Sharding Config (height sharded BMM / reuse)**:
+- This matmul computes context with logical shape `b × head_count × seqL × head_size`.
+- Height sharding again distributes the `(b × head_count × seqL)` dimension across cores.
+- The key tile parameters are:
+  - `in0_block_w = seqL_t` (token dimension in tiles)
+  - `per_core_N = head_size_t` (head size in tiles)
 
 #### 4.4.7 Concatenate heads + Self-output Linear
 The per-head context is concatenated back into a single `[b × seqL × dim]` representation:
@@ -628,6 +684,11 @@ ttnn.deallocate(context_layer)
 
 ![concat](images/selfoutput.png)
 
+**Sharding Config (block sharded + multicast for self-output)**:
+- After concatenating heads, the tensor returns to `b × seqL × dim` (tiles: `[seqL_t, dim_t]`).
+- The self-output linear keeps the tensor block sharded on the fixed `core_grid_10x12` grid.
+- Multicast is used similarly to the QKV projection to efficiently distribute inputs/weights across the grid.
+
 #### 4.4.8 Reallocate/defragmentation notes
 The attention path contains optional `ttnn.reallocate()` calls controlled by `config.should_reallocate_in_attention`, which is set by `update_model_config()` based on batch regime.
 
@@ -663,6 +724,8 @@ The subsequent normalization (the second LayerNorm in the layer) is described in
 - `layernorm_after_output_program_config`
 - `ln_compute_config`
 
+This residual connection helps preserve information from the input and improves training/inference stability by maintaining gradient flow through the layer.
+
 **Add and Norm Diagram**:
 
 ![addnorm](images/addnorm.png)
@@ -694,16 +757,21 @@ Program config (sized in tiles for the fixed 10×12 grid):
 
 ```python
 "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(12, 10),
-    in0_block_w=2,
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
+    in0_block_w=dim_t__x_full_grid,
     out_subblock_h=1,
-    out_subblock_w=4,
-    per_core_M=7,
-    per_core_N=8,  # 4 * 2 tiles
+    out_subblock_w=(dim_t__x_full_grid * 4) // 2,
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x_full_grid * 4,
     transpose_mcast=False,
     fused_activation=(ttnn.UnaryOpType.GELU, True),
 ),
 ```
+
+**Sharding Config (FF1, block sharded + multicast)**:
+- FF1 computes `b × seqL × (4×dim)`; in tiles `[seqL_t, 4×dim_t]`.
+- Output remains block sharded on `core_grid_10x12`, so per-core output width is `(4×dim_t)/grid_x`.
+- GELU is fused into the matmul via `fused_activation=(GELU, True)` to reduce extra kernel launches and memory traffic.
 
 #### 4.6.2 FF2 (projection back to dim + residual add)
 
@@ -726,16 +794,20 @@ Program config:
 
 ```python
 "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(12, 10),
-    in0_block_w=8,   # 4 * 2 tiles
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
+    in0_block_w=dim_t__x_full_grid * 4,
     out_subblock_h=1,
-    out_subblock_w=2,
-    per_core_M=7,
-    per_core_N=2,
+    out_subblock_w=dim_t__x_full_grid,
+    per_core_M=seqL_t,
+    per_core_N=dim_t__x_full_grid,
     transpose_mcast=False,
     fused_activation=None,
 ),
 ```
+
+**Sharding Config (FF2, block sharded + multicast)**:
+- FF2 projects `b × seqL × (4×dim)` back to `b × seqL × dim`.
+- Both FF2 output and the residual add stay in `ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG`, avoiding reshards between FF2 and the residual.
 
 #### 4.6.3 FFN wrapper (`vit_feedforward`)
 The encoder layer calls the FFN through a small wrapper:
