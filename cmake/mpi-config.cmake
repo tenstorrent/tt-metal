@@ -16,22 +16,19 @@ if(NOT DEFINED ULFM_PREFIX)
     set(ULFM_PREFIX "/opt/openmpi-v5.0.7-ulfm" CACHE PATH "Path to ULFM MPI installation")
 endif()
 
-# Macro to configure MPI support
+# Function to configure MPI library support
 # Checks for custom ULFM or system MPI, sets up the OpenMPI::MPI target,
 # and defines USE_MPI and TT_METAL_USING_ULFM variables.
 #
 # Arguments:
 #   enable_distributed: Whether distributed compute is enabled (ON/OFF)
-#   use_mpi_out_var: Variable to store the result (TRUE/FALSE) - set in PARENT_SCOPE if calling from function
-#   extra_src_out_var: Variable to append source files to (e.g. mpi_distributed_context.cpp)
-macro(tt_configure_mpi enable_distributed use_mpi_out_var extra_src_out_var)
-    set(${use_mpi_out_var} FALSE)
+#   use_mpi_out_var: Variable to store the result (TRUE/FALSE) - set in PARENT_SCOPE
+function(tt_configure_mpi enable_distributed use_mpi_out_var)
+    set(${use_mpi_out_var} FALSE PARENT_SCOPE)
     set(TT_METAL_USING_ULFM FALSE PARENT_SCOPE)
 
     # Early exit if distributed compute is disabled
     if(NOT ${enable_distributed})
-        message(STATUS "Multihost compute with MPI disabled, using single host context.")
-        list(APPEND ${extra_src_out_var} ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
         return()
     endif()
 
@@ -39,8 +36,7 @@ macro(tt_configure_mpi enable_distributed use_mpi_out_var extra_src_out_var)
     if(EXISTS "${ULFM_PREFIX}/lib/libmpi.so.40")
         message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
         set(TT_METAL_USING_ULFM TRUE PARENT_SCOPE)
-        set(${use_mpi_out_var} TRUE)
-        list(APPEND ${extra_src_out_var} ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
+        set(${use_mpi_out_var} TRUE PARENT_SCOPE)
 
         add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
         set_target_properties(
@@ -62,8 +58,7 @@ macro(tt_configure_mpi enable_distributed use_mpi_out_var extra_src_out_var)
         message(FATAL_ERROR "ENABLE_DISTRIBUTED is ON but no MPI implementation found.")
     endif()
 
-    set(${use_mpi_out_var} TRUE)
-    list(APPEND ${extra_src_out_var} ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
+    set(${use_mpi_out_var} TRUE PARENT_SCOPE)
 
     # Check for OpenMPI version and warn if < 5 (missing ULFM)
     if(MPI_C_LIBRARY_VERSION_STRING MATCHES "Open MPI")
@@ -90,4 +85,4 @@ macro(tt_configure_mpi enable_distributed use_mpi_out_var extra_src_out_var)
         get_filename_component(_mpi_dir "${_mpi_loc}" DIRECTORY)
         set(TT_METAL_MPI_LIB_DIR "${_mpi_dir}" PARENT_SCOPE)
     endif()
-endmacro()
+endfunction()

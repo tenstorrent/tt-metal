@@ -35,13 +35,20 @@ endif()
 # This sets ULFM_PREFIX with appropriate defaults
 include(${CMAKE_SOURCE_DIR}/cmake/mpi-config.cmake)
 
-# Configure MPI support using centralized logic
+# Configure MPI library support using centralized logic
 # This handles:
 # 1. Detection of custom ULFM MPI (Ubuntu) or System MPI (Fedora)
 # 2. Setup of OpenMPI::MPI target
 # 3. Setting USE_MPI and TT_METAL_USING_ULFM variables
-# 4. Adding appropriate source files to DISTRIBUTED_SRC
-tt_configure_mpi(${ENABLE_DISTRIBUTED} USE_MPI DISTRIBUTED_SRC)
+tt_configure_mpi(${ENABLE_DISTRIBUTED} USE_MPI)
+
+# Add appropriate source files based on MPI configuration
+if(NOT ENABLE_DISTRIBUTED)
+    message(STATUS "Multihost compute with MPI disabled, using single host context.")
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
+elseif(USE_MPI)
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
+endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
