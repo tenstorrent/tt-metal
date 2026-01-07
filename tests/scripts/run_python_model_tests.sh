@@ -31,9 +31,7 @@ run_python_model_tests_grayskull() {
 
 run_python_model_tests_wormhole_b0() {
     pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-    pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+    MESH_DEVICE=N300 pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
 
     # Falcon tests
     # attn_matmul_from_cache is currently not used in falcon7b
