@@ -55,6 +55,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 // c_tensix_core core;
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
@@ -81,14 +82,14 @@ void set_deassert_addresses() {
 inline void run_subordinate_eriscs(uint32_t enables) {
 #if defined(ARCH_BLACKHOLE)
     if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
 
 inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
     WAYPOINT("SEW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    while (subordinate_sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
         RISC_POST_HEARTBEAT(heartbeat);
     }
@@ -108,9 +109,9 @@ int main() {
 
     risc_init();
 
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
 #ifdef ARCH_BLACKHOLE
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+    subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
 #endif
     set_deassert_addresses();
     // device_setup();
