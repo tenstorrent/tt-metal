@@ -136,7 +136,7 @@ class Experts:
             topk_expert_indices: Top-k expert indices per token (unused in this version of experts)
 
         Returns:
-            Expert output tensor [batch, seq_len, hidden_size]
+            Expert output tensor [1, batch, seq_len, hidden_size]
         """
         # Determine mode based on sequence length
         if is_decode:
