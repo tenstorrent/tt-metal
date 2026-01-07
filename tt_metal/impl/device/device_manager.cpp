@@ -212,6 +212,11 @@ void DeviceManager::init_profiler() const {
         }
     }
     detail::ProfilerSync(ProfilerSyncState::INIT);
+
+    if (tt::tt_metal::MetalContext::instance().profiler_state_manager() &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled()) {
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(this->get_all_active_devices());
+    }
 #endif
 }
 
@@ -879,12 +884,6 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         }
         devices_to_close.push_back(mmio_device_id);
         mmio_devices_to_close.insert(mmio_device_id);
-    }
-
-    // TODO(MO): Remove when legacy non-mesh device is removed
-    for (const ChipId device_id : devices_to_close) {
-        IDevice* device = get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
     }
 
     dispatch_firmware_active_ = false;

@@ -166,8 +166,12 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::N150) {
             cluster_type = tt::tt_metal::ClusterType::N150;
         } else if (board_type == BoardType::P100) {
-            TT_FATAL(num_chips == 1, "Unknown cluster type for P100 board with {}", num_chips);
-            cluster_type = tt::tt_metal::ClusterType::P100;
+            if (num_chips == 1) {
+                cluster_type = tt::tt_metal::ClusterType::P100;
+            } else {
+                log_warning(tt::LogDevice, "Using CUSTOM cluster type for P100 board with {} chips", num_chips);
+                cluster_type = tt::tt_metal::ClusterType::CUSTOM;
+            }
         } else if (board_type == BoardType::P150) {
             if (num_chips == 1) {
                 cluster_type = tt::tt_metal::ClusterType::P150;
@@ -178,7 +182,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             } else if (num_chips == 8) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X8;
             } else {
-                TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
+                log_warning(tt::LogDevice, "Using CUSTOM cluster type for P150 board with {} chips", num_chips);
+                cluster_type = tt::tt_metal::ClusterType::CUSTOM;
             }
         } else if (board_type == BoardType::P300) {
             // PCIe is enabled to both chips on the P300 board
@@ -187,7 +192,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             } else if (num_chips == 4) {
                 cluster_type = tt::tt_metal::ClusterType::P300_X2;
             } else {
-                TT_THROW("Unknown cluster type for P300 board with {} chips", num_chips);
+                log_warning(tt::LogDevice, "Using CUSTOM cluster type for P300 board with {} chips", num_chips);
+                cluster_type = tt::tt_metal::ClusterType::CUSTOM;
             }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
@@ -271,6 +277,11 @@ bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routi
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_ = this->driver_->get_cluster_description();
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::CUSTOM) {
+        TT_FATAL(
+            this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
+            "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
+    }
     if (this->target_type_ == TargetDevice::Simulator) {
         return;
     }

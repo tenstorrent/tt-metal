@@ -39,7 +39,7 @@ Tensor _addcdiv(
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
-    Tensor t_div = ttnn::div(input_b, input_c, true, std::nullopt, std::nullopt, output_mem_config);
+    Tensor t_div = ttnn::div(input_b, input_c, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor t_factor = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
     t_div.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
@@ -89,23 +89,11 @@ Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::option
     bool b_is_scalar = b.is_scalar();
     bool c_is_scalar = c.is_scalar();
 
-    if (!a_is_scalar && !b_is_scalar && !c_is_scalar) {
-        // all tensors
+    // When 'a' is a tensor, compute a * b + c regardless of whether b and c are scalars or tensors
+    if (!a_is_scalar) {
         return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    } else if (!a_is_scalar && !b_is_scalar && c_is_scalar) {
-        // a - tensor, b - tensor, c - is scalar
-        return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    } else if (!a_is_scalar && b_is_scalar && !c_is_scalar) {
-        // a - tensor, b - scalar, c - is tensor
-        return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    } else if (!a_is_scalar && b_is_scalar && c_is_scalar) {
-        // a - tensor, b - scalar, c - is scalar
-        return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    } else if (a_is_scalar && !b_is_scalar && !c_is_scalar) {
-        // a - scalar, b - tensor, c - tensor
-        return ttnn::add(ttnn::multiply(b, a, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    } else if (a_is_scalar && !b_is_scalar && c_is_scalar) {
-        // a - scalar, b - tensor, c - is scalar
+    } else if (a_is_scalar && !b_is_scalar) {
+        // a - scalar, b - tensor, c - scalar or tensor
         return ttnn::add(ttnn::multiply(b, a, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
     } else if (a_is_scalar && b_is_scalar && !c_is_scalar) {
         // a - scalar, b - scalar, c - is tensor
