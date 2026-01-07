@@ -124,7 +124,7 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     return static_cast<uint64_t>(hash);
 }
 
-std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, ChipId /*device_id*/, bool is_fw) {
+std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, bool is_fw) {
     // Get the dispatch message address for this device
     uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
@@ -147,6 +147,7 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, ChipId /*d
                 .dispatch_message_addr = dispatch_message_addr,
                 .is_cooperative = hal.get_eth_fw_is_cooperative(),
             };
+            // if is_fw and processor_class == DM and arch == Quasar, just add a single build state for the DM firmware
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
                 config.processor_id = processor_type;
@@ -169,9 +170,9 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     device_id_to_build_env_[device_id].build_env.init(
         build_key, fw_compile_hash, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, true);
+        create_build_state(device_id_to_build_env_[device_id].build_env, true);
     device_id_to_build_env_[device_id].kernel_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, false);
+        create_build_state(device_id_to_build_env_[device_id].build_env, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
@@ -182,6 +183,7 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
+    // if processor_class == DM and arch == Quasar, just return the DM firmware build state
     uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
