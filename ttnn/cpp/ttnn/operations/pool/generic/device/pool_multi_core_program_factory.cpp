@@ -771,7 +771,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         uint32_t remaining_out_nhw =
             total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
         uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
-        std::vector<uint32_t> args = {out_nhw_this_core};
+        std::vector<uint32_t> args = {out_nhw_this_core, core_nhw_index};
 
         if (return_indices) {
             TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
@@ -782,11 +782,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
             args.push_back((uint32_t)(start_row));
             args.push_back((uint32_t)(start_col));
-        } else {
-            args.push_back(0);
-            args.push_back(0);
         }
-        args.push_back(core_nhw_index);
         SetRuntimeArgs(program, reader0_kernel, core, args);
         SetRuntimeArgs(program, compute_kernel, core, args);
     }

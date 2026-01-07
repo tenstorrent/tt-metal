@@ -124,8 +124,8 @@ ALWI void initialize_return_indices_data() {
     // Calculate initial index based on padding conditions
     uint16_t init_index = 0;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
-    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(1);
-    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(2);
+    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(2);
+    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(3);
 
     if (start_row <= pad_t) {
         // top left is in top padding, we increment from the padding index in the top left
@@ -512,7 +512,7 @@ void kernel_main() {
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }
-    const uint32_t core_nhw_index = get_arg_val<uint32_t>(3);
+    const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     if constexpr (config_in_dram) {
