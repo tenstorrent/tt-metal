@@ -13,8 +13,10 @@ export DEEPSEEK_V3_HF_MODEL="/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/" &&
 ```
 
 Follow these steps to add a new fused op unit test:
-1. Run the provided module test command to capture the baseline accuracy and verify that the test is working. If it's not working, let the user know.
-2. Identify the ttnn operations that will be fused into a new operation, this should be provided by the user; if it's unclear which ones should be fused, let the user know.
+1. Run the provided module test command to capture the baseline accuracy and verify that the test is working.
+2. Identify the ttnn operations that will be fused into a new operation, this should be provided by the user;
+    1. Finde the sequence of ops in the module for decode; if it's unclear which ones should be fused, let the user know immediately.
+    2. Find the sequence of ops in the module for prefill; if the same sequence of ops does not exist for prefill, then ignore all prefill instructions and inform the user in the final summary that this was a decode only fused op sequence.
 3. Create a new file for the new fused op unit test under MODEL_FOLDER/tests/fused_op_unit_tests/test_NEW_FUSED_OP_NAME.py
 4. In the fused op unit test file, create a PyTorch reference for the newly fused op based on the sequence of ttnn ops.
 	- Make sure to use the PyTorch reference as a basis here. To figure out what reference code is used, look at the containing module's test, e.g. test_mla.py for a fused op that's contained in the MLA module. Then figure out which exact portion of the reference model's code corresponds to our new fused op. It might be necessary to modify the reference code slightly to get the correct reference implementation since the exact operations used in the ttnn model and in the reference model my differer.
