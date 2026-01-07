@@ -75,14 +75,11 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
     # Configure system MPI target
     add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
 
-    # Export MPI lib dir for RPATH construction in tt_metal (Fedora fix)
-    get_target_property(_mpi_loc MPI::MPI_C IMPORTED_LOCATION)
-    if(NOT _mpi_loc AND MPI_C_LIBRARIES)
-        list(GET MPI_C_LIBRARIES 0 _mpi_loc)
-    endif()
-
-    if(EXISTS "${_mpi_loc}")
-        get_filename_component(_mpi_dir "${_mpi_loc}" DIRECTORY)
-        set(TT_METAL_MPI_LIB_DIR "${_mpi_dir}" PARENT_SCOPE)
-    endif()
+    # Note: We do NOT export the MPI library directory for RPATH construction because:
+    # 1. For Fedora builds, system MPI libraries are in standard paths (/usr/lib64 or /usr/lib64/openmpi/lib)
+    #    and will be found via the standard library search path, not via RPATH
+    # 2. RPM's brp-check-rpaths requires $ORIGIN to be first in RPATH, and adding system paths violates this
+    # 3. The MPI library should be found via the system's library search mechanism, not via RPATH
+    # 4. Even with INSTALL_RPATH_USE_LINK_PATH=FALSE, CMake might still add library directories from
+    #    imported targets' INTERFACE_LINK_DIRECTORIES, so we rely on system library search instead
 endfunction()

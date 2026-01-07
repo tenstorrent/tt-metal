@@ -9,6 +9,11 @@ set_target_properties(
     PROPERTIES
         EXPORT_NAME
             Metalium
+        # Prevent CMake from automatically adding library directories to INSTALL_RPATH
+        # This must be set before linking to any targets (especially MPI) to ensure
+        # $ORIGIN is first in RPATH (required by RPM's brp-check-rpaths)
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
 )
 
 include(flatbuffers)
@@ -306,22 +311,22 @@ tt_set_library_rpath(tt_metal)
 
 # Set INSTALL_RPATH after distributed subdirectory is processed
 # $ORIGIN must come first - it allows the library to find sibling libraries in the install directory
-# We explicitly manage the RPATH to ensure $ORIGIN is first, followed by any required system paths.
+# RPM's brp-check-rpaths requires $ORIGIN to be first, so we must not add any system paths before it.
+# For Fedora builds with system OpenMPI, the MPI libraries are in standard system paths
+# (/usr/lib64 or /usr/lib64/openmpi/lib) and will be found via the standard library search path,
+# so we don't need to add them to RPATH.
 set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 
 if(TT_METAL_USING_ULFM)
-    # Ubuntu builds with custom ULFM: Add the custom path
+    # Ubuntu builds with custom ULFM: Add the custom path after $ORIGIN
+    # This is acceptable because it's a non-standard location that requires RPATH
     list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_PREFIX}/lib")
-else()
-    # Fedora builds with system OpenMPI:
-    # We need to ensure the system MPI library path is in RPATH *after* $ORIGIN
-    # if it's not in a standard location (like /usr/lib64/openmpi/lib).
-    # Since INSTALL_RPATH_USE_LINK_PATH=FALSE, we must add it manually if needed.
-    # We use the variable exported from distributed/CMakeLists.txt which finds the exact lib path.
-    if(DEFINED TT_METAL_MPI_LIB_DIR)
-        list(APPEND TT_METAL_INSTALL_RPATH "${TT_METAL_MPI_LIB_DIR}")
-    endif()
 endif()
+# Note: For Fedora builds with system OpenMPI, we do NOT add the MPI library directory
+# to INSTALL_RPATH because:
+# 1. System libraries in /usr/lib64 are found via standard library search paths
+# 2. RPM's brp-check-rpaths requires $ORIGIN to be first, and adding system paths violates this
+# 3. The MPI library should be found via the system's library search mechanism, not via RPATH
 
 set_target_properties(
     tt_metal
