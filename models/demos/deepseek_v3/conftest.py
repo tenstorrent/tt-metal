@@ -250,30 +250,33 @@ def pytest_configure(config):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_setup(item):
+def pytest_collection_modifyitems(config, items):
     """
-    Check if test has requires_device marker and skip if current device doesn't match.
+    Check if tests have requires_device marker and skip them during collection if current device doesn't match.
     """
-    marker = item.get_closest_marker("requires_device")
-    if marker:
-        # Get device_types from marker - can be single value or list
-        device_types = marker.args[0] if marker.args else marker.kwargs.get("device_types", [])
-
-        # Normalize to list
-        if isinstance(device_types, str):
-            device_types = [device_types]
-        elif not isinstance(device_types, (list, tuple)):
-            device_types = [device_types]
-
-        # Get current device type
+    try:
         current_device = get_current_device_type()
         logger.debug(f"Current detected device type: {current_device}")
+    except Exception as e:
+        logger.warning(f"Could not determine device type during collection: {e}")
+        return
 
-        # Check if current device is in the allowed list
-        if current_device not in device_types:
-            # Use item.nodeid to show the actual test location and name
-            pytest.skip(
-                f"{item.nodeid}: Test requires device type(s) {device_types}, but current device is {current_device}",
-                allow_module_level=False,
-            )
+    for item in items:
+        marker = item.get_closest_marker("requires_device")
+        if marker:
+            # Get device_types from marker - can be single value or list
+            device_types = marker.args[0] if marker.args else marker.kwargs.get("device_types", [])
+
+            # Normalize to list
+            if isinstance(device_types, str):
+                device_types = [device_types]
+            elif not isinstance(device_types, (list, tuple)):
+                device_types = [device_types]
+
+            # Check if current device is in the allowed list
+            if current_device not in device_types:
+                # Add skip marker during collection - this will make skips collapse like @pytest.mark.skip()
+                skip_reason = (
+                    f"Test case requires device type(s) {device_types}, but current device is {current_device}"
+                )
+                item.add_marker(pytest.mark.skip(reason=skip_reason))
