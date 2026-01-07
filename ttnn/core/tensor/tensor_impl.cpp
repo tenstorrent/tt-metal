@@ -19,6 +19,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include "tt-metalium/shape.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "ttnn/tensor/storage.hpp"
@@ -767,6 +768,29 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+// Useful information about how a shard_shape cuts a 2D shape
+// - num_shards_height: Number of shards along the height (including partial last shard, if any)
+// - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)
+// - num_shards_width: Number of shards along the width (including partial last shard, if any)
+// - last_shard_width: Width of last partial shard (if None, it will be same as full shard shape width)
+struct ShardDivisionSpec {
+    size_t num_shards_height = 0;
+    size_t last_shard_height = 0;
+    size_t num_shards_width = 0;
+    size_t last_shard_width = 0;
+};
+
+ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
+    const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
+    const auto last_shard_height =
+        shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
+    const auto num_shards_width = tt::div_up(shape.width(), shard_shape.width());
+    const auto last_shard_width =
+        shape.width() % shard_shape.width() > 0 ? shape.width() % shard_shape.width() : shard_shape.width();
+
+    return ShardDivisionSpec{num_shards_height, last_shard_height, num_shards_width, last_shard_width};
+};
+
 // TODO: Remove when we get rid of physical sharding and generalize interleaved and sharded; when we do, directly get
 // from TensorLayout
 std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
@@ -788,7 +812,7 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     const auto logical_stride = logical_2d_shape.width();
 
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
-        tt::tt_metal::compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
+        compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
 
     std::vector<LogicalPhysicalMapping> logical_physical_mapping{};
     logical_physical_mapping.reserve(num_shards_height * num_shards_width);

@@ -19,6 +19,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+// NOLINTBEGIN(bugprone-branch-clone)
+
 using std::vector;
 
 namespace tt::llrt {
@@ -44,6 +46,7 @@ enum class EnvVarID {
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
+    TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -119,6 +122,7 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
+    TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
 
     // ========================================
     // WATCHER SYSTEM
@@ -145,7 +149,6 @@ enum class EnvVarID {
     // INSPECTOR
     // ========================================
     TT_METAL_INSPECTOR,                                // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
     TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
     TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
     TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
@@ -316,6 +319,8 @@ const std::string& RunTimeOptions::get_cache_dir() const {
     return this->cache_dir_;
 }
 
+const std::string& RunTimeOptions::get_logs_dir() const { return logs_dir_; }
+
 const std::string& RunTimeOptions::get_kernel_dir() const {
     if (!this->is_kernel_dir_specified()) {
         TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH");
@@ -341,7 +346,7 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 // Uses switch statement for efficient dispatch
 //
 // IMPORTANT: Most cases assume 'value' is non-null (enforced by InitializeFromEnvVars loop guard).
-// Only TT_METAL_INSPECTOR_LOG_PATH and TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
+// Only TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
 // for default value initialization.
 
 void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
@@ -367,6 +372,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->is_kernel_dir_env_var_set = true;
             this->kernel_dir = normalize_path(value) + "/";
             break;
+
+        // TT_METAL_LOGS_PATH
+        // Directory for generated logs and debug output (dprint, watcher, profiler, etc.)
+        // Default: Current working directory if not set
+        // Usage: export TT_METAL_LOGS_PATH=/path/to/logs
+        case EnvVarID::TT_METAL_LOGS_PATH: this->logs_dir_ = normalize_path(value) + "/"; break;
 
         // TT_METAL_SIMULATOR
         // Path to simulator executable. When set, overrides mock cluster mode if both are set.
@@ -834,6 +845,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_DEVICE_DEBUG_DUMP_ENABLED
+        // Enable and sets the polling interval in seconds for experimental debug dump mode for profiler. In this mode,
+        // the profiler infrastructure will be used to continuously dump debug packets to a file. Default: false (debug
+        // dump mode disabled) Usage: export TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1
+        case EnvVarID::TT_METAL_DEVICE_DEBUG_DUMP_ENABLED: {
+            if (is_env_enabled(value)) {
+                this->profiler_enabled = true;
+                this->profiler_noc_events_enabled = true;
+                this->experimental_device_debug_dump_interval_seconds = std::stoi(value);
+            }
+            break;
+        }
+
         // TT_METAL_GTEST_NUM_HW_CQS
         // Number of hardware command queues to use in tests.
         // Default: 1
@@ -1017,18 +1041,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.enabled = true;
             if (strcmp(value, "0") == 0) {
                 this->inspector_settings.enabled = false;
-            }
-            break;
-
-        // TT_METAL_INSPECTOR_LOG_PATH
-        // Sets the log path for inspector output.
-        // Default: Defaults to {TT_METAL_RUNTIME_ROOT}/generated/inspector
-        // Usage: export TT_METAL_INSPECTOR_LOG_PATH=/path/to/inspector/logs
-        case EnvVarID::TT_METAL_INSPECTOR_LOG_PATH:
-            if (value) {
-                this->inspector_settings.log_path = std::filesystem::path(value);
-            } else {
-                this->inspector_settings.log_path = std::filesystem::path(this->get_root_dir()) / "generated/inspector";
             }
             break;
 
@@ -1249,10 +1261,8 @@ void RunTimeOptions::InitializeFromEnvVars() {
         }
     }
 
-    // TT_METAL_INSPECTOR_LOG_PATH: Set default path if not specified
-    if (std::getenv("TT_METAL_INSPECTOR_LOG_PATH") == nullptr) {
-        HandleEnvVar(EnvVarID::TT_METAL_INSPECTOR_LOG_PATH, nullptr);
-    }
+    // Set inspector log path
+    this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
 
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
@@ -1601,3 +1611,5 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
 }
 
 }  // namespace tt::llrt
+
+// NOLINTEND(bugprone-branch-clone)

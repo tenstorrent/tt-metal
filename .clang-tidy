@@ -37,7 +37,6 @@
 #   potential flush dependency.
 Checks: >
   *,
-  -bugprone-branch-clone,
   -bugprone-easily-swappable-parameters,
   -bugprone-exception-escape,
   -bugprone-implicit-widening-of-multiplication-result,
@@ -120,7 +119,6 @@ Checks: >
   -readability-math-missing-parentheses,
   -readability-named-parameter,
   -readability-redundant-casting,
-  -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof,
