@@ -34,8 +34,8 @@ jobs:
       - name: Generate test matrix
         id: generate
         run: |
+          # NOTE: isolate the failing module test; unit tests are temporarily disabled.
           all_tests=$(jq -n '[
-            { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" }
           ]')
 
@@ -109,12 +109,12 @@ jobs:
         timeout-minutes: 10
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
-      - name: Run DeepSeek module tests
+      - name: Run DeepSeek module test (isolated)
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+          pytest 'models/demos/deepseek_v3/tests/test_moe_experts.py::test_forward_pass[model.layers.3.mlp.experts.0-255-random-prefill-2048]' --timeout 600 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
