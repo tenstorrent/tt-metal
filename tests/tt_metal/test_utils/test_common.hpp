@@ -14,7 +14,6 @@
 #include <vector>
 #include <iostream>
 #include <sstream>
-#include "llrt/metal_soc_descriptor.hpp"
 
 using namespace tt::tt_metal;  // test only
 

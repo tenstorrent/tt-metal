@@ -13,7 +13,6 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include "llrt/metal_soc_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/allocator/bank_manager.hpp"
 
