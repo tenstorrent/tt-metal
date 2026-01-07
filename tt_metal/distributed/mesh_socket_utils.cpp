@@ -308,9 +308,8 @@ void write_socket_configs(
                                           tt_fabric::MeshId peer_mesh_id) -> tt_fabric::FabricNodeId {
         if (peer_device) {
             return peer_device->get_fabric_node_id(device_coord);
-        } else {
-            return tt_fabric::FabricNodeId(peer_mesh_id, mesh_graph.coordinate_to_chip(peer_mesh_id, device_coord));
         }
+        return tt_fabric::FabricNodeId(peer_mesh_id, mesh_graph.coordinate_to_chip(peer_mesh_id, device_coord));
     };
 
     if (is_sender) {
