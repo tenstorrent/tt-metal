@@ -54,6 +54,9 @@ target_precompile_headers(
 
 target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
+# Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
+tt_set_library_rpath(tt_stl)
+
 install(TARGETS tt_stl EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
 if(TT_METAL_BUILD_TESTS)

@@ -433,6 +433,9 @@ add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: r
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
+# Set RPATH for build-time linking and installation layouts
+tt_set_installable_library_rpath(ttnncpp)
+
 set_target_properties(
     ttnncpp
     PROPERTIES
@@ -440,15 +443,6 @@ set_target_properties(
             TTNN
         PREFIX
             "_"
-        # Use INSTALL_RPATH during build so binaries are relocatable in CI tar artifacts
-        BUILD_WITH_INSTALL_RPATH
-            TRUE
-        # INSTALL_RPATH for multiple installation layouts:
-        # - $ORIGIN/build/lib      = wheel layout (ttnn/_ttnn.so -> ttnn/build/lib/)
-        # - $ORIGIN/../../build/lib = tar artifact layout (ttnn/ttnn/_ttnn.so -> build/lib/)
-        # - $ORIGIN                 = FHS packages (all libs in /usr/lib64/)
-        INSTALL_RPATH
-            "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
         CXX_VISIBILITY_PRESET
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
@@ -674,6 +668,9 @@ if(WITH_PYTHON_BINDINGS)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
     TT_ENABLE_UNITY_BUILD(ttnn)
 
+    # Set RPATH for build-time linking and installation layouts
+    tt_set_installable_library_rpath(ttnn)
+
     set_target_properties(
         ttnn
         PROPERTIES
@@ -681,15 +678,6 @@ if(WITH_PYTHON_BINDINGS)
                 Python
             PREFIX
                 "_"
-            # Use INSTALL_RPATH during build so binaries are relocatable in CI tar artifacts
-            BUILD_WITH_INSTALL_RPATH
-                TRUE
-            # INSTALL_RPATH for multiple installation layouts:
-            # - $ORIGIN/build/lib      = wheel layout (ttnn/_ttnn.so -> ttnn/build/lib/)
-            # - $ORIGIN/../../build/lib = tar artifact layout (ttnn/ttnn/_ttnn.so -> build/lib/)
-            # - $ORIGIN                 = FHS packages (all libs in /usr/lib64/)
-            INSTALL_RPATH
-                "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
             CXX_VISIBILITY_PRESET
                 "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
             ADDITIONAL_CLEAN_FILES

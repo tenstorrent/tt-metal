@@ -301,14 +301,16 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 
+# Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
+tt_set_library_rpath(tt_metal)
+
 # Set INSTALL_RPATH after distributed subdirectory is processed
 # $ORIGIN must come first - it allows the library to find sibling libraries in the install directory
 # Only include ULFM path if we're actually using the custom ULFM MPI build (set by distributed/CMakeLists.txt)
 # Note: TT_METAL_USING_ULFM is only TRUE when the custom ULFM path exists (/opt/openmpi-v5.0.7-ulfm).
 #       For Fedora builds using system OpenMPI 5 (with ULFM support), TT_METAL_USING_ULFM will be FALSE,
 #       so the system MPI libraries (in standard paths like /usr/lib64/openmpi/) will be found via
-#       the standard library search path, not via RPATH. This is the correct behavior.
-# Note: Do NOT include build directory paths - INSTALL_RPATH is for installed libraries only
+#       the standard library search path, not via RPATH.
 set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 if(TT_METAL_USING_ULFM)
     # Only add custom ULFM path when we're actually using it (Ubuntu builds with custom ULFM)
