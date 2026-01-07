@@ -301,10 +301,14 @@ def analyze_memory_summary(
     optimizer_size_bytes: float,
     gradients_size_bytes: Optional[float],
     device_memory_bytes: float,
+    use_actual_sizes: bool = False,
 ) -> Dict[str, float]:
     """Analyze and print memory metrics for a single summary
 
     Returns a dictionary with memory breakdown for visualization
+
+    Args:
+        use_actual_sizes: If True, use measured values from logs for model/optimizer in visualization
     """
     print(f"\n{'='*80}")
     print(f"Section: {name}")
@@ -372,8 +376,17 @@ def analyze_memory_summary(
         print(f"  Usage:                {usage_percentage:.2f}%")
 
         # Calculate breakdown for visualization
-        model_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
-        optimizer_mb = bytes_to_mb(optimizer_size_bytes)
+        if use_actual_sizes:
+            # Use actual measured values from logs
+            model_mb = metrics.get("MODEL_CREATION", {}).get("segment_change", 0.0)
+            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get(
+                "segment_change", 0.0
+            )
+        else:
+            # Use theoretical values
+            model_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
+            optimizer_mb = bytes_to_mb(optimizer_size_bytes)
+
         activations_mb = metrics.get("FORWARD_PASS", {}).get("segment_change", 0.0)
         gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get(
             "segment_peak", 0.0
@@ -437,6 +450,12 @@ def main():
         "--visualize_peak",
         action="store_true",
         help="Create a histogram visualization of peak memory usage breakdown",
+    )
+
+    parser.add_argument(
+        "--use_actual_sizes",
+        action="store_true",
+        help="Use actual measured values from logs for model/optimizer sizes in visualization instead of theoretical values",
     )
 
     parser.add_argument(
@@ -507,6 +526,7 @@ def main():
             optimizer_size_bytes,
             gradients_size_bytes,
             args.device_memory,
+            args.use_actual_sizes,
         )
         if breakdown:
             visualization_data.append((name, breakdown))
