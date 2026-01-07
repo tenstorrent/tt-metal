@@ -1084,9 +1084,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         }
 
         // TT_METAL_JIT_ANALYTICS_
-        // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
-        // Default: Inherits from inspector setting
-        // Usage: export TT_METAL_JIT_ANALYTICS=1  # or =0 to disable
+        // Enable JIT compiler state information. Disable state by default; override with 1.
+        // Default: '0', or disable
+        // Usage: export TT_METAL_JIT_ANALYTICS=1  # in disable state by default
         case EnvVarID::TT_METAL_JIT_ANALYTICS: {
             jit_analytics_enabled = false;
             if (value) {
