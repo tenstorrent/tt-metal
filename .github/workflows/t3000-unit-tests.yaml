@@ -26,6 +26,7 @@ on:
           - qwen25_vl
           - gemma3-small
           - dits
+          - deepseek
           - gpt-oss
   schedule:
     - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
