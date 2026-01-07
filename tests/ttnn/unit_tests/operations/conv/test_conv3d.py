@@ -54,26 +54,69 @@ def prepare_input_tensor(input_tensor, groups, device, alignment=ALIGNMENT):
     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
-    """Prepare weights and bias for TTNN."""
-    w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
-    w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    print(f"w.shape: {w.shape}")
-    ALIGN_PAD = alignment - w.shape[3] % alignment
-    if C % alignment != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
+# def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
+#     """Prepare weights and bias for TTNN."""
+#     w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
+#     w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
+#     print(f"w.shape: {w.shape}")
+#     ALIGN_PAD = alignment - w.shape[3] % alignment
+#     if C % alignment != 0:
+#         w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
 
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-    print(f"kD, kH, kW, C_in_aligned, out_channels: {kD, kH, kW, C_in_aligned, out_channels}")
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert num_C_in_blocks * C_in_block == C_in_aligned
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
+#     # Reshape weights so that num_C_in_blocks is the first dimension
+#     kD, kH, kW, C_in_aligned, out_channels = w.shape
+#     print(f"kD, kH, kW, C_in_aligned, out_channels: {kD, kH, kW, C_in_aligned, out_channels}")
+#     C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
+#     num_C_in_blocks = C_in_aligned // C_in_block
+#     assert num_C_in_blocks * C_in_block == C_in_aligned
+#     w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
+#     w = w.permute(3, 0, 1, 2, 4, 5)
+#     w = w.reshape(-1, out_channels)
 
-    print(f"Final Weights shape after per-group padding: {w.shape}")
+#     print(f"Final Weights shape after per-group padding: {w.shape}")
+
+#     tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16)
+#     tt_bias = ttnn.from_torch(
+#         conv3d_module.bias.data.reshape(1, -1),
+#         device=device,
+#         dtype=ttnn.DataType.BFLOAT16,
+#         layout=ttnn.TILE_LAYOUT,
+#         pad_value=0,
+#     )
+#     return tt_weight, tt_bias
+
+
+def prepare_weights(conv3d_module, groups, device, alignment=ALIGNMENT):
+    # w: [oC_total, iC_pg, kD, kH, kW]
+    w = conv3d_module.weight.data
+    oC_total, iC_pg, kD, kH, kW = w.shape
+    oC_pg = oC_total // groups  # 每一组真正的输出通道数
+
+    # 1. 【必须引用 groups】
+    # 将输出通道拆分为 groups 和 oC_pg
+    # 形状变为: [groups, oC_pg, iC_pg, kD, kH, kW]
+    w = w.reshape(groups, oC_pg, iC_pg, kD, kH, kW)
+
+    # 2. 变换维度：把空间维度 (kD, kH, kW) 和输入通道 (iC_pg) 放在一起构成高度
+    # 目标顺序: [groups, kD, kH, kW, iC_pg, oC_pg]
+    w = w.permute(0, 3, 4, 5, 2, 1)
+
+    # 3. 对每组内的 iC_pg 进行 32 对齐
+    c_pad = (alignment - iC_pg % alignment) % alignment
+    if c_pad != 0:
+        w = torch.nn.functional.pad(w, (0, 0, 0, c_pad))  # 在 iC_pg 维度补齐
+
+    # 4. 拉平成你想要的“横向拼接”矩阵
+    # 我们先拉平单组的高度和宽度: [groups, H_per_group, oC_pg]
+    # H_per_group = kD * kH * kW * iC_pg_aligned
+    w = w.reshape(groups, -1, oC_pg)
+
+    # 5. 【关键】：转置并拉平成横向拼接 [H_per_group, groups * oC_pg]
+    # 也就是 [H_per_group, oC_total]
+    w = w.permute(1, 0, 2).reshape(-1, oC_total)
+
+    print(f"Final Weights shape (G={groups}): {w.shape}")
+    # 3x3x3, G=2, oC=32, iC_pg=32(aligned) 时，形状应为 [864, 32]
 
     tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16)
     tt_bias = ttnn.from_torch(
@@ -165,7 +208,8 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    # tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    tt_weight, tt_bias = prepare_weights(conv3d_module, groups, device)
 
     # Create config and run TTNN conv3d
     config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
