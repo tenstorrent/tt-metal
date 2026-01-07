@@ -1714,23 +1714,19 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         // MUX RT args
         std::vector<uint32_t> fwd_mux_rt;
         std::vector<uint32_t> bwd_mux_rt;
+        const uint32_t link = 0;  // num_links = 1
+        const auto src_node_id = mesh_device_->get_fabric_node_id(device_coord);
 
         if (mux_connection_valid(0)) {
-            auto src_node = mesh_device_->get_fabric_node_id(device_coord);
-            auto dst_node = mesh_device_->get_fabric_node_id(forward_coord.value());
-            auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
-            uint32_t link_idx = links.empty() ? 0 : links[0];
+            const auto dst_node_id = mesh_device_->get_fabric_node_id(forward_coord.value());
             fwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node, dst_node, link_idx, program_desc, mux_fwd_core);
+                src_node_id, dst_node_id, link, program_desc, mux_fwd_core);
         }
 
         if (mux_connection_valid(1)) {
-            auto src_node = mesh_device_->get_fabric_node_id(device_coord);
-            auto dst_node = mesh_device_->get_fabric_node_id(backward_coord.value());
-            auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
-            uint32_t link_idx = links.empty() ? 0 : links[0];
+            const auto dst_node_id = mesh_device_->get_fabric_node_id(backward_coord.value());
             bwd_mux_rt = mux_config.get_fabric_mux_run_time_args<ProgramDescriptor>(
-                src_node, dst_node, link_idx, program_desc, mux_bwd_core);
+                src_node_id, dst_node_id, link, program_desc, mux_bwd_core);
         }
 
         // Create Kernel Descriptors
