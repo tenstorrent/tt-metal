@@ -717,7 +717,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             num_buffers_per_channel,
             core_grid_offset);
     }
-    TT_FATAL(topology == ccl::Topology::Linear, "Must         be line or ring");
+    TT_FATAL(topology == ccl::Topology::Linear, "Must be line or ring");
     return line_reduce_scatter_minimal_async_helper(
         program,
         input_tensor,
