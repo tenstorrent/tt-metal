@@ -641,11 +641,15 @@ public:
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
-    void set_mock_cluster_desc_path(const std::string& path) {
-        mock_cluster_desc_path = path;
-        // Set target device to Mock if path is provided and simulator is not enabled
-        if (!path.empty() && simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Mock;
+    // Set mock cluster descriptor from filename (prepends base path automatically)
+    void set_mock_cluster_desc(const std::string& filename) {
+        if (!filename.empty()) {
+            mock_cluster_desc_path =
+                get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+            // Set target device to Mock if simulator is not enabled
+            if (simulator_path.empty()) {
+                runtime_target_device_ = tt::TargetDevice::Mock;
+            }
         }
     }
 

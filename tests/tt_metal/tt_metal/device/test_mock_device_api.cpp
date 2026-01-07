@@ -2,68 +2,89 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Test suite for programmatic mock device API
-// This demonstrates how tt-mlir/tt-xla can enable mock mode without environment variables
-
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/mock_device.hpp>
 #include <umd/device/types/arch.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "llrt/get_platform_architecture.hpp"
 
 namespace tt::tt_metal {
 
-// Test fixture that cleans up mock mode after each test
 class MockDeviceAPIFixture : public ::testing::Test {
 protected:
-    void TearDown() override {
-        // Reset mock mode after each test
-        experimental::disable_mock_mode();
-    }
+    void TearDown() override { experimental::disable_mock_mode(); }
 };
 
-// Test: Verify configure_mock_mode registers config correctly
 TEST_F(MockDeviceAPIFixture, ConfigureMockModeRegistersConfig) {
-    // Initially, mock mode should not be registered
     EXPECT_FALSE(experimental::is_mock_mode_registered());
-
-    // Configure mock mode for Blackhole with 1 chip
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
-
-    // Verify mock mode is now registered
     EXPECT_TRUE(experimental::is_mock_mode_registered());
-
-    // Verify the config is correct
-    auto config = experimental::get_registered_mock_config();
-    ASSERT_TRUE(config.has_value());
-    EXPECT_EQ(config->arch, tt::ARCH::BLACKHOLE);
-    EXPECT_EQ(config->num_chips, 1);
+    auto desc = experimental::get_mock_cluster_desc();
+    ASSERT_TRUE(desc.has_value());
+    EXPECT_EQ(*desc, "blackhole_P150.yaml");
 }
 
-// Test: Verify configure_mock_mode works for Wormhole with multiple chips
 TEST_F(MockDeviceAPIFixture, ConfigureMockModeWormholeMultiChip) {
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 8);
-
     EXPECT_TRUE(experimental::is_mock_mode_registered());
-
-    auto config = experimental::get_registered_mock_config();
-    ASSERT_TRUE(config.has_value());
-    EXPECT_EQ(config->arch, tt::ARCH::WORMHOLE_B0);
-    EXPECT_EQ(config->num_chips, 8);
+    auto desc = experimental::get_mock_cluster_desc();
+    ASSERT_TRUE(desc.has_value());
+    EXPECT_EQ(*desc, "t3k_cluster_desc.yaml");
 }
 
-// Test: Verify disable_mock_mode clears the registration
 TEST_F(MockDeviceAPIFixture, DisableMockModeClearsConfig) {
-    // Enable mock mode
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
+    experimental::disable_mock_mode();
+    EXPECT_FALSE(experimental::is_mock_mode_registered());
+    EXPECT_FALSE(experimental::get_mock_cluster_desc().has_value());
+}
 
-    // Disable mock mode
+TEST_F(MockDeviceAPIFixture, WormholeConfigurationsAreValid) {
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "wormhole_N150.yaml");
     experimental::disable_mock_mode();
 
-    // Verify it's cleared
-    EXPECT_FALSE(experimental::is_mock_mode_registered());
-    EXPECT_FALSE(experimental::get_registered_mock_config().has_value());
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "wormhole_N300.yaml");
+    experimental::disable_mock_mode();
+
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 4);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "2x2_n300_cluster_desc.yaml");
+    experimental::disable_mock_mode();
+
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 8);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "t3k_cluster_desc.yaml");
+    experimental::disable_mock_mode();
+
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 32);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "tg_cluster_desc.yaml");
+}
+
+TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
+    experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "blackhole_P150.yaml");
+    experimental::disable_mock_mode();
+
+    experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 2);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "blackhole_P300_both_mmio.yaml");
+}
+
+TEST_F(MockDeviceAPIFixture, UnsupportedConfigurationThrows) {
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 99);
+    EXPECT_THROW(experimental::get_mock_cluster_desc(), std::runtime_error);
+}
+
+TEST_F(MockDeviceAPIFixture, ConfigureMockModeFromHwDetectsArchitecture) {
+    tt::ARCH detected_arch = get_physical_architecture();
+    if (detected_arch == tt::ARCH::Invalid) {
+        GTEST_SKIP() << "No TT hardware detected - skipping configure_mock_mode_from_hw test";
+    }
+
+    experimental::configure_mock_mode_from_hw();
+    EXPECT_TRUE(experimental::is_mock_mode_registered());
+    auto desc = experimental::get_mock_cluster_desc();
+    ASSERT_TRUE(desc.has_value());
 }
 
 }  // namespace tt::tt_metal

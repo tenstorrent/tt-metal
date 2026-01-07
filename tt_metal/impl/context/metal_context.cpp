@@ -152,8 +152,8 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
 
-    // Workaround for galaxy and BH, need to always re-init
-    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+    // Workaround for galaxy, need to always re-init
+    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
@@ -421,6 +421,11 @@ void MetalContext::teardown() {
     inspector_data_.reset();
 
     control_plane_.reset();
+
+    // Clear mock mode configuration if it was enabled
+    if (experimental::is_mock_mode_registered()) {
+        experimental::disable_mock_mode();
+    }
 }
 
 MetalContext& MetalContext::instance() {
@@ -439,11 +444,10 @@ void MetalContext::teardown_base_objects() {
 
 MetalContext::MetalContext() {
     // Check if mock mode was configured via API (before env vars take effect)
-    auto mock_config = experimental::get_registered_mock_config();
-    if (mock_config.has_value()) {
-        std::string yaml_path = experimental::get_mock_cluster_desc_path(*mock_config);
-        rtoptions_.set_mock_cluster_desc_path(yaml_path);
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", yaml_path);
+    auto mock_cluster_desc = experimental::get_mock_cluster_desc();
+    if (mock_cluster_desc.has_value()) {
+        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
     }
 
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
