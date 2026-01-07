@@ -437,6 +437,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         (32, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
+        (1, 2048),  # prefill 2k
         (1, 4096),  # prefill 4k TODO: 20b fails attention pcc and 120b runs out of DRAM in experts
     ],
     ids=[
@@ -444,6 +445,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         "decode_32",
         "decode_128",
         "prefill_128",
+        "prefill_2048",
         "prefill_4096",
     ],
 )
