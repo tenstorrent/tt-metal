@@ -38,6 +38,7 @@ namespace tt::tt_metal {
 SubDeviceManagerTracker::SubDeviceManagerTracker(
     IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
+    TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();
     active_sub_device_manager_ = default_sub_device_manager_;
