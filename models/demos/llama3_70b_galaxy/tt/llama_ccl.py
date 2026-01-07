@@ -1280,7 +1280,7 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
 ):
-    use_2d_grid = inp.shape[-2] == 128 and not tt_ccl.is_qwen
+    use_2d_grid = False
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
