@@ -81,7 +81,6 @@ def test_mpwi_20_core_C_dims(device, in_c):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
     (
         in_n,
@@ -118,7 +117,7 @@ def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
         ceil_mode=ceil_mode,
         memory_config=None,
         run_twice=True,
-        config_tensor_in_dram=False,
+        config_tensor_in_dram=True,
     )
 
 
