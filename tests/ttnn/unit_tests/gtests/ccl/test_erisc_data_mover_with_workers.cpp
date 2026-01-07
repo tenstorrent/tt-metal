@@ -1195,5 +1195,3 @@ TEST(
         termination_mode);
     ASSERT_EQ(result, 0);
 }
-
-// EnablePersistentKernelCache

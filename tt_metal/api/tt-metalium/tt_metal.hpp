@@ -151,17 +151,16 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
- * `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`
+ * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
  *
+ *  The build key component accounts for device architecture as binaries are not compatible across architectures.
  *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
  * compiled kernels. Kernel uniqueness is determined by the kernel hash which is computed based on compile time args,
  * defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute
- * kernels
- *  TODO: Kernel hash needs to account for device architecture as binaries are not the same across architectures.
+ * kernels.
  *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static is enabled for the duration of the running process.
- *  By default the cache does not persistent across runs, but can be enabled by calling EnablePersistentKernelCache().
- * Setting this will skip compilation when output binary directory exists.
+ *  This cache is static and is enabled for the duration of the running process.
+ *  Across runs, previously compiled kernels are recompiled if the source code or dependencies have changed.
  *
  *  Return value: void
  *
