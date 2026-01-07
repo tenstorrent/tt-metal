@@ -77,6 +77,7 @@ void set_deassert_addresses() {
 
 inline void run_subordinate_eriscs(uint32_t enables) {
 #if defined(ENABLE_2_ERISC_MODE)
+    tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
     // List of subordinate eriscs to run
     if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
         subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
@@ -87,6 +88,7 @@ inline void run_subordinate_eriscs(uint32_t enables) {
 inline void wait_subordinate_eriscs() {
 #if defined(ENABLE_2_ERISC_MODE)
     WAYPOINT("SEW");
+    tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
     do {
         invalidate_l1_cache();
         // If the subordinate is using dynamic NOC mode, it may use NOC0 but we don't need to sync the counters
@@ -204,6 +206,7 @@ int __attribute__((noinline)) main(void) {
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
     risc_init();
 

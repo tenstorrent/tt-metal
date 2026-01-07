@@ -55,7 +55,6 @@ routing_info_t* routing_info = (routing_info_t*)(eth_l1_mem::address_map::ERISC_
 
 // Context Switch Config
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
-tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 extern uint32_t __erisc_jump_table;
 volatile uint32_t* RtosTable =
