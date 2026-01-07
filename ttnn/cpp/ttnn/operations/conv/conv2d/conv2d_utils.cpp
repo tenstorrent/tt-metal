@@ -82,6 +82,7 @@ uint32_t get_input_channels_alignment(
         (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
+            // NOLINTNEXTLINE(bugprone-branch-clone)
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
                 return tt::constants::TILE_WIDTH;
             } else if (shard_width % 16 == 0) {
@@ -565,7 +566,10 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     Layout input_tensor_layout,
     BufferType input_tensor_buffer_type,
     const std::optional<ParallelConfig>& input_tensor_parallel_config,
-    std::optional<uint32_t> act_block_h_override) {
+    std::optional<uint32_t> act_block_h_override,
+    bool enable_channels_padding,
+    bool is_shard_height_tile_multiple,
+    bool is_shard_width_tile_multiple) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
     ParallelConfig parallel_config;
@@ -582,9 +586,9 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
             input_channels_alignment,
             compute_grid_size,
             block_shard_orientation,
-            !is_mm_conv,
-            true,
-            true,
+            enable_channels_padding && !is_mm_conv,
+            is_shard_height_tile_multiple,
+            is_shard_width_tile_multiple,
             act_block_h_override.value_or(0));
     }
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);

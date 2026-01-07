@@ -8,8 +8,9 @@
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
-#include <memory_reporter.hpp>
+#include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include <ranges>
 #include <tt_align.hpp>
 #include <algorithm>
 #include <array>
@@ -39,6 +40,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
@@ -236,7 +238,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
     for (const auto& cb_descriptor : descriptor.cbs) {
-        internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
+        internal_->add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
     }
 
     for (const auto& semaphore_descriptor : descriptor.semaphores) {
@@ -364,7 +366,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
             std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
             for (CoreCoord coreCoord : kernel_logical_cores) {
                 TT_FATAL(
-                    !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end()),
+                    !check_kernel_logical_cores.contains(coreCoord),
                     "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
                     check_kernel->name(),
                     kernel->name(),
@@ -384,7 +386,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     // this->id);
     //  find coretype based on kernel_id
     for (const auto& kernels : this->kernels_) {
-        if (kernels.find(kernel_id) != kernels.end()) {
+        if (kernels.contains(kernel_id)) {
             return kernels.at(kernel_id);
         }
     }
@@ -715,7 +717,7 @@ void detail::ProgramImpl::CircularBufferAllocator::mark_address(
     }
 }
 
-CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer) {
+CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer) {
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -778,8 +780,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
-    std::shared_ptr<CircularBuffer> circular_buffer =
-        std::make_shared<CircularBuffer>(core_range_set.merge_ranges(), config);
+    std::shared_ptr<CircularBufferImpl> circular_buffer =
+        std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config);
     return add_circular_buffer_(circular_buffer);
 }
 
@@ -789,21 +791,21 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
-    std::shared_ptr<CircularBuffer> circular_buffer =
-        std::make_shared<CircularBuffer>(core_range_set.merge_ranges(), config, global_circular_buffer);
+    std::shared_ptr<CircularBufferImpl> circular_buffer =
+        std::make_shared<CircularBufferImpl>(core_range_set.merge_ranges(), config, global_circular_buffer);
     return add_circular_buffer_(circular_buffer);
 }
 
-std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
-    if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
+std::shared_ptr<CircularBufferImpl> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
+    if (!this->circular_buffer_by_id_.contains(cb_id)) {
         TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
     }
     return this->circular_buffer_by_id_.at(cb_id);
 }
 
-std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers_on_core(
+std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers_on_core(
     const CoreCoord& core) const {
-    std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
+    std::vector<std::shared_ptr<CircularBufferImpl>> cbs_on_core;
     for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_core(core)) {
             cbs_on_core.push_back(circular_buffer);
@@ -812,9 +814,9 @@ std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffe
     return cbs_on_core;
 }
 
-std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers_on_corerange(
+std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers_on_corerange(
     const CoreRange& cr) const {
-    std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
+    std::vector<std::shared_ptr<CircularBufferImpl>> cbs_on_core;
     for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_corerange(cr)) {
             cbs_on_core.push_back(circular_buffer);
@@ -980,8 +982,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
         unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
             for (auto core : kernel->logical_cores()) {
-                if (unique_cores[programmable_core_type_index].find(core) !=
-                    unique_cores[programmable_core_type_index].end()) {
+                if (unique_cores[programmable_core_type_index].contains(core)) {
                     continue;
                 }
                 unique_cores[programmable_core_type_index].insert(core);
@@ -996,8 +997,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     const auto& kernel_defines = kernel->defines();
     const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
     for (const auto& str : reserved_defines) {
-        TT_FATAL(
-            kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
+        TT_FATAL(!kernel_defines.contains(str), "{} is a reserved define and can't be manually set", str);
     }
     std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
@@ -1311,7 +1311,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically
     // allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
-    if (this->kernels_buffer_.find(device->id()) == this->kernels_buffer_.end() and binary_data_size_bytes) {
+    if (!this->kernels_buffer_.contains(device->id()) and binary_data_size_bytes) {
         std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
             device,
             binary_data_size_bytes,
@@ -1575,12 +1575,15 @@ size_t detail::ProgramImpl::num_kernels() const {
     return count;
 }
 
-std::span<const std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers() const {
+std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
 }
 
-std::span<const std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
-    return internal_->circular_buffers();
+std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
+    std::ranges::transform_view res_view(impl().circular_buffers(), [](const auto& impl_ptr) {
+        return std::make_shared<CircularBuffer>(impl_ptr.get());
+    });
+    return {res_view.begin(), res_view.end()};
 }
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }

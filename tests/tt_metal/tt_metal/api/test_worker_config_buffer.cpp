@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <time.h>
+#include <cstdint>
+#include <cstdlib>
+#include <ctime>
 #include <tt-logger/tt-logger.hpp>
 #include <cstddef>
 #include <deque>

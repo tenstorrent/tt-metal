@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ttnn/core.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -22,6 +23,7 @@ struct AdaptiveAvgPool2DOp {
         uint32_t channels,
         std::array<uint32_t, 2> output_size,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         bool deallocate_input = false,
@@ -37,6 +39,7 @@ struct AdaptiveMaxPool2DOp {
         uint32_t channels,
         std::array<uint32_t, 2> output_size,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<op_slicing::Op2DSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool deallocate_input = false,
         bool reallocate_output = true);

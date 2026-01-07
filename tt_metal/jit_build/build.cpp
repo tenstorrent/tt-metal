@@ -164,8 +164,8 @@ void JitBuildEnv::init(
 
     // Defines
     this->defines_ = "";
-    for (auto it = device_kernel_defines.begin(); it != device_kernel_defines.end(); ++it) {
-        this->defines_ += "-D" + it->first + "=" + it->second + " ";
+    for (const auto& device_kernel_define : device_kernel_defines) {
+        this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
@@ -192,6 +192,9 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
+    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+        this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
@@ -272,8 +275,8 @@ void JitBuildEnv::init(
         root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
-    for (size_t i = 0; i < includeDirs.size(); ++i) {
-        oss << "-I" << includeDirs[i] << " ";
+    for (const auto& includeDir : includeDirs) {
+        oss << "-I" << includeDir << " ";
     }
     this->includes_ = oss.str();
 

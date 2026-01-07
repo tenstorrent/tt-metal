@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <cmath>
 #include <pthread.h>
 #include <algorithm>
 #include <atomic>
@@ -496,7 +496,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
@@ -647,7 +647,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
             tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (umd::CoreDescriptor logical_core : all_cores) {
-                if (dispatch_cores.find(logical_core) == dispatch_cores.end()) {
+                if (!dispatch_cores.contains(logical_core)) {
                     if (logical_core.type == core_type) {
                         print_cores_sanitized.push_back(logical_core);
                     }
@@ -677,7 +677,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
-                if (valid_logical_core && all_cores.count({logical_core, core_type}) > 0) {
+                if (valid_logical_core && all_cores.contains({logical_core, core_type})) {
                     print_cores_sanitized.push_back({logical_core, core_type});
                     log_info(
                         tt::LogMetal,
@@ -713,14 +713,14 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
         }
-        if (dispatch_cores.count(logical_core)) {
+        if (dispatch_cores.contains(logical_core)) {
             device_reads_dispatch_cores_[device_id] = true;
         }
     }
 
     device_intermediate_streams_force_flush_lock_.lock();
     TT_ASSERT(
-        device_intermediate_streams_force_flush_.count(device_id) == 0,
+        !device_intermediate_streams_force_flush_.contains(device_id),
         "Device {} added to DPRINT server more than once!",
         device_id);
     device_intermediate_streams_force_flush_[device_id] = false;
@@ -729,7 +729,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // Save this device + core range to the print server
     device_to_core_range_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) == 0, "Device {} added to DPRINT server more than once!", device_id);
+        !device_to_core_range_.contains(device_id), "Device {} added to DPRINT server more than once!", device_id);
     device_to_core_range_[device_id] = print_cores_sanitized;
     device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
@@ -808,7 +808,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     // Remove the device from relevant data structures.
     device_intermediate_streams_force_flush_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) > 0,
+        device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_intermediate_streams_force_flush_.erase(device_id);
@@ -816,7 +816,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 
     device_to_core_range_lock_.lock();
     TT_ASSERT(
-        device_to_core_range_.count(device_id) > 0,
+        device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_to_core_range_.erase(device_id);
@@ -1084,7 +1084,7 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
         // write back to device - update rpos only
         std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
-        uint32_t offs = DebugPrintMemLayout().rpos_offs();
+        uint32_t offs = DebugPrintMemLayout::rpos_offs();
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             chip_id, virtual_core, rposbuf, base_addr + offs);
 
@@ -1218,7 +1218,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
             const ChipId chip_id = get<0>(risc_key);
             const umd::CoreDescriptor& logical_core = get<1>(risc_key);
             const int risc_id = get<2>(risc_key);
-            string filename = rtoptions.get_root_dir() + logfile_path;
+            string filename = rtoptions.get_logs_dir() + logfile_path;
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
                 chip_id,
