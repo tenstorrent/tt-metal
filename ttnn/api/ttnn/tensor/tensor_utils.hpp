@@ -14,8 +14,6 @@ namespace tt::tt_metal {
 
 int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const size_t> strides);
 
-std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile);
-
 constexpr auto compute_flat_input_index = [](const auto& indices, const auto& strides) {
     uint32_t flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
