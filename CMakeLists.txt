@@ -76,6 +76,13 @@ include(unity)
 include(clang-tidy)
 include(rpath)
 
+# Prevent link directories from being added to INSTALL_RPATH automatically.
+# This is crucial for Fedora's brp-check-rpaths which requires $ORIGIN to be first in RPATH.
+# Without this, CMake would add library directories from imported targets (e.g., MPI::MPI_C)
+# to the RPATH, causing $ORIGIN to be in the wrong position.
+# We explicitly control RPATH via target properties (INSTALL_RPATH) in tt_metal/CMakeLists.txt
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
