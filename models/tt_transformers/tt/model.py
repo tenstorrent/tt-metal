@@ -172,7 +172,9 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
@@ -202,7 +204,7 @@ class Transformer(LightweightModule):
         # Slice the rot mats to the prefill seqlen
         mat_len = self.rope_setup.cos_matrix.shape[2]
         # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
-        seq_len = last_token_idx+1 if last_token_idx is not None else S
+        seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
 
         # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.

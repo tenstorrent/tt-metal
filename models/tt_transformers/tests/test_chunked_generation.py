@@ -153,10 +153,10 @@ def test_chunked_prefill_single_user(
     for last_token_idx in [
         prefill_chunk_size - 2,  # one chunk minus one token
         prefill_chunk_size - 1,  # exactly one chunk
-        prefill_chunk_size,      # one chunk plus one token
+        prefill_chunk_size,  # one chunk plus one token
         prefill_chunk_size + 1,  # one chunk plus two tokens
-        seq_len - 10,            # less than seq_len (two chunks)
-        seq_len - 1,             # exactly seq_len (two chunks)
+        seq_len - 10,  # less than seq_len (two chunks)
+        seq_len - 1,  # exactly seq_len (two chunks)
     ]:
         prefill_input_trimmed = tt_prefill_input[:, : last_token_idx + 1]
 

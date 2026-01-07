@@ -134,9 +134,9 @@ class Generator:
         tt_out_logits_all_users=None,
         start_pos: list[int] = None,  # Cached prefixes lengths, ignored for now
     ):
-        assert (start_pos is None) or (isinstance(start_pos, list) and all(x == 0 for x in start_pos)), (
-            f"Prefix caching is not supported for llama3_70b_galaxy, got start_pos: {start_pos}"
-        )
+        assert (start_pos is None) or all(
+            x == 0 for x in start_pos
+        ), f"Prefix caching is not supported for llama3_70b_galaxy, got start_pos: {start_pos}"
 
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
