@@ -34,11 +34,12 @@ jobs:
 
       - name: Download built wheel
         if: ${{ inputs.wheel-artifact-name != '' }}
-        uses: actions/download-artifact@v4
+        uses: dawidd6/action-download-artifact@v6
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: ./wheels
-          run-id: 20788440471
+          run_id: 20788440471
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install tt-metal wheel and dependencies
         if: ${{ inputs.wheel-artifact-name != '' }}
