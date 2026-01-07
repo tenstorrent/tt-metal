@@ -754,7 +754,9 @@ class TtLlamaAttention(LightweightModule):
                 is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](
+                    seq_len // batch_size if seq_len // batch_size == 128 else seq_len
+                ),
             )
 
         # deallocate keys and values
