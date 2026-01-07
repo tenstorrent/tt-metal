@@ -104,16 +104,16 @@ The implemented optimization techniques in TT-NN compared to the conventional fl
   - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs. 
   - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
   - Sharding Concepts
-![Sharding Concept](images/sharding_concept.png) 
+![Sharding Concept](images_bh/sharding_concept.png) 
   - Illustrative example 
-![Sharding Example](images/sharding_example.png)   
+![Sharding Example](images_bh/sharding_example.png)   
 
 ### 3.2 Matmul sharding variants in ViT
 
 #### 3.2.1 Matmul Reuse (BMM)
 The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attention module, where both inputs (in0 and in1) as well as the output are height sharded. There no multi-cast (mcast) technique applied on the inputs here. Each core will be responsible for the Matmul of single head of one image of the batch.
 
-![BMM Height](images/bmm_height.png) 
+![BMM Height](images_bh/bmm_height.png) 
 
 #### 3.2.2 Matmul Reuse Mcast (2D)
 The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV generation as well as the Feed-Forward Network.
@@ -122,7 +122,7 @@ The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV 
   - The in1 is interleaved (on L1 or DRAM) and its slices along the N (outer) dimension are mcasted along the cores in the same column, where each slide has the full inner dimension (K). This is aligned with the previously mentioned mcast of in0 slices.
   - Worth to mention that in some cases it may be better to implement the Column_Major (and mcast transposed = True) config, where the in0 M dimension is sharded along the x-axis of the core as shown in the figure. All the mcast techniques in the Column_Major will be transposed with respect to the Row_Major config mentioned in the previous paragraph.
 
-![Mcast Block](images/block_mcast.png)
+![Mcast Block](images_bh/block_mcast.png)
 
 **ROW_MAJOR vs COLUMN_MAJOR Selection Guide:**
 
@@ -138,7 +138,7 @@ For Blackhole's 10×12 grid (y=10, x=12), **ROW_MAJOR** is typically optimal.
 #### 3.2.3 Matmul Reuse Mcast (1D)
 The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while in1 is still interleaved, as shown in the figure.
 
-![Mcast Height](images/height_mcast.png)
+![Mcast Height](images_bh/height_mcast.png)
 
 ### 3.3 Transformer optimizations
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
@@ -146,8 +146,8 @@ The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while
   - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
   - Fusing GeLU OP with its preceding Linear OP
 
-    ![Multi-Head Attention in TT-NN](images/mha_ttnn_1.png) 
-  ![](images/mha_ttnn_2.png)  
+    ![Multi-Head Attention in TT-NN](images_bh/mha_ttnn_1.png) 
+  ![](images_bh/mha_ttnn_2.png)  
 
 ## 4. ViT TT-NN Code Structure
 
@@ -355,10 +355,10 @@ def vit_layer(
 This is a step-by-step walkthrough of the ViT encoder layer implementation in TT-NN on Blackhole. The diagram below summarizes all of these steps in a flow chart, which is examined in smaller pieces below.
 
 This diagram is representing the TT-NN module `vit_layer()`
-![encoder_layer](images/diagram.png)
+![encoder_layer](images_bh/diagram.jpeg)
 
 The graph legend:
-![legend](images/legend.png)
+![legend](images_bh/legend.jpeg)
 
 ### 5.1 Input 
 The input to the Vision Transformer consists of image patches that are flattened and embedded into a higher-dimensional space. The input is represented as:
@@ -425,7 +425,7 @@ def vit_layernorm_before(config, hidden_states, *, parameters):
 )
 ```
 
-![input](images/layernorm.png)
+![input](images_bh/layernorm.png)
 
 ### 5.4 Multi-Head Self-Attention
 The multi-head self-attention (MHA) block computes:
@@ -483,7 +483,7 @@ This matmul uses a **block-sharded, reuse+mcast** program config sized for the f
 )
 ```
 
-![input](images/qkvlinear.png)
+![input](images_bh/qkvlinear.png)
 
 #### 5.4.2 Resharding (Core Grid Transition)
 After QKV is produced on the fixed 10×12 grid, the implementation reshards it to a **batch-dependent grid** (`config.core_grid`) before splitting into heads and running the attention BMMs:
@@ -525,7 +525,7 @@ where
 
 **QKV Diagram**:
 
-![laynorm](images/qkvsplit.png)
+![laynorm](images_bh/qkvsplit.png)
 
 #### 5.4.4 Attention Scores (Q×Kᵀ)
 Attention scores are computed via a height-sharded matmul:
@@ -558,7 +558,7 @@ ttnn.deallocate(key)
 ),
 ```
 
-![attn](images/attention.png)
+![attn](images_bh/attention.png)
 
 #### 5.4.5 Scale and Softmax
 The scores are scaled by \(1/\sqrt{head\_size}\) using an explicit multiply, then softmax is applied in-place:
@@ -617,7 +617,7 @@ ttnn.deallocate(value)
 )
 ```
 
-![attn](images/value.png)
+![attn](images_bh/value.png)
 
 #### 5.4.7 Concatenating Heads + Self-Output
 The per-head context is concatenated back into a single `[b × seqL × dim]` representation:
@@ -669,7 +669,7 @@ ttnn.deallocate(context_layer)
 )
 ```
 
-![concat](images/selfoutput.png)
+![concat](images_bh/selfoutput.jpeg)
 
 #### 5.4.8 Defragmentation Notes
 The attention path contains optional `ttnn.reallocate()` calls controlled by `config.should_reallocate_in_attention`, which is set by `update_model_config()` based on batch regime.
@@ -726,7 +726,7 @@ layernorm_after_output = ttnn.layer_norm(
 
 **Add and Norm Diagram**:
 
-![addnorm](images/addnorm.png)
+![addnorm](images_bh/addnorm.png)
 
 ### 5.6 Feed-Forward Network
 The feed-forward network (FFN/MLP) expands the embedding dimension and projects it back down:
@@ -838,7 +838,7 @@ def vit_feedforward(
 
 **FFN Diagram**:
 
-![ffn](images/ffn.png)
+![ffn](images_bh/ffn.jpeg)
 
 ### 5.7 Output
 The final result after the feed-forward network and the second normalization step is the **Encoder Output**. This output has the following shape:
