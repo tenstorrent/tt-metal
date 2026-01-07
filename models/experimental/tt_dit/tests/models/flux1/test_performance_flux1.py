@@ -23,12 +23,14 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
     [
         [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+        [(4, 2), (4, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "1x2sp0tp1",
         "2x2sp0tp1",
+        "4x2sp0tp1",
         "2x4sp0tp1",
         "4x8sp0tp1",
     ],
@@ -306,6 +308,7 @@ def test_flux1_pipeline_performance(
         device_name_map = {
             (1, 2): "BH_P300",
             (2, 2): "BH_QB",
+            (4, 2): "BH_LB",
             (2, 4): "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
