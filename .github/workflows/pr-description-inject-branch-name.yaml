@@ -1,4 +1,4 @@
-name: Inject git branch into PR description
+name: Inject branch name into PR description
 
 on:
   pull_request:
