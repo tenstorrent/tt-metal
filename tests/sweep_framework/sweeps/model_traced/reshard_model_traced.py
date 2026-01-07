@@ -30,6 +30,35 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Invalidate test vectors with non-tile-aligned output shard shapes.
+    ttnn.reshard cannot create output tensors with non-tile-aligned shard dimensions.
+    """
+    output_mem_config = test_vector.get("output_memory_config")
+
+    if output_mem_config:
+        # Check if it's a dict (during generation) or object (during execution)
+        if isinstance(output_mem_config, dict):
+            shard_spec = output_mem_config.get("data", {}).get("shard_spec")
+            if shard_spec and "shape" in shard_spec:
+                shard_shape = shard_spec["shape"]
+                if len(shard_shape) >= 2:
+                    height, width = shard_shape[-2], shard_shape[-1]
+                    if height % 32 != 0 or width % 32 != 0:
+                        return True, f"Output shard shape {shard_shape} not tile-aligned (must be divisible by 32)"
+        elif hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
+            shard_spec = output_mem_config.shard_spec
+            if hasattr(shard_spec, "shape"):
+                shard_shape = shard_spec.shape
+                if len(shard_shape) >= 2:
+                    height, width = shard_shape[-2], shard_shape[-1]
+                    if height % 32 != 0 or width % 32 != 0:
+                        return True, f"Output shard shape ({height}, {width}) not tile-aligned"
+
+    return False, None
+
+
 def mesh_device_fixture():
     device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
     device_name = ttnn.get_arch_name()
@@ -52,21 +81,6 @@ def run(
 
     shape = input_shape if isinstance(input_shape, (tuple, list)) else (1, 1, 32, 32)
 
-    # Check if output shard shape is tile-aligned
-    # If not, we need to use ROW_MAJOR layout
-    needs_row_major = False
-    if hasattr(output_memory_config, "shard_spec") and output_memory_config.shard_spec:
-        shard_spec = output_memory_config.shard_spec
-        if hasattr(shard_spec, "shape"):
-            shard_shape = shard_spec.shape
-            if len(shard_shape) >= 2:
-                height, width = shard_shape[-2], shard_shape[-1]
-                if height % 32 != 0 or width % 32 != 0:
-                    needs_row_major = True
-
-    # Override layout if needed
-    actual_layout = ttnn.ROW_MAJOR_LAYOUT if needs_row_major else input_a_layout
-
     # Tensor creation
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
@@ -74,7 +88,7 @@ def run(
     torch_output = torch_input.clone()
 
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=input_a_dtype, layout=actual_layout, device=device, memory_config=input_a_memory_config
+        torch_input, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
     )
 
     # Op call
