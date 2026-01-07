@@ -210,6 +210,7 @@ void MAIN {
                 cb_recipsumexps,
                 compute_kernel_lib::TileShape::row(block_w),
                 {},
+                {},
                 [](uint32_t) {
                     recip_tile_init();
                     recip_tile(0);
