@@ -2397,12 +2397,16 @@ process_gather_in0_program_and_create_override_variables(
     std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
     shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
 
+    // Use worker_cores_vec instead of all_cores_vec for override_variables.cores
+    // because only worker cores have in1_tensor_addr at runtime args index [1].
+    // HOP and IDLE cores have signaler args at index [1] when fused_op_signaler is present,
+    // so updating index [1] for those cores would corrupt the signaler data and cause hangs.
     return ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t{
         {mm_kernel_in1_sender_writer_id},
         shared_cbs,
         false,
         CoreCoord{0, 0},
-        all_cores_vec,
+        worker_cores_vec,
         0,
         ttnn::operations::matmul::Matmul1DType::GATHER_IN0};
 }
@@ -2587,6 +2591,10 @@ inline void override_gather_in0_program_parameters(
             UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
         }
     }
+
+    // Update in1 tensor address for all worker cores.
+    // Note: override_variables.cores only contains worker cores (not hop/idle cores),
+    // so it's safe to unconditionally update index [1] which holds in1_tensor_addr.
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
     for (const auto& core : override_variables.cores) {
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
