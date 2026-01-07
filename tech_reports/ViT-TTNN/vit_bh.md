@@ -281,40 +281,360 @@ The Multi-Head Self-Attention implementation (`vit_attention`) is described in d
 > Draft placeholder: This section will be a step-by-step walkthrough of the Blackhole ViT encoder layer implementation in TT-NN. It will cover the sharding strategy, matmul program configs, and the attention flow (including resharding, explicit scaling, in-place softmax, and any required reallocations).
 
 ### 4.1 Input
-> Draft placeholder
+The input to a ViT encoder layer is a sequence of patch embeddings with shape:
+
+`b × seqL × dim`
+
+Where:
+- `b` is the batch size
+- `seqL` is the sequence length (number of tokens)
+- `dim` is the embedding dimension
+
+For ViT-Base (224×224 image, patch=16, hidden=768):
+- patch grid is 14×14 → `seqL = 196`
+- TT-NN tiles have height 32, so the token dimension is padded to a tile multiple:
+  - `seqL_padded = 224`
+
+In the Blackhole implementation, the encoder (Section 3.3) converts embeddings to a **block-sharded** tensor on a fixed **10×12 core grid**, so the *layer input* is typically:
+
+`b × 224 × 768`  (tile-padded tokens)
 
 ### 4.2 Sharding parametrization
-> Draft placeholder
+This subsection defines the main sharding parameters used throughout the Blackhole implementation. These values are computed in `update_model_config()` and are used to size the sharded program configs (LayerNorm, matmuls, softmax).
+
+#### 4.2.1 Tile-derived dimensions
+TT-NN uses `TILE_HEIGHT = 32` for tile layout.
+
+For ViT-Base:
+- `seqL = 196`
+- `seqL_padded = 224`
+- `seqL_t = seqL_padded / 32 = 7` (tokens in tiles)
+- `dim = 768`
+- `dim_t = dim / 32 = 24` (embedding in tiles)
+- `head_num = 12`
+- `head_size = dim / head_num = 64`
+- `head_size_t = head_size / 32 = 2` (head size in tiles)
+
+#### 4.2.2 Core grids used by the Blackhole ViT implementation
+The Blackhole demo uses two related core grids:
+
+1) **Fixed 10×12 grid (120 cores)**:
+- `core_grid_10x12 = CoreGrid(y=10, x=12)`
+- Used for the block-sharded “backbone” of the encoder (encoder input sharding, LayerNorms, QKV linear, self-output linear, FFN).
+
+2) **Batch-dependent (variable) grid** used inside attention and for the classifier:
+- If `batch_size ≤ 10`: `core_grid = CoreGrid(y=batch_size, x=12)`
+- If `batch_size > 10`: `core_grid = CoreGrid(y=10, x=12)` and the code enables `should_reallocate_in_attention = True`.
+
+This is why the attention path contains explicit sharding transitions (reshard/to_memory_config) between the fixed 10×12 grid and the batch-dependent grid.
+
+#### 4.2.3 Per-core tile slices (examples)
+With `x = 12`:
+- `dim_t__x_full_grid = dim_t / 12 = 24/12 = 2` tiles per core in X (for the fixed 10×12 grid).
+
+For the variable grid:
+- `dim_t__x = dim_t / core_grid.x` (still 2 when `x=12`)
+- `head_seqL_t__x = (head_num × seqL_t) / core_grid.x = (12×7)/12 = 7`
+
+Classifier tiles (1000 classes padded to 1152):
+- `1152/32 = 36` tiles total, so `class__x = 36 / core_grid.x = 3` tiles per core in X (for `x=12`).
+
+> The remaining subsections will show how each op uses these values via its program config (e.g. `query_key_value_matmul_program_config`, `query_by_key_matmul_program_config`, `softmax_program_config`, etc.).
 
 ### 4.3 Layer Normalization (LayerNorm)
-> Draft placeholder
+LayerNorm is applied twice per encoder layer:
+1) Before attention (`layernorm_before`)
+2) After the attention residual add (`layernorm_after`)
+
+In the Blackhole implementation, both LayerNorm ops run on **block-sharded** tensors in L1:
+
+```python
+layernorm_before_output = ttnn.layer_norm(
+    hidden_states,
+    weight=parameters.layernorm_before.weight,
+    bias=parameters.layernorm_before.bias,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    program_config=config.program_configs["layernorm_before_program_config"],
+    compute_kernel_config=config.program_configs["ln_compute_config"],
+)
+
+layernorm_after_output = ttnn.layer_norm(
+    multi_head_attention_output,
+    weight=parameters.layernorm_after.weight,
+    bias=parameters.layernorm_after.bias,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    program_config=config.program_configs["layernorm_after_output_program_config"],
+    compute_kernel_config=config.program_configs["ln_compute_config"],
+)
+```
+
+#### 4.3.1 Sharding shape (block sharding)
+For the encoder layer input `b × 224 × 768`, the block-sharded tensor is distributed on the fixed `core_grid_10x12` grid. In tile units:
+- `seqL_t = 7` tiles (224/32)
+- `dim_t = 24` tiles (768/32)
+- `dim_t__x_full_grid = 2` tiles per core in X (24/12)
+
+So the per-core shard shape for LayerNorm is:
+
+`[block_h, block_w] = [seqL_t, dim_t__x_full_grid] = [7, 2]` tiles
+
+#### 4.3.2 LayerNorm program configs (Blackhole)
+The LayerNorm program configs are defined in `update_model_config()` and are sized in tiles:
+
+```python
+"layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(12, 10),
+    subblock_w=2,
+    block_h=7,
+    block_w=2,
+    inplace=False,
+),
+
+"layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(12, 10),
+    subblock_w=2,
+    block_h=7,
+    block_w=2,
+    inplace=False,
+),
+```
+
+#### 4.3.3 LayerNorm compute kernel configuration
+The Blackhole demo also provides a compute kernel configuration for LayerNorm:
+
+```python
+"ln_compute_config": ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+),
+```
+
+This configuration controls math fidelity and some kernel-level performance options for the LayerNorm implementation.
 
 ### 4.4 Multi-Head Self-Attention
-> Draft placeholder
+The multi-head self-attention (MHA) block computes:
+
+- Q, K, V projections from the input
+- attention scores \(QK^T\)
+- softmax probabilities \(P\)
+- context \(PV\)
+- projection back to `dim` via the self-output linear layer
+
+The Blackhole implementation uses:
+- a **fused QKV projection** (`ttnn.linear` producing a merged QKV tensor),
+- **height-sharded** matmuls for the attention BMMs,
+- an explicit **scale multiply**,
+- `ttnn.softmax_in_place`,
+- explicit **resharding** between core grids inside attention,
+- optional `ttnn.reallocate()` in some batch regimes.
 
 #### 4.4.1 Q,K,V Generation (Fused Linear)
-> Draft placeholder
+The Q/K/V projection is computed as one fused linear op that produces a merged QKV tensor.
+
+```python
+query_key_value = ttnn.linear(
+    hidden_states,
+    parameters.attention.query_key_value.weight,
+    bias=parameters.attention.query_key_value.bias,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+    program_config=config.program_configs["query_key_value_matmul_program_config"],
+)
+```
+
+This matmul uses a **block-sharded, reuse+mcast** program config sized for the fixed 10×12 grid.
+
+```python
+"query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(12, 10),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=7,
+    per_core_N=6,  # 3 * 2 tiles
+    transpose_mcast=False,
+    fused_activation=None,
+),
+```
+
+![input](images/qkvlinear.png)
 
 #### 4.4.2 Resharding and core-grid usage
-> Draft placeholder
+After QKV is produced on the fixed 10×12 grid, the implementation reshards it to a **batch-dependent grid** (`config.core_grid`) before splitting into heads and running the attention BMMs:
+
+```python
+block_sharded_config_variable_cores = ttnn.create_sharded_memory_config(
+    query_key_value.padded_shape,
+    core_grid=config.core_grid,  # dynamic based on batch size
+    strategy=ttnn.ShardStrategy.BLOCK,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+)
+query_key_value = ttnn.reshard(query_key_value, block_sharded_config_variable_cores)
+```
+
+This reshard is part of the attention “contract” on Blackhole: the fused QKV projection runs on the fixed 10×12 grid, and the attention BMMs run on the batch-dependent grid.
 
 #### 4.4.3 Split into Q/K/V + heads
-> Draft placeholder
+The merged QKV tensor is split into Q, K, and V and rearranged into attention heads using the TT-NN transformer helper:
+
+```python
+(query, key, value) = ttnn.transformer.split_query_key_value_and_split_heads(
+    query_key_value,
+    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    num_heads=num_heads,
+)
+ttnn.deallocate(query_key_value)
+ttnn.deallocate(hidden_states)
+```
+
+The output tensors are placed in **height-sharded** L1 memory, which matches the subsequent BMM-style matmuls.
+
+![laynorm](images/qkvsplit.png)
 
 #### 4.4.4 Attention scores (Q×Kᵀ) + scale
-> Draft placeholder
+Attention scores are computed via a height-sharded matmul:
+
+```python
+attention_scores = ttnn.matmul(
+    query,
+    key,
+    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+    program_config=config.program_configs["query_by_key_matmul_program_config"],
+)
+ttnn.deallocate(query)
+ttnn.deallocate(key)
+```
+
+Program config:
+
+```python
+"query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=(config.core_grid.x, config.core_grid.y),
+    in0_block_w=2,      # head_size_t
+    out_subblock_h=1,
+    out_subblock_w=7,   # seqL_t
+    per_core_M=head_seqL_t__x,
+    per_core_N=7,       # seqL_t
+),
+```
+
+Then the scores are scaled by \(1/\sqrt{head\_size}\) using an explicit multiply:
+
+```python
+scale = 1.0 / (head_size**0.5)
+attention_scores = ttnn.mul_(attention_scores, scale)
+```
+
+![attn](images/attention.png)
 
 #### 4.4.5 Softmax (in-place)
-> Draft placeholder
+The Blackhole implementation applies softmax **in-place** over the attention scores:
+
+```python
+attention_probs = ttnn.softmax_in_place(
+    attention_scores,
+    program_config=config.program_configs["softmax_program_config"],
+)
+```
+
+Program config:
+
+```python
+"softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(config.core_grid.x, config.core_grid.y),
+    subblock_w=7,           # seqL_t
+    block_h=head_seqL_t__x,
+    block_w=7,              # seqL_t
+),
+```
 
 #### 4.4.6 Context (P×V)
-> Draft placeholder
+The context is computed by multiplying attention probabilities with V (height sharded):
+
+```python
+context_layer = ttnn.matmul(
+    attention_probs,
+    value,
+    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+    program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"],
+)
+ttnn.deallocate(attention_probs)
+ttnn.deallocate(value)
+```
+
+Program config:
+
+```python
+"attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=(config.core_grid.x, config.core_grid.y),
+    in0_block_w=7,    # seqL_t
+    out_subblock_h=1,
+    out_subblock_w=2, # head_size_t
+    per_core_M=head_seqL_t__x,
+    per_core_N=2,     # head_size_t
+),
+```
+
+![attn](images/value.png)
 
 #### 4.4.7 Concatenate heads + Self-output Linear
-> Draft placeholder
+The per-head context is concatenated back into a single `[b × seqL × dim]` representation:
+
+```python
+context_layer = ttnn.transformer.concatenate_heads(
+    context_layer,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+)
+```
+
+After concatenation, the tensor is explicitly converted to the fixed 10×12 block-sharded layout for the self-output projection:
+
+```python
+block_sharded_config_120_cores = ttnn.create_sharded_memory_config(
+    context_layer.padded_shape,
+    core_grid=config.core_grid_10x12,  # 120 cores
+    strategy=ttnn.ShardStrategy.BLOCK,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+)
+context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_120_cores)
+```
+
+Then the self-output linear is applied (reuse+mcast, block-sharded):
+
+```python
+self_output = ttnn.linear(
+    context_layer,
+    parameters.output.dense.weight,
+    bias=parameters.output.dense.bias,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+    program_config=config.program_configs["self_output_matmul_program_config"],
+)
+ttnn.deallocate(context_layer)
+```
+
+![concat](images/selfoutput.png)
 
 #### 4.4.8 Reallocate/defragmentation notes
-> Draft placeholder
+The attention path contains optional `ttnn.reallocate()` calls controlled by `config.should_reallocate_in_attention`, which is set by `update_model_config()` based on batch regime.
+
+In the current Blackhole demo:
+- For some batch regimes (notably `batch_size > 10`), `should_reallocate_in_attention` is enabled.
+- When enabled, the code reallocates intermediate tensors in the attention block:
+
+```python
+if config.should_reallocate_in_attention:
+    value = ttnn.reallocate(value)
+...
+if config.should_reallocate_in_attention:
+    self_output = ttnn.reallocate(self_output)
+```
+
+These reallocations are used to avoid fragmentation/defragmentation issues in the attention block for those runtime configurations.
 
 ### 4.5 Add and Norm
 > Draft placeholder
