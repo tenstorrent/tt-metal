@@ -142,10 +142,6 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const std::optional<ttnn::Tensor>& optional_intermediate_tensor = tensor_args.optional_intermediate_tensor;
-    const std::optional<ttnn::Tensor>& optional_output_tensor = tensor_args.optional_output_tensor;
-
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::stl::hash::hash_objects(
@@ -159,16 +155,14 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         operation_attributes.using_persistent_buffers,
         operation_attributes.sub_device_id.has_value(),
         operation_attributes.sub_device_id.has_value()
-            ? input_tensor.device()->worker_cores(
+            ? tensor_args.input_tensor.device()->worker_cores(
                   tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         operation_attributes.cluster_axis,
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        input_tensor,
-        optional_intermediate_tensor,
-        optional_output_tensor,
+        tensor_args,
         program_factory.index());
 }
 

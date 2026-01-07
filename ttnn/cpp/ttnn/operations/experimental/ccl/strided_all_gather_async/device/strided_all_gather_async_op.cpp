@@ -47,9 +47,6 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "StridedAllGatherAsync::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
-
     auto program_factory = select_program_factory(attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
@@ -65,8 +62,7 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.mm_cores_y,
         attributes.mm_block_ht,
         attributes.mm_block_wt,
-        input_tensor,
-        persistent_output_buffer,
+        tensor_args,
         program_factory.index());
 }
 

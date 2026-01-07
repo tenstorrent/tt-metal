@@ -228,14 +228,8 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input;
-    const std::optional<ttnn::Tensor>& residual_input_tensor = tensor_args.residual_input_tensor;
-    const std::optional<ttnn::Tensor>& weight_tensor = tensor_args.weight;
-    const std::optional<ttnn::Tensor>& stats_tensor = tensor_args.stats;
-    const std::optional<ttnn::Tensor>& preallocated_output_tensor = tensor_args.preallocated_output;
-
     auto subdevice_id = args.sub_device_id;
-    auto* mesh_device = input_tensor.device();
+    auto* mesh_device = tensor_args.input.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
@@ -256,11 +250,7 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.use_noc1_only,
         subdevice_core_range_set,
-        input_tensor,
-        residual_input_tensor,
-        weight_tensor,
-        stats_tensor,
-        preallocated_output_tensor,
+        tensor_args,
         program_factory.index());
 }
 

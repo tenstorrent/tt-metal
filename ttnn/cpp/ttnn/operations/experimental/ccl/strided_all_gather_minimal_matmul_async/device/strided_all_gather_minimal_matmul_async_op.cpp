@@ -67,11 +67,6 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "StridedAllGatherMinimalMatmulAsync::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
-    const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
-    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
-
     auto program_factory = select_program_factory(attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
@@ -96,10 +91,7 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.all_gather_core_grid_offset,
         attributes.read_local_slice_from_input,
         attributes.ag_op,
-        input_tensor,
-        weight_tensor,
-        persistent_output_buffer,
-        bias_tensor,
+        tensor_args,
         program_factory.index());
 }
 

@@ -145,11 +145,8 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const std::optional<ttnn::Tensor>& optional_output_tensor = tensor_args.optional_output_tensor;
-
     auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     if (operation_attributes.sub_core_grid.has_value()) {
@@ -171,8 +168,7 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         subdevice_core_range_set,
-        input_tensor,
-        optional_output_tensor,
+        tensor_args,
         program_factory.index());
 }
 

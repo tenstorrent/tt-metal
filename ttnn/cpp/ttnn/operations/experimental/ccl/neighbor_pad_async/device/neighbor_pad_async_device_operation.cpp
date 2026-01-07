@@ -105,9 +105,6 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const std::optional<ttnn::Tensor>& preallocated_output_tensor = tensor_args.preallocated_output;
-
     auto program_factory = select_program_factory(args, tensor_args);
 
     return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
@@ -122,8 +119,7 @@ tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
         args.ring_size,
         args.secondary_cluster_axis,
         args.secondary_mesh_shape,
-        input_tensor,
-        preallocated_output_tensor,
+        tensor_args,
         program_factory.index());
 }
 

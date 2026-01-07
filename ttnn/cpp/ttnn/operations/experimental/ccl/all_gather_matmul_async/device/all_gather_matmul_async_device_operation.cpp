@@ -124,11 +124,6 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
 
-    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
-    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
-    const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
-
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
@@ -163,10 +158,7 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.matmul.output_tile,
         operation_attributes.matmul.global_cb,
         operation_attributes.all_gather_core_grid_offset,
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        persistent_output_buffer,
+        tensor_args,
         program_factory.index());
 }
 

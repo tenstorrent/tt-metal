@@ -47,7 +47,6 @@ SendAsyncDeviceOperation::tensor_return_value_t SendAsyncDeviceOperation::create
 tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendAsyncDeviceOperation::compute_program_hash is called");
-
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
     auto program_factory = select_program_factory(args, tensor_args);
