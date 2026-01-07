@@ -215,9 +215,8 @@ sfpi_inline sfpi::vFloat sfpu_asine_maclaurin_series(sfpi::vFloat val) {
     // arcsin(x) = x + [(1/2) *x^3/3] + [(1 * 3) / (2 * 4) * x^5 / 5] + [(1 * 3 * 5) / (2 * 4 * 6) * x^7 / 7 ] + ...
     // arcsin(x) ≈ x + (1/6) * x^3 + (3/40) * x^5 + (5/112) * x^7 + (35/1152) * x^9 + (63/2816) * x^11
 
-    sfpi::vFloat tmp = val;
     sfpi::vFloat x = val;
-    sfpi::vFloat xx = tmp * tmp;
+    sfpi::vFloat xx = x * x;
 
     sfpi::vFloat output = x * PolynomialEvaluator::eval(
                                   xx,
