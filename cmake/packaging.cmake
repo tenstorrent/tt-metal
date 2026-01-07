@@ -197,6 +197,17 @@ endif()
 
 # Common CMake package config helpers
 include(CMakePackageConfigHelpers)
+
+# Validate PROJECT_VERSION is set (required for package version files)
+# This can fail if git describe couldn't parse the tag format
+if(NOT PROJECT_VERSION)
+    message(
+        FATAL_ERROR
+        "PROJECT_VERSION is not set. This usually means git describe failed to parse the version tag. "
+        "Ensure you have a valid git tag (e.g., v0.58.0) or set VERSION_NUMERIC manually via -DVERSION_NUMERIC=0.58.0"
+    )
+endif()
+
 write_basic_package_version_file(
     ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
     VERSION ${PROJECT_VERSION}

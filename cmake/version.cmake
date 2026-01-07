@@ -138,7 +138,13 @@ function(ParseGitDescribe)
     set(status "\\-([a-zA-Z]+[0-9]+)") # eg: alpha, beta, RC
     set(tagRegex "^[^0-9]*(${major}(${segment}(${segment}(${segment})?)?)?)(${status})?$")
     if(NOT "${tagname}" MATCHES "${tagRegex}")
-        message(WARNING "Cannot parse tag ${tagname}")
+        message(WARNING "Cannot parse tag '${tagname}', using fallback version 0.0.0")
+        # Provide a fallback version so builds can continue
+        set(VERSION_NUMERIC "0.0.0" PARENT_SCOPE)
+        set(VERSION_FULL "0.0.0+unknown" PARENT_SCOPE)
+        set(VERSION_DEB "0.0.0+unknown" PARENT_SCOPE)
+        set(VERSION_RPM "0.0.0.unknown" PARENT_SCOPE)
+        set(VERSION_HASH "${VERSION_HASH}" PARENT_SCOPE)
         return()
     endif()
 
