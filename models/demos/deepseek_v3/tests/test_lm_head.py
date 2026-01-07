@@ -48,11 +48,9 @@ class DeepseekV3LMHead(nn.Module):
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
-        # ("decode", 32),
-        # ("prefill", 1024),
-        ("prefill", 32768),
-        ("prefill", 65536),
-        ("prefill", 131072),
+        ("decode", 32),
+        ("prefill", 1024),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(

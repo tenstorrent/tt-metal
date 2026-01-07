@@ -288,7 +288,6 @@ def run_reference_with_attention(
     Run reference model with attention, using memory optimizations for large sequences.
 
     For long sequences, the code splits processing into chunks to limit peak memory usage.
-    Attention masks are created on CPU first for very long sequences, then moved to GPU when needed.
     All model calls are wrapped with torch.no_grad() to avoid building computation graphs and storing gradients.
     Intermediate tensors are explicitly freed between chunks using del and torch.cuda.empty_cache().
     Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
@@ -302,7 +301,6 @@ def run_reference_with_attention(
         max_seq_len = position_ids_or_seq_lens.max().item()
         position_ids = torch.arange(max_seq_len).unsqueeze(0).repeat(batch_size, 1)
 
-        # For very long sequences, create mask on CPU first to reduce GPU memory pressure
         if max_position_id_or_seq_len > 16384:
             device = activation.device
             mask = torch.triu(
@@ -310,7 +308,7 @@ def run_reference_with_attention(
                     (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
                     float("-inf"),
                     dtype=torch.bfloat16,
-                    device="cpu",  # Create on CPU, transfer to GPU later
+                    device="cpu",
                 ),
                 diagonal=1,
             )
@@ -373,7 +371,6 @@ def run_reference_with_attention(
         output_chunks = []
         current_cache = deepcopy(deepcopied_cache)
 
-        # OOM Strategy #3: Use torch.no_grad() to prevent gradient accumulation
         with torch.no_grad():
             for chunk_idx in range(num_chunks):
                 start_idx = chunk_idx * CHUNK_SIZE
@@ -449,10 +446,8 @@ def run_reference_with_attention(
             model_output = MockOutput(model_output_tensor, current_cache)
     else:
         # Standard processing for shorter sequences or decode mode
-        # Move mask to device if it was created on CPU
         if mask is not None and mask.device.type == "cpu":
             mask = mask.to(activation.device)
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
         # Use torch.no_grad() to prevent gradient accumulation
         with torch.no_grad():
@@ -648,28 +643,14 @@ def get_rope_tensors(
     position_ids: torch.Tensor | None,
     mesh_device: ttnn.MeshDevice,
 ) -> dict[str, ttnn.Tensor]:
-    print("[DEBUG] get_rope_tensors: ENTER")
-    print(
-        f"[DEBUG] get_rope_tensors: batch_size_per_row={batch_size_per_row}, seq_len={seq_len}, position_ids={position_ids is not None}"
-    )
-    print("[DEBUG] get_rope_tensors: About to create RotarySetup")
     rope_setup = RotarySetup(
         device=mesh_device,
         batch_size_per_row=batch_size_per_row,
         hf_config=hf_config,
     )
-    print("[DEBUG] get_rope_tensors: RotarySetup created")
     if position_ids is None:
-        print(f"[DEBUG] get_rope_tensors: position_ids is None, calling get_rot_mats_table with seq_len={seq_len}")
-        result = rope_setup.get_rot_mats_table(seq_len)
-        print("[DEBUG] get_rope_tensors: get_rot_mats_table completed")
-        print("[DEBUG] get_rope_tensors: EXIT")
-        return result
-    print("[DEBUG] get_rope_tensors: position_ids is not None, calling get_rot_mats")
-    result = rope_setup.get_rot_mats(position_ids)
-    print("[DEBUG] get_rope_tensors: get_rot_mats completed")
-    print("[DEBUG] get_rope_tensors: EXIT")
-    return result
+        return rope_setup.get_rot_mats_table(seq_len)
+    return rope_setup.get_rot_mats(position_ids)
 
 
 def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
