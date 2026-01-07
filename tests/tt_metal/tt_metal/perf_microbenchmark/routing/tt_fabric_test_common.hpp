@@ -288,6 +288,32 @@ public:
         return freq;
     }
 
+    bool is_multi_mesh() const override {
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return mesh_graph.get_mesh_ids().size() > 1;
+    }
+
+    std::unordered_map<MeshId, std::unordered_set<MeshId>> get_mesh_adjacency_map() const override {
+        std::unordered_map<MeshId, std::unordered_set<MeshId>> mesh_adjacency_map;
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& global_nodes = get_global_node_ids();
+        const std::vector<RoutingDirection> directions = {
+            RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
+        for (const auto& src_node : global_nodes) {
+            MeshId src_mesh_id = src_node.mesh_id;
+            for (const auto& direction : directions) {
+                const auto& neighbors = control_plane.get_chip_neighbors(src_node, direction);
+                for (const auto& [neighbor_mesh_id, neighbor_chips] : neighbors) {
+                    if (neighbor_mesh_id != src_mesh_id && !neighbor_chips.empty()) {
+                        mesh_adjacency_map[src_mesh_id].insert(neighbor_mesh_id);
+                    }
+                }
+            }
+        }
+        return mesh_adjacency_map;
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
