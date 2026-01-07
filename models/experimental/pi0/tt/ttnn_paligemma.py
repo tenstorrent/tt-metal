@@ -370,6 +370,7 @@ class PaliGemmaBackboneTTNN:
             )
             if use_cache:
                 new_cache.append(new_kv)
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
 
         # Final norm using TTNN
         hidden_states = rms_norm_ttnn(
@@ -416,6 +417,7 @@ class PaliGemmaBackboneTTNN:
             )
             if use_cache:
                 new_cache.append(new_kv)
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
 
         # Final norm using TTNN
         hidden_states = rms_norm_ttnn(

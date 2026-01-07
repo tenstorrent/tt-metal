@@ -360,6 +360,9 @@ class PI0ModelTTNN:
             velocity_scaled = ttnn.mul(velocity, dt)
             x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+            # Clear profiler buffer after each denoising step (~500 ops)
+            ttnn.ReadDeviceProfiler(self.device)
+
         # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
         return ttnn.to_torch(x_t_ttnn)
 
