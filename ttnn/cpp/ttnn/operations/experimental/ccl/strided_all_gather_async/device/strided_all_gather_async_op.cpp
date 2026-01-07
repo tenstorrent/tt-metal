@@ -45,8 +45,10 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
+
     return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
-        select_program_factory(attributes, tensor_args).index(),
         attributes.dim,
         attributes.num_links,
         attributes.ring_size,
@@ -59,10 +61,8 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.mm_cores_y,
         attributes.mm_block_ht,
         attributes.mm_block_wt,
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.layout(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config());
+        input_tensor,
+        persistent_output_buffer);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
