@@ -3,24 +3,40 @@
 # Ensure GNUInstallDirs is available for CMAKE_INSTALL_LIBDIR
 include(GNUInstallDirs)
 
-# This file provides three functions:
-#   tt_set_runtime_rpath() - For executables (requires RUNTIME_OUTPUT_DIRECTORY)
-#   tt_set_library_rpath() - For shared libraries (BUILD_RPATH only)
-#   tt_set_installable_library_rpath() - For installable shared libraries (BUILD_RPATH + INSTALL_RPATH)
+# =============================================================================
+# RPATH Application Patterns - When to Use Which Function
+# =============================================================================
 #
-# Usage:
-#   tt_set_runtime_rpath(target_name)              # Links to build/${CMAKE_INSTALL_LIBDIR}/ only
-#   tt_set_runtime_rpath(target_name TTNN)         # Links to build/${CMAKE_INSTALL_LIBDIR}/ and ttnn/ttnn/
-#   tt_set_library_rpath(target_name)              # Sets BUILD_RPATH for build-time linking
-#   tt_set_installable_library_rpath(target_name)  # Sets both BUILD_RPATH and INSTALL_RPATH
+# This module provides three functions for different use cases:
 #
-# Requirements for tt_set_runtime_rpath:
-#   - Target must have RUNTIME_OUTPUT_DIRECTORY set before calling this function
+# 1. tt_set_runtime_rpath() - For test executables and tools
+#    Use when: Target is an executable that needs to find libraries at runtime
+#    - Test executables (unit_tests_*, test_*)
+#    - Tools (lightmetal_runner, mem_bench, watcher_dump)
+#    - Requires: RUNTIME_OUTPUT_DIRECTORY must be set before calling
+#    - Sets: BUILD_RPATH (absolute paths) and INSTALL_RPATH (relative $ORIGIN paths)
+#
+# 2. tt_set_library_rpath() - For simple shared libraries (build-time only)
+#    Use when: Target is a shared library that only needs build-time linking
+#    - Libraries that don't get installed (internal libraries)
+#    - Sets: BUILD_RPATH only (for build-time dependency resolution)
+#
+# 3. tt_set_installable_library_rpath() - For libraries that get installed
+#    Use when: Target is a shared library that will be installed (via CPack or install())
+#    - Main libraries (tt_metal, tt_stl, ttnncpp, ttnn)
+#    - Sets: Both BUILD_RPATH and INSTALL_RPATH (supports multiple installation layouts)
+#
+# Alternative: Global CMAKE_BUILD_RPATH / CMAKE_INSTALL_RPATH
+#    Use when: All targets in a subdirectory need the same RPATH
+#    - Example: tt-train/CMakeLists.txt sets global RPATH for all tt-train targets
+#    - Individual targets can still override with per-target functions
 #
 # Why different RPATH approaches?
 #   - BUILD_RPATH: Absolute paths for build-time execution and linking (preferred for simple cases)
 #   - INSTALL_RPATH: Relative $ORIGIN paths for tar artifacts and installed binaries
 #   - BUILD_WITH_INSTALL_RPATH=TRUE: Use INSTALL_RPATH during build (for complex multi-layout cases)
+#
+# =============================================================================
 #
 # Example for executable:
 #   add_executable(my_test test.cpp)
@@ -175,10 +191,14 @@ function(tt_set_installable_library_rpath TARGET)
             # Use INSTALL_RPATH during build for multi-layout support
             BUILD_WITH_INSTALL_RPATH
                 TRUE
-            # INSTALL_RPATH for multiple installation layouts:
+            # INSTALL_RPATH for multiple installation layouts (searched in order):
             # - $ORIGIN/build/lib      = wheel layout (wheels always use 'lib', not CMAKE_INSTALL_LIBDIR)
             # - $ORIGIN/../../build/lib = tar artifact layout (tar artifacts always use 'lib')
             # - $ORIGIN                 = FHS packages (all libs co-located in same dir, uses CMAKE_INSTALL_LIBDIR for install but RPATH is just $ORIGIN)
+            # The linker searches all paths in order and uses the first one that exists.
+            # Note: $ORIGIN is placed last (not first) because it's the fallback for FHS packages where all libs
+            # are co-located. For wheel and tar layouts, the more specific paths ($ORIGIN/build/lib, etc.) are
+            # checked first, and $ORIGIN only applies when those don't exist (i.e., in FHS package installations).
             INSTALL_RPATH
                 "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
     )

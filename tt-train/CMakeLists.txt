@@ -46,6 +46,10 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 # CMAKE_SOURCE_DIR is always the top-level source directory (e.g., /work/).
 # The tar artifact is created directly from build/ without cmake --install, so
 # BUILD_RPATH is what gets embedded in the binaries (not INSTALL_RPATH).
+#
+# These global settings apply to all targets in tt-train. Individual targets (like ttml_tests)
+# may override these with per-target RPATH settings via tt_set_runtime_rpath() for more
+# specific requirements (e.g., TTNN dependencies).
 set(CMAKE_BUILD_RPATH
     "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}" # /work/build/lib (for libtt_metal.so)
     "${CMAKE_SOURCE_DIR}/ttnn/ttnn" # /work/ttnn/ttnn (for _ttnncpp.so)

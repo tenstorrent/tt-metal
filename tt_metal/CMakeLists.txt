@@ -315,7 +315,12 @@ set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 if(TT_METAL_USING_ULFM)
     # Only add custom ULFM path when we're actually using it (Ubuntu builds with custom ULFM)
     # Fedora builds use system MPI and should NOT have this path in RPATH
-    list(APPEND TT_METAL_INSTALL_RPATH "/opt/openmpi-v5.0.7-ulfm/lib")
+    # Use the same ULFM_PREFIX that was used during configuration
+    if(DEFINED ULFM_PREFIX)
+        list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_PREFIX}/lib")
+    else()
+        list(APPEND TT_METAL_INSTALL_RPATH "/opt/openmpi-v5.0.7-ulfm/lib")
+    endif()
 endif()
 set_target_properties(
     tt_metal

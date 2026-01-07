@@ -43,11 +43,17 @@ set(CPACK_RPM_PACKAGE_URL "https://tenstorrent.com")
 # The strip command can't recognize the format of these non-host architecture files
 #
 # RPATH handling: tt_metal/CMakeLists.txt now correctly sets INSTALL_RPATH with $ORIGIN first,
-# followed by the ULFM MPI path (/opt/openmpi-v5.0.7-ulfm/lib) when ULFM is enabled.
-# However, __brp_check_rpaths is still skipped because:
-#   1. The ULFM path may not exist on the build host (only on target systems)
+# followed by the ULFM MPI path (when ULFM is enabled, which is only for Ubuntu builds).
+# Fedora builds use system OpenMPI 5+ (with ULFM support) and do not include custom ULFM paths.
+#
+# TODO: Re-enable __brp_check_rpaths once all builds use system MPI only.
+# TODO: Create tracking issue and link here (e.g., https://github.com/tenstorrent/tt-metal/issues/XXXXX)
+# Currently disabled because:
+#   1. The ULFM path may not exist on the build host (only on target systems for Ubuntu builds)
 #   2. System MPI paths added by find_package() may vary between build and target hosts
-# Once Fedora builds use only system MPI (no ULFM), the __brp_check_rpaths skip can be removed.
+# Once all builds (including Ubuntu) use only system MPI, the __brp_check_rpaths skip can be removed.
+# This is a security/quality check that validates RPATHs in binaries and helps prevent
+# security issues from hardcoded paths. It should be re-enabled as soon as possible.
 set(CPACK_RPM_SPEC_MORE_DEFINE
     "%define __strip /bin/true
 %define __brp_strip /bin/true

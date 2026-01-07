@@ -127,60 +127,64 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     WORLD_EXECUTE
 )
 
-# Detect package manager type: DEB vs RPM
-# Check for /etc/os-release to determine distro family
-set(TT_PACKAGING_TYPE "")
-
-if(EXISTS "/etc/os-release")
-    file(STRINGS "/etc/os-release" OS_RELEASE_CONTENTS)
-    foreach(LINE ${OS_RELEASE_CONTENTS})
-        # Check ID_LIKE first (more reliable for derivatives)
-        if(LINE MATCHES "^ID_LIKE=(.*)$")
-            string(TOLOWER "${CMAKE_MATCH_1}" ID_LIKE_VALUE)
-            # Remove quotes if present
-            string(REPLACE "\"" "" ID_LIKE_VALUE "${ID_LIKE_VALUE}")
-            if(ID_LIKE_VALUE MATCHES "debian|ubuntu")
-                set(TT_PACKAGING_TYPE "DEB")
-            elseif(ID_LIKE_VALUE MATCHES "fedora|rhel|centos|suse")
-                set(TT_PACKAGING_TYPE "RPM")
-            endif()
-        endif()
-        # Check ID if ID_LIKE didn't match
-        if(TT_PACKAGING_TYPE STREQUAL "" AND LINE MATCHES "^ID=(.*)$")
-            string(TOLOWER "${CMAKE_MATCH_1}" ID_VALUE)
-            # Remove quotes if present
-            string(REPLACE "\"" "" ID_VALUE "${ID_VALUE}")
-            if(ID_VALUE MATCHES "debian|ubuntu|linuxmint|pop")
-                set(TT_PACKAGING_TYPE "DEB")
-            elseif(ID_VALUE MATCHES "fedora|rhel|centos|rocky|alma|opensuse|sles")
-                set(TT_PACKAGING_TYPE "RPM")
-            endif()
-        endif()
-    endforeach()
-endif()
-
-# Fallback: check for package manager executables
-if(TT_PACKAGING_TYPE STREQUAL "")
-    find_program(DPKG_EXECUTABLE dpkg)
-    find_program(RPM_EXECUTABLE rpm)
-    if(DPKG_EXECUTABLE)
-        set(TT_PACKAGING_TYPE "DEB")
-    elseif(RPM_EXECUTABLE)
-        set(TT_PACKAGING_TYPE "RPM")
+# Helper function to detect packaging type (DEB vs RPM)
+# This function detects the appropriate package manager type based on the distribution.
+# It can be overridden by setting TT_PACKAGING_TYPE via -D flag (creates a cache variable).
+function(detect_packaging_type)
+    # Check if user has explicitly set TT_PACKAGING_TYPE via -D flag (cache variable)
+    # Command-line -D flags create cache variables, which are checked here
+    if(DEFINED TT_PACKAGING_TYPE AND NOT TT_PACKAGING_TYPE STREQUAL "")
+        message(STATUS "Using user-specified packaging type: ${TT_PACKAGING_TYPE}")
+        set(TT_PACKAGING_TYPE "${TT_PACKAGING_TYPE}" PARENT_SCOPE)
+        return()
     endif()
-endif()
 
+    # Auto-detect from distribution information
+    set(TT_PACKAGING_TYPE "")
+    include(${CMAKE_CURRENT_LIST_DIR}/detect-distro.cmake)
+    detect_distro()
+
+    # Determine package type from distro ID and ID_LIKE
+    # Check ID_LIKE first (more reliable for derivatives)
+    if(DISTRO_ID_LIKE)
+        if(DISTRO_ID_LIKE MATCHES "debian|ubuntu")
+            set(TT_PACKAGING_TYPE "DEB")
+        elseif(DISTRO_ID_LIKE MATCHES "fedora|rhel|centos|suse")
+            set(TT_PACKAGING_TYPE "RPM")
+        endif()
+    endif()
+    # Check ID if ID_LIKE didn't match
+    if(TT_PACKAGING_TYPE STREQUAL "" AND DISTRO_ID)
+        if(DISTRO_ID MATCHES "debian|ubuntu|linuxmint|pop")
+            set(TT_PACKAGING_TYPE "DEB")
+        elseif(DISTRO_ID MATCHES "fedora|rhel|centos|rocky|alma|opensuse|sles")
+            set(TT_PACKAGING_TYPE "RPM")
+        endif()
+    endif()
+
+    # Fallback: check for package manager executables
+    if(TT_PACKAGING_TYPE STREQUAL "")
+        find_program(DPKG_EXECUTABLE dpkg)
+        find_program(RPM_EXECUTABLE rpm)
+        if(DPKG_EXECUTABLE)
+            set(TT_PACKAGING_TYPE "DEB")
+        elseif(RPM_EXECUTABLE)
+            set(TT_PACKAGING_TYPE "RPM")
+        endif()
+    endif()
+
+    # Default to DEB if detection failed
+    if(TT_PACKAGING_TYPE STREQUAL "")
+        message(WARNING "Could not detect distro package type, defaulting to DEB")
+        set(TT_PACKAGING_TYPE "DEB")
+    endif()
+
+    set(TT_PACKAGING_TYPE "${TT_PACKAGING_TYPE}" PARENT_SCOPE)
+endfunction()
+
+# Detect package manager type: DEB vs RPM
 # Allow override via command line: -DTT_PACKAGING_TYPE=DEB or -DTT_PACKAGING_TYPE=RPM
-if(DEFINED CACHE{TT_PACKAGING_TYPE} AND NOT TT_PACKAGING_TYPE STREQUAL "")
-    # User override takes precedence
-    set(TT_PACKAGING_TYPE "${TT_PACKAGING_TYPE}")
-endif()
-
-# Default to DEB if detection failed
-if(TT_PACKAGING_TYPE STREQUAL "")
-    message(WARNING "Could not detect distro package type, defaulting to DEB")
-    set(TT_PACKAGING_TYPE "DEB")
-endif()
+detect_packaging_type()
 
 message(STATUS "Packaging type: ${TT_PACKAGING_TYPE}")
 

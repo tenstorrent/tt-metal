@@ -31,7 +31,10 @@ if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
 endif()
 
-set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
+# ULFM MPI prefix - can be overridden via -DULFM_PREFIX=/path/to/ulfm
+if(NOT DEFINED ULFM_PREFIX)
+    set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
+endif()
 
 # Track whether we're using ULFM MPI (for RPATH configuration in parent scope)
 set(TT_METAL_USING_ULFM FALSE PARENT_SCOPE)
