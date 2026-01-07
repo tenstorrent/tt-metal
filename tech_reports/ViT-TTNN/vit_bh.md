@@ -705,6 +705,16 @@ The subsequent normalization (the second LayerNorm in the layer) is described in
 
 This residual connection helps preserve information from the input and improves training/inference stability by maintaining gradient flow through the layer.
 
+**Add + Norm (flow)**:
+
+```mermaid
+flowchart LR
+  HS["hidden_states\n(b × 224 × 768)\nL1 block-sharded"] --> ADD["ttnn.add\n(residual)"]
+  SO["self_output\n(b × 224 × 768)\nL1 block-sharded"] --> ADD
+  ADD --> LN["ttnn.layer_norm\n(layernorm_after)\nL1 block-sharded"]
+  LN --> OUT["layernorm_after_output\n(b × 224 × 768)\nL1 block-sharded"]
+```
+
 **Add and Norm Diagram**:
 
 ![addnorm](images/addnorm.png)
