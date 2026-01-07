@@ -5,6 +5,7 @@
 #include "tensor_accessor_args.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
