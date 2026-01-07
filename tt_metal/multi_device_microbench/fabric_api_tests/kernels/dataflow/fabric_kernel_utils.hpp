@@ -25,7 +25,7 @@ FORCE_INLINE void fabric_write_chunked(
         packet_header->to_noc_unicast_write(NocCommandType{dest_noc_addr + offset}, chunk_size);
         fabric_sender.wait_for_empty_write_slot();
         fabric_sender.send_payload_without_header_non_blocking_from_address(src_l1_addr + offset, chunk_size);
-        fabric_sender.send_payload_flush_blocking_from_address(
+        fabric_sender.send_payload_blocking_from_address(
             reinterpret_cast<uint32_t>(packet_header), sizeof(PacketHeaderType));
         offset += chunk_size;
         remaining -= chunk_size;

@@ -121,7 +121,7 @@ void execute_incremental_packet_size_bench(
 
     for (uint32_t idx = 0; idx < tt::constants::TILE_HW; idx++) {
         uint32_t pkt_size = (idx + 1) * 4;
-        double latency_sec = static_cast<double>(perf_points[idx]) / 1e9;
+        double latency_sec = static_cast<double>(perf_points[idx]) / 1e9 / 10;  // take average of 10 samples
         double GB = static_cast<double>(pkt_size) / 1e9;
         double GB_s = (latency_sec > 0.0) ? (GB / latency_sec) : 0.0;
 

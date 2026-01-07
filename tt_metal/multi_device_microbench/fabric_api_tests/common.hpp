@@ -36,7 +36,7 @@ struct MeshDescriptor {
 struct FabricTestDescriptor {
     uint32_t mesh_id = uint32_t(0);
     ChipId src_chip = 0;
-    ChipId dst_chip = 3;
+    ChipId dst_chip = 1;
     uint32_t page_size = 0;
     CoreCoord sender_core = {0, 0};
     CoreCoord receiver_core = {0, 0};

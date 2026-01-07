@@ -61,20 +61,28 @@ void kernel_main() {
     uint32_t slot = 0;
     while (slot < 1024) {
         // Sample 10 times of blocking write in a row.
-        sender.wait_for_empty_write_slot();
-        pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, bytes_to_send);
+        for (uint32_t it = 0; it < SAMPLE_COUNT; it++) {
+            sender.wait_for_empty_write_slot();
+            pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, bytes_to_send);
 
-        uint64_t st = get_timestamp();
-        sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, bytes_to_send);
-        sender.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-        uint64_t et = get_timestamp();
-        device_perf_buf_ptr[slot] = static_cast<uint32_t>(et - st);
+            uint64_t st = get_timestamp();
+            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, bytes_to_send);
+            sender.send_payload_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+            uint64_t et = get_timestamp();
+            dur_sec_samples[it] = static_cast<uint32_t>(et - st);
+        }
 
-        bytes_to_send += 4;
+        uint32_t sum_ns = 0;
+        for (auto ns : dur_sec_samples) {
+            sum_ns += ns;
+        }
+        device_perf_buf_ptr[slot] = sum_ns;
+
         slot++;
+        bytes_to_send += 4;
     }
-    cb_push_back(PERF_CB_ID, 1);
 
+    cb_push_back(PERF_CB_ID, 1);
     cb_pop_front(CB_ID, 1);
 
     // Final signal: bump receiver semaphore so the receiver kernel exits.

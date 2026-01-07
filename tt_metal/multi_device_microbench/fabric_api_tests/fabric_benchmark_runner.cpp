@@ -78,6 +78,12 @@ int main() {
     // Get control plance instance
     const auto& control_plane = MetalContext::instance().get_control_plane();
 
+    // print all fabric packet spec info
+    log_info(tt::LogTest, "fabric packet header size bytes : {}", tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    log_info(tt::LogTest, "fabric max payload size bytes : {}", tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    log_info(
+        tt::LogTest, "fabric channel buffer size bytes : {}", tt_fabric::get_tt_fabric_channel_buffer_size_bytes());
+
     // Set fabric node ids. One is composed of {MeshId, ChipId}
     // MeshId is same for both src and dst because it is intra-routing test.
     tt_fabric::FabricNodeId src_fabric_node{tt_fabric::MeshId{fabric_desc.mesh_id}, fabric_desc.src_chip};
