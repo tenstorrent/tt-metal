@@ -424,6 +424,8 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         transformation_mats=transformation_mats,
         max_seq_len=max(seq_len, 128),
         max_local_batch_size=local_batch_size,
+        use_throughput_experts=setup["mesh_device"].shape[0] > 1
+        and local_batch_size * seq_len > 1,  # high throughput experts don't support single user decode currently
     )
     return decoder_layer
 
@@ -629,19 +631,7 @@ def test_decoder(
             logger.info("Router test only runs in decode mode (seq_len=1). Skipping...")
 
     if should_test("experts"):
-        # We can't run EP=32 on a mesh shape of (1, 8) so run EP=4 tests
-        if mesh_shape[0] == 1:
-            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {mesh_shape}...")
-            run_experts_component(
-                setup["mesh_device"],
-                hidden_states.shape,
-                config,
-                reference_layer,
-                decoder_layer,
-                is_decode=is_decode,
-                pcc_threshold=pcc_thresholds["experts"],
-            )
-        elif mesh_shape[0] == 4:
+        if decoder_layer.mlp.use_throughput_experts:
             logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
             run_throughput_experts_component(
                 setup["mesh_device"],
@@ -654,8 +644,15 @@ def test_decoder(
                 pcc_threshold=pcc_thresholds["experts"],
             )
         else:
-            raise ValueError(
-                f"Got unexpected mesh shape {mesh_shape}. Only mesh shapes (1, 8) and (4, 8) are supported."
+            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {mesh_shape}...")
+            run_experts_component(
+                setup["mesh_device"],
+                hidden_states.shape,
+                config,
+                reference_layer,
+                decoder_layer,
+                is_decode=is_decode,
+                pcc_threshold=pcc_thresholds["experts"],
             )
 
     if should_test("attention"):
