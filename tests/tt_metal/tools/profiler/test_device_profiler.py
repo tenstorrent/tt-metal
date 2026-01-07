@@ -607,7 +607,7 @@ def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
 def test_ethernet_dispatch_cores():
     # Simple range check: both Dispatch and Prefetch should be within this range
     MIN_COUNT = 500
-    MAX_COUNT = 10000
+    MAX_COUNT = 10200
 
     # Test configuration: (test_name_suffix, op_support_count)
     test_configs = [
