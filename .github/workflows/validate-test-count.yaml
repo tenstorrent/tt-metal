@@ -34,20 +34,20 @@ jobs:
         with:
           python-version: '3.10'
 
-      # - name: Download built wheel
-      #   if: ${{ inputs.wheel-artifact-name != '' }}
-      #   uses: dawidd6/action-download-artifact@v6
-      #   with:
-      #     name: ${{ inputs.wheel-artifact-name }}
-      #     path: ./wheels
-      #     run_id: 20788440471
-      #     github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Download built wheel
         if: ${{ inputs.wheel-artifact-name != '' }}
-        uses: actions/download-artifact@v4
+        uses: dawidd6/action-download-artifact@v6
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: ./wheels
+          run_id: 20788440471
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Download built wheel
+      #   if: ${{ inputs.wheel-artifact-name != '' }}
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: ${{ inputs.wheel-artifact-name }}
+      #     path: ./wheels
 
       - name: Install tt-metal wheel and dependencies
         if: ${{ inputs.wheel-artifact-name != '' }}
@@ -78,6 +78,7 @@ jobs:
             echo "Collecting from: $dir" >&2
             output=$(pytest "$dir" --collect-only -q --noconftest 2>&1)
             echo "Pytest output:" >&2
+            echo "$output" >&2
             count=$(echo "$output" | tail -1 | grep -oE '[0-9]+' | head -1)
             if [ -z "$count" ]; then
               echo "0"
