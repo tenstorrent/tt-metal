@@ -58,7 +58,8 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                 sub_state_dict(state_dict, f"model.layers.{layer_idx}.")
                 for layer_idx in range(hf_config.num_hidden_layers)
             ]
-            + [None]
+            + [None],
+            dtype=object,
         )
 
         return {

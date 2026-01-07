@@ -58,6 +58,7 @@
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
 enum class FabricConfig : uint32_t;
@@ -1206,6 +1207,19 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+
+    // Validate the defines in the config
+    std::visit(
+        [](const auto& cfg) {
+            for (const auto& [key, value] : cfg.defines) {
+                if (value.find('\0') != std::string::npos) {
+                    throw std::invalid_argument(
+                        "Define value for key '" + key + "' contains null character");
+                }
+            }
+        },
+        config);
+
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
@@ -1257,7 +1271,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 }
 
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBuffer> circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    std::shared_ptr<CircularBufferImpl> circular_buffer = program.impl().get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program.impl().invalidate_circular_buffer_allocation();
     }

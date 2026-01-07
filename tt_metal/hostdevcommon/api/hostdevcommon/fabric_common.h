@@ -154,18 +154,18 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
 
     static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? MAX_CHIPS_LOWLAT_1D : MAX_CHIPS_LOWLAT_2D;
     static constexpr uint16_t COMPRESSED_ROUTE_SIZE = (dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D;
-    static constexpr uint16_t SINGLE_ROUTE_SIZE =
-        compressed ? ((dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D)
-                   : ((dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D);
+    static constexpr uint16_t UNCOMPRESSED_ROUTE_SIZE = (dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D;
+    static constexpr uint16_t SINGLE_ROUTE_SIZE = compressed ? COMPRESSED_ROUTE_SIZE : UNCOMPRESSED_ROUTE_SIZE;
 
-    typename std::conditional<
+    std::conditional_t<
         !compressed,
         std::uint8_t[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE],  // raw for uncompressed
-        typename std::conditional<
+        std::conditional_t<
             dim == 1,
             std::uint8_t[0],                         // empty for compressed 1D (0 bytes)
             compressed_route_2d_t[MAX_CHIPS_LOWLAT]  // two for compressed 2D
-            >::type>::type paths = {};
+            >>
+        paths = {};
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods
@@ -223,12 +223,12 @@ struct routing_l1_info_t {
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-    direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};          // 96 bytes
-    direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};         // 384 bytes
-    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
-    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
-    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
-    uint8_t padding[12] = {};  // pad to 16-byte alignment
+    direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
+    direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
+    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};     // 64 bytes
+    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};      // 512 bytes
+    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
+    uint8_t padding[12] = {};                                        // pad to 16-byte alignment
 } __attribute__((packed));
 
 struct worker_routing_l1_info_t {

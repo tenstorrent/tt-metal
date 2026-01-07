@@ -77,9 +77,8 @@ std::string get_default_root_path() {
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
-    } else {
-        return "/tmp/tt-metal-cache/";
     }
+    return "/tmp/tt-metal-cache/";
 }
 
 JitBuildEnv::JitBuildEnv() = default;
@@ -104,14 +103,14 @@ void JitBuildEnv::init(
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(
-            std::filesystem::directory_iterator{root_path},
-            [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
+        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+            check_built_dir(dir_entry.path(), git_hash_path);
+        });
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
 
-    this->out_root_ = this->out_root_  + git_hash + "/";
+    this->out_root_ = this->out_root_ + git_hash + "/";
 #endif
 
     // Tools
@@ -125,10 +124,7 @@ void JitBuildEnv::init(
     // Use local sfpi for development
     // Use system sfpi for production to avoid packaging it
     // Ordered by precedence
-    const std::array<std::string, 2> sfpi_roots = {
-        this->root_ + "runtime/sfpi",
-        "/opt/tenstorrent/sfpi"
-    };
+    const std::array<std::string, 2> sfpi_roots = {this->root_ + "runtime/sfpi", "/opt/tenstorrent/sfpi"};
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
@@ -164,8 +160,8 @@ void JitBuildEnv::init(
 
     // Defines
     this->defines_ = "";
-    for (auto it = device_kernel_defines.begin(); it != device_kernel_defines.end(); ++it) {
-        this->defines_ += "-D" + it->first + "=" + it->second + " ";
+    for (const auto& device_kernel_define : device_kernel_defines) {
+        this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
@@ -192,6 +188,9 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
+    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+        this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
@@ -272,8 +271,8 @@ void JitBuildEnv::init(
         root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
-    for (size_t i = 0; i < includeDirs.size(); ++i) {
-        oss << "-I" << includeDirs[i] << " ";
+    for (const auto& includeDir : includeDirs) {
+        oss << "-I" << includeDir << " ";
     }
     this->includes_ = oss.str();
 
@@ -566,7 +565,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
-    static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
+    static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     if (this->firmware_is_kernel_object_) {
         elf.ObjectifyExecutable();

@@ -201,7 +201,7 @@ void BandwidthResultsManager::add_result(const TestConfig& config, const Bandwid
 void BandwidthResultsManager::add_summary(const TestConfig& config, const BandwidthResultSummary& summary) {
     const std::string& test_name = config.name;
     // First iteration or first time we see this test name
-    if (config.iteration_number == 0 || !test_name_to_summary_index_.count(test_name)) {
+    if (config.iteration_number == 0 || !test_name_to_summary_index_.contains(test_name)) {
         test_name_to_summary_index_[test_name] = bandwidth_results_summary_.size();
         bandwidth_results_summary_.push_back(summary);
         return;
@@ -691,8 +691,7 @@ void BandwidthResultsManager::compare_summary_results_with_golden() {
             golden_csv_entries_.size());
     }
 
-    for (int i = 0; i < bandwidth_results_summary_.size(); i++) {
-        BandwidthResultSummary& test_result = bandwidth_results_summary_[i];
+    for (auto& test_result : bandwidth_results_summary_) {
         auto bandwidth_stat_location =
             std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::BandwidthMean);
         if (bandwidth_stat_location == stat_order_.end()) {

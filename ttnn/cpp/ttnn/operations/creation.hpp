@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -86,13 +87,13 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, /*blocking=*/false);
+        tt::tt_metal::tensor_impl::copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
-    } else if (device != nullptr) {
-        return host_tensor.to_device(device, output_mem_config);
-    } else {
-        return host_tensor;
     }
+    if (device != nullptr) {
+        return host_tensor.to_device(device, output_mem_config);
+    }
+    return host_tensor;
 }
 
 }  // namespace detail
@@ -198,26 +199,24 @@ Tensor full_like_impl(
              (arch != tt::ARCH::GRAYSKULL && dtype_value == DataType::FLOAT32)) &&
             tensor.storage_type() == StorageType::DEVICE) {
             return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
-        } else {
-            return full_impl(
-                tensor.logical_shape(),
-                fill_value,
-                dtype_value,
-                layout_value,
-                device ? device : tensor.device(),
-                memory_config.value_or(tensor.memory_config()),
-                optional_output_tensor);
         }
-    } else {
         return full_impl(
             tensor.logical_shape(),
             fill_value,
             dtype_value,
             layout_value,
             device ? device : tensor.device(),
-            memory_config,
+            memory_config.value_or(tensor.memory_config()),
             optional_output_tensor);
     }
+    return full_impl(
+        tensor.logical_shape(),
+        fill_value,
+        dtype_value,
+        layout_value,
+        device ? device : tensor.device(),
+        memory_config,
+        optional_output_tensor);
 }
 
 template <detail::boxed FillValue>
