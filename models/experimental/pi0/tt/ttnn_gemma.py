@@ -171,11 +171,19 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # Compute kernel config for attention
+        # Compute kernel config for attention (HiFi4 for precision-critical ops)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        # HiFi2 config for projections (faster, less precision needed)
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
@@ -218,13 +226,13 @@ class GemmaAttentionTTNN:
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
-        # OPTIMIZATION: Use bfloat8_b + L1 for maximum bandwidth
+        # OPTIMIZATION: Use bfloat8_b + L1 + HiFi2 for maximum throughput
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
@@ -530,6 +538,7 @@ class GemmaBlockTTNN:
         )
         hidden_states = ttnn.add(hidden_states, attn_output)
         ttnn.deallocate(attn_output)
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
 
         # Pre-MLP norm
         normed = rms_norm_ttnn(
@@ -543,6 +552,7 @@ class GemmaBlockTTNN:
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_output)
         ttnn.deallocate(mlp_output)
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
 
         return hidden_states, new_cache
 
