@@ -413,8 +413,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id)
-    for (size_t i = 0; i < deployment_hosts.size(); ++i) {
-        const auto& deployment_host = deployment_hosts[i];
+    for (const auto& deployment_host : deployment_hosts) {
         auto* host = fsd.add_hosts();
         host->set_hostname(deployment_host.hostname);
         host->set_hall(deployment_host.hall);
@@ -545,13 +544,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         //  all the default connections are enumerated
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
-        if (host1_node_type.size() >= suffix.size() &&
-            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host1_node_type.size() >= suffix.size() && host1_node_type.ends_with(suffix)) {
             host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
         }
         std::string host2_node_type = host2.node_type;
-        if (host2_node_type.size() >= suffix.size() &&
-            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (host2_node_type.size() >= suffix.size() && host2_node_type.ends_with(suffix)) {
             host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
         }
 
@@ -604,7 +601,7 @@ void CablingGenerator::collect_host_assignments(
         HostId host_id = node.host_id;
         std::string full_node_path = path_prefix.empty() ? node_name : path_prefix + "/" + node_name;
 
-        if (host_to_node_path.count(host_id)) {
+        if (host_to_node_path.contains(host_id)) {
             throw std::runtime_error(
                 "Host ID " + std::to_string(*host_id) + " is assigned to multiple nodes: '" +
                 host_to_node_path[host_id] + "' and '" + full_node_path + "'");
@@ -769,12 +766,9 @@ void CablingGenerator::get_all_connections_of_type(
 
 CableLength calc_cable_length(
     const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
-    if (host1.hall != host2.hall) {
-        return CableLength::UNKNOWN;
-    } else if (host1.aisle != host2.aisle) {
+    if (host1.hall != host2.hall || host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
-
 
     int tray_id_0 = tray_id1;
     int tray_id_1 = tray_id2;

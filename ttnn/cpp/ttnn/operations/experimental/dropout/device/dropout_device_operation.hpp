@@ -32,25 +32,23 @@ struct DropoutDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float prob,
-        float scale,
-        uint32_t seed,
-        bool use_per_device_seed,
-        DataType output_dtype,
-        const MemoryConfig& output_memory_config = MemoryConfig(),
-        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::dropout
 
 namespace ttnn::prim {
-constexpr auto dropout =
-    ttnn::register_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
+
+ttnn::operations::experimental::dropout::DropoutDeviceOperation::tensor_return_value_t dropout(
+    const Tensor& input,
+    float prob,
+    float scale,
+    uint32_t seed,
+    bool use_per_device_seed,
+    DataType output_dtype,
+    const MemoryConfig& output_memory_config = MemoryConfig(),
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
+
 }  // namespace ttnn::prim

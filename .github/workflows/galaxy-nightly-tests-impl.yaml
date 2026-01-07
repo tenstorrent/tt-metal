@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
+      wormhole:
+        required: false
+        type: boolean
+        default: true
       blackhole:
         required: false
         type: boolean
@@ -26,7 +30,7 @@ on:
         default: false
 jobs:
   galaxy-nightly-tests:
-    if: ${{ inputs.blackhole == false || inputs.scheduled == true }}
+    if: ${{ inputs.wormhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -94,14 +98,13 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-
   galaxy-bh-nightly-tests:
     if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS} # Naif Tarafdar, Camilo Vega
+          { name: "BH Galaxy CCL tests", arch: blackhole, cmd: "pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly", timeout: 40, owner_id: U05ACKAJTHS} # Naif Tarafdar, Camilo Vega
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:

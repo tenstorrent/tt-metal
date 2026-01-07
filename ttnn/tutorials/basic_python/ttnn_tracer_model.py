@@ -20,7 +20,7 @@ def main():
 
     with trace():
         # Create a random integer tensor of shape (1, 64) with values between 0-99
-        tensor = torch.randint(0, 100, (1, 64))
+        tensor = torch.randint(0, 100, (1, 64), dtype=torch.int32)
         # Apply exponential function element-wise
         # This demonstrates how mathematical operations are captured
         tensor = torch.exp(tensor)
@@ -31,7 +31,7 @@ def main():
 
     with trace():
         # Create a PyTorch tensor with shape (4, 64)
-        tensor = torch.randint(0, 100, (4, 64))
+        tensor = torch.randint(0, 100, (4, 64), dtype=torch.int32)
 
         # Convert PyTorch tensor to TT-NN format
         # This operation moves data to the TT-NN representation

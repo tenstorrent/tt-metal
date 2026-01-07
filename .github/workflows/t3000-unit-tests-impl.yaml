@@ -176,6 +176,23 @@ jobs:
               "cmd": "run_t3000_gemma3-small_tests",
               "timeout": 30,
               "owner_id": "U08E1JCDVNX" # Pavle Petrovic
+            },
+            {
+              #Uses random weights for corresponding model initialization. Does not depend on MLPerf
+              "name": "t3k DiTs Image and Video Generation",
+              "model": "dits",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_tt_dit_tests",
+              "timeout": 20,
+              "owner_id": "U08TED0JM9D" # Samuel Adesoye
+            },
+            {
+              "name": "t3k gpt-oss unit tests",
+              "model": "gpt-oss",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_gpt_oss_unit_tests",
+              "timeout": 10,
+              "owner_id": "U08TJ70UFRT" # Harry Andrews
             }
           ]')
 
@@ -240,7 +257,6 @@ jobs:
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           ${{ matrix.test-group.cmd }}

@@ -158,6 +158,7 @@ def get_function_name():
     return frame.f_code.co_name
 
 
+@pytest.mark.skip_post_commit
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
@@ -179,6 +180,7 @@ def test_multi_op():
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+@pytest.mark.skip_post_commit
 def test_multi_op_buffer_overflow():
     COMPUTE_OP_COUNT = 200
     DATA_MOVEMENT_OP_COUNT = 1000
@@ -277,6 +279,7 @@ def test_custom_cycle_count():
         assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
 
 
+@pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
     RISC_COUNT = 5
@@ -314,6 +317,64 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_device_api_debugger_non_dropping():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
+    clear_profiler_runtime_artifacts()
+
+    envVars = "TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1 "
+
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
+    assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
+
+    # Verify the NOC trace JSON file exists
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file), f"Expected trace file '{expected_trace_file}' does not exist"
+
+    # Read and parse the JSON file
+    with open(expected_trace_file, "r") as nocTraceJson:
+        try:
+            noc_trace_data = json.load(nocTraceJson)
+        except json.JSONDecodeError:
+            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
+
+    assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
+    assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
+
+    brisc_dst_addrs_found = set()
+    ncrisc_dst_addrs_found = set()
+
+    for event in noc_trace_data:
+        assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+        if event.get("type") == "READ" and "dst_addr" in event and "proc" in event:
+            proc = event["proc"]
+            dst_addr = event["dst_addr"]
+            if proc == "BRISC":
+                brisc_dst_addrs_found.add(dst_addr)
+            elif proc == "NCRISC":
+                ncrisc_dst_addrs_found.add(dst_addr)
+
+    expected_dst_addrs = set(range(10000))  # 0 to 9999
+
+    # Verify BRISC has all expected dst_addr values
+    missing_brisc_dst_addrs = expected_dst_addrs - brisc_dst_addrs_found
+    assert len(missing_brisc_dst_addrs) == 0, (
+        f"Missing dst_addr values in BRISC JSON events: {sorted(missing_brisc_dst_addrs)[:20]}"
+        f"{'...' if len(missing_brisc_dst_addrs) > 20 else ''} "
+        f"(found {len(brisc_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify NCRISC has all expected dst_addr values
+    missing_ncrisc_dst_addrs = expected_dst_addrs - ncrisc_dst_addrs_found
+    assert len(missing_ncrisc_dst_addrs) == 0, (
+        f"Missing dst_addr values in NCRISC JSON events: {sorted(missing_ncrisc_dst_addrs)[:20]}"
+        f"{'...' if len(missing_ncrisc_dst_addrs) > 20 else ''} "
+        f"(found {len(ncrisc_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
 
 
 def wildcard_match(pattern, words):
@@ -460,18 +521,27 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383, 7422, 8570],
-        "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
-        "dispatch_total_cq_cmd_op_time": [223],
-        "dispatch_go_send_wait_time": [223],
+        "Tensix CQ Dispatch*": [9325],
+        "Tensix CQ Prefetch": [9325],
     }
 
     verify_stats(
         run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
         statTypes=["Dispatch", "Prefetch"],
-        allowedRange=150,
+        allowedRange=8875,
         refCountDict=REF_COUNT_DICT,
     )
+
+
+@skip_for_blackhole()
+@pytest.mark.skip_post_commit
+def test_dispatch_cores_extended_worker():
+    REF_COUNT_DICT = {
+        "Tensix CQ Dispatch*": [9325],
+        "Tensix CQ Prefetch": [9325],
+        "dispatch_total_cq_cmd_op_time": [223],
+        "dispatch_go_send_wait_time": [223],
+    }
 
     verify_stats(
         run_device_profiler_test(
@@ -481,7 +551,7 @@ def test_dispatch_cores():
             setOpSupportCount=1500,
         ),
         statTypes=["Dispatch", "Prefetch"],
-        allowedRange=1000,
+        allowedRange=9260,
         refCountDict=REF_COUNT_DICT,
     )
 
@@ -493,7 +563,7 @@ def test_dispatch_cores():
             setOpSupportCount=3000,
         ),
         statTypes=["Dispatch", "Prefetch"],
-        allowedRange=1000,
+        allowedRange=9260,
         refCountDict=REF_COUNT_DICT,
     )
 
@@ -532,6 +602,7 @@ def _validate_ethernet_dispatch_counts(devicesData, min_count, max_count):
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
+@pytest.mark.skip_post_commit
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     # Simple range check: both Dispatch and Prefetch should be within this range

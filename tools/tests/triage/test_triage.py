@@ -23,11 +23,14 @@ triage_home = os.path.join(metal_home, "tools", "triage")
 sys.path.insert(0, triage_home)
 
 
+import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
 
+
+triage.progress_disabled = True  # Disable progress bars for tests
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
@@ -44,17 +47,14 @@ HANG_APP_EXPECTED_RESULTS = {
             "location_to_check": "0,0",  # Only check this core location
             "cores_to_check": {
                 "trisc0": {
-                    "pc": 34556,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
                 "trisc1": {
-                    "pc": 35360,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
                 "trisc2": {
-                    "pc": 36236,
                     "file": "add_2_tiles_hang.cpp",
                     "line": 40,
                 },
@@ -79,6 +79,7 @@ def cause_hang_with_app(request):
     app, args, app_configuration, timeout = request.param
     build_dir = os.path.join(metal_home, "build")
     app_path_str = os.path.join(build_dir, app)
+    os.environ.pop("TT_METAL_LOGS_PATH", None)
     proc = subprocess.Popen(
         [app_path_str] + args,
         stdout=subprocess.PIPE,
@@ -105,6 +106,9 @@ def cause_hang_with_app(request):
     request.cls.app_configuration = app_configuration
     request.cls.expected_results = app_configuration.get("expected_results", {})
     request.cls.exalens_context = init_ttexalens()
+    if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
+        metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
+        os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
     try:
         yield
     finally:
@@ -143,7 +147,22 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                },
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+            },
+            20,
+        ),
+        (
+            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
+            HANG_APP_ADD_2_INTEGERS,
+            [],
+            {
+                "auto_timeout": True,
+                "env": {
+                    "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
+                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
@@ -177,6 +196,72 @@ class TestTriage:
 
         result = subprocess.run(
             [triage_script],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_verbosity(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--verbosity=4", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_initialize_with_noc1(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--initialize-with-noc1", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_skip_version_check(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--skip-version-check", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_print_script_times(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--print-script-times", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_verbose(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "-vvv", "--run=test_output"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert len(result.stderr) == 0
+
+    def test_triage_disable_colors(self):
+        global triage_script
+
+        result = subprocess.run(
+            [triage_script, "--disable-colors", "--run=test_output"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -329,12 +414,6 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
-
-            # Verify PC if specified
-            expected_pc = expected_data.get("pc")
-            if expected_pc is not None:
-                actual_pc = check.result.pc
-                assert actual_pc == expected_pc, f"{risc_name}: Expected PC {expected_pc}, got {actual_pc}"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")

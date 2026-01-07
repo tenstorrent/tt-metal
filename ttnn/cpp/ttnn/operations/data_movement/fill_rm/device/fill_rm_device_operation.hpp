@@ -28,30 +28,26 @@ struct FillRMDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         const tensor_return_value_t& tensor_return_value);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        uint32_t N,
-        uint32_t C,
-        uint32_t H,
-        uint32_t W,
-        uint32_t hFill,
-        uint32_t wFill,
-        const Tensor& input,
-        float val_hi,
-        float val_lo,
-        const MemoryConfig& output_memory_config);
 };
 
 }  // namespace ttnn::operations::data_movement::fill_rm
 
 namespace ttnn::prim {
-constexpr auto fill_rm =
-    ttnn::register_operation<"ttnn::prim::fill_rm", ttnn::operations::data_movement::fill_rm::FillRMDeviceOperation>();
+ttnn::Tensor fill_rm(
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    uint32_t hFill,
+    uint32_t wFill,
+    const Tensor& input,
+    float val_hi,
+    float val_lo,
+    const MemoryConfig& output_memory_config);
 }  // namespace ttnn::prim

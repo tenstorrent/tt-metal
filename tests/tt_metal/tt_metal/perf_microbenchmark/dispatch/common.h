@@ -81,7 +81,7 @@ private:
         const one_core_data_t& one_core_data,
         uint32_t start_index,
         uint32_t result_addr);
-    bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
+    bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data);
 
     void prepopulate_dram(distributed::MeshDevice::IDevice* device, uint32_t size_words);
 
@@ -117,14 +117,14 @@ public:
     bool validate(distributed::MeshDevice::IDevice* device);
     void overflow_check(distributed::MeshDevice::IDevice* device);
 
-    int size() { return amt_written; }
+    int size() const { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
 
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
 
     tt::CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
     uint32_t size_at(CoreCoord core, int bank_id);
-    uint32_t at(CoreCoord core, int bank_id, uint32_t addr);
+    uint32_t at(CoreCoord core, int bank_id, uint32_t offset);
     CoreCoord get_host_core() { return this->host_core; }
     bool core_and_bank_present(CoreCoord core, uint32_t bank);
 };
@@ -248,9 +248,9 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
 }
 
 inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
-    if (this->all_data.find(core) != this->all_data.end()) {
+    if (this->all_data.contains(core)) {
         std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
-        if (core_data.find(bank) != core_data.end()) {
+        if (core_data.contains(bank)) {
             return true;
         }
     }
@@ -284,7 +284,7 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                     counted = true;
                 }
 
-                TT_ASSERT(this->all_data.find(core) != this->all_data.end());
+                TT_ASSERT(this->all_data.contains(core));
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
             }
@@ -474,9 +474,9 @@ inline bool DeviceData::validate_host(
     uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)];
 
     int fail_count = 0;
-    for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
+    for (unsigned int val : host_data.data) {
         validated_cores.insert(this->host_core);
-        if (host_data.data[data_index] != results[host_data_index] && fail_count < 20) {
+        if (val != results[host_data_index] && fail_count < 20) {
             if (!failed) {
                 log_fatal(tt::LogTest, "Data mismatch - First 20 host data failures: [idx] expected->read");
             }
@@ -485,7 +485,7 @@ inline bool DeviceData::validate_host(
                 tt::LogTest,
                 "  [{:02d}] 0x{:08x}->0x{:08x}",
                 host_data_index,
-                (unsigned int)host_data.data[data_index],
+                (unsigned int)val,
                 (unsigned int)results[host_data_index]);
 
             failed = true;
@@ -771,7 +771,7 @@ public:
     // Helper for random number generation in a range [min, max]
     template <typename T>
     T get_rand(T min, T max) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
+        static_assert(std::is_integral_v<T>, "T must be an integral type");
         std::uniform_int_distribution<T> dist(min, max);
         return dist(rng_);
     }
