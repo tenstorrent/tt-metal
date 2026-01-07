@@ -53,7 +53,7 @@ def run_max_pool2d(
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
     use_reshaped_tensor=True,
     dram_slice_config=None,
-    config_tensor_in_dram=True,
+    config_tensor_in_dram=False,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size

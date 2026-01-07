@@ -10,7 +10,6 @@ import pytest
 from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
 def test_mpwi_20_core_C_dims(device, in_c):
     in_n = 1
@@ -60,6 +59,7 @@ def test_mpwi_20_core_C_dims(device, in_c):
         None,  # None means auto sharding
         ceil_mode,
         memory_config,
+        config_tensor_in_dram=True,
     )
 
 
@@ -118,6 +118,7 @@ def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
         ceil_mode=ceil_mode,
         memory_config=None,
         run_twice=True,
+        config_tensor_in_dram=False,
     )
 
 
@@ -133,7 +134,6 @@ def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_mpwi_general(device, ttnn_dtype, input_spec):
     (
         in_n,
@@ -170,6 +170,7 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
         ceil_mode=ceil_mode,
         memory_config=None,
         run_twice=True,
+        config_tensor_in_dram=True,
     )
 
 
@@ -186,7 +187,6 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_mpwi_dram_slice(device, ttnn_dtype, input_spec):
     (
         in_n,
@@ -225,4 +225,5 @@ def test_mpwi_dram_slice(device, ttnn_dtype, input_spec):
         None,  # no memory_config
         False,  # not in place
         dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=True,
     )
