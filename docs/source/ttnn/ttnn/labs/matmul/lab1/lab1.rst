@@ -906,6 +906,7 @@ In general, stack traces alone may not be sufficient to uncover the reason for t
 you may need to add DPRINT statements to kernel code to help pinpoint the problem. For example,
 printing iterator values in all kernels may be useful to identify the iteration when the hang occurs.
 
+Note that you can terminate the hung program by pressing Ctrl+C in the terminal where it is running.
 Once you are done debugging, uncomment the calls to ``cb_pop_front`` in the compute kernel to restore normal behavior.
 
 Device Performance Profiling
@@ -1079,21 +1080,29 @@ In this exercise, you will implement matrix multiplication on a Tenstorrent devi
 to perform matrix multiplication.
 Start by copying the files from the ``lab_eltwise_binary`` directory into a new directory (e.g. ``lab1_matmul``),
 and rename the copied ``lab_eltwise_binary.cpp`` file to match the directory name (e.g. ``lab1_matmul.cpp``).
+Similarly, rename ``tiles_add.cpp`` to e.g. ``tiles_matmul.cpp``.
 Then, adjust the code to perform matrix multiplication, by making the following changes:
 
 #. Update the host program to create input vectors to multiply matrix A of size 640x320 and matrix B of size 320x640 to produce matrix C of size 640x640.
-   Copy reference (non-tiled) matrix multiplication code you created in Exercise 1 so it can be used to verify TT-Metalium results.
-   Similarly, you will need to update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
-   pass required parameters to kernels (you may need to complete some of the following steps to determine the correct parameters).
+   
+#. Copy reference (non-tiled) matrix multiplication code you created in Exercise 1.
+   Adapt it to the ``bfloat16`` data type, so it can be used to verify TT-Metalium results. Ad
+   
+#. Update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
+   pass required parameters to kernels (you may need to complete some of the other steps below to determine the correct parameters).
+   You should write your code to make the following assumptions about the matrix and tile sizes:
+
+   * Tiles will be square with dimensions ``TILE_HEIGHTxTILE_WIDTH`` (i.e. ``TILE_HEIGHT == TILE_WIDTH``).
+   
+   * All matrices will have dimensions that are divisible by the tile size.
+     Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in the ``tt_metal/api/tt-metalium/constants.hpp`` header in the ``tt::constants`` namespace,
+     and height is equal to width for all existing Tenstorrent devices.
+     You should add assertions (using ``TT_FATAL``) that check theese assumptions.
+   
+
+#. Update kernel creation code to refer to kernel ``.cpp`` files in the new directory.
 
 #. Update the reader kernel to read the tiles of A and B in the correct order.
-   You should write your code to make the following assumptions about the matrix and tile sizes:
-   * All matrices will have dimensions that are divisible by the tile size.
-   * Tiles in the resulting matrix ``C``are of size ``TILE_HEIGHTxTILE_WIDTH``.
-   * Tiles in ``A`` are of size ``TILE_HEIGHTxTILE_WIDTH``.
-   * Tiles in ``B`` are of size ``TILE_WIDTHxTILE_WIDTH``.
-   Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in headers in the ``tt::constants`` namespace.
-
    The order of reading tiles from ``A`` and ``B`` should match the pattern of visiting one row of tiles of ``A``
    with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
    not the actual memory address, so your code only needs to generate indices in the right order.
@@ -1107,16 +1116,21 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
    To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
-   This function accumulates the result into the destination register; i.e. it adds to the values in the register rather than overwriting existing content.
+   This function accumulates the result into the destination register; i.e. it adds to the values to the register rather than overwriting existing content.
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
    ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,
    you can ensure that the result for each output tile is accumulated correctly.
+   don't forget to also pack each resulting tile and push it to the output circular buffer.
    Your compute kernel code should process the required number of tiles provided by reader kernels and
    produce the correct number of output tiles expected by the writer kernel.
+   Remember that JIT compiler can better optimize the kernel code if loop bounds are constant.
+   Therefore, you should use compile-time arguments for the loop bounds whenever possible.
 
-#. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile to match whatever file and directory names you chose.
+#. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile, matching whatever file and directory names you chose.
 
 #. Update ``CMakeLists.txt`` in the parent folder to add the new subdirectory to the list of subdirectories to build.
+
+#. Build all programming examples by running ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
 
 #. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in Exercise 1.
    Note that because of limited precision of bfloat16, the results may not be exactly the same as the golden reference, but they should be
@@ -1131,7 +1145,7 @@ Troubleshooting and Additional Resources
 ========================================
 
 In rare cases, a Tensix device may enter an undefined operational state if a program performs actions outside the supported behavior.
-In such cases, the ``tt-smi -r`` command can be used to reset the device.
+In such a case, the ``tt-smi -r`` command can be used to reset the device.
 This operation restores the device to a clean state, allowing normal operation to resume.
 If you encounter an unexplained behaviors, try resetting the device using this command.
 
