@@ -27,7 +27,7 @@ parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
         "input_shape": [(1, 1, 32, 32)],
-        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.int32],  # plus_one requires INT32 or UINT32
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],  # plus_one requires ROW_MAJOR
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -38,6 +38,7 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     # Override layout to ROW_MAJOR as required by plus_one operation
+    # Keep the original dtypes from traced configs (they should be INT32/UINT32)
     if "input_a_layout" in model_traced_params:
         model_traced_params["input_a_layout"] = [ttnn.ROW_MAJOR_LAYOUT] * len(model_traced_params["input_a_layout"])
     parameters["model_traced"] = model_traced_params
@@ -52,6 +53,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
@@ -61,12 +63,21 @@ def run(
     else:
         shape = input_shape
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    # Generate tensor with correct dtype for plus_one (INT32/UINT32 required)
+    # Check if dtype is int32 or uint32
+    dtype_str = str(input_a_dtype).lower()
+    if "int32" in dtype_str:
+        torch_input_tensor_a = torch.randint(-100, 100, shape, dtype=torch.int32)
+    elif "uint32" in dtype_str:
+        torch_input_tensor_a = torch.randint(0, 200, shape, dtype=torch.int32)  # Will convert to uint32 in ttnn
+    else:
+        # Fallback for other dtypes (shouldn't happen with traced configs)
+        torch_input_tensor_a = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(shape)
 
     # Plus one operation: x + 1
-    torch_output_tensor = torch_input_tensor_a + 1.0
+    torch_output_tensor = torch_input_tensor_a + 1
 
     # Force ROW_MAJOR layout as required by plus_one operation
     # Check if storage_type is HOST - if so, don't pass device to from_torch

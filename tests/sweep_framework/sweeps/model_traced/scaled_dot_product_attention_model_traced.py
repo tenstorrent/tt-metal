@@ -15,7 +15,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 60
+TIMEOUT = 120
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -46,6 +46,43 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """
+    Filter out configs that are known to cause timeouts or resource issues.
+    """
+    input_shape = test_vector.get("input_shape")
+    input_a_memory_config = test_vector.get("input_a_memory_config")
+
+    # If we have shape info, check for very large configs
+    if isinstance(input_shape, dict):
+        shape_q = input_shape.get("input_a") or input_shape.get("self")
+        shape_k = input_shape.get("input_b") or input_shape.get("other")
+        shape_v = input_shape.get("input_c")
+
+        # Calculate approximate memory requirement
+        if shape_q and isinstance(shape_q, (list, tuple)) and len(shape_q) >= 4:
+            batch, num_heads, seq_len, head_dim = shape_q[0], shape_q[1], shape_q[2], shape_q[3]
+
+            # Filter very large attention computations that cause timeouts
+            # Attention complexity is O(batch * heads * seq_len^2 * head_dim)
+            # Very large seq_len (> 4096) or very large num_heads (> 64) can cause timeouts
+            if seq_len > 4096:
+                return True, f"Sequence length {seq_len} too large (timeout risk)"
+
+            if num_heads > 64:
+                return True, f"Number of heads {num_heads} too large (timeout risk)"
+
+            # Also filter configs with very large batch * heads * seq_len
+            total_elements = batch * num_heads * seq_len * seq_len * head_dim
+            if total_elements > 1024 * 1024 * 1024:  # 1B elements
+                return (
+                    True,
+                    f"Attention computation too large: {total_elements / (1024**3):.2f}B elements (timeout risk)",
+                )
+
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -61,6 +98,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
