@@ -200,6 +200,7 @@ def run_test_matmul_dram_sharded(
     ],
     ids=["bf16_bf4b_bf16"],
 )
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_dram_sharded_single_device(
     device,
     M,
@@ -254,6 +255,7 @@ def test_matmul_dram_sharded_single_device(
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_dram_sharded_mesh_device(
     mesh_device,
     M,
@@ -548,6 +550,7 @@ L1_INTERLEAVED = ttnn.MemoryConfig(
     [ttnn.bfloat16],
     ids=["out_bf16"],
 )
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_interleaved_single_device(
     device,
     in0_shape,
@@ -702,6 +705,7 @@ def test_matmul_interleaved_single_device(
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
+@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 def test_matmul_interleaved_mesh_device(
     mesh_device,
     in0_shape,

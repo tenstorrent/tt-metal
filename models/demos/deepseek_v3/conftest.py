@@ -158,3 +158,121 @@ def cache_path():
     except OSError:
         default_cache = "/proj_sw/user_dev/deepseek-v3-cache"
     return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
+
+
+def get_current_device_type():
+    """
+    Determine the current device type based on cluster type and device count.
+
+    Returns:
+        str: One of "N150", "N300", "T3K", "TG", "DUAL", "QUAD"
+
+    Raises:
+        ValueError: If the device type cannot be determined from the current configuration
+    """
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = ttnn.get_num_devices()
+    arch_name = ttnn.get_arch_name()
+
+    # Check cluster type first
+    if cluster_type == ttnn.cluster.ClusterType.T3K:
+        if num_devices == 8:
+            return "T3K"
+        else:
+            raise ValueError(f"T3K cluster type detected but unexpected device count: {num_devices} (expected 8)")
+    elif cluster_type == ttnn.cluster.ClusterType.TG:
+        if num_devices == 32:
+            return "TG"
+        else:
+            raise ValueError(f"TG cluster type detected but unexpected device count: {num_devices} (expected 32)")
+    elif cluster_type == ttnn.cluster.ClusterType.GALAXY:
+        # Galaxy can be TG (32 devices), DUAL (64 devices), or QUAD (128 devices)
+        if num_devices == 32:
+            return "TG"
+        elif num_devices == 64:
+            return "DUAL"
+        elif num_devices == 128:
+            return "QUAD"
+        else:
+            raise ValueError(
+                f"GALAXY cluster type detected but unexpected device count: {num_devices} "
+                f"(expected 32 for TG, 64 for DUAL, or 128 for QUAD)"
+            )
+    elif cluster_type == ttnn.cluster.ClusterType.N150:
+        if num_devices == 1:
+            return "N150"
+        else:
+            raise ValueError(f"N150 cluster type detected but unexpected device count: {num_devices} (expected 1)")
+    elif cluster_type == ttnn.cluster.ClusterType.N300:
+        # N300 can be 1 or 2 devices
+        if num_devices == 1 or num_devices == 2:
+            return "N300"
+        else:
+            raise ValueError(f"N300 cluster type detected but unexpected device count: {num_devices} (expected 1 or 2)")
+
+    # Fallback: try to determine from device count and architecture
+    if arch_name == "wormhole_b0":
+        if num_devices == 1:
+            raise ValueError(
+                f"Unable to determine device type: 1 device on {arch_name} could be N150 or N300. "
+                f"Cluster type is {cluster_type}"
+            )
+        elif num_devices == 2:
+            return "N300"
+        elif num_devices == 8:
+            return "T3K"
+        elif num_devices == 32:
+            return "TG"
+        elif num_devices == 64:
+            return "DUAL"
+        elif num_devices == 128:
+            return "QUAD"
+        else:
+            raise ValueError(
+                f"Unable to determine device type: unexpected device count {num_devices} "
+                f"on {arch_name} with cluster type {cluster_type}"
+            )
+
+    # Unknown configuration
+    raise ValueError(
+        f"Unable to determine device type: cluster_type={cluster_type}, "
+        f"num_devices={num_devices}, arch_name={arch_name}"
+    )
+
+
+def pytest_configure(config):
+    # Register the requires_device marker
+    config.addinivalue_line(
+        "markers",
+        "requires_device(device_types): mark test to run only on specified device types. "
+        "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
+        "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """
+    Check if test has requires_device marker and skip if current device doesn't match.
+    """
+    marker = item.get_closest_marker("requires_device")
+    if marker:
+        # Get device_types from marker - can be single value or list
+        device_types = marker.args[0] if marker.args else marker.kwargs.get("device_types", [])
+
+        # Normalize to list
+        if isinstance(device_types, str):
+            device_types = [device_types]
+        elif not isinstance(device_types, (list, tuple)):
+            device_types = [device_types]
+
+        # Get current device type
+        current_device = get_current_device_type()
+        logger.debug(f"Current detected device type: {current_device}")
+
+        # Check if current device is in the allowed list
+        if current_device not in device_types:
+            pytest.skip(
+                f"Test requires device type(s) {device_types}, but current device is {current_device}. "
+                f"Use @pytest.mark.requires_device({device_types}) to mark this test."
+            )
