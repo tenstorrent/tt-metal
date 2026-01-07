@@ -1066,10 +1066,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
-        // TT_METAL_RISCV_COMPILER_ANALYTICS
+        // TT_METAL_JIT_ANALYTICS_
         // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
         // Default: Inherits from inspector setting
-        // Usage: export TT_METAL_RISCV_COMPILER_ANALYTICS=1  # or =0 to disable
+        // Usage: export TT_METAL_JIT_ANALYTICS=1  # or =0 to disable
         case EnvVarID::TT_METAL_JIT_ANALYTICS: {
             jit_analytics_enabled = false;
             if (value) {
@@ -1079,7 +1079,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             this->set_jit_analytics_enabled(jit_analytics_enabled);
             break;
-        }        
+        }
 
         // TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS
         // Sets the RPC server address for the inspector. Format: "host:port" or just "host" (uses default port).
