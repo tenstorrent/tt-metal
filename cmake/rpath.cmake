@@ -147,9 +147,9 @@ endfunction()
 # that INSTALL_RPATH is used during build time as well.
 #
 # This is for libraries that need complex multi-layout RPATH support like:
-# - Wheel layout: $ORIGIN/build/${CMAKE_INSTALL_LIBDIR}
-# - Tar artifact layout: $ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR}
-# - FHS packages: $ORIGIN
+# - Wheel layout: $ORIGIN/build/lib (always 'lib', not CMAKE_INSTALL_LIBDIR, because wheels always use 'lib')
+# - Tar artifact layout: $ORIGIN/../../build/lib (always 'lib' for tar artifacts)
+# - FHS packages: $ORIGIN (all libs co-located, no subdirectory needed)
 #
 # Usage:
 #   tt_set_installable_library_rpath(target_name)
@@ -176,16 +176,16 @@ function(tt_set_installable_library_rpath TARGET)
             BUILD_WITH_INSTALL_RPATH
                 TRUE
             # INSTALL_RPATH for multiple installation layouts:
-            # - $ORIGIN/build/${CMAKE_INSTALL_LIBDIR}      = wheel layout (lib -> lib/build/${CMAKE_INSTALL_LIBDIR}/)
-            # - $ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR} = tar artifact layout (lib -> build/${CMAKE_INSTALL_LIBDIR}/)
-            # - $ORIGIN                 = FHS packages (all libs in same dir)
+            # - $ORIGIN/build/lib      = wheel layout (wheels always use 'lib', not CMAKE_INSTALL_LIBDIR)
+            # - $ORIGIN/../../build/lib = tar artifact layout (tar artifacts always use 'lib')
+            # - $ORIGIN                 = FHS packages (all libs co-located in same dir, uses CMAKE_INSTALL_LIBDIR for install but RPATH is just $ORIGIN)
             INSTALL_RPATH
-                "$ORIGIN/build/${CMAKE_INSTALL_LIBDIR};$ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR};$ORIGIN"
+                "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
     )
 
     # Debug message (only shown with cmake --log-level=DEBUG)
     message(
         DEBUG
-        "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}, INSTALL_RPATH=$ORIGIN/build/${CMAKE_INSTALL_LIBDIR};$ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR};$ORIGIN"
+        "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}, INSTALL_RPATH=$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
     )
 endfunction()

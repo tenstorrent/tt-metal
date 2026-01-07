@@ -1,5 +1,7 @@
 project(tt_stl)
 
+include(GNUInstallDirs)
+
 add_library(tt_stl SHARED)
 add_library(TT::STL ALIAS tt_stl)
 

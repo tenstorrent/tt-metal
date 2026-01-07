@@ -52,7 +52,7 @@ set(CMAKE_BUILD_RPATH
 )
 set(CMAKE_INSTALL_RPATH
     "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}" # FHS: /usr/libexec/tt-train/tests/../${CMAKE_INSTALL_LIBDIR} = /usr/lib64
-    "$ORIGIN/../../${CMAKE_INSTALL_LIBDIR}" # From tests/ -> ${CMAKE_INSTALL_LIBDIR}/
+    "$ORIGIN/../../lib" # Tar artifact: from tests/ -> build/lib/ (tar artifacts always use 'lib', not CMAKE_INSTALL_LIBDIR)
     "$ORIGIN/../../../ttnn/ttnn" # Tar artifact: build/tt-train/tests/../../../ttnn/ttnn
 )
 
