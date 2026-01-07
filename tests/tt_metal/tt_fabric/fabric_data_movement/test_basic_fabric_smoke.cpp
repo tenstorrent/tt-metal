@@ -28,7 +28,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
 

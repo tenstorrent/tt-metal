@@ -26,7 +26,6 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
-#include "impl/profiler/tt_metal_profiler_details.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
