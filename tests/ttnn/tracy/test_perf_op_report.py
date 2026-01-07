@@ -288,7 +288,7 @@ op_support_count_with_sum_profiling_enabled_test = {
     "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops_single_core"',
     "op_support_count": 200,
     # Number of ops we expect to detect is higher than the op support count value because BRISC, NCRISC, and TRISC1 use the extra space reserved for accumulation zones to record ops instead
-    "expected_op_count": 266,
+    "expected_op_count": 267,
     "sum_profiling": True,
 }
 
