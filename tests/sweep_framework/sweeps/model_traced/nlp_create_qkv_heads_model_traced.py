@@ -52,41 +52,29 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape
+    # Convert input_shape to tuple (loader should always provide this)
     if isinstance(input_shape, (tuple, list)):
         shape = tuple(input_shape)
     else:
         shape = input_shape
 
-    # Input shape is [B, 1, S, hidden_dim] where S is the sequence length
-    # For shape [1, 1, 256, 1536]: B=1, S=256, hidden_dim=1536
+    # Extract dimensions from shape: [B, 1, S, hidden_dim]
     batch_size = shape[0]
-    seq_len = shape[2]  # Third dimension is sequence length
+    seq_len = shape[2]
     hidden_dim = shape[3]
 
-    # Try to infer num_q_heads and num_kv_heads from shape if missing
-    if num_q_heads is None or num_kv_heads is None:
-        # For GQA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
-        # Try common ratios: assume head_dim = 64 (common)
-        head_dim_guess = 64
-        total_heads = hidden_dim // head_dim_guess
-        if num_q_heads is None and num_kv_heads is None:
-            # Assume GQA: num_kv_heads = num_q_heads / 2
-            # So: num_q_heads + 2*(num_q_heads/2) = 2*num_q_heads = total_heads
-            num_q_heads = total_heads // 2
-            num_kv_heads = num_q_heads // 2
-        elif num_q_heads is None:
-            # num_kv_heads is known, solve for num_q_heads
-            num_q_heads = total_heads - 2 * num_kv_heads
-        elif num_kv_heads is None:
-            # num_q_heads is known, solve for num_kv_heads
-            num_kv_heads = (total_heads - num_q_heads) // 2
+    # Convert to int if needed (loader provides these, just ensure type correctness)
+    if isinstance(num_q_heads, float):
+        num_q_heads = int(num_q_heads)
+    if isinstance(num_kv_heads, float):
+        num_kv_heads = int(num_kv_heads)
 
-    # For GQA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
-    # So head_dim = hidden_dim / (num_q_heads + 2 * num_kv_heads)
+    # Calculate head_dim from provided parameters
+    # For GQA/MHA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
     head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)
 
     torch_input_tensor_a = gen_func_with_cast_tt(

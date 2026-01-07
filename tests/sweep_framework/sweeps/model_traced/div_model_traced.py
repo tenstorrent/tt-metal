@@ -46,6 +46,7 @@ def run(
     scalar=None,
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
