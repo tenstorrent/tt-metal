@@ -287,7 +287,7 @@ if(benchmark_ADDED)
         benchmark
         PROPERTIES
             LIBRARY_OUTPUT_DIRECTORY
-                "${CMAKE_BINARY_DIR}/lib"
+                "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
     )
 endif()
 

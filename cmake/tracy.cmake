@@ -27,9 +27,9 @@ set_target_properties(
         EXCLUDE_FROM_ALL
             TRUE
         LIBRARY_OUTPUT_DIRECTORY
-            "${PROJECT_BINARY_DIR}/lib"
+            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
         ARCHIVE_OUTPUT_DIRECTORY
-            "${PROJECT_BINARY_DIR}/lib"
+            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
         OUTPUT_NAME
             "tracy"
 )

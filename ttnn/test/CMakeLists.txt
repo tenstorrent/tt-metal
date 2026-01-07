@@ -1,5 +1,6 @@
 # Spell out the RPATH so that shlibdeps can find deps across package components.
-set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
+include(GNUInstallDirs)
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
 # Smoke
 add_executable(tt-nn-validation-smoke)

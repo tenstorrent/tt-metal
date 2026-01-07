@@ -1,13 +1,16 @@
 # CMake helper for setting relocatable RPATH on test executables and libraries
 #
+# Ensure GNUInstallDirs is available for CMAKE_INSTALL_LIBDIR
+include(GNUInstallDirs)
+
 # This file provides three functions:
 #   tt_set_runtime_rpath() - For executables (requires RUNTIME_OUTPUT_DIRECTORY)
 #   tt_set_library_rpath() - For shared libraries (BUILD_RPATH only)
 #   tt_set_installable_library_rpath() - For installable shared libraries (BUILD_RPATH + INSTALL_RPATH)
 #
 # Usage:
-#   tt_set_runtime_rpath(target_name)              # Links to build/lib/ only
-#   tt_set_runtime_rpath(target_name TTNN)         # Links to build/lib/ and ttnn/ttnn/
+#   tt_set_runtime_rpath(target_name)              # Links to build/${CMAKE_INSTALL_LIBDIR}/ only
+#   tt_set_runtime_rpath(target_name TTNN)         # Links to build/${CMAKE_INSTALL_LIBDIR}/ and ttnn/ttnn/
 #   tt_set_library_rpath(target_name)              # Sets BUILD_RPATH for build-time linking
 #   tt_set_installable_library_rpath(target_name)  # Sets both BUILD_RPATH and INSTALL_RPATH
 #
@@ -58,7 +61,7 @@ function(tt_set_runtime_rpath TARGET)
     #
     # Note: The tar artifact is created WITHOUT cmake --install, so BUILD_RPATH
     # (not INSTALL_RPATH) is what's embedded in the binaries.
-    set(BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/lib")
+    set(BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
     if(ARG_TTNN)
         # Build tree location (for gtest_discover_tests during build)
         list(APPEND BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/ttnn")
@@ -69,7 +72,7 @@ function(tt_set_runtime_rpath TARGET)
     # === INSTALL_RPATH: Relative paths for proper cmake --install ===
     # (Currently unused since tar artifact doesn't run cmake --install,
     # but kept for future FHS package installs)
-    file(RELATIVE_PATH LIB_REL_PATH "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/lib")
+    file(RELATIVE_PATH LIB_REL_PATH "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
     set(INSTALL_RPATH_ENTRIES "$ORIGIN/${LIB_REL_PATH}")
     if(ARG_TTNN)
         file(RELATIVE_PATH TTNN_REL_PATH "${OUTPUT_DIR}" "${CMAKE_SOURCE_DIR}/ttnn/ttnn")
@@ -128,13 +131,13 @@ function(tt_set_library_rpath TARGET)
         ${TARGET}
         PROPERTIES
             BUILD_RPATH
-                "${CMAKE_BINARY_DIR}/lib"
+                "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
             BUILD_WITH_INSTALL_RPATH
                 FALSE
     )
 
     # Debug message (only shown with cmake --log-level=DEBUG)
-    message(DEBUG "tt_set_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/lib")
+    message(DEBUG "tt_set_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
 endfunction()
 
 # CMake helper for setting RPATH on installable shared libraries
@@ -144,8 +147,8 @@ endfunction()
 # that INSTALL_RPATH is used during build time as well.
 #
 # This is for libraries that need complex multi-layout RPATH support like:
-# - Wheel layout: $ORIGIN/build/lib
-# - Tar artifact layout: $ORIGIN/../../build/lib
+# - Wheel layout: $ORIGIN/build/${CMAKE_INSTALL_LIBDIR}
+# - Tar artifact layout: $ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR}
 # - FHS packages: $ORIGIN
 #
 # Usage:
@@ -168,21 +171,21 @@ function(tt_set_installable_library_rpath TARGET)
         ${TARGET}
         PROPERTIES
             BUILD_RPATH
-                "${CMAKE_BINARY_DIR}/lib"
+                "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
             # Use INSTALL_RPATH during build for multi-layout support
             BUILD_WITH_INSTALL_RPATH
                 TRUE
             # INSTALL_RPATH for multiple installation layouts:
-            # - $ORIGIN/build/lib      = wheel layout (lib -> lib/build/lib/)
-            # - $ORIGIN/../../build/lib = tar artifact layout (lib -> build/lib/)
+            # - $ORIGIN/build/${CMAKE_INSTALL_LIBDIR}      = wheel layout (lib -> lib/build/${CMAKE_INSTALL_LIBDIR}/)
+            # - $ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR} = tar artifact layout (lib -> build/${CMAKE_INSTALL_LIBDIR}/)
             # - $ORIGIN                 = FHS packages (all libs in same dir)
             INSTALL_RPATH
-                "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
+                "$ORIGIN/build/${CMAKE_INSTALL_LIBDIR};$ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR};$ORIGIN"
     )
 
     # Debug message (only shown with cmake --log-level=DEBUG)
     message(
         DEBUG
-        "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/lib, INSTALL_RPATH=$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
+        "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}, INSTALL_RPATH=$ORIGIN/build/${CMAKE_INSTALL_LIBDIR};$ORIGIN/../../build/${CMAKE_INSTALL_LIBDIR};$ORIGIN"
     )
 endfunction()

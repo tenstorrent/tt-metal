@@ -275,7 +275,7 @@ set_target_properties(
     tt_metal
     PROPERTIES
         ADDITIONAL_CLEAN_FILES
-            "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
+            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR};${PROJECT_BINARY_DIR}/obj"
 )
 
 if(BUILD_PROGRAMMING_EXAMPLES)

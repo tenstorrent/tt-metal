@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.18...3.30)
 include(cmake/compilers.cmake)
+include(GNUInstallDirs)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
     message(STATUS "Setting C and C++ compiler from environment variables")
@@ -46,12 +47,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 # The tar artifact is created directly from build/ without cmake --install, so
 # BUILD_RPATH is what gets embedded in the binaries (not INSTALL_RPATH).
 set(CMAKE_BUILD_RPATH
-    "${CMAKE_BINARY_DIR}/lib" # /work/build/lib (for libtt_metal.so)
+    "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}" # /work/build/lib (for libtt_metal.so)
     "${CMAKE_SOURCE_DIR}/ttnn/ttnn" # /work/ttnn/ttnn (for _ttnncpp.so)
 )
 set(CMAKE_INSTALL_RPATH
-    "$ORIGIN/../lib" # FHS: /usr/libexec/tt-train/tests/../lib = /usr/lib64
-    "$ORIGIN/../../lib" # From tests/ -> lib/
+    "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}" # FHS: /usr/libexec/tt-train/tests/../${CMAKE_INSTALL_LIBDIR} = /usr/lib64
+    "$ORIGIN/../../${CMAKE_INSTALL_LIBDIR}" # From tests/ -> ${CMAKE_INSTALL_LIBDIR}/
     "$ORIGIN/../../../ttnn/ttnn" # Tar artifact: build/tt-train/tests/../../../ttnn/ttnn
 )
 
