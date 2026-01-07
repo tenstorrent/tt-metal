@@ -9,10 +9,6 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
-        required: false
-        type: number
-        default: 5
       docker-image:
         required: true
         type: string
@@ -55,11 +51,7 @@ on:
         options:
           - N150
           - N300
-          - BH
-      timeout:
-        required: false
-        type: number
-        default: 40
+          - P150b
       docker-image:
         required: true
         type: string
@@ -83,7 +75,8 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false },
+            { name: "wormhole_b0 sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5 },
+            { name: "blackhole deepseek blitz op tests", cmd: "pytest models/demos/deepseek_v3_b1/tests/unit_tests/", merge_gate: false, arch: "blackhole", timeout: 2 }
           ]]
     steps:
       - name: Compute tests
@@ -97,7 +90,7 @@ jobs:
           echo $default_ops_tests | jq
           requested_ops_tests=$default_ops_tests
 
-          requested_ops_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ops_tests")
+          requested_ops_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" --arg arch "${{ inputs.arch }}" '[.[] | select(.merge_gate == $merge_gate_call and .arch == $arch)]' <<< "$requested_ops_tests")
           echo "[info] after filtering for requested workflow tests: $requested_ops_tests"
 
           # Check that we have a valid test list that's not empty
@@ -115,14 +108,9 @@ jobs:
       matrix:
         test-group: ${{ fromJSON(needs.define-ops-tests.outputs.ops-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     container:
-      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -154,7 +142,7 @@ jobs:
           slow-dispatch-timeout: 10.0
 
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
 
