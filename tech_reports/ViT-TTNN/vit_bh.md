@@ -23,12 +23,22 @@ Authors: Vishal Shenoy, Mohamed Bahnas (Original), Updated for Blackhole Archite
     - [5.2 Sharding parametrization](#52-sharding-parametrization)
     - [5.3 Layer Normalization (Layernorm)](#53-layer-normalization-layernorm)
     - [5.4 Multi-Head Self-Attention](#54-multi-head-self-attention)
+      - [5.4.1 Q,K,V Generation (Fused Linear)](#541-qkv-generation-fused-linear)
+      - [5.4.2 Resharding (Core Grid Transition)](#542-resharding-core-grid-transition)
+      - [5.4.3 Split into Q/K/V + Heads](#543-split-into-qkv--heads)
+      - [5.4.4 Attention Scores (Q×Kᵀ)](#544-attention-scores-qk)
+      - [5.4.5 Scale and Softmax](#545-scale-and-softmax)
+      - [5.4.6 Context (P×V)](#546-context-pv)
+      - [5.4.7 Concatenating Heads + Self-Output](#547-concatenating-heads--self-output)
+      - [5.4.8 Defragmentation Notes](#548-defragmentation-notes)
     - [5.5 Add and Norm](#55-add-and-norm)
     - [5.6 Feed-Forward Network](#56-feed-forward-network)
+      - [5.6.1 FF1 (Intermediate + Fused GELU)](#561-ff1-intermediate--fused-gelu)
+      - [5.6.2 FF2 (Output + Residual)](#562-ff2-output--residual)
+      - [5.6.3 FFN Wrapper](#563-ffn-wrapper)
     - [5.7 Output](#57-output)
-  - [6. To be added soon - High Resolution and Temporal Sharding](#6-to-be-added-soon---high-resolution-and-temporal-sharding)
-  - [7. Conclusion](#7-conclusion)
-  - [8. References](#8-references)
+  - [6. Conclusion](#6-conclusion)
+  - [7. References](#7-references)
 
 ## 1. Overview
 
@@ -36,7 +46,7 @@ The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transforme
 
 The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently on Blackhole architecture.
 
-For more details on the architecture, please refer to the [References](#8-references).
+For more details on the architecture, please refer to the [References](#7-references).
 
 ## 2. Blackhole Architecture Differences
 
@@ -140,6 +150,9 @@ The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while
   ![](images/mha_ttnn_2.png)  
 
 ## 4. ViT TT-NN Code Structure
+
+This section outlines the code organization of the TT-NN Blackhole ViT implementation. The reference implementation is:
+- `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
 
 ### 4.1 Top-level modules
 ViT model has 3 main modules: Embeddings, Encoder (12 Layers), and Classification head.
@@ -416,21 +429,24 @@ def vit_layernorm_before(config, hidden_states, *, parameters):
 ![input](images/layernorm.png)
 
 ### 5.4 Multi-Head Self-Attention
-The self-attention mechanism is implemented in the `vit_attention` function. Here, the Query, Key, and Value matrices are created by applying linear transformations to the input embeddings. After computing the attention scores (dot product of Q and K), the scores are normalized using a Softmax function. The resulting attention probabilities are multiplied by the Value matrix to produce the attention output.
+The multi-head self-attention (MHA) block computes:
 
-**Functional Code**:
+- Q, K, V projections from the input
+- attention scores \(QK^T\)
+- softmax probabilities \(P\)
+- context \(PV\)
+- projection back to `dim` via the self-output linear layer
 
-```python
-query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(query_key_value, num_heads=num_heads)
-attention_scores = ttnn.matmul(query, key)
-attention_probs = ttnn.softmax_in_place(attention_scores)  # With scaling
-context_layer = ttnn.matmul(attention_probs, value)
-```
+The Blackhole implementation uses:
+- a **fused QKV projection** (`ttnn.linear` producing a merged QKV tensor),
+- **height-sharded** matmuls for the attention BMMs,
+- an explicit **scale multiply**,
+- `ttnn.softmax_in_place`,
+- explicit **resharding** between core grids inside attention,
+- optional `ttnn.reallocate()` in some batch regimes.
 
-> **Note:** An alternative is `ttnn.transformer.attention_softmax_` which fuses scale + softmax into one kernel. However, the in-place version **requires an attention mask**. Since ViT does not use attention masks, we use separate scale + `softmax_in_place` operations.
-
-#### 5.4.1 Q,K,V Generation using the Fused Linear OP
-The encoder input is matrix-multiplied by the Q,K,V weights to generate the individual Query, Key, Value tensors. In the TT-NN implementation, the input is multiplied by the pre-fused weights to generate the merged 3 tensors that will be split in a following step. The fused linear operation objective is to maximize the utilization by increasing the workload that is computed simultaneously on the Tensix core grid.
+#### 5.4.1 Q,K,V Generation (Fused Linear)
+The Q/K/V projection is computed as one fused linear op that produces a merged QKV tensor. The fused linear operation objective is to maximize the utilization by increasing the workload that is computed simultaneously on the Tensix core grid.
 
 **Blackhole-Optimized Code**:
 
@@ -443,16 +459,9 @@ query_key_value = ttnn.linear(
     dtype=ttnn.bfloat8_b,
     program_config=config.program_configs["query_key_value_matmul_program_config"],
 )
-
-# Reshard to dynamic cores for attention computation
-block_sharded_config_variable_cores = ttnn.create_sharded_memory_config(
-    query_key_value.padded_shape,
-    core_grid=config.core_grid,  # dynamic: batch_size × 12 or 10×12
-    strategy=ttnn.ShardStrategy.BLOCK,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-)
-query_key_value = ttnn.reshard(query_key_value, block_sharded_config_variable_cores)
 ```
+
+This matmul uses a **block-sharded, reuse+mcast** program config sized for the fixed 10×12 grid.
 
 **Sharding Config for Blackhole**:
 
@@ -477,8 +486,35 @@ query_key_value = ttnn.reshard(query_key_value, block_sharded_config_variable_co
 
 ![input](images/qkvlinear.png)
 
-#### 5.4.2 Splitting into Q-K-V
-The input embeddings are then split into **Query** (Q), **Key** (K), and **Value** (V) matrices. This is done by projecting the input embeddings into three separate matrices. Each matrix has a size of:
+#### 5.4.2 Resharding (Core Grid Transition)
+After QKV is produced on the fixed 10×12 grid, the implementation reshards it to a **batch-dependent grid** (`config.core_grid`) before splitting into heads and running the attention BMMs:
+
+```python
+block_sharded_config_variable_cores = ttnn.create_sharded_memory_config(
+    query_key_value.padded_shape,
+    core_grid=config.core_grid,  # dynamic based on batch size
+    strategy=ttnn.ShardStrategy.BLOCK,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+)
+query_key_value = ttnn.reshard(query_key_value, block_sharded_config_variable_cores)
+```
+
+This reshard is part of the attention "contract" on Blackhole: the fused QKV projection runs on the fixed 10×12 grid, and the attention BMMs run on the batch-dependent grid.
+
+#### 5.4.3 Split into Q/K/V + Heads
+The merged QKV tensor is split into Q, K, and V and rearranged into attention heads using the TT-NN transformer helper:
+
+```python
+(query, key, value) = ttnn.transformer.split_query_key_value_and_split_heads(
+    query_key_value,
+    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    num_heads=num_heads,
+)
+ttnn.deallocate(query_key_value)
+ttnn.deallocate(hidden_states)
+```
+
+The output tensors are placed in **height-sharded** L1 memory, which matches the subsequent BMM-style matmuls. Each matrix has a size of:
 
 `b × head_count × seqL × head_size`
 
@@ -488,46 +524,47 @@ where
 - `seqL` is the sequence length (224 padded)
 - `head_size` is the size of each split head (64)
 
-Additionally, height sharding is applied by splitting the sequence length (`seqL`) across multiple processing cores. This allows the matrix operations to be parallelized, with each core handling a block of the sequence length.
-
-**Optimized Code**:
-
-```python
-(
-    query,
-    key,
-    value,
-) = ttnn.transformer.split_query_key_value_and_split_heads(
-    query_key_value,
-    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-    num_heads=num_heads,
-)
-ttnn.deallocate(query_key_value)
-ttnn.deallocate(hidden_states)
-if config.should_reallocate_in_attention:
-    value = ttnn.reallocate(value)  # Defragmentation for batch > 10
-```
-
 **QKV Diagram**:
 
 ![laynorm](images/qkvsplit.png)
 
-#### 5.4.3 Attention Mechanism
-The attention mechanism begins by calculating the dot product between the Query and Key matrices. This result is then scaled by the size of the attention head to form the Attention Scores. These scores are passed through a Softmax operation, which normalizes them across the sequence length. **Height sharding** is applied during this process, where the sequence length is split across cores to parallelize the computation of the Attention Scores, making the operation more efficient.
-
-**Optimized Code**:
+#### 5.4.4 Attention Scores (Q×Kᵀ)
+Attention scores are computed via a height-sharded matmul:
 
 ```python
 attention_scores = ttnn.matmul(
     query,
-    key, 
-    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, 
-    dtype=ttnn.bfloat8_b, 
+    key,
+    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
     program_config=config.program_configs["query_by_key_matmul_program_config"],
 )
 ttnn.deallocate(query)
 ttnn.deallocate(key)
+```
 
+**Sharding Config (height sharded BMM / reuse)**:
+
+- This matmul computes attention scores with logical shape `b × head_count × seqL × seqL` (per head, token-to-token scores).
+- Height sharding distributes work across cores over the `(b × head_count × seqL)` dimension.
+
+```python
+"query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+    in0_block_w=head_size_t,  # 2
+    out_subblock_h=1,
+    out_subblock_w=seqL_t,  # 7
+    per_core_M=head_seqL_t__x,  # 7 for 10x12 grid
+    per_core_N=seqL_t,  # 7
+),
+```
+
+![attn](images/attention.png)
+
+#### 5.4.5 Scale and Softmax
+The scores are scaled by \(1/\sqrt{head\_size}\) using an explicit multiply, then softmax is applied in-place:
+
+```python
 scale = 1.0 / (head_size**0.5)
 attention_scores = ttnn.mul_(attention_scores, scale)
 
@@ -539,24 +576,9 @@ attention_probs = ttnn.softmax_in_place(
 
 > **Note:** An alternative is `ttnn.transformer.attention_softmax_` which fuses scale + softmax into one kernel. However, the in-place version (`attention_softmax_`) **requires an attention mask**. Since ViT does not use attention masks, we use separate `mul_` + `softmax_in_place` operations. For models with attention masks (e.g., causal LLMs), `attention_softmax_` is preferred.
 
-**Sharding Config**:
-
-- With 1D Height sharding, the block or shard size per each tensix core = [seqL, seqL].
-- The block height (per_core_M)= input or output shape[0] / (core_grid.y × core_grid.x) = (b × head_count × seqL) /(core_grid.y × core_grid.x), so each tensix row will be of height = seqL
-- The input (in0) block width (in0_block_w) = head_size
-- The in1 block width = per_core_N = seqL
-- The in1 block_height = head_size
-- The output block width (per_core_N) = seqL
+**Softmax Program Config**:
 
 ```python
-"query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-    in0_block_w=head_size_t,  # 2
-    out_subblock_h=1,
-    out_subblock_w=seqL_t,  # 7
-    per_core_M=head_seqL_t__x,  # 7 for 10x12 grid
-    per_core_N=seqL_t,  # 7
-),
 "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
     compute_with_storage_grid_size=(core_grid.x, core_grid.y),
     subblock_w=seqL_t,  # 7
@@ -565,35 +587,25 @@ attention_probs = ttnn.softmax_in_place(
 ),
 ```
 
-**Matmul Sharding (Reuse / BMM) Diagram**:
-
-![attn](images/attention.png)
-
-#### 5.4.4 Matmul with Value
-The normalized attention scores are then multiplied by the Value matrix to produce the attention output. This is the core of the self-attention mechanism, allowing the model to focus on different parts of the input sequence. **Height sharding** is used.
-
-**Optimized Code**:
+#### 5.4.6 Context (P×V)
+The context is computed by multiplying attention probabilities with V (height sharded):
 
 ```python
 context_layer = ttnn.matmul(
-    attention_probs, 
-    value, 
-    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, 
-    dtype=ttnn.bfloat8_b, 
+    attention_probs,
+    value,
+    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
     program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"],
 )
 ttnn.deallocate(attention_probs)
 ttnn.deallocate(value)
 ```
 
-**Sharding Config**:
+**Sharding Config (height sharded BMM / reuse)**:
 
-- With 1D Height sharding, the block or shard size per each tensix core = [seqL, head_size].
-- The block height (per_core_M)= input or output shape[0] / (core_grid.y × core_grid.x) = (b × head_count × seqL) /(core_grid.y × core_grid.x), so each tensix row will be of height = seqL
-- The input (in0) block width (in0_block_w) = seqL
-- The in1 block width = per_core_N = head_size
-- The in1 block_height = seqL
-- The output block width (per_core_N) = head_size
+- This matmul computes context with logical shape `b × head_count × seqL × head_size`.
+- Height sharding distributes the `(b × head_count × seqL)` dimension across cores.
 
 ```python
 "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -606,26 +618,21 @@ ttnn.deallocate(value)
 )
 ```
 
-**Matmul Sharding (Reuse / BMM) Diagram**:
-
 ![attn](images/value.png)
 
-#### 5.4.5 Concatenating Heads and Self-Output Linear OP
-The outputs from all attention heads are concatenated back together. This creates a unified representation of the attention across all heads:
-
-` seqL × head_count × head_size` 
-
-This step aggregates the outputs from the different heads into a single vector representation for each position in the sequence. The following step is the Linear OP to calculate the self output, which is the output of the self multi-head attention module.
-
-**Optimized Code**:
+#### 5.4.7 Concatenating Heads + Self-Output
+The per-head context is concatenated back into a single `[b × seqL × dim]` representation:
 
 ```python
 context_layer = ttnn.transformer.concatenate_heads(
     context_layer,
     memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
 )
+```
 
-# Reshard to 120 cores (10x12) for Blackhole
+After concatenation, the tensor is explicitly converted to the fixed 10×12 block-sharded layout for the self-output projection:
+
+```python
 block_sharded_config_120_cores = ttnn.create_sharded_memory_config(
     context_layer.padded_shape,
     core_grid=config.core_grid_10x12,  # 120 cores
@@ -643,19 +650,12 @@ self_output = ttnn.linear(
     program_config=config.program_configs["self_output_matmul_program_config"],
 )
 ttnn.deallocate(context_layer)
-if config.should_reallocate_in_attention:
-    self_output = ttnn.reallocate(self_output)
 ```
 
-**Sharding Config**:
+**Sharding Config (block sharded + multicast for self-output)**:
 
-- With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
-- The block height (per_core_M)= input or output shape[0] / core_grid.y = b × seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-- The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
-- The input block (dim/x) is multi-casted, in turn, from one tensix core to other cores in the same row. The block matmul inner dimension will be the full (dim)
-- The output block width (per_core_N) = output shape[1] / core_grid.x = dim / core_grid.x
-- The in1_block_height is the same size of (dim)
-- The in1_block_width = per_core_N, and each in1 block will be multi-casted along the same column of cores.
+- After concatenating heads, the tensor returns to `b × seqL × dim` (tiles: `[seqL_t, dim_t]`).
+- The self-output linear keeps the tensor block sharded on the fixed `core_grid_10x12` grid.
 
 ```python
 "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -670,9 +670,26 @@ if config.should_reallocate_in_attention:
 )
 ```
 
-**Self Attention Output diagram**:
-
 ![concat](images/selfoutput.png)
+
+#### 5.4.8 Defragmentation Notes
+The attention path contains optional `ttnn.reallocate()` calls controlled by `config.should_reallocate_in_attention`, which is set by `update_model_config()` based on batch regime.
+
+In the Blackhole implementation:
+- For batch regimes where `batch_size > 10`, `should_reallocate_in_attention` is enabled.
+- When enabled, the code reallocates intermediate tensors in the attention block to avoid fragmentation/defragmentation issues:
+
+```python
+# After Q/K/V split
+if config.should_reallocate_in_attention:
+    value = ttnn.reallocate(value)
+
+# After self-output linear
+if config.should_reallocate_in_attention:
+    self_output = ttnn.reallocate(self_output)
+```
+
+These reallocations compact the L1 memory layout to prevent allocation failures in the attention block for larger batch configurations.
 
 ### 5.5 Add and Norm
 A residual connection (skip connection) is applied, adding the original input to the attention block back to the output of the attention block. This helps in maintaining gradient flow through the network and stabilizes training. The resulting tensor is then normalized again using layer normalization. Additionally, **block sharding** is used.
@@ -708,14 +725,30 @@ layernorm_after_output = ttnn.layer_norm(
 )
 ```
 
+**Add and Norm Flow**:
+
+```mermaid
+flowchart LR
+  HS["hidden_states\n(b × 224 × 768)\nL1 block-sharded"] --> ADD["ttnn.add\n(residual)"]
+  SO["self_output\n(b × 224 × 768)\nL1 block-sharded"] --> ADD
+  ADD --> LN["ttnn.layer_norm\n(layernorm_after)\nL1 block-sharded"]
+  LN --> OUT["layernorm_after_output\n(b × 224 × 768)\nL1 block-sharded"]
+```
+
 **Add and Norm Diagram**:
 
 ![addnorm](images/addnorm.png)
 
 ### 5.6 Feed-Forward Network
-The output from the attention block is passed through a **Feed-Forward Network** (FFN). The FFN consists of two linear transformations with a GeLU activation function between them. The first linear layer expands the dimensionality of the embeddings, and the second linear layer projects it back to the original size. **Block sharding** is utilized in the FFN, where the computations are split across multiple blocks, allowing for parallel processing and improved efficiency during the linear transformations.
+The feed-forward network (FFN/MLP) expands the embedding dimension and projects it back down:
 
-**Optimized Code**:
+`dim (768) → 4×dim (3072) → dim (768)`
+
+In the Blackhole implementation, the FFN is implemented as two sharded matmuls:
+- **FF1**: `hidden_states @ W1 (+ b1)` with **fused GELU**
+- **FF2**: `intermediate @ W2 (+ b2)` followed by a **residual add** with the attention output
+
+#### 5.6.1 FF1 (Intermediate + Fused GELU)
 
 ```python
 def vit_intermediate(
@@ -730,12 +763,34 @@ def vit_intermediate(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        program_config=config.program_configs["ff1_matmul_program_config"],  # Fused GELU!
+        program_config=config.program_configs["ff1_matmul_program_config"],
     )
     ttnn.deallocate(hidden_states)
     return output
+```
 
+**Sharding Config (FF1, block sharded + multicast)**:
 
+- FF1 computes `b × seqL × (4×dim)`; in tiles `[seqL_t, 4×dim_t]`.
+- Output remains block sharded on `core_grid_10x12`, so per-core output width is `(4×dim_t)/grid_x`.
+- GELU is fused into the matmul via `fused_activation=(GELU, True)` to reduce extra kernel launches and memory traffic.
+
+```python
+"ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),  # (12, 10)
+    in0_block_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
+    out_subblock_h=1,
+    out_subblock_w=(dim_t__x_full_grid * 4) // 2,  # (2 * 4) // 2 = 4
+    per_core_M=seqL_t,  # 7
+    per_core_N=dim_t__x_full_grid * 4,  # 2 * 4 = 8
+    transpose_mcast=False,
+    fused_activation=(ttnn.UnaryOpType.GELU, True),  # Fused GELU!
+),
+```
+
+#### 5.6.2 FF2 (Output + Residual)
+
+```python
 def vit_output(
     config,
     hidden_states,
@@ -756,8 +811,30 @@ def vit_output(
     output = ttnn.add(output, residual, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(residual)
     return output
+```
 
+**Sharding Config (FF2, block sharded + multicast)**:
 
+- FF2 projects `b × seqL × (4×dim)` back to `b × seqL × dim`.
+- Both FF2 output and the residual add stay in `ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG`, avoiding reshards between FF2 and the residual.
+
+```python
+"ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),  # (12, 10)
+    in0_block_w=dim_t__x_full_grid * 4,  # 2 * 4 = 8
+    out_subblock_h=1,
+    out_subblock_w=dim_t__x_full_grid,  # 2
+    per_core_M=seqL_t,  # 7
+    per_core_N=dim_t__x_full_grid,  # 2
+    transpose_mcast=False,
+    fused_activation=None,
+),
+```
+
+#### 5.6.3 FFN Wrapper
+The encoder layer calls the FFN through a small wrapper:
+
+```python
 def vit_feedforward(
     config,
     hidden_states,
@@ -768,47 +845,6 @@ def vit_feedforward(
     intermediate = vit_intermediate(config, hidden_states, parameters=parameters.intermediate)
     hidden_states = vit_output(config, intermediate, attention_output, parameters=parameters.output)
     return hidden_states
-```
-
-**Sharding Config**:
-
-For FF1:
-- With 2D Block sharding, the block or shard size per each tensix core = [seqL, 4*dim/core_grid.x].
-- The block height (per_core_M)= input or output shape[0] / core_grid.y = b × seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-- The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
-- The output block width (per_core_N) = output shape[1] / core_grid.x = 4*dim / core_grid.x
-- The in1_block_height is the same size of (dim)
-- The in1_block_width = per_core_N, and each in1 block will be multi-casted along the same column of cores.
-
-For FF2:
-- With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
-- The block height (per_core_M)= input or output shape[0] / core_grid.y = b × seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-- The input block width (in0_block_w) = input shape[1] / core_grid.x = 4*dim / core_grid.x
-- The output block width (per_core_N) = output shape[1] / core_grid.x = dim / core_grid.x
-- The in1_block_height is the same size of (4*dim)
-- The in1_block_width = per_core_N, and each in1 block will be multi-casted along the same column of cores.
-
-```python
-"ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),  # (12, 10)
-    in0_block_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
-    out_subblock_h=1,
-    out_subblock_w=(dim_t__x_full_grid * 4) // 2,  # (2 * 4) // 2 = 4
-    per_core_M=seqL_t,  # 7
-    per_core_N=dim_t__x_full_grid * 4,  # 2 * 4 = 8
-    transpose_mcast=False,
-    fused_activation=(ttnn.UnaryOpType.GELU, True),  # Fused GELU!
-),
-"ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),  # (12, 10)
-    in0_block_w=dim_t__x_full_grid * 4,  # 2 * 4 = 8
-    out_subblock_h=1,
-    out_subblock_w=dim_t__x_full_grid,  # 2
-    per_core_M=seqL_t,  # 7
-    per_core_N=dim_t__x_full_grid,  # 2
-    transpose_mcast=False,
-    fused_activation=None,
-),  
 ```
 
 **FFN Diagram**:
@@ -822,9 +858,7 @@ The final result after the feed-forward network and the second normalization ste
 
 The output can either be passed to the next layer in the Transformer encoder or to the classification head, depending on the specific task.
 
-## 6. To be added soon - High Resolution and Temporal Sharding
-
-## 7. Conclusion
+## 6. Conclusion
 
 This walkthrough provided an in-depth explanation of the Vision Transformer (ViT) encoder implementation optimized for the Tenstorrent Blackhole (P150) architecture. Key optimizations for Blackhole include:
 
@@ -837,11 +871,16 @@ This walkthrough provided an in-depth explanation of the Vision Transformer (ViT
 
 From patch embedding to self-attention and feed-forward networks, the ViT model effectively applies the principles of attention-based mechanisms to image processing with architecture-specific optimizations for Blackhole.
 
-## 8. References
-  - https://huggingface.co/docs/transformers/en/model_doc/vit
+## 7. References
+  - ViT paper: https://arxiv.org/pdf/2010.11929
+  - HuggingFace ViT docs: https://huggingface.co/docs/transformers/en/model_doc/vit
   - https://medium.com/@hansahettiarachchi/unveiling-vision-transformers-revolutionizing-computer-vision-beyond-convolution-c410110ef061
   - https://www.v7labs.com/blog/vision-transformer-guide
   - https://viso.ai/deep-learning/vision-transformer-vit/
+  - TT-NN sharding & layouts: https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md
   - ViT Blackhole Implementation: `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
   - Blackhole Bring-Up Guide: `tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md`
+  - Allocator / memory banks: `tech_reports/memory/allocator.md`
+  - Matrix engine / fidelity notes: `tech_reports/matrix_engine/matrix_engine.md`
+  - GEMM FLOPS and BH grid reference: `tech_reports/GEMM_FLOPS/GEMM_FLOPS.md`
 
