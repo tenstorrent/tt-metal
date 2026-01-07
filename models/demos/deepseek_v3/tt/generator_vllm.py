@@ -36,6 +36,11 @@ def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USER
 
 
 class DeepseekV3ForCausalLM(DeepseekGenerator):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

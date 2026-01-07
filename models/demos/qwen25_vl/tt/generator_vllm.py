@@ -107,6 +107,11 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     dummy_inputs=Qwen2_5_VLDummyInputsBuilder if envs.VLLM_USE_V1 else DummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
         self.visual_model = kwargs.pop("visual_model", None)

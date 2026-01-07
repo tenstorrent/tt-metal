@@ -96,8 +96,8 @@ class Generator:
         self.enable_split_sampling = True
         self.mode = None
 
-    # Class-level capabilities (to be overridden by subclasses)
-    _model_capabilities = {
+    # Class-level capabilities (VLLM specific, to be overridden by subclasses)
+    model_capabilities = {
         "supports_prefix_caching": True,
     }
 

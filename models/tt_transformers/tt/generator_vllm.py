@@ -272,7 +272,7 @@ class MllamaMultiModalProcessor(EncDecMultiModalProcessor[TT_MllamaProcessingInf
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
     # Class-level capabilities
     # Note: Mllama doesn't support prefix caching (it's V0 only)
-    _model_capabilities = {
+    model_capabilities = {
         "supports_prefix_caching": False,
     }
 
@@ -361,7 +361,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
 
 class LlamaForCausalLM(Generator):
     # Class-level capabilities
-    _model_capabilities = {
+    model_capabilities = {
         "supports_prefix_caching": True,
     }
 
@@ -422,7 +422,7 @@ class LlamaForCausalLM(Generator):
 
 class QwenForCausalLM(Generator):
     # Class-level capabilities
-    _model_capabilities = {
+    model_capabilities = {
         "supports_prefix_caching": True,
     }
 
@@ -470,7 +470,7 @@ class QwenForCausalLM(Generator):
 
 class MistralForCausalLM(Generator):
     # Class-level capabilities
-    _model_capabilities = {
+    model_capabilities = {
         "supports_prefix_caching": True,
     }
 
@@ -587,7 +587,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
 )
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     # Class-level capabilities
-    _model_capabilities = {
+    model_capabilities = {
         "supports_prefix_caching": False,
     }
 
@@ -655,7 +655,7 @@ class GptOssForCausalLM(Generator):
     """GPT-OSS model for vLLM integration"""
 
     # Class-level capabilities
-    _model_capabilities = {
+    model_capabilities = {
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
     }
 
