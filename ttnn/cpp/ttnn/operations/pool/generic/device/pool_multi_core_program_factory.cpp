@@ -375,11 +375,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::round_up(reader_indices_size, 4);  // pagesize needs to be multiple of 4
     constexpr uint32_t in_reader_indices_cb_npages = 1;
 
+    const uint32_t max_reader_indices_size =
+        (max_out_nhw_per_core * 3 * sizeof(uint16_t)) + 2;  // worst case of 3 indices per output element
+    TT_FATAL(
+        reader_indices_storage.get_buffer()->page_size() <= max_reader_indices_size,
+        "Reader indices buffer page size {} exceeds max expected size {}",
+        reader_indices_storage.get_buffer()->page_size(),
+        max_reader_indices_size);
+
     tt::tt_metal::create_cb(
         in_reader_indices_cb_id,
         program,
         all_cores,
-        config_tensor_in_dram ? reader_indices_storage.get_buffer()->page_size() : in_reader_indices_cb_pagesize,
+        config_tensor_in_dram ? max_reader_indices_size : in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages,
         tt::DataFormat::UInt16,
         config_tensor_in_dram ? nullptr : reader_indices_storage.get_buffer());
@@ -581,12 +589,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         scalar_config_storage = config_tensor.device_storage();
         tt::tt_metal::Buffer* config_buffer = scalar_config_storage.get_buffer();
         const uint32_t config_buffer_page_size = config_buffer->page_size();
+        uint32_t max_config_tensor_size =
+            max_out_nhw_per_core * 3 * sizeof(uint16_t);  // worst case of 3 entries per output element
+
+        TT_FATAL(
+            config_buffer->page_size() <= max_config_tensor_size,
+            "Config tensor buffer page size {} exceeds max expected size {}",
+            config_buffer->page_size(),
+            max_config_tensor_size);
 
         std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
             next_cb_index++,
             program,
             all_cores,
-            config_buffer_page_size,
+            config_tensor_in_dram ? max_config_tensor_size : config_buffer_page_size,
             1,
             config_df,
             config_tensor_in_dram ? nullptr : config_buffer);
@@ -777,15 +793,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto temporary_size = calculate_total_cb_size(program);
 
-    // As the CBs are now in L1_SMALL instead of L1, it is included in temporary_size.
-    // However, calculate_L1_usage doesn't account for this size.
-    // So we need to subtract these sizes from temporary_size before comparison.
-    if (config_tensor_in_dram) {
-        temporary_size -= reader_indices_storage.get_buffer()->page_size();
-        if (!one_scalar_per_core) {
-            temporary_size -= config_tensor.device_storage().get_buffer()->page_size();
-        }
-    }
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     uint32_t l1_usage = calculate_L1_usage(
@@ -807,7 +814,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         count_include_pad,
         divisor_override,
         output_layout,
-        outputs[0].dtype());
+        outputs[0].dtype(),
+        config_tensor_in_dram);
 
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
