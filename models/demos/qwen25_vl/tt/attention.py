@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 # Potential warning that we don't want to show for every layer and token
 global_padded_head_warning_shown = False
@@ -75,6 +76,36 @@ class Attention(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
+        self.activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+        )
+        self.wqkv_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.WQKV
+        )
+        self.wo_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.WO
+        )
+        self.kv_cache_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
+        )
+        self.li_qkv_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
+        )
+        self.sdpa_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
+        )
+        self.li_o_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
+        )
+        self.sdpa_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
+        )
+        self.li_qkv_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
+        )
+        self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
+        )
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -211,7 +242,8 @@ class Attention(LightweightModule):
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            # dtype=self.dtype,
+            dtype=self.wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=wqkv_mem_config,
@@ -243,7 +275,8 @@ class Attention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=self.dtype,
+            # dtype=self.dtype,
+            dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul) else wo_mem_config,
@@ -344,7 +377,8 @@ class Attention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                dtype=self.dtype,
+                # dtype=self.dtype,
+                dtype=self.kv_cache_dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -384,7 +418,9 @@ class Attention(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
+            # dtype=ttnn.bfloat16,
+            # compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+            dtype=self.activation_dtype or ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -491,6 +527,7 @@ class Attention(LightweightModule):
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                # compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
@@ -502,6 +539,7 @@ class Attention(LightweightModule):
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                # compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
@@ -572,6 +610,7 @@ class Attention(LightweightModule):
                 memory_config=attn_output_cat.memory_config(),
                 dtype=None,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
+                # compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
 
             ttnn.deallocate(attn_output_cat)
@@ -609,10 +648,9 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        mask=None,
     ):
         seq_len = x_11SH.shape[-2]
-        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
@@ -626,10 +664,9 @@ class Attention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
-            # bias=self.wqkv_bias_prefill,
-            dtype=ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
 
@@ -666,6 +703,9 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+        k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+
         ttnn.deallocate(xqkv_fused)
 
         ###
@@ -674,15 +714,6 @@ class Attention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-
-        # workaround until rotary embeddings support sub-tile head dims
-        if self.head_dim != self.padded_head_dim:
-            pad_head_dim = lambda x, v: ttnn.pad(
-                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
-            )
-            # pad with cos = 1, sin = 0
-            rot_mats = [pad_head_dim(rot_mats[0], 1.0), pad_head_dim(rot_mats[1], 0.0)]
-            # print(f'{rot_mats[0].shape=}')
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -705,64 +736,67 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
-
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        # Fill KV-Cache
+        if kv_cache:
+            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
+        else:
+            keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype)
         ttnn.deallocate(k_heads_1KSD)
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        # sharding k_fill to deal with update_cache memory limitation
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            k_fill = k_heads_1KSD_8b
+
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=values_BKSD.dtype)
+
         ttnn.deallocate(v_heads_1VSD)
 
-        # Fill KV-Cache
-        if self.use_kv_cache:
-            if kv_cache:
-                keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
-            else:
-                keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+        # sharding v_fill to deal with update_cache memory limitation
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            v_fill = v_heads_1VSD_8b
 
-            # sharding k_fill to deal with update_cache memory limitation
-            if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
-                k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-            else:
-                k_fill = k_heads_1KSD_8b
+        if self.TG:
+            k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
+            v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
+        if page_table:
+            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+            block_size = keys_BKSD.shape[2]
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
 
-            # sharding v_fill to deal with update_cache memory limitation
-            if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
-                v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-            else:
-                v_fill = v_heads_1VSD_8b
-
-            if page_table:
-                # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
-                # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
-                block_size = keys_BKSD.shape[2]
-                # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-                fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
-
-                page_len = fill_page_table.shape[1] * block_size
-                k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-                v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-                ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
-            else:
-                ttnn.fill_cache(
-                    keys_BKSD,
-                    k_fill,
-                    user_id % self.batch_size_per_device_group,
-                )
-                ttnn.fill_cache(
-                    values_BKSD,
-                    v_fill,
-                    user_id % self.batch_size_per_device_group,
-                )
-
-            if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
-                ttnn.deallocate(k_fill)
-                ttnn.deallocate(v_fill)
+            page_len = fill_page_table.shape[1] * block_size
+            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+        else:
+            ttnn.fill_cache(
+                keys_BKSD,
+                k_fill,
+                user_id % self.batch_size_per_device_group,
+            )
+            ttnn.fill_cache(
+                values_BKSD,
+                v_fill,
+                user_id % self.batch_size_per_device_group,
+            )
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
 
         # SDPA
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
+
         if chunk_start_idx is not None:
+            if self.sliding_window is not None:
+                raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 keys_BKSD,
@@ -778,10 +812,10 @@ class Attention(LightweightModule):
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                is_causal=self.causal_mask,
-                attn_mask=mask,
+                is_causal=True,
+                sliding_window_size=self.sliding_window,
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
@@ -790,7 +824,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
+        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
         ###
         # Output matmul
@@ -799,7 +833,6 @@ class Attention(LightweightModule):
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
@@ -824,14 +857,11 @@ class Attention(LightweightModule):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
+            compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+            dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
@@ -844,7 +874,7 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
-                dim=3,
+                dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
                 topology=self.ccl_topology,
