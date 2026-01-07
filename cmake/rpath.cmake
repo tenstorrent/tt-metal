@@ -77,12 +77,21 @@ function(tt_set_runtime_rpath TARGET)
     #
     # Note: The tar artifact is created WITHOUT cmake --install, so BUILD_RPATH
     # (not INSTALL_RPATH) is what's embedded in the binaries.
-    # Build artifacts (and CI tar bundles) place libraries under build/lib regardless of
-    # the install libdir (which may be lib64 on Fedora).
+    # Build-time runpath for executables.
     #
-    # Some third-party targets may still emit to build/${CMAKE_INSTALL_LIBDIR}, so include both
-    # to make build-time execution robust across distros.
-    set(BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/lib")
+    # Important: different toolchains/packaging flows may place shared libs in different build-tree
+    # locations (e.g. build/lib, build/lib64, or a target's binary dir). To be robust, include:
+    # - The actual output dir of tt_metal / TTNN targets (via generator expressions)
+    # - Conventional aggregate dirs build/lib and build/${CMAKE_INSTALL_LIBDIR}
+    set(BUILD_RPATH_ENTRIES "")
+    if(TARGET tt_metal)
+        list(APPEND BUILD_RPATH_ENTRIES "$<TARGET_FILE_DIR:tt_metal>")
+    endif()
+    if(ARG_TTNN AND TARGET TTNN::TTNN)
+        list(APPEND BUILD_RPATH_ENTRIES "$<TARGET_FILE_DIR:TTNN::TTNN>")
+    endif()
+    # Conventional aggregate dirs (used by CI/tar layout, and some deps)
+    list(APPEND BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/lib")
     if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
         list(APPEND BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
     endif()
