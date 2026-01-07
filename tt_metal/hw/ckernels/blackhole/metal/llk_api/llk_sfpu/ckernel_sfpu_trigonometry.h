@@ -20,25 +20,6 @@ static const float FRAC_1_PI = 0.31830987f;
 
 static sfpi_inline sfpi::vFloat sfpu_tan_large(sfpi::vFloat x) {
     const sfpi::vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
-    // const sfpi::vFloat y =
-    //     ((((((((((((2.1457846f * r + 2.815174f) * r - 3.9035487f) * r - 5.2096696f) * r + 3.658698f) * r
-    //     + 4.9457364f) *
-    //                r -
-    //            0.7137798f) *
-    //               r -
-    //           1.0665413f) *
-    //              r +
-    //          1.1057009f) *
-    //             r +
-    //         1.462757f) *
-    //            r +
-    //        1.4643353f) *
-    //           r +
-    //       1.8716435f) *
-    //          r +
-    //      2.514385f) *
-    //         r +
-    //     3.0097759f;
 
     const sfpi::vFloat y = PolynomialEvaluator::eval(
         r,
@@ -81,13 +62,6 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat x) {
     const sfpi::vFloat xx = x * x;
 
     v_if(sfpi::abs(x) <= 1.0f) {
-        // x *= ((((((0.010222361f * xx - 0.015764693f) * xx + 0.02789032f) * xx + 0.012122508f) * xx + 0.05659461f) *
-        // xx +
-        //        0.1329926f) *
-        //           xx +
-        //       0.33334994f) *
-        //          xx +
-        //      0.9999999f;
         x *= PolynomialEvaluator::eval(
             xx,
             0.9999999f,
@@ -124,15 +98,11 @@ sfpi_inline sfpi::vFloat sfpu_sinpi<true>(sfpi::vFloat x) {
     sfpi::vFloat xx = x * x;
 
     return x * PolynomialEvaluator::eval(xx, 0x1.92149p+1f, -0x1.4954d4p+2f, 0x1.29cf02p+1f);
-    // return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
 }
 
 template <>
 sfpi_inline sfpi::vFloat sfpu_sinpi<false>(sfpi::vFloat x) {
     sfpi::vFloat xx = x * x;
-
-    // return x *
-    //    ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
 
     return x *
            PolynomialEvaluator::eval(xx, 0x3.243f6cp+0f, -0x5.2aef6p+0f, 0x2.8cd64p+0f, -0x9.93f86p-4f, 0x1.406628p-4f);
