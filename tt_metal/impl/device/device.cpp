@@ -706,7 +706,7 @@ uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    if (this->command_queues_.empty() || cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
+    if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
         return CoreCoord{0, 0};  // Return default for mock devices
     }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();

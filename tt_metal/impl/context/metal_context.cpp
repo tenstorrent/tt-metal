@@ -153,8 +153,8 @@ void MetalContext::initialize(
     bool minimal) {
     ZoneScoped;
 
-    // Workaround for galaxy and BH, need to always re-init
-    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+    // Workaround for galaxy, need to always re-init
+    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
@@ -414,6 +414,11 @@ void MetalContext::teardown() {
     inspector_data_.reset();
 
     control_plane_.reset();
+
+    // Clear mock mode configuration if it was enabled
+    if (experimental::is_mock_mode_registered()) {
+        experimental::disable_mock_mode();
+    }
 }
 
 MetalContext& MetalContext::instance() {
@@ -432,11 +437,9 @@ void MetalContext::teardown_base_objects() {
 
 MetalContext::MetalContext() {
     // Check if mock mode was configured via API (before env vars take effect)
-    auto mock_config = experimental::get_registered_mock_config();
-    if (mock_config.has_value()) {
-        std::string yaml_path = experimental::get_mock_cluster_desc_path(*mock_config);
-        rtoptions_.set_mock_cluster_desc_path(yaml_path);
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", yaml_path);
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
     }
 
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
@@ -767,12 +770,6 @@ void MetalContext::initialize_fabric_config() {
         return;
     }
 
-    // Mock devices don't have real fabric/ethernet
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        log_info(tt::LogDistributed, "Skipping fabric config initialization for mock devices");
-        return;
-    }
-
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
@@ -816,13 +813,6 @@ tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabr
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
-    // Mock devices get a stub control plane (no real fabric/ethernet operations)
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        log_info(tt::LogDistributed, "Creating stub control plane for mock devices.");
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
-        return;
-    }
-
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
@@ -833,13 +823,6 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::construct_control_plane() {
-    // Mock devices get a stub control plane (no real fabric/ethernet operations)
-    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        log_info(tt::LogDistributed, "Creating stub control plane for mock devices.");
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
-        return;
-    }
-
     // Use auto-discovery to generate mesh graph from physical system descriptor
     // This uses MeshGraph::generate_from_physical_system_descriptor which internally
     // uses map_mesh_to_physical to find a valid mapping
@@ -1063,9 +1046,8 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = (cluster_->get_target_device_type() == tt::TargetDevice::Mock)
-                                       ? false
-                                       : cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
+                                   cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {

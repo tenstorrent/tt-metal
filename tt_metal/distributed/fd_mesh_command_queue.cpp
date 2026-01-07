@@ -147,7 +147,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     if (!is_mock) {
         TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
 
-        for (auto& queue : read_descriptors_) {
+        for (const auto& queue : read_descriptors_) {
             TT_FATAL(queue.second->empty(), "No buffer read requests should be outstanding when closing devices.");
         }
 
@@ -165,7 +165,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
-    for (auto* device : mesh_device_->get_devices()) {
+    for (const auto* device : mesh_device_->get_devices()) {
         read_descriptors_.emplace(
             device->id(), std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
     }
@@ -556,6 +556,9 @@ void FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }

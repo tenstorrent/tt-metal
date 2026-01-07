@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Mock Device Test Suite Runner
 # This script runs existing tests with mock device environment variables

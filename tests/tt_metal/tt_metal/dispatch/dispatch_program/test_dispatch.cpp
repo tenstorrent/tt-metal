@@ -368,19 +368,14 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
                 uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-                bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == cb_addr;
-                bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == cb_size;
-                bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
-                bool pass_intermediate =
-                    (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
-                EXPECT_TRUE(pass_intermediate);
+                EXPECT_EQ(cb_config_vector.at(intermediate_index), cb_addr);
+                EXPECT_EQ(cb_config_vector.at(intermediate_index + 1), cb_size);
+                EXPECT_EQ(cb_config_vector.at(intermediate_index + 2), num_tiles);
 
                 uint32_t out_index = out_cb * sizeof(uint32_t);
-                bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
-                bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
-                bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
-                bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
-                EXPECT_TRUE(pass_out);
+                EXPECT_EQ(cb_config_vector.at(out_index), cb_addr);
+                EXPECT_EQ(cb_config_vector.at(out_index + 1), cb_size);
+                EXPECT_EQ(cb_config_vector.at(out_index + 2), num_tiles);
             }
         }
     }
