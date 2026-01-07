@@ -45,6 +45,7 @@ inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str
         return str.npos;
     }
 
+    // NOLINTBEGIN(bugprone-branch-clone)
     for (std::string_view::size_type idx = 0; idx != pattern.size(); idx++) {
         if (pattern[idx] == '*') {
             auto result = FloatingGlobEndsAt(str.substr(idx), pattern.substr(idx + 1), globs - 1);
@@ -61,6 +62,8 @@ inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str
             return str.npos;
         }
     }
+    // NOLINTEND(bugprone-branch-clone)
+
     return pattern.size();
 }
 

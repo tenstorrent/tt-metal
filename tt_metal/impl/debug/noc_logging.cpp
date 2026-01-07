@@ -32,9 +32,9 @@ namespace tt {
 constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
+    std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
-    std::string filename = rtoptions.get_root_dir() + logfile_path + file_name;
+    std::string filename = rtoptions.get_logs_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 
     for (uint32_t idx = 0; idx < NOC_DATA_SIZE; idx++) {
