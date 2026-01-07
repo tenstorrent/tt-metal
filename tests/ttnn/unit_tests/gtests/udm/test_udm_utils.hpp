@@ -431,8 +431,8 @@ inline uint32_t get_max_pages_per_gcore(const tt::tt_metal::experimental::udm::G
     uint32_t max_pages = 0;
     for (size_t gcore_idx = 0; gcore_idx < gcores_info.gcores.size(); ++gcore_idx) {
         uint32_t total_pages = 1;
-        for (size_t d = 0; d < gcores_info.dim_pages[gcore_idx].size(); ++d) {
-            total_pages *= gcores_info.dim_pages[gcore_idx][d];
+        for (const auto& dim_page : gcores_info.dim_pages[gcore_idx]) {
+            total_pages *= dim_page;
         }
         max_pages = std::max(max_pages, total_pages);
     }
@@ -494,8 +494,8 @@ inline void log_gcores_info(
         const auto& gcore = gcores_info.gcores[i];
 
         uint32_t total_pages = 1;
-        for (size_t d = 0; d < gcores_info.dim_pages[i].size(); ++d) {
-            total_pages *= gcores_info.dim_pages[i][d];
+        for (const auto& dim_page : gcores_info.dim_pages[i]) {
+            total_pages *= dim_page;
         }
 
         if (total_pages > 0) {
