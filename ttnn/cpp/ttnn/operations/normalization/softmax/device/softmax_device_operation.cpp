@@ -128,8 +128,8 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             },
             operation_attributes.program_config);
         return program::SoftmaxProgramFactoryAttentionOptimized{};
-    } else if (
-        operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
+    }
+    if (operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
         rank == 4) {
         return std::visit(
             [&](const auto& program_config) -> program_factory_t {

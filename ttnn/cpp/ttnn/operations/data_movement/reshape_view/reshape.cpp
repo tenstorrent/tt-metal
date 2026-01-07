@@ -53,9 +53,8 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
         return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
-    } else {
-        return temp_tensor2;
     }
+    return temp_tensor2;
 }
 
 ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
@@ -135,8 +134,8 @@ ttnn::Tensor PerformView(
     }
     if (logical_shape.rank() == 1) {
         return ttnn::experimental::view(tensor, logical_shape);
-    } else if (
-        tensor.layout() == ttnn::TILE_LAYOUT &&
+    }
+    if (tensor.layout() == ttnn::TILE_LAYOUT &&
         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0)) {
         return ttnn::experimental::view(tensor, logical_shape, compute_padded_shape(logical_shape));
     }
@@ -182,11 +181,11 @@ ttnn::Tensor reshape_tiled(
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
             return squeeze_shape_to_3D(shape);
-        } else if (shape.rank() < 3) {
-            return unsqueeze_shape_to_3D(shape);
-        } else {
-            return shape;
         }
+        if (shape.rank() < 3) {
+            return unsqueeze_shape_to_3D(shape);
+        }
+        return shape;
     };
 
     const auto input_tensor_shape_3d = transform_to_3d(tensor.logical_shape());
@@ -318,15 +317,14 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             mem_config,
             pad_value.value_or(default_pad_value),
             sub_core_grid);
-    } else {
-        return reshape_tiled(
-            tensor,
-            logical_shape,
-            mem_config,
-            pad_value.value_or(default_pad_value),
-            reshape_map_mode == TileReshapeMapMode::RECREATE,
-            sub_core_grid);
     }
+    return reshape_tiled(
+        tensor,
+        logical_shape,
+        mem_config,
+        pad_value.value_or(default_pad_value),
+        reshape_map_mode == TileReshapeMapMode::RECREATE,
+        sub_core_grid);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(

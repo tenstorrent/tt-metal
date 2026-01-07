@@ -373,11 +373,9 @@ void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_de
         events.emplace_back(detail::async([dev]() {
             if (dev->compile_fabric()) {
                 return dev;
-            } else {
-                // compile failure mostly come from Nebula (TG)
-                log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-                return (tt_metal::IDevice*)nullptr;
-            }
+            }  // compile failure mostly come from Nebula         (TG)
+            log_trace(tt::LogMetal, "Did not build fabric on         Device {}", dev->id());
+            return (tt_metal::IDevice*)nullptr;
         }));
     }
 
@@ -535,7 +533,12 @@ void DeviceManager::activate_device(ChipId id) {
     } else {
         log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
         if (not device->is_initialized()) {
-            device->initialize(this->num_hw_cqs_, this->l1_small_size_, this->trace_region_size_, this->worker_l1_size_, this->l1_bank_remap_);
+            device->initialize(
+                this->num_hw_cqs_,
+                this->l1_small_size_,
+                this->trace_region_size_,
+                this->worker_l1_size_,
+                this->l1_bank_remap_);
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }

@@ -881,9 +881,8 @@ const char* FabricTensixDatamoverMuxBuilder::get_kernel_file_path() const {
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp";
-    } else {
-        return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp";
     }
+    return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp";
 }
 
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverMuxBuilder::build_connection_to_fabric_channel(

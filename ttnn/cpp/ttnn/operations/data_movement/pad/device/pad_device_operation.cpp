@@ -56,20 +56,19 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                     "ttnn.pad: Unsupported sharded row-major padding configuration: pad_impl did not decompose padding "
                     "correctly.");
                 return {};
-            } else if (input_w != output_w) {
+            }
+            if (input_w != output_w) {
                 return program::PadRmShardedWidthOnlyProgramFactory{};
-            } else {
-                // height-only padding or no padding
-                return program::PadRmShardedHeightOnlyProgramFactory{};
             }
-        } else {
-            if (operation_attributes.use_multicore) {
-                return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
-            } else {
-                return program::PadRmReaderWriterProgramFactory{};
-            }
+            // height-only padding or no padding
+            return program::PadRmShardedHeightOnlyProgramFactory{};
         }
-    } else if (input_tensor.layout() == Layout::TILE) {
+        if (operation_attributes.use_multicore) {
+            return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
+        }
+        return program::PadRmReaderWriterProgramFactory{};
+    }
+    if (input_tensor.layout() == Layout::TILE) {
         if (operation_attributes.use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&
             !(input_tensor.memory_config().buffer_type() == BufferType::L1)) {
             return program::PadTileMulticoreProgramFactory{};
@@ -79,10 +78,9 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
             "Only bfloat16 and non-L1 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 "
             "core. #29295");
         return program::PadTileCoreProgramFactory{};
-    } else {
-        TT_THROW("Unsupported layout for pad");
-        return {};
     }
+    TT_THROW("Unsupported layout for pad");
+    return {};
 }
 
 void PadDeviceOperation::validate_on_program_cache_hit(

@@ -133,34 +133,56 @@ private:
     DeviceAddr getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const;
 
     // Read all control buffers
-    void readControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch);
+    void readControlBuffers(
+        distributed::MeshDevice* mesh_device,
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        bool force_slow_dispatch);
 
     // Read control buffer for a single core
-    void readControlBufferForCore(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, bool force_slow_dispatch);
+    void readControlBufferForCore(
+        distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, bool force_slow_dispatch);
 
     // Reset all control buffers
-    void resetControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch);
+    void resetControlBuffers(
+        distributed::MeshDevice* mesh_device,
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        bool force_slow_dispatch);
 
     // Read all L1 data buffers
-    void readL1DataBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch);
+    void readL1DataBuffers(
+        distributed::MeshDevice* mesh_device,
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        bool force_slow_dispatch);
 
     // Read L1 data buffer for a single core
-    void readL1DataBufferForCore(distributed::MeshDevice* mesh_device,
-        IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer, bool force_slow_dispatch);
+    void readL1DataBufferForCore(
+        distributed::MeshDevice* mesh_device,
+        IDevice* device,
+        const CoreCoord& virtual_core,
+        std::vector<uint32_t>& core_l1_data_buffer,
+        bool force_slow_dispatch);
 
     // Read device profiler buffer
-    void readProfilerBuffer(distributed::MeshDevice* mesh_device, IDevice* device, uint8_t active_dram_buffer_index, bool force_slow_dispatch);
+    void readProfilerBuffer(
+        distributed::MeshDevice* mesh_device,
+        IDevice* device,
+        uint8_t active_dram_buffer_index,
+        bool force_slow_dispatch);
 
     // Read data from profiler buffer using fast dispatch
-    void issueFastDispatchReadFromProfilerBuffer(distributed::MeshDevice* mesh_device, IDevice* device, uint8_t active_dram_buffer_index = 0);
+    void issueFastDispatchReadFromProfilerBuffer(
+        distributed::MeshDevice* mesh_device, IDevice* device, uint8_t active_dram_buffer_index = 0);
 
     // Read data from profiler buffer using slow dispatch
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index = 0);
 
     // Read data from L1 data buffer using fast dispatch
     // NOLINTNEXTLINE(readability-make-member-function-const)
-    void issueFastDispatchReadFromL1DataBuffer(distributed::MeshDevice* mesh_device,
-        const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
+    void issueFastDispatchReadFromL1DataBuffer(
+        distributed::MeshDevice* mesh_device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read data from L1 data buffer using slow dispatch
     // NOLINTNEXTLINE(readability-make-member-function-const)
@@ -168,7 +190,8 @@ private:
         IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Helper function for reading risc profile results
-    void readRiscProfilerResults(IDevice* device,
+    void readRiscProfilerResults(
+        IDevice* device,
         const CoreCoord& worker_core,
         ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
@@ -250,7 +273,8 @@ public:
     void setOutputDir(const std::string& new_output_dir);
 
     // Traverse all cores on the device and read the device profile results
-    void readResults(distributed::MeshDevice* mesh_device,
+    void readResults(
+        distributed::MeshDevice* mesh_device,
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
         ProfilerReadState state = ProfilerReadState::NORMAL,
@@ -312,6 +336,11 @@ public:
 
 bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device);
 
-void writeToCoreControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data, bool force_slow_dispatch);
+void writeToCoreControlBuffer(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const std::vector<uint32_t>& data,
+    bool force_slow_dispatch);
 
 }  // namespace tt::tt_metal

@@ -490,18 +490,21 @@ public:
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
             if (!blocking) {
-                TT_FATAL(results_out.contains(logical_core), "read_buffer_from_ethernet_cores was called in non-blocking mode without pre-allocating the results_out container. Non-blocking mode requires preallocating the results entries for each core.");
+                TT_FATAL(
+                    results_out.contains(logical_core),
+                    "read_buffer_from_ethernet_cores was called in non-blocking mode without pre-allocating the "
+                    "results_out container. Non-blocking mode requires preallocating the results entries for each "
+                    "core.");
                 results_out.at(logical_core).resize(num_elements, 0);
             } else {
                 results_out[logical_core] = std::vector<uint32_t>(num_elements, 0);
             }
             dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shard_from_core(
-                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
-                        results_out.at(logical_core).data(),
-                        size_bytes,
-                        blocking);
-
+                .enqueue_read_shard_from_core(
+                    tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                    results_out.at(logical_core).data(),
+                    size_bytes,
+                    blocking);
         }
     }
 
@@ -517,15 +520,14 @@ public:
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
 
             dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
-                    .enqueue_write_shard_to_core(
-                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
-                        data.data(),
-                        data.size(),
-                        false);
+                .enqueue_write_shard_to_core(
+                    tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                    data.data(),
+                    data.size(),
+                    false);
         }
         mesh_device_->mesh_command_queue().finish();
     }
-
 
     void zero_out_buffer_on_cores(
         const MeshCoordinate& device_coord,
@@ -1738,12 +1740,12 @@ private:
         // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
             return compute_unicast_destinations(src_coord, hops);
-        } else if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_node, src_coord, hops);
-        } else {
-            TT_THROW("Unsupported send type: {}", send_type);
-            return {};
         }
+        if (send_type == ChipSendType::CHIP_MULTICAST) {
+            return compute_multicast_destinations(src_node, src_coord, hops);
+        }
+        TT_THROW("Unsupported send type: {}", send_type);
+        return {};
     }
 
     std::vector<FabricNodeId> compute_unicast_destinations(
@@ -1957,7 +1959,8 @@ private:
     RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
         if (split_hops.contains(RoutingDirection::N) && split_hops.at(RoutingDirection::N) > 0) {
             return RoutingDirection::N;
-        } else if (split_hops.contains(RoutingDirection::S) && split_hops.at(RoutingDirection::S) > 0) {
+        }
+        if (split_hops.contains(RoutingDirection::S) && split_hops.at(RoutingDirection::S) > 0) {
             return RoutingDirection::S;
         }
         // If no NS, assume not a grid or handle error

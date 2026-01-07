@@ -17,12 +17,10 @@ NLPCreateQKVHeadsDecodeDeviceOperation::select_program_factory(
     if (is_input_sharded) {
         if (operation_attributes.input_on_subcoregrids) {
             return program::NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory{};
-        } else {
-            return program::NLPCreateQKVHeadsDecodeShardedProgramFactory{};
         }
-    } else {
-        return program::NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
+        return program::NLPCreateQKVHeadsDecodeShardedProgramFactory{};
     }
+    return program::NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
 }
 
 void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_hit(

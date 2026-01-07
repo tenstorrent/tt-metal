@@ -55,47 +55,39 @@ struct ToMemoryConfig {
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
                     return ttnn::reshard(tensor, memory_config, output_tensor);
-                } else {
-                    // for row-major tensors where shard-spec[1] is different for input shard and output shard
+                }  // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
-                    TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
-                    Tensor temp = ttnn::prim::sharded_to_interleaved(
-                        tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
-                    const bool keep_l1_aligned = false;
-                    return ttnn::interleaved_to_sharded(
-                        temp,
-                        memory_config,
-                        dtype.value_or(temp.dtype()),
-                        keep_l1_aligned,
-                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
-                }
-            } else {
-                auto bbox = memory_config.shard_spec().value().grid.bounding_box();
-                CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
+                TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
+                Tensor temp = ttnn::prim::sharded_to_interleaved(
+                    tensor, ttnn::DRAM_MEMORY_CONFIG, dtype.value_or(tensor.dtype()));
                 const bool keep_l1_aligned = false;
                 return ttnn::interleaved_to_sharded(
-                    tensor,
+                    temp,
                     memory_config,
-                    dtype.value_or(tensor.dtype()),
+                    dtype.value_or(temp.dtype()),
                     keep_l1_aligned,
                     optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             }
-        } else {
-            // to_interleaved path
-            if (tensor.is_sharded()) {
-                return ttnn::prim::sharded_to_interleaved(
-                    tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
-            } else {
-                // L1 to DRAM or DRAM to L1
-                return ttnn::prim::copy(
-                    tensor,
-                    memory_config,
-                    dtype.value_or(tensor.dtype()),
-                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
-            }
+            auto bbox = memory_config.shard_spec().value().grid.bounding_box();
+            CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
+            const bool keep_l1_aligned = false;
+            return ttnn::interleaved_to_sharded(
+                tensor,
+                memory_config,
+                dtype.value_or(tensor.dtype()),
+                keep_l1_aligned,
+                optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
         }
-
-        return tensor;
+        // to_interleaved path
+        if (tensor.is_sharded()) {
+            return ttnn::prim::sharded_to_interleaved(
+                tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
+        }  // L1 to DRAM or DRAM to L1
+        return ttnn::prim::copy(
+            tensor,
+            memory_config,
+            dtype.value_or(tensor.dtype()),
+            optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
     }
 };
 

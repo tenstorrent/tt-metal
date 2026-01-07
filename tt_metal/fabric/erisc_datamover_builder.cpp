@@ -170,7 +170,6 @@ bool should_risc_service_receiver_channels(size_t risc_id) {
     return true;  // Wormhole or single-ERISC mode: all service receivers
 }
 
-
 }  // anonymous namespace
 
 static std::pair<bool, bool> compute_edge_facing_flags(
@@ -236,11 +235,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Buffer size: max timer types * 16 bytes per result
-        constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
+        constexpr size_t code_profiling_buffer_size =
+            get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
         this->code_profiling_buffer_address = next_l1_addr;
         next_l1_addr += code_profiling_buffer_size;
     } else {
-        this->code_profiling_buffer_address = 0; // Not allocated
+        this->code_profiling_buffer_address = 0;  // Not allocated
     }
 
     this->handshake_addr = next_l1_addr;
@@ -360,7 +360,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
     FabricEriscDatamoverConfig(topology) {
-
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
 
     // Set channel counts from parameters
@@ -376,8 +375,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     // Set total counts for backward compatibility
-    this->num_used_sender_channels = std::accumulate(this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
-    this->num_used_receiver_channels = std::accumulate(this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
+    this->num_used_sender_channels = std::accumulate(
+        this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
+    this->num_used_receiver_channels = std::accumulate(
+        this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
 
     // num_fwd_paths = total sender channels - 1 (worker channel)
     this->num_fwd_paths = this->num_used_sender_channels - 1;
@@ -478,7 +479,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
-            this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
+            this->receiver_channel_forwarding_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
             this->receiver_channel_local_write_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
             this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
@@ -616,7 +618,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args [[maybe_unused]], size_t starting_arg_idx) {
+size_t log_worker_to_fabric_edm_sender_rt_args(
+    const std::vector<uint32_t>& args [[maybe_unused]], size_t starting_arg_idx) {
     log_trace(tt::LogFabric, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
     log_trace(tt::LogFabric, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(tt::LogFabric, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
@@ -627,9 +630,15 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
     log_trace(tt::LogFabric, "arg[{}]: buffer_size_bytes {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(tt::LogFabric, "arg[{}]: buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(
-        tt::LogFabric, "arg[{}]: sender_worker_flow_control_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+        tt::LogFabric,
+        "arg[{}]: sender_worker_flow_control_semaphore_id {}",
+        starting_arg_idx,
+        args[starting_arg_idx++]);
     log_trace(
-        tt::LogFabric, "arg[{}]: sender_worker_buffer_index_semaphore_id {}", starting_arg_idx, args[starting_arg_idx++]);
+        tt::LogFabric,
+        "arg[{}]: sender_worker_buffer_index_semaphore_id {}",
+        starting_arg_idx,
+        args[starting_arg_idx++]);
     return starting_arg_idx + 10;
 }
 
@@ -692,7 +701,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     // Initialize per-RISC channel servicing flags
     const auto& sender_counts = actual_sender_channels_per_vc.value_or(this->config.num_used_sender_channels_per_vc);
-    const auto& receiver_counts = actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
+    const auto& receiver_counts =
+        actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
 
     bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
                                                 tt::tt_fabric::FabricTensixConfig::MUX);
@@ -750,7 +760,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
 
-    TT_FATAL(config.channel_allocator.get() != nullptr, "Channel allocator is not set. Failed to build TT-Fabric router. Internal error.");
+    TT_FATAL(
+        config.channel_allocator.get() != nullptr,
+        "Channel allocator is not set. Failed to build TT-Fabric router. Internal error.");
     auto* static_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(
@@ -820,15 +832,16 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
-        uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+        uint32_t code_profiling_enabled_timers =
+            static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
         ct_args.push_back(code_profiling_enabled_timers);
 
         // Add code profiling buffer address (16B aligned)
         ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
     } else {
         // Code profiling disabled - add zeros
-        ct_args.push_back(0); // No timers enabled
-        ct_args.push_back(0); // No buffer address
+        ct_args.push_back(0);  // No timers enabled
+        ct_args.push_back(0);  // No buffer address
     }
 }
 
@@ -882,11 +895,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     uint32_t my_eth_channel_ = [&]() -> uint32_t {
         if (dispatch_core_type == CoreType::WORKER) {
             return this->my_eth_channel;
-        } else if (dispatch_core_type == CoreType::ETH) {
-            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
-        } else {
-            TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
         }
+        if (dispatch_core_type == CoreType::ETH) {
+            return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+        }
+        TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
     }();
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1413,7 +1426,8 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 
     // Use VC-aware allocator getters with VC-relative channel ID
-    size_t sender_channels_num_buffer = static_channel_allocator->get_sender_channel_number_of_slots(vc, vc_relative_channel_id);
+    size_t sender_channels_num_buffer =
+        static_channel_allocator->get_sender_channel_number_of_slots(vc, vc_relative_channel_id);
 
     TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");
 
@@ -1498,7 +1512,8 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
-    adapter_ptr->add_downstream_connection(adapter_spec, upstream_vc_idx, channel_id, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+    adapter_ptr->add_downstream_connection(
+        adapter_spec, upstream_vc_idx, channel_id, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }

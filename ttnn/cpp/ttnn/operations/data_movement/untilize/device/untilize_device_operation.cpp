@@ -47,9 +47,8 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
         // as the current default multi core implementation processes an entire row of tiles at once.
         if (!output_is_sharded && num_tiles_per_col == 1) {
             return 0;
-        } else {
-            return 1;
         }
+        return 1;
     }
     return 2;
 }
@@ -277,7 +276,8 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     auto pf_option = get_pf_type(output_is_sharded, input_tensor_a);
     if (pf_option == 0) {
         return program::UntilizeMultiCoreParallelizeColumnProgramFactory{};
-    } else if (pf_option == 1) {
+    }
+    if (pf_option == 1) {
         return program::UntilizeSingleCoreProgramFactory{};
     }
     // Default multi core implementation

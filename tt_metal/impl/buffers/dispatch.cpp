@@ -174,9 +174,8 @@ public:
     uint32_t num_partial_pages_written_for_current_transaction_full_pages() const override {
         if (this->address - this->curr_full_pages_start_address == this->buffer.aligned_page_size()) {
             return this->num_partial_pages_in_single_full_page;
-        } else {
-            return (this->address - this->curr_full_pages_start_address) / this->size_of_partial_page;
         }
+        return (this->address - this->curr_full_pages_start_address) / this->size_of_partial_page;
     }
 
     void update_params_after_write_transaction() override {
@@ -1151,12 +1150,11 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
     IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
-    } else {
-        for (const auto& sub_device_id : sub_device_ids) {
-            TT_FATAL(*sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
-        }
-        return sub_device_ids;
     }
+    for (const auto& sub_device_id : sub_device_ids) {
+        TT_FATAL(*sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
+    }
+    return sub_device_ids;
 }
 
 template void issue_buffer_dispatch_command_sequence<InterleavedBufferWriteDispatchParams>(

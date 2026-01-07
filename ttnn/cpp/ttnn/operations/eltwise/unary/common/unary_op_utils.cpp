@@ -131,21 +131,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "relu_max_tile_init();",
                     fmt::format("relu_max_tile_int32({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
-            } else {
-                return {
-                    "relu_max_tile_init();",
-                    fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "relu_max_tile_init();",
+                fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::RELU_MIN:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, (uint)params[0])};
-            } else {
-                return {
-                    "relu_min_tile_init();",
-                    fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "relu_min_tile_init();",
+                fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::POWER:
             return {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, (uint32_t)param0)};
         case UnaryOpType::LEAKY_RELU:
@@ -295,16 +295,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                         "add_unary_tile_int32({}, {}u);",
                         idst,
                         std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
-            } else if (input_dtype == DataType::UINT32) {
+            }
+            if (input_dtype == DataType::UINT32) {
                 return {
                     "binop_with_scalar_tile_init();",
                     // TODO: Use uint32_t tile API here once implemented
                     fmt::format("add_unary_tile_int32({}, {}u);", idst, (uint)param0_raw)};
-            } else {
-                return {
-                    "binop_with_scalar_tile_init();",
-                    fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "binop_with_scalar_tile_init();",
+                fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::MUL_UNARY_SFPU:
             return {
                 "binop_with_scalar_tile_init();",
@@ -320,11 +321,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "unary_ne_tile_init();",
                     fmt::format("unary_ne_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
-            } else {
-                return {
-                    "unary_ne_tile_init();",
-                    fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_ne_tile_init();",
+                fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::UNARY_EQ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -332,11 +333,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "unary_eq_tile_init();",
                     fmt::format("unary_eq_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
-            } else {
-                return {
-                    "unary_eq_tile_init();",
-                    fmt::format("unary_eq_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_eq_tile_init();",
+                fmt::format("unary_eq_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::UNARY_GT:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -344,11 +345,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "unary_gt_tile_init();",
                     fmt::format("unary_gt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
-            } else {
-                return {
-                    "unary_gt_tile_init();",
-                    fmt::format("unary_gt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_gt_tile_init();",
+                fmt::format("unary_gt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::UNARY_LT:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -356,11 +357,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "unary_lt_tile_init();",
                     fmt::format("unary_lt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
-            } else {
-                return {
-                    "unary_lt_tile_init();",
-                    fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_lt_tile_init();",
+                fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::UNARY_GE:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -368,11 +369,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "unary_ge_tile_init();",
                     fmt::format("unary_ge_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
-            } else {
-                return {
-                    "unary_ge_tile_init();",
-                    fmt::format("unary_ge_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_ge_tile_init();",
+                fmt::format("unary_ge_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::UNARY_LE:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -380,11 +381,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "unary_le_tile_init();",
                     fmt::format("unary_le_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
-            } else {
-                return {
-                    "unary_le_tile_init();",
-                    fmt::format("unary_le_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_le_tile_init();",
+                fmt::format("unary_le_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::SOFTPLUS: {
             TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
             float param1 = params[1];
@@ -422,21 +423,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {"unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)params[0])};
-            } else {
-                return {
-                    "unary_max_tile_init();",
-                    fmt::format("unary_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_max_tile_init();",
+                fmt::format("unary_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::MINIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {"unary_min_tile_init();", fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)params[0])};
-            } else {
-                return {
-                    "unary_min_tile_init();",
-                    fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
+            return {
+                "unary_min_tile_init();",
+                fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+
         case UnaryOpType::CELU:
             return {
                 "celu_tile_init();",
@@ -472,15 +473,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 return {
                     "clamp_tile_init();",
                     fmt::format("clamp_tile_int32({}, {}, {});", idst, (uint)params[0], (uint)params[1])};
-            } else {
-                return {
-                    "clamp_tile_init();",
-                    fmt::format(
-                        "clamp_tile({}, {}, {});",
-                        idst,
-                        std::bit_cast<uint32_t>(param0),
-                        std::bit_cast<uint32_t>(param1))};
             }
+            return {
+                "clamp_tile_init();",
+                fmt::format(
+                    "clamp_tile({}, {}, {});",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
         }
         case UnaryOpType::HARDTANH: {
             float param1 = params[1];
@@ -542,17 +542,17 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"relu_tile_init();", fmt::format("relu_tile_int32({});", idst)};
-            } else {
-                return {"relu_tile_init();", fmt::format("relu_tile({});", idst)};
             }
+            return {"relu_tile_init();", fmt::format("        relu_tile({});", idst)};
+
         case UnaryOpType::SIGNBIT:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"signbit_tile_init();", fmt::format("signbit_tile_int32({});", idst)};
-            } else {
-                return {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
             }
+            return {"signbit_tile_init();", fmt::format("        signbit_tile({});", idst)};
+
         case UnaryOpType::SIN: return {"sin_tile_init();", fmt::format("sin_tile({});", idst)};
         case UnaryOpType::COS: return {"cos_tile_init();", fmt::format("cos_tile({});", idst)};
         case UnaryOpType::COSH: return {"cosh_tile_init();", fmt::format("cosh_tile({});", idst)};
@@ -567,13 +567,14 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
-            } else if (input_dtype == DataType::UINT32) {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
-            } else if (input_dtype == DataType::UINT16) {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint16({});", idst)};
-            } else {
-                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             }
+            if (input_dtype == DataType::UINT32) {
+                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
+            }
+            if (input_dtype == DataType::UINT16) {
+                return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint16({});", idst)};
+            }
+            return {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
         case UnaryOpType::I0: return {"i0_tile_init();", fmt::format("i0_tile({});", idst)};
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
@@ -594,70 +595,73 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 return {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
-            } else if (input_dtype.value() == DataType::UINT32) {
-                return {"mul_int32_tile_init();", fmt::format("mul_uint32_tile({0}, {0}, {0});", idst)};
-            } else if (input_dtype.value() == DataType::UINT16) {
-                return {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
-            } else {
-                return {"square_tile_init();", fmt::format("square_tile({});", idst)};
             }
+            if (input_dtype.value() == DataType::UINT32) {
+                return {"mul_int32_tile_init();", fmt::format("mul_uint32_tile({0},         {0}, {0});", idst)};
+            }
+            if (input_dtype.value() == DataType::UINT16) {
+                return {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0},         {0}, {0});", idst)};
+            }
+            return {"        square_tile_init();", fmt::format("square_tile({});", idst)};
         case UnaryOpType::TILED_PROD: return {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)};
         case UnaryOpType::EQZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 return {"eqz_tile_init();", fmt::format("eqz_tile_int32({});", idst)};
-            } else if (input_dtype.value() == DataType::UINT16) {
-                return {"eqz_tile_init();", fmt::format("eqz_tile_uint16({});", idst)};
-            } else if (input_dtype.value() == DataType::UINT32) {
-                return {"eqz_tile_init();", fmt::format("eqz_tile_uint32({});", idst)};
-            } else {
-                return {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
+            if (input_dtype.value() == DataType::UINT16) {
+                return {"eqz_tile_init();", fmt::format("eqz_tile_uint16({});", idst)};
+            }
+            if (input_dtype.value() == DataType::UINT32) {
+                return {"eqz_tile_init();", fmt::format("eqz_tile_uint32({});", idst)};
+            }
+            return {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
         case UnaryOpType::NEZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"nez_tile_init();", fmt::format("nez_tile_int32({});", idst)};
-            } else if (input_dtype == DataType::UINT16) {
-                return {"nez_tile_init();", fmt::format("nez_tile_uint16({});", idst)};
-            } else if (input_dtype.value() == DataType::UINT32) {
-                return {"nez_tile_init();", fmt::format("nez_tile_uint32({});", idst)};
-            } else {
-                return {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
             }
+            if (input_dtype == DataType::UINT16) {
+                return {"nez_tile_init();", fmt::format("nez_tile_uint16({});", idst)};
+            }
+            if (input_dtype.value() == DataType::UINT32) {
+                return {"nez_tile_init();", fmt::format("nez_tile_uint32({});", idst)};
+            }
+            return {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
         case UnaryOpType::LTZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
-            } else {
-                return {"ltz_tile_init();", fmt::format("ltz_tile({});", idst)};
             }
+            return {"ltz_tile_init();", fmt::format("        ltz_tile({});", idst)};
+
         case UnaryOpType::GTZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
-            } else {
-                return {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)};
             }
+            return {"gtz_tile_init();", fmt::format("        gtz_tile({});", idst)};
+
         case UnaryOpType::GEZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
-            } else {
-                return {"gez_tile_init();", fmt::format("gez_tile({});", idst)};
             }
+            return {"gez_tile_init();", fmt::format("        gez_tile({});", idst)};
+
         case UnaryOpType::LEZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
-            } else {
-                return {"lez_tile_init();", fmt::format("lez_tile({});", idst)};
             }
+            return {"lez_tile_init();", fmt::format("        lez_tile({});", idst)};
+
         case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
         case UnaryOpType::RSQRT: return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
         case UnaryOpType::EXP2: return {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)};
@@ -692,9 +696,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 return {"negative_tile_init();", fmt::format("negative_tile_int32({});", idst)};
-            } else {
-                return {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
             }
+            return {"negative_tile_init();", fmt::format("        negative_tile({});", idst)};
+
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
@@ -738,63 +742,92 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
-    } else if (name == "relu6") {
+    }
+    if (name == "relu6") {
         return UnaryWithParam(UnaryOpType::RELU6);
-    } else if (name == "gelu") {
+    }
+    if (name == "gelu") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(false));
-    } else if (name == "gelu_approx") {
+    }
+    if (name == "gelu_approx") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
-    } else if (name == "silu") {
+    }
+    if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
-    } else if (name == "sigmoid") {
+    }
+    if (name == "sigmoid") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(false)});
-    } else if (name == "sigmoid_approx") {
+    }
+    if (name == "sigmoid_approx") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
-    } else if (name == "hardsigmoid") {
+    }
+    if (name == "hardsigmoid") {
         return UnaryWithParam(UnaryOpType::HARDSIGMOID);
-    } else if (name == "sqrt") {
+    }
+    if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT, {static_cast<float>(false)});
-    } else if (name == "rsqrt") {
+    }
+    if (name == "rsqrt") {
         return UnaryWithParam(UnaryOpType::RSQRT, {static_cast<float>(false)});
-    } else if (name == "exp") {
+    }
+    if (name == "exp") {
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
-    } else if (name == "recip") {
+    }
+    if (name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
-    } else if (name == "log") {
+    }
+    if (name == "log") {
         return UnaryWithParam(UnaryOpType::LOG, static_cast<float>(true));
-    } else if (name == "log1p") {
+    }
+    if (name == "log1p") {
         return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
-    } else if (name == "tanh") {
+    }
+    if (name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH, static_cast<float>(false));
-    } else if (name == "log2") {
+    }
+    if (name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
-    } else if (name == "log10") {
+    }
+    if (name == "log10") {
         return UnaryWithParam(UnaryOpType::LOG10, static_cast<float>(true));
-    } else if (name == "sin") {
+    }
+    if (name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
-    } else if (name == "cos") {
+    }
+    if (name == "cos") {
         return UnaryWithParam(UnaryOpType::COS);
-    } else if (name == "cosh") {
+    }
+    if (name == "cosh") {
         return UnaryWithParam(UnaryOpType::COSH);
-    } else if (name == "sinh") {
+    }
+    if (name == "sinh") {
         return UnaryWithParam(UnaryOpType::SINH);
-    } else if (name == "abs") {
+    }
+    if (name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
-    } else if (name == "abs_int32") {
+    }
+    if (name == "abs_int32") {
         return UnaryWithParam(UnaryOpType::ABS_INT32);
-    } else if (name == "sign") {
+    }
+    if (name == "sign") {
         return UnaryWithParam(UnaryOpType::SIGN);
-    } else if (name == "square") {
+    }
+    if (name == "square") {
         return UnaryWithParam(UnaryOpType::SQUARE);
-    } else if (name == "softplus") {
+    }
+    if (name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
-    } else if (name == "selu") {
+    }
+    if (name == "selu") {
         return UnaryWithParam(UnaryOpType::SELU);
-    } else if (name == "alt_complex_rotate90") {
+    }
+    if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
-    } else if (name == "hardmish") {
+    }
+    if (name == "hardmish") {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
-    } else if (name == "mish") {
+    }
+    if (name == "mish") {
         return UnaryWithParam(UnaryOpType::MISH);
     }
     TT_THROW("Unknown unary op: {}", name);

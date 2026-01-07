@@ -25,9 +25,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
             if (is_l1) {
                 if (is_row_major) {
                     return program::TransposeWHShardedRMProgramFactory{};
-                } else {
-                    return program::TransposeWHShardedProgramFactory{};
                 }
+                return program::TransposeWHShardedProgramFactory{};
             }
             return program::TransposeWHProgramFactory{};
 

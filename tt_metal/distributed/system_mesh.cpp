@@ -152,9 +152,8 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
                 offset,
                 system_dimensions);
             return *offset;
-        } else {
-            return MeshCoordinate::zero_coordinate(system_dimensions);
         }
+        return MeshCoordinate::zero_coordinate(system_dimensions);
     }();
 
     if (requested_shape.is_line_topology()) {

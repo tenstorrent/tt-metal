@@ -83,7 +83,7 @@ using std::chrono::microseconds;
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
+std::vector<T> slice_vec(const std::vector<T>& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -116,17 +116,15 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
         if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
             if (index >= choice) {
                 return {subblock_h, subblock_w};
-            } else {
-                index++;
             }
+            index++;
         }
     }
 
     return {1, 1};
 }
 
-std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircularBuffer>
-create_programs(
+std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircularBuffer> create_programs(
     tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
@@ -198,8 +196,7 @@ create_programs(
     uint32_t in1_writer_cb_index = 31;
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
     in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    tt_metal::experimental::CreateCircularBuffer(
-        sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
+    tt_metal::experimental::CreateCircularBuffer(sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
 
     // in0 reader CB
     uint32_t in0_reader_cb_index = 0;
@@ -475,7 +472,8 @@ bool validation_bfp8_b(
 
     std::vector<float> result_untilized;
     std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
+    tt_metal::distributed::ReadShard(
+        device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     result_untilized = untilize_swizzled(result_bfp8, mt * 32, nt * 32);
 
@@ -525,7 +523,8 @@ bool validation_fp16(
     std::vector<float> result_vec(mt * nt * 32 * 32, 0);
 
     std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
+    tt_metal::distributed::ReadShard(
+        device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);
@@ -593,9 +592,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
     log_info(tt::LogTest, "num_receivers: {}", num_receivers);
 
     auto device_local_config = tt_metal::distributed::DeviceLocalBufferConfig{
-        .page_size = page_size_bytes,
-        .buffer_type = buffer_type,
-        .sharding_args = sharding_args};
+        .page_size = page_size_bytes, .buffer_type = buffer_type, .sharding_args = sharding_args};
 
     tt_metal::distributed::ReplicatedBufferConfig global_buf{.size = size_bytes};
 
@@ -717,7 +714,8 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
-        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = { { dram_reader_core_coord, l1_receiver_core } };
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
+            {dram_reader_core_coord, l1_receiver_core}};
         std::vector<SubDeviceId> receiver_sub_device_ids = {};
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
@@ -779,7 +777,8 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp8.get_values(), m, k * num_receivers);
-            std::vector<uint32_t> activations = pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
+            std::vector<uint32_t> activations =
+                pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 activations,
@@ -806,7 +805,8 @@ int main(int argc, char** argv) {
             // in1
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp16.get_values(), k, n);
-                auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(input_vec_tilized));
+                auto input_vec_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -822,7 +822,8 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp16.get_values(), m, k * num_receivers);
-            auto activations_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+            auto activations_tile_layout =
+                convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),

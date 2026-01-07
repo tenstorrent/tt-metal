@@ -1142,10 +1142,8 @@ void DPrintServer::Impl::poll_print_data() {
                                 server_killed_due_to_hang_ = true;
                                 device_to_core_range_lock_.unlock();
                                 return;  // Stop the print loop
-                            } else {
-                                // Re-throw for instant exit
-                                throw e;
-                            }
+                            }  // Re-throw for instant exit
+                            throw e;
                         }
 
                         // If this read detected a print hang, stop processing prints.

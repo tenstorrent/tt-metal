@@ -88,11 +88,11 @@ bool should_use_two_stage_reduce(
 uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
     if (mcast_1d) {
         return shard_spec.num_cores();
-    } else if (row_wise) {
-        return grid_size.x;
-    } else {
-        return grid_size.y;
     }
+    if (row_wise) {
+        return grid_size.x;
+    }
+    return grid_size.y;
 
     return uint32_t{};
 }

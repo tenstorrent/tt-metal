@@ -362,9 +362,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {
             return mesh_slots.get()[arch_index];
-        } else {
-            return other_slots.get()[arch_index];
         }
+        return other_slots.get()[arch_index];
     };
 
     auto get_optimal_num_slots_per_vc = [this](

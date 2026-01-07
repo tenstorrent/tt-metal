@@ -662,7 +662,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved);
-        } else if (core_range.x == 1 or use_mcast_1d_in1_config) {
+        }
+        if (core_range.x == 1 or use_mcast_1d_in1_config) {
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -677,8 +678,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved);
-        } else if (
-            (core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
+        }
+        if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
             bool transpose_mcast =
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
@@ -1048,8 +1049,8 @@ MatmulProgramConfig get_matmul_program_config(
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
             };
-        } else if (
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
+        }
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
             (grid_size.x > 1 and grid_size.y > 1)) {
             bool transpose_mcast = input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
 
@@ -1239,35 +1240,33 @@ inline MatmulProgramConfig generate_matmul_program_config(
                 compute_kernel_config,
                 mem_config,
                 output_dtype);
-        } else {
-            tt::tt_metal::IDevice* device = input_tensor_a.device();
-            auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-            return create_simple_matmul_program_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                compute_kernel_config,
-                compute_with_storage_grid_size,
-                mem_config,
-                output_dtype);
         }
-    } else {
-        bool bmm = user_run_batched;
-        return get_matmul_program_config(
+        tt::tt_metal::IDevice* device = input_tensor_a.device();
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        return create_simple_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
             transpose_a,
             transpose_b,
             bias_single_tile_size,
-            mem_config,
-            std::nullopt,
-            !bmm,
-            user_core_coord,
             compute_kernel_config,
+            compute_with_storage_grid_size,
+            mem_config,
             output_dtype);
     }
+    bool bmm = user_run_batched;
+    return get_matmul_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        bias_single_tile_size,
+        mem_config,
+        std::nullopt,
+        !bmm,
+        user_core_coord,
+        compute_kernel_config,
+        output_dtype);
 }
 
 tt::tt_metal::Tile get_output_tile(
@@ -1316,9 +1315,8 @@ tt::tt_metal::Tile get_output_tile(
         }
 
         return override_output_tile;
-    } else {
-        return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
     }
+    return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 }
 
 }  // namespace

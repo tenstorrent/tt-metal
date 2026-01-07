@@ -169,9 +169,8 @@ std::vector<Tensor> ExecuteSort::invoke(
             std::get<0>(*optional_output_tensors).tensor_attributes->get_storage() =
                 input_tensor.tensor_attributes->get_storage();
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
-        } else {
-            return {input_tensor, ttnn::zeros_like(input_tensor)};
         }
+        return {input_tensor, ttnn::zeros_like(input_tensor)};
     }
 
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
