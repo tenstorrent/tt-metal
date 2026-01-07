@@ -309,70 +309,49 @@ In the Blackhole implementation, the encoder (Section 3.3) converts embeddings t
 ### 4.2 Sharding parametrization
 This subsection defines the main sharding parameters used throughout the Blackhole implementation. These values are computed in `update_model_config()` and are used to size the sharded program configs (LayerNorm, matmuls, softmax).
 
-#### 4.2.1 Tile-derived dimensions
-TT-NN uses `TILE_HEIGHT = 32` for tile layout.
-
-For ViT-Base:
-- `seqL = 196`
-- `seqL_padded = 224`
-- `seqL_t = seqL_padded / 32 = 7` (tokens in tiles)
-- `dim = 768`
-- `dim_t = dim / 32 = 24` (embedding in tiles)
-- `head_num = 12`
-- `head_size = dim / head_num = 64`
-- `head_size_t = head_size / 32 = 2` (head size in tiles)
-
-**Concrete example (ViT-Base on Blackhole, `grid_x = 12`)**:
+Below is the parameterization (same style as the original report), with comments showing the typical ViT-Base values:
 
 ```python
+wh_core_grid_y = 10
+
+# Grid selection (batch-dependent)
+should_reallocate_in_attention = False
+if batch_size <= wh_core_grid_y:
+    grid_y = batch_size
+    grid_x = 12
+else:
+    grid_y = 10
+    batch_per_y_core = batch_size // wh_core_grid_y
+    batch_size = grid_y * batch_per_y_core
+    grid_x = 12
+    should_reallocate_in_attention = True
+
+core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+core_grid_10x12 = ttnn.CoreGrid(y=10, x=12)
+
 TILE_HEIGHT = 32
 
-# ViT-Base
-seqL = 14 * 14                  # 196
-seqL_padded = 224               # padded to TILE_HEIGHT
-seqL_t = seqL_padded // 32      # 7
+# ViT-Base shapes
+patch_count = config.image_size // config.patch_size   # 224/16 = 14
+seqL = patch_count * patch_count                       # 196
+seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT  # 224
+seqL_t = seqL_padded // TILE_HEIGHT                    # 7
 
-dim = 768
-dim_t = dim // 32               # 24
+dim_t = config.hidden_size // TILE_HEIGHT              # 768/32 = 24
+dim_t__x = dim_t // core_grid.x                        # 2 when x=12
+dim_t__x_full_grid = dim_t // core_grid_10x12.x        # 2 (10x12 grid)
 
-head_num = 12
-head_size = dim // head_num     # 64
-head_size_t = head_size // 32   # 2
-
-# grid_x = 12
-dim_t__x_full_grid = dim_t // 12            # 2
-head_seqL_t__x = (head_num * seqL_t) // 12  # 7
+head_num = config.num_attention_heads                  # 12
+head_seqL_t__x = (head_num * seqL_t) // core_grid.x    # 7 when x=12
+head_size_t = dim_t // head_num                        # 2
 
 # classifier: 1000 classes padded to 1152
-class_tiles = 1152 // 32         # 36
-class__x = class_tiles // 12     # 3
+class__x = (1152 // TILE_HEIGHT) // core_grid.x        # 3 when x=12
 ```
 
-#### 4.2.2 Core grids used by the Blackhole ViT implementation
-The Blackhole implementation uses two related core grids:
-
-1) **Fixed 10×12 grid (120 cores)**:
-- `core_grid_10x12 = CoreGrid(y=10, x=12)`
-- Used for the block-sharded “backbone” of the encoder (encoder input sharding, LayerNorms, QKV linear, self-output linear, FFN).
-
-2) **Batch-dependent (variable) grid** used inside attention and for the classifier:
-- If `batch_size ≤ 10`: `core_grid = CoreGrid(y=batch_size, x=12)`
-- If `batch_size > 10`: `core_grid = CoreGrid(y=10, x=12)` and the code enables `should_reallocate_in_attention = True`.
-
-This is why the attention path contains explicit sharding transitions (reshard/to_memory_config) between the fixed 10×12 grid and the batch-dependent grid.
-
-#### 4.2.3 Per-core tile slices (examples)
-With `x = 12`:
-- `dim_t__x_full_grid = dim_t / 12 = 24/12 = 2` tiles per core in X (for the fixed 10×12 grid).
-
-For the variable grid:
-- `dim_t__x = dim_t / core_grid.x` (still 2 when `x=12`)
-- `head_seqL_t__x = (head_num × seqL_t) / core_grid.x = (12×7)/12 = 7`
-
-Classifier tiles (1000 classes padded to 1152):
-- `1152/32 = 36` tiles total, so `class__x = 36 / core_grid.x = 3` tiles per core in X (for `x=12`).
-
-> The remaining subsections will show how each op uses these values via its program config (e.g. `query_key_value_matmul_program_config`, `query_by_key_matmul_program_config`, `softmax_program_config`, etc.).
+Two related core grids appear throughout the implementation:
+- **`core_grid_10x12` (fixed 10×12)**: used for the block-sharded backbone (encoder sharding, LayerNorms, QKV/self-output/FFN matmuls).
+- **`core_grid` (batch-dependent)**: used inside attention BMMs/softmax and for the classifier in some regimes, which is why the attention path contains explicit `reshard()`/`to_memory_config()` transitions.
 
 ### 4.3 Layer Normalization (LayerNorm)
 LayerNorm is applied twice per encoder layer:
