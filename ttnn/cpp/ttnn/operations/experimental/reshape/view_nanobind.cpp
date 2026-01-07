@@ -40,7 +40,7 @@ void bind_view(nb::module_& mod) {
         doc,
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::experimental::view)& self, ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
-                return self(input_tensor, infer_dims_for_reshape(input_tensor, ttnn::SmallVector<int>{N, C, H, W}));
+                return self(input_tensor, ttnn::SmallVector<int>{N, C, H, W});
             },
             nb::arg("input_tensor"),
             nb::arg("N"),
@@ -51,9 +51,7 @@ void bind_view(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::experimental::view)& self,
                ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& shape) {
-                return self(input_tensor, infer_dims_for_reshape(input_tensor, shape));
-            },
+               const ttnn::SmallVector<int32_t>& shape) { return self(input_tensor, shape); },
             nb::arg("input_tensor"),
             nb::arg("shape"),
         });

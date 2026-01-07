@@ -13,6 +13,7 @@
 #include "device/reshape_op.hpp"
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -101,7 +102,7 @@ ttnn::Tensor ReshapeOperation::invoke(
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
+    return invoke(input_tensor, detail::infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement
