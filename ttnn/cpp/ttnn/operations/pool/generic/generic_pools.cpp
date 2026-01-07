@@ -530,7 +530,8 @@ public:
             pool_type,
             count_include_pad,
             divisor_override,
-            return_indices));
+            return_indices,
+            config_tensor_in_dram));
 
         return sliced_input_tensor_memory_config;
     }
