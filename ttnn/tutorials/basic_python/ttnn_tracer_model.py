@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 
 def main():
-    os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
+    # os.environ["TTNN_CONFIG_OVERRIDES"] = "{\"enable_fast_runtime_mode\": false}"
 
     transformers.logging.set_verbosity_error()
 
@@ -58,7 +58,7 @@ def main():
             model_location = Path(cache_dir) / Path("config_google_bert.json")
 
         # Load model weights (download if cache_dir was not set)
-        config = transformers.BertConfig.from_pretrained(model_location)
+        config = transformers.BertConfig.from_pretrained(model_location, cache_dir="/localdev/mgajewski/model_cache")
         model = transformers.models.bert.modeling_bert.BertSelfOutput(config).eval()
 
         return model, config
@@ -72,7 +72,7 @@ def main():
             config_location = Path(cache_dir) / Path("config_ttnn_bert.json")
 
         # Load config (download if cache_dir was not set)
-        config = transformers.BertConfig.from_pretrained(config_location)
+        config = transformers.BertConfig.from_pretrained(config_location, cache_dir="/localdev/mgajewski/model_cache")
 
         return config
 
@@ -87,7 +87,9 @@ def main():
             model_location = Path(cache_dir)
 
         # Load model weights (download if cache_dir was not set)
-        model = transformers.BertForQuestionAnswering.from_pretrained(model_location, config=config).eval()
+        model = transformers.BertForQuestionAnswering.from_pretrained(
+            model_location, config=config, cache_dir="/localdev/mgajewski/model_cache"
+        ).eval()
 
         return model
 
@@ -103,10 +105,7 @@ def main():
         input_tensor = torch.rand((1, 64, config.hidden_size))
 
         # Run the layer forward pass
-        hidden_states = model(hidden_states, input_tensor)
-
-        # Convert output to TT-NN format for visualization
-        output = ttnn.from_torch(hidden_states)
+        output = model(hidden_states, input_tensor)
 
     # Visualize the BERT layer computation graph
     visualize(output)
