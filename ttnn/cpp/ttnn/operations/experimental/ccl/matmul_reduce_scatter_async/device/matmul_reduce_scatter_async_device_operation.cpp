@@ -93,17 +93,18 @@ tensor_return_value_t MatmulReduceScatterAsyncDeviceOperation::create_output_ten
 tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = tensor_args.input.padded_shape();
-    auto input_memory_layout = tensor_args.input.layout();
-    auto input_dtype = tensor_args.input.dtype();
-    auto input_memory_config = tensor_args.input.memory_config();
+    const ttnn::Tensor& input_tensor = tensor_args.input;
+    const ttnn::Tensor& weight_tensor = tensor_args.weight;
+    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
+    const ttnn::Tensor& persistent_intermediate_tensor = tensor_args.persistent_intermediate;
+    const ttnn::Tensor& persistent_output_tensor = tensor_args.persistent_output;
 
     return tt::tt_metal::operation::hash_operation<MatmulReduceScatterAsyncDeviceOperation>(
         args.reduce_scatter_params.dim,
         args.reduce_scatter_params.num_links,
         args.reduce_scatter_params.ring_size,
         args.reduce_scatter_params.output_mem_config,
-        args.reduce_scatter_params.optional_intermediate_mem_config.value(),
+        args.reduce_scatter_params.optional_intermediate_mem_config,
         args.reduce_scatter_params.topology,
         args.reduce_scatter_params.sub_device_id.has_value(),
         args.reduce_scatter_params.sub_device_id.has_value()
@@ -116,11 +117,25 @@ tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_h
         args.reduce_scatter_params.chunks_per_sync,
         args.reduce_scatter_params.num_workers_per_link,
         args.reduce_scatter_params.num_buffers_per_channel,
+        args.matmul_struct.program_config,
+        args.matmul_struct.bcast_batch,
+        args.matmul_struct.output_mem_config,
+        args.matmul_struct.output_dtype,
+        args.matmul_struct.compute_kernel_config,
+        args.matmul_struct.untilize_out,
+        args.matmul_struct.user_core_coord,
+        args.matmul_struct.user_fused_activation,
+        args.matmul_struct.user_run_batched,
+        args.matmul_struct.transpose_a,
+        args.matmul_struct.transpose_b,
+        args.matmul_struct.output_tile,
+        args.matmul_struct.global_cb,
         args.reduce_scatter_core_grid_offset,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        persistent_intermediate_tensor,
+        persistent_output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async

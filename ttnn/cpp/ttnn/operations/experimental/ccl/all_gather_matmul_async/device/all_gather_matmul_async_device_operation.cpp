@@ -123,11 +123,10 @@ tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors
 tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
+    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
 
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
         operation_attributes.all_gather_async_attributes.dim,
@@ -147,11 +146,24 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.all_gather_async_attributes.chunks_per_sync,
         operation_attributes.all_gather_async_attributes.num_workers_per_link,
         operation_attributes.all_gather_async_attributes.num_buffers_per_channel,
+        operation_attributes.matmul.program_config,
+        operation_attributes.matmul.bcast_batch,
+        operation_attributes.matmul.output_mem_config,
+        operation_attributes.matmul.output_dtype,
+        operation_attributes.matmul.compute_kernel_config,
+        operation_attributes.matmul.untilize_out,
+        operation_attributes.matmul.user_core_coord,
+        operation_attributes.matmul.user_fused_activation,
+        operation_attributes.matmul.user_run_batched,
+        operation_attributes.matmul.transpose_a,
+        operation_attributes.matmul.transpose_b,
+        operation_attributes.matmul.output_tile,
+        operation_attributes.matmul.global_cb,
         operation_attributes.all_gather_core_grid_offset,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        persistent_output_buffer);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async

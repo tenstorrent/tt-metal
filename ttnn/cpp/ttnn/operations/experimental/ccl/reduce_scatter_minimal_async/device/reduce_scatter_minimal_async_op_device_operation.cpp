@@ -140,7 +140,9 @@ tensor_return_value_t ReduceScatterMinimalAsyncDeviceOperation::create_output_te
 
 tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor = tensor_args.optional_intermediate_tensor;
+    const std::optional<ttnn::Tensor>& optional_output_tensor = tensor_args.optional_output_tensor;
 
     return tt::stl::hash::hash_objects(
         operation_attributes.dim,
@@ -160,12 +162,9 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        input_tensor.logical_shape(),
-        input_tensor.padded_shape(),
-        input_tensor.tensor_spec().page_config(),
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config());
+        input_tensor,
+        optional_intermediate_tensor,
+        optional_output_tensor);
 }
 
 // Common validation function implementation
