@@ -443,7 +443,7 @@ MetalContext::MetalContext() {
             platform_arch,
             is_base_routing_fw_enabled,
             rtoptions_.get_enable_2_erisc_mode(),
-            get_profiler_dram_bank_size_per_risc_bytes(rtoptions_));
+            get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
         rtoptions_.ParseAllFeatureEnv(*hal_);
         cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
         distributed_context_ = distributed::multihost::DistributedContext::get_current_world();

@@ -319,6 +319,64 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+def test_device_api_debugger_non_dropping():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
+    clear_profiler_runtime_artifacts()
+
+    envVars = "TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1 "
+
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
+    assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
+
+    # Verify the NOC trace JSON file exists
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file), f"Expected trace file '{expected_trace_file}' does not exist"
+
+    # Read and parse the JSON file
+    with open(expected_trace_file, "r") as nocTraceJson:
+        try:
+            noc_trace_data = json.load(nocTraceJson)
+        except json.JSONDecodeError:
+            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
+
+    assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
+    assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
+
+    brisc_dst_addrs_found = set()
+    ncrisc_dst_addrs_found = set()
+
+    for event in noc_trace_data:
+        assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+        if event.get("type") == "READ" and "dst_addr" in event and "proc" in event:
+            proc = event["proc"]
+            dst_addr = event["dst_addr"]
+            if proc == "BRISC":
+                brisc_dst_addrs_found.add(dst_addr)
+            elif proc == "NCRISC":
+                ncrisc_dst_addrs_found.add(dst_addr)
+
+    expected_dst_addrs = set(range(10000))  # 0 to 9999
+
+    # Verify BRISC has all expected dst_addr values
+    missing_brisc_dst_addrs = expected_dst_addrs - brisc_dst_addrs_found
+    assert len(missing_brisc_dst_addrs) == 0, (
+        f"Missing dst_addr values in BRISC JSON events: {sorted(missing_brisc_dst_addrs)[:20]}"
+        f"{'...' if len(missing_brisc_dst_addrs) > 20 else ''} "
+        f"(found {len(brisc_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+    # Verify NCRISC has all expected dst_addr values
+    missing_ncrisc_dst_addrs = expected_dst_addrs - ncrisc_dst_addrs_found
+    assert len(missing_ncrisc_dst_addrs) == 0, (
+        f"Missing dst_addr values in NCRISC JSON events: {sorted(missing_ncrisc_dst_addrs)[:20]}"
+        f"{'...' if len(missing_ncrisc_dst_addrs) > 20 else ''} "
+        f"(found {len(ncrisc_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
+    )
+
+
 def wildcard_match(pattern, words):
     if not pattern.endswith("*"):
         return [word for word in words if pattern == word]
