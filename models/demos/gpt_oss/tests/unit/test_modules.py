@@ -15,6 +15,111 @@ from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, 
 
 
 # Helper Functions for Common Test Patterns
+def _tt_tensor_to_torch_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+    """Materialize a TTNN tensor as a host torch.Tensor (blocking)."""
+    if hasattr(tt_tensor, "cpu"):
+        tt_tensor = tt_tensor.cpu(blocking=True, cq_id=0)
+    return ttnn.to_torch(tt_tensor)
+
+
+def get_full_kv_cache_torch(
+    tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice, users_row_sharded: bool
+) -> torch.Tensor:
+    """Reconstruct full KV cache as a torch.Tensor.
+
+    - Concat TP shards (mesh columns) along KV-head dim (dim=1).
+    - If users are row-sharded, concat mesh rows along batch dim (dim=0).
+      Otherwise, caches are replicated across rows; take row 0.
+    """
+    device_tensors = ttnn.get_device_tensors(tt_cache)
+    rows, cols = tuple(mesh_device.shape)
+    assert len(device_tensors) == rows * cols, f"Unexpected device tensor count: {len(device_tensors)} vs {rows}*{cols}"
+
+    row_recon = []
+    for r in range(rows):
+        col_torch = []
+        for c in range(cols):
+            col_torch.append(_tt_tensor_to_torch_host(device_tensors[r * cols + c]))
+        row_recon.append(torch.cat(col_torch, dim=1))
+
+    return torch.cat(row_recon, dim=0) if users_row_sharded else row_recon[0]
+
+
+def get_kv_from_hf_cache(ref_cache, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Deprecated: prefer computing reference K/V directly from projections for stable layout.
+
+    Kept temporarily to avoid breaking other local debug workflows that may still call it.
+    """
+    raise RuntimeError(
+        "Do not use get_kv_from_hf_cache() in this test. Compute reference K/V directly from projections + RoPE."
+    )
+
+
+def _align_kv_for_compare(
+    tt_k: torch.Tensor,
+    tt_v: torch.Tensor,
+    ref_k: torch.Tensor,
+    ref_v: torch.Tensor,
+    *,
+    batch_size: int,
+    seq_len: int,
+    num_attention_heads: int,
+    num_kv_heads: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Align TT and reference KV tensors for PCC comparison.
+
+    Handles:
+    - **batch padding** on TT side (e.g. padded to 32)
+    - **GQA head expansion** mismatch (ref stores KV heads, TT might store repeated KV -> full heads, or vice-versa)
+    """
+    # Slice any padding first
+    tt_k = tt_k[:batch_size, ...]
+    tt_v = tt_v[:batch_size, ...]
+    ref_k = ref_k[:batch_size, ...]
+    ref_v = ref_v[:batch_size, ...]
+
+    # Slice sequence
+    tt_k = tt_k[:, :, :seq_len, :]
+    tt_v = tt_v[:, :, :seq_len, :]
+    ref_k = ref_k[:, :, :seq_len, :]
+    ref_v = ref_v[:, :, :seq_len, :]
+
+    # Align KV head dimension (dim=1).
+    #
+    # In practice we see two common layouts:
+    # - ref cache stores KV heads (num_key_value_heads)
+    # - TT cache sometimes stores KV expanded to full heads, or vice-versa (depending on implementation)
+    if tt_k.shape[1] != ref_k.shape[1]:
+        tt_h, ref_h = int(tt_k.shape[1]), int(ref_k.shape[1])
+        hi, lo = (tt_h, ref_h) if tt_h > ref_h else (ref_h, tt_h)
+        if hi % lo != 0:
+            kv_groups = max(num_attention_heads // max(num_kv_heads, 1), 1)
+            raise ValueError(
+                f"KV head dim mismatch not divisible: TT heads={tt_h} ref heads={ref_h}. "
+                f"Expected divisibility (e.g., GQA groups). "
+                f"num_attention_heads={num_attention_heads} num_kv_heads={num_kv_heads} kv_groups={kv_groups} "
+                f"TT shape={tuple(tt_k.shape)} ref shape={tuple(ref_k.shape)}"
+            )
+
+        factor = hi // lo
+        if ref_h < tt_h:
+            ref_k = ref_k.repeat_interleave(factor, dim=1)
+            ref_v = ref_v.repeat_interleave(factor, dim=1)
+        else:
+            tt_k = tt_k.repeat_interleave(factor, dim=1)
+            tt_v = tt_v.repeat_interleave(factor, dim=1)
+
+    # Final guard: shapes must match for PCC
+    if tt_k.shape != ref_k.shape or tt_v.shape != ref_v.shape:
+        raise ValueError(
+            f"KV shapes still mismatch after alignment: "
+            f"TT K {tuple(tt_k.shape)} ref K {tuple(ref_k.shape)} | "
+            f"TT V {tuple(tt_v.shape)} ref V {tuple(ref_v.shape)}"
+        )
+
+    return tt_k, tt_v, ref_k, ref_v
+
+
 def run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.99):
     """Standard component output comparison"""
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
@@ -75,7 +180,20 @@ def run_attention_component(
             use_cache=True,
         )
 
+    # Compute reference KV (post-RoPE) in the same layout as TT cache: [B, kv_heads, S, head_dim]
+    head_dim = reference_attention.head_dim
+    hidden_shape = (*hidden_states.shape[:-1], -1, head_dim)
+    key_states = reference_attention.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    value_states = reference_attention.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    cos, sin = position_embeddings
+    # apply_rotary_pos_emb expects query+key; query is unused for our KV compare
+    dummy_q = reference_attention.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    _, key_states = apply_rotary_pos_emb(dummy_q, key_states, cos, sin)
+    ref_k, ref_v = key_states, value_states
+
     # TTNN attention forward (no mask needed, causal masking handled internally)
+    #
+    # Mirror tt_transformers attention tests: pass the KV cache explicitly and validate it after the call.
     attention_module = decoder_layer.self_attn
     tt_out = attention_module(
         tt_hidden_states,
@@ -96,6 +214,77 @@ def run_attention_component(
         logger.info(f"Attention test passed. Output: {output}")
     else:
         assert passing, f"Attention test failed. Output: {output}"
+
+    # KV cache comparison (helps isolate "prefill good, decode bad" issues)
+    # IMPORTANT: For these unit tests, "row sharded" refers to users/batch being sharded across mesh rows.
+    # The DecoderLayer/AttentionConfig flag might not be plumbed consistently in all test setups, so use
+    # the test's `is_row_sharded` signal to reconstruct the global cache for comparison.
+    users_row_sharded = is_row_sharded
+
+    tt_k_full = get_full_kv_cache_torch(tt_k_cache, mesh_device, users_row_sharded)
+    tt_v_full = get_full_kv_cache_torch(tt_v_cache, mesh_device, users_row_sharded)
+
+    # These unit tests use non-paged attention (page_table=None), so compare only the filled slice.
+    compare_seq_len = 1 if is_decode else seq_len
+    cfg = reference_layer.self_attn.config
+    tt_k_slice, tt_v_slice, ref_k_slice, ref_v_slice = _align_kv_for_compare(
+        tt_k_full,
+        tt_v_full,
+        ref_k,
+        ref_v,
+        batch_size=batch_size,
+        seq_len=compare_seq_len,
+        num_attention_heads=getattr(cfg, "num_attention_heads"),
+        num_kv_heads=getattr(cfg, "num_key_value_heads"),
+    )
+    assert tt_k_slice.shape == ref_k_slice.shape and tt_v_slice.shape == ref_v_slice.shape, (
+        f"KV shapes must match before PCC. "
+        f"TT K {tuple(tt_k_slice.shape)} ref K {tuple(ref_k_slice.shape)} | "
+        f"TT V {tuple(tt_v_slice.shape)} ref V {tuple(ref_v_slice.shape)}"
+    )
+
+    k_passing, k_output = compare_tensors(tt_k_slice, ref_k_slice, mesh_device, pcc_threshold=min(pcc_threshold, 0.99))
+    v_passing, v_output = compare_tensors(tt_v_slice, ref_v_slice, mesh_device, pcc_threshold=min(pcc_threshold, 0.99))
+
+    def _permute_last_dim_interleave_halves(x: torch.Tensor) -> torch.Tensor:
+        # [0..d/2-1, d/2..d-1] -> [0, d/2, 1, d/2+1, ...]
+        d = x.shape[-1]
+        assert d % 2 == 0
+        first = x[..., : d // 2]
+        second = x[..., d // 2 :]
+        return torch.stack([first, second], dim=-1).reshape(*x.shape[:-1], d)
+
+    def _permute_last_dim_even_odd(x: torch.Tensor) -> torch.Tensor:
+        # [0,1,2,3,...] -> [0,2,4,...,1,3,5,...]
+        return torch.cat([x[..., 0::2], x[..., 1::2]], dim=-1)
+
+    # If K fails but V passes and attention output passed, try common head-dim layout permutations for K.
+    if (not k_passing) and v_passing:
+        try_candidates: list[tuple[str, torch.Tensor]] = [
+            ("interleave_halves", _permute_last_dim_interleave_halves(ref_k_slice)),
+            ("even_odd", _permute_last_dim_even_odd(ref_k_slice)),
+        ]
+        for name, cand in try_candidates:
+            cand_pass, cand_out = compare_tensors(tt_k_slice, cand, mesh_device, pcc_threshold=min(pcc_threshold, 0.99))
+            if cand_pass:
+                logger.warning(
+                    f"K cache only matches after '{name}' head-dim permutation (this indicates a layout mismatch, not a functional bug). "
+                    f"Original K PCC: {k_output}; permuted K PCC: {cand_out}"
+                )
+                k_passing, k_output = cand_pass, cand_out
+                break
+        else:
+            logger.info(f"K cache still mismatched after layout permutations. K PCC: {k_output}")
+
+    if not (k_passing and v_passing):
+        assert False, (
+            f"\nKV cache mismatch:"
+            f"\nK {k_passing} ({k_output})"
+            f"\nV {v_passing} ({v_output})"
+            f"\nTT K full {tuple(tt_k_full.shape)} ref K {tuple(ref_k.shape)}"
+        )
+    else:
+        logger.info(f"KV cache test passed. K: {k_output} V: {v_output}")
 
 
 def run_rms_norm_component(

@@ -52,6 +52,12 @@ class ModelArgs:
         self.optimizations = None
         self.cache_hf = cache_hf
 
+        # Sampling-related attributes expected by SamplingGenerator/TTSampling
+        self.cluster_shape = list(mesh_device.shape)
+        self.sub_core_grids = None
+        self.sub_core_grid_topk = None
+        self.start_core = ttnn.CoreCoord(0, 0)
+
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
         default_models = [

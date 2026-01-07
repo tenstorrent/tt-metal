@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+from models.common.sampling.generator import SamplingGenerator
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
@@ -136,6 +137,10 @@ class Model:
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
+        # Sampling will be initialized once args are attached (see create_transformer_compatible)
+        self.sampling = None
+        self._supports_on_device_sampling = False
+
     @classmethod
     def create_transformer_compatible(
         cls,
@@ -179,6 +184,18 @@ class Model:
         instance.vocab_size = args.vocab_size
         instance.n_layers = args.n_layers
         instance.dtype = dtype
+
+        # On-device sampling support (mirrors tt_transformers behavior)
+        sampling_splits = mesh_device.get_num_devices() if list(mesh_device.shape) != [1, 1] else 2
+        instance._supports_on_device_sampling = instance.vocab_size // sampling_splits <= 64 * 1024
+        if instance._supports_on_device_sampling:
+            instance.sampling = SamplingGenerator(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=None,
+            )
+        else:
+            instance.sampling = None
 
         return instance
 
@@ -235,7 +252,7 @@ class Model:
         hidden_states.deallocate(True)
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
-        if config.tp > 1:
+        if config.tp > 1 and not is_decode:
             logits_gathered = self.mesh_config.allgather(
                 logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
             )
@@ -263,6 +280,7 @@ class Model:
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
         # Embed tokens
+        # breakpoint()
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
 
@@ -284,8 +302,14 @@ class Model:
             kv_cache=kv_cache,
             is_decode=True,
         )
+        if sampling_on_device and self.sampling is not None:
+            # out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            if capture_sampling_trace:
+                return out
+            return self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
+
         # Return logits and None for log-probs for compatibility with generator interface
-        # TODO: Add log-probs return value once sampling_on_device is supported
         return out, None
 
     def ttnn_prefill_forward(
@@ -331,6 +355,11 @@ class Model:
         )
 
         return logits
+
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
+        # Match tt_transformers behavior: advance positions for next decode step
+        ttnn.plus_one(current_pos, skip_negative_entries=True)
+        ttnn.plus_one(rot_mat_idxs)
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
@@ -465,11 +494,12 @@ class Model:
             tt_chunk_page_table,
         )
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Process decode output and convert to torch tensors"""
         concat_out = self.concat_device_output(tt_out)
+        print("concat_out", concat_out.shape)
         if is_tokens:
-            return concat_out[:B, 0]  # [batch_size]
+            return concat_out.reshape(-1)  # [batch_size]
 
         torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
         # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong

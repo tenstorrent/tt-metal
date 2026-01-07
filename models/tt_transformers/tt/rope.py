@@ -389,6 +389,7 @@ class RotarySetup(LightweightModule):
 
         self.batch_size_per_device_group = batch_size
         self.batch_size = batch_size * data_parallel
+
         self.head_dim = head_dim
         self.device = device
         self.core_grid = device.compute_with_storage_grid_size()
@@ -466,7 +467,7 @@ class RotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+                ##mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=(-1, None), mesh_shape=self.device.shape),
             )
         else:  # On device
@@ -476,7 +477,7 @@ class RotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+                ##mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.device, dims=(-1, None), mesh_shape=self.device.shape),
             )
 
