@@ -194,7 +194,8 @@ void ProfilerStateManager::start_debug_dump_thread(
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    if (MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+                    if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
+                        state == ProfilerReadState::LAST_FD_READ) {
                         profiler.processResults(
                             device,
                             virtual_cores_map.at(device->id()),
