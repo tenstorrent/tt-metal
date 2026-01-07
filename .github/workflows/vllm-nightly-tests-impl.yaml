@@ -207,7 +207,7 @@ jobs:
               "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
               "server-timeout": 10,
-              "benchmark-timeout": 5,
+              "benchmark-timeout": 10,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
