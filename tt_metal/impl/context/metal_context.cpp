@@ -33,6 +33,7 @@
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
 #include <experimental/fabric/control_plane.hpp>
+#include <experimental/mock_device.hpp>
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -437,6 +438,14 @@ void MetalContext::teardown_base_objects() {
 }
 
 MetalContext::MetalContext() {
+    // Check if mock mode was configured via API (before env vars take effect)
+    auto mock_config = experimental::get_registered_mock_config();
+    if (mock_config.has_value()) {
+        std::string yaml_path = experimental::get_mock_cluster_desc_path(*mock_config);
+        rtoptions_.set_mock_cluster_desc_path(yaml_path);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", yaml_path);
+    }
+
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {

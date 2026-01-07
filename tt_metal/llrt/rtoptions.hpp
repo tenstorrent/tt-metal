@@ -641,6 +641,13 @@ public:
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+    void set_mock_cluster_desc_path(const std::string& path) {
+        mock_cluster_desc_path = path;
+        // Set target device to Mock if path is provided and simulator is not enabled
+        if (!path.empty() && simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Mock;
+        }
+    }
 
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
