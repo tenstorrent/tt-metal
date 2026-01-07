@@ -1091,7 +1091,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             jit_analytics_enabled = false;
             if (value) {
                 if (strcmp(value, "1") == 0) {
-                    jit_analytics_enabled = true;  // Default to true if set
+                    jit_analytics_enabled = true;
                 }
             }
             this->set_jit_analytics_enabled(jit_analytics_enabled);
