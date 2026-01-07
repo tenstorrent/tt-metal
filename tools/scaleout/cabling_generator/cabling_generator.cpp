@@ -413,8 +413,7 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id)
-    for (size_t i = 0; i < deployment_hosts.size(); ++i) {
-        const auto& deployment_host = deployment_hosts[i];
+    for (const auto& deployment_host : deployment_hosts) {
         auto* host = fsd.add_hosts();
         host->set_hostname(deployment_host.hostname);
         host->set_hall(deployment_host.hall);
@@ -767,12 +766,9 @@ void CablingGenerator::get_all_connections_of_type(
 
 CableLength calc_cable_length(
     const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
-    if (host1.hall != host2.hall) {
-        return CableLength::UNKNOWN;
-    } else if (host1.aisle != host2.aisle) {
+    if (host1.hall != host2.hall || host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
-
 
     int tray_id_0 = tray_id1;
     int tray_id_1 = tray_id2;

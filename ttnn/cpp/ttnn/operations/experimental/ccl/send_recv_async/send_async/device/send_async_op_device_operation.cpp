@@ -5,7 +5,7 @@
 #include "send_async_op_device_operation_types.hpp"
 #include "send_async_op_device_operation.hpp"
 
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -63,7 +63,7 @@ ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation::tenso
     auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

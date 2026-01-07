@@ -121,6 +121,6 @@ ttnn::operations::embedding::EmbeddingsDeviceOperation::tensor_return_value_t em
         .optional_output_tensor = optional_output_tensor,
     };
 
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

@@ -19,7 +19,7 @@ def create_global_semaphores(mesh_device, cores, initial_value):
 
 
 def run_reduce_scatter_impl(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     rs_input_shape,
     mm_shard_dim,
@@ -49,7 +49,7 @@ def run_reduce_scatter_impl(
         mem_config_weights = mem_config_rs
 
     ##### Fabric setup #####
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
@@ -61,12 +61,12 @@ def run_reduce_scatter_impl(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = t3k_mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    t3k_mesh_device.load_sub_device_manager(sub_device_manager)
-    t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
@@ -76,11 +76,11 @@ def run_reduce_scatter_impl(
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
             memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         for _ in range(num_iters)
     ]
@@ -89,11 +89,11 @@ def run_reduce_scatter_impl(
     persistent_output_buffers = [
         ttnn.from_torch(
             torch.zeros(rs_output_shape),
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
             memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         for _ in range(num_iters)
     ]
@@ -107,9 +107,9 @@ def run_reduce_scatter_impl(
         weights_tensor_padded,
         dtype=matmul_weights_dtype,
         layout=layout,
-        device=t3k_mesh_device,
+        device=mesh_device,
         memory_config=mem_config_weights,
-        mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=mm_shard_dim),
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=mm_shard_dim),
     )
 
     if use_bias:
@@ -119,9 +119,9 @@ def run_reduce_scatter_impl(
             bias_tensor_scaled,
             dtype=matmul_weights_dtype,
             layout=layout,
-            device=t3k_mesh_device,
+            device=mesh_device,
             memory_config=mem_config_weights,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             tile=ttnn.Tile(tile),
         )
     else:
@@ -166,12 +166,12 @@ def run_reduce_scatter_impl(
 
         input_tensor_mesh = ttnn.from_torch(
             mm_input_tensor,
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=layout,
             dtype=rs_input_dtype,
             memory_config=mem_config_input,
             mesh_mapper=ttnn.create_mesh_mapper(
-                t3k_mesh_device,
+                mesh_device,
                 ttnn.MeshMapperConfig(
                     [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
                 ),
@@ -246,20 +246,20 @@ def run_reduce_scatter_impl(
         logger.info(f"Done compiling Op")
 
         # Capture the trace
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(num_iters):
             tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
             tt_reduce_scatter_output_list.append(tt_reduce_scatter_output_tensor)
             tt_matmul_output_list.append(tt_matmul_out_tensor)
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
         # Execute trace
-        ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
 
         # Synchronize the devices
-        ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     else:
         for i in range(num_iters):
             tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = run_op(i)
@@ -267,7 +267,7 @@ def run_reduce_scatter_impl(
             tt_matmul_output_list.append(tt_matmul_out_tensor)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
@@ -277,7 +277,7 @@ def run_reduce_scatter_impl(
         torch_mm_out_tensor = torch_matmul_output_list[i]
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
-        tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         tt_mm_out = torch.sum(torch.stack(torch.chunk(tt_mm_out, num_devices, 3)), dim=0)
         eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
         logger.info(f"{output}, iteration {i}")
@@ -288,7 +288,7 @@ def run_reduce_scatter_impl(
         torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         eq, output = comp_pcc(tt_rs_out, torch_rs_out)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
@@ -296,8 +296,8 @@ def run_reduce_scatter_impl(
         # print(f"RS TORCH TENSOR {torch_rs_out}")
         # print(f"RS TT TENSOR {tt_rs_out}")
 
-    t3k_mesh_device.reset_sub_device_stall_group()
-    t3k_mesh_device.clear_loaded_sub_device_manager()
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
 
 
 @pytest.mark.parametrize(
@@ -383,8 +383,9 @@ def run_reduce_scatter_impl(
     ],
     indirect=["device_params"],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_reduce_scatter_async(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     num_links,
     mm_weights_shape,
@@ -404,7 +405,7 @@ def test_reduce_scatter_async(
     rs_topology,
 ):
     run_reduce_scatter_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         rs_input_shape,
         mm_shard_dim,

@@ -58,10 +58,8 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                 return {};
             } else if (input_w != output_w) {
                 return program::PadRmShardedWidthOnlyProgramFactory{};
-            } else if (input_tot_h != output_tot_h) {
-                return program::PadRmShardedHeightOnlyProgramFactory{};
             } else {
-                // for no padding, we just use the height-only padding program
+                // height-only padding or no padding
                 return program::PadRmShardedHeightOnlyProgramFactory{};
             }
         } else {
@@ -197,7 +195,7 @@ ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t 
     bool use_multicore,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::data_movement::pad::PadDeviceOperation;
-    return ttnn::device_operation::detail::launch_on_device<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             output_logical_shape, output_padded_shape, input_tensor_start, pad_value, output_mem_config, use_multicore},
         OperationType::tensor_args_t{input, preallocated_output});

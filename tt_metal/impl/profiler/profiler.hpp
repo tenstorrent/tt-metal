@@ -19,6 +19,7 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
+#include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -118,35 +119,48 @@ private:
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
 
+    // Number of bytes reserved in each DRAM bank for storing device profiling data
+    uint32_t profile_buffer_bank_size_bytes{};
+
+    // Map which DRAM buffer is currently being written to by the RISC cores. Used for debug dump mode with double
+    // buffering.
+    std::map<CoreCoord, std::map<tracy::RiscType, uint8_t>> active_dram_buffer_per_core_risc_map;
+
+    // Map to store buffer end indices for inactive buffers (before they're reset)
+    // Key: (core, risc_type, buffer_index) -> buffer_end_index
+    std::map<CoreCoord, std::map<tracy::RiscType, std::map<uint8_t, uint32_t>>> inactive_buffer_end_indices;
+
+    DeviceAddr getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const;
+
     // Read all control buffers
-    void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void readControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch);
 
     // Read control buffer for a single core
-    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core);
+    void readControlBufferForCore(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, bool force_slow_dispatch);
 
     // Reset all control buffers
-    void resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void resetControlBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch);
 
     // Read all L1 data buffers
-    void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+    void readL1DataBuffers(distributed::MeshDevice* mesh_device, IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool force_slow_dispatch);
 
     // Read L1 data buffer for a single core
-    void readL1DataBufferForCore(
-        IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
+    void readL1DataBufferForCore(distributed::MeshDevice* mesh_device,
+        IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer, bool force_slow_dispatch);
 
     // Read device profiler buffer
-    void readProfilerBuffer(IDevice* device);
+    void readProfilerBuffer(distributed::MeshDevice* mesh_device, IDevice* device, uint8_t active_dram_buffer_index, bool force_slow_dispatch);
 
     // Read data from profiler buffer using fast dispatch
-    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
+    void issueFastDispatchReadFromProfilerBuffer(distributed::MeshDevice* mesh_device, IDevice* device, uint8_t active_dram_buffer_index = 0);
 
     // Read data from profiler buffer using slow dispatch
-    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device, uint8_t active_dram_buffer_index = 0);
 
     // Read data from L1 data buffer using fast dispatch
     // NOLINTNEXTLINE(readability-make-member-function-const)
-    void issueFastDispatchReadFromL1DataBuffer(
-        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
+    void issueFastDispatchReadFromL1DataBuffer(distributed::MeshDevice* mesh_device,
+        const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read data from L1 data buffer using slow dispatch
     // NOLINTNEXTLINE(readability-make-member-function-const)
@@ -154,11 +168,11 @@ private:
         IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Helper function for reading risc profile results
-    void readRiscProfilerResults(
-        IDevice* device,
+    void readRiscProfilerResults(IDevice* device,
         const CoreCoord& worker_core,
         ProfilerDataBufferSource data_source,
-        const std::optional<ProfilerOptionalMetadata>& metadata);
+        const std::optional<ProfilerOptionalMetadata>& metadata,
+        const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
 
     // Read marker data to be displayed
     void readDeviceMarkerData(
@@ -216,9 +230,6 @@ public:
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
-    // Number of bytes reserved in each DRAM bank for storing device profiling data
-    uint32_t profile_buffer_bank_size_bytes{};
-
     // Device markers grouped by (physical core, risc type)
     std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>> device_markers_per_core_risc_map;
 
@@ -239,7 +250,7 @@ public:
     void setOutputDir(const std::string& new_output_dir);
 
     // Traverse all cores on the device and read the device profile results
-    void readResults(
+    void readResults(distributed::MeshDevice* mesh_device,
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
         ProfilerReadState state = ProfilerReadState::NORMAL,
@@ -252,7 +263,8 @@ public:
         const std::vector<CoreCoord>& virtual_cores,
         ProfilerReadState state = ProfilerReadState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
-        const std::optional<ProfilerOptionalMetadata>& metadata = {});
+        const std::optional<ProfilerOptionalMetadata>& metadata = {},
+        const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
 
     void dumpRoutingInfo() const;
 
@@ -288,10 +300,18 @@ public:
     void setLastFDReadAsNotDone();
 
     bool isLastFDReadDone() const;
+
+    uint32_t getProfileBufferBankSizeBytes() const;
+
+    void setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks);
+
+    // Read control buffer for each core, check if the host buffer for any risc is full. If it's full,
+    // swap the active DRAM buffer to unblock the risc and then read out the buffer
+    void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
-bool useFastDispatch(IDevice* device);
+bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device);
 
-void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
+void writeToCoreControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data, bool force_slow_dispatch);
 
 }  // namespace tt::tt_metal

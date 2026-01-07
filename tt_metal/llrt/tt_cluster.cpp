@@ -22,6 +22,7 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "common/executor.hpp"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -333,7 +334,7 @@ void Cluster::initialize_device_drivers() {
             auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = pci->is_mapping_buffer_to_noc_supported();
+                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
         }
     }
@@ -437,9 +438,21 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     this->driver_->start_device(device_params);
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
-        for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
-            ll_api::configure_static_tlbs(
-                this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+        // Configure TLBs on all MMIO devices in parallel
+        std::vector<std::shared_future<void>> futures;
+        const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
+        futures.reserve(mmio_device_ids.size());
+
+        for (const auto& mmio_device_id : mmio_device_ids) {
+            futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
+                ll_api::configure_static_tlbs(
+                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+            }));
+        }
+
+        // Wait for all TLB configurations to complete
+        for (auto& future : futures) {
+            future.get();
         }
     }
 }
@@ -1124,7 +1137,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
 
             const uint8_t num_cores_to_reserve = std::min(num_routing_planes, static_cast<uint8_t>(cores.size()));
             uint8_t num_reserved_cores = 0;
-            for (auto i = 0; i < cores.size(); i++) {
+            for (const auto eth_core : cores) {
                 if (num_reserved_cores == num_cores_to_reserve) {
                     pairs_done.insert(std::make_pair(chip_id, connected_chip_id));
                     pairs_done.insert(std::make_pair(connected_chip_id, chip_id));
@@ -1141,7 +1154,6 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                     break;
                 }
 
-                const auto eth_core = cores[i];
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
                 if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
