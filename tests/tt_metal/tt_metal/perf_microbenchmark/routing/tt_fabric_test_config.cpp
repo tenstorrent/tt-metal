@@ -1389,6 +1389,31 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
             }
         }
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
+    } else if (device_info_provider_.is_multi_mesh()) {
+        const auto mesh_adjacency_map = device_info_provider_.get_mesh_adjacency_map();
+
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+        for (const auto& pair : all_pairs) {
+            MeshId src_mesh_id = pair.first.mesh_id;
+            MeshId dst_mesh_id = pair.second.mesh_id;
+            bool same_mesh = (src_mesh_id == dst_mesh_id);
+            bool dst_is_adjacent = false;
+            auto it = mesh_adjacency_map.find(src_mesh_id);
+            if (it != mesh_adjacency_map.end()) {
+                dst_is_adjacent = it->second.contains(dst_mesh_id);
+            }
+            if (same_mesh || dst_is_adjacent) {
+                filtered_pairs.push_back(pair);
+            }
+        }
+
+        log_info(
+            LogTest,
+            "Multi-mesh all_to_all: filtered {} pairs to {} pairs with adjacent mesh destinations",
+            all_pairs.size(),
+            filtered_pairs.size());
+
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else {
         add_senders_from_pairs(test, all_pairs, base_pattern);
     }
