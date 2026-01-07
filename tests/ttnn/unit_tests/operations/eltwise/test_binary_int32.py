@@ -1065,3 +1065,28 @@ def test_divide_inf_nan_cases(device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+
+
+def test_binary_scalar_div_int32(device):
+    torch_dtype = torch.int32
+    ttnn_dtype = ttnn.int32
+
+    x_torch = torch.tensor([[1000, -1000, 1000, -1999]], dtype=torch_dtype)
+    y_torch = 500
+    z_torch = torch.divide(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = 500
+    z_tt = ttnn.divide(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt)
+
+    z_tt_floor = ttnn.divide(x_tt, y_tt, round_mode="floor")
+    tt_out_floor = ttnn.to_torch(z_tt_floor)
+    z_torch_floor = torch.divide(x_torch, y_torch, rounding_mode="floor")
+
+    z_tt_trunc = ttnn.divide(x_tt, y_tt, round_mode="trunc")
+    tt_out_trunc = ttnn.to_torch(z_tt_trunc)
+    z_torch_trunc = torch.divide(x_torch, y_torch, rounding_mode="trunc")
+
+    assert torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=True)
+    assert torch.equal(z_torch_floor, tt_out_floor)
+    assert torch.equal(z_torch_trunc, tt_out_trunc)

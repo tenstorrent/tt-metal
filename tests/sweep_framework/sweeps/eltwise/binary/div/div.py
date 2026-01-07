@@ -29,7 +29,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
         + gen_shapes([32, 32], [256, 256], [32, 32], 8),
-        "accurate_mode": [True, False],
+        "fast_and_approximate_mode": [False, True],
         "round_mode": [None, "floor", "trunc"],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
@@ -43,7 +43,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 4)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
         + gen_shapes([32, 32], [256, 256], [32, 32], 4),
-        "accurate_mode": [True, False],
+        "fast_and_approximate_mode": [False, True],
         "round_mode": [None, "floor", "trunc"],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -69,7 +69,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    accurate_mode,
+    fast_and_approximate_mode,
     round_mode,
     input_a_dtype,
     input_b_dtype,
@@ -88,7 +88,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    if accurate_mode == False:
+    if fast_and_approximate_mode == True:
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=0.1, high=100, dtype=torch.float32), input_b_dtype
         )(input_shape)
@@ -119,7 +119,10 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.div(
-        input_tensor_a, input_tensor_b, accurate_mode=accurate_mode, memory_config=output_memory_config
+        input_tensor_a,
+        input_tensor_b,
+        fast_and_approximate_mode=fast_and_approximate_mode,
+        memory_config=output_memory_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
