@@ -31,13 +31,13 @@ Authors: Vishal Shenoy, Mohamed Bahnas
     - [4.5 Add and Norm](#45-add-and-norm)
     - [4.6 Feed-Forward Network (FFN/MLP)](#46-feed-forward-network-ffnmlp)
     - [4.7 Output](#47-output)
-  - [6. Conclusion](#6-conclusion)
-  - [7. References](#7-references)
+  - [5. Conclusion](#5-conclusion)
+  - [6. References](#6-references)
 
 ## 1. Overview
 
 The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transformer model that is utilized for vision processing tasks. The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently on Blackhole devices.
-For more details on the architecture, please refer to the [References](#7-references).
+For more details on the architecture, please refer to the [References](#6-references).
 
 ## 2. ViT TT-NN Optimization Techniques (Blackhole)
 
@@ -309,7 +309,7 @@ In the Blackhole implementation, the encoder (Section 3.3) converts embeddings t
 ### 4.2 Sharding parametrization
 This subsection defines the main sharding parameters used throughout the Blackhole implementation. These values are computed in `update_model_config()` and are used to size the sharded program configs (LayerNorm, matmuls, softmax).
 
-Below is the parameterization (same style as the original report), with comments showing the typical ViT-Base values:
+Below are the parameters used in the sharding scheme, with comments showing typical ViT-Base values:
 
 ```python
 wh_core_grid_y = 10
@@ -808,13 +808,13 @@ The output of the encoder layer after the FFN residual add has shape:
 
 This tensor remains **block-sharded** in L1 and is passed directly as input to the next encoder layer in the 12-layer loop.
 
-## 6. Conclusion
+## 5. Conclusion
 
 This report provided an in-depth walkthrough of the Vision Transformer (ViT) implementation in the TT-NN library on Blackhole. It covered the end-to-end flow from patch embeddings through the encoder layer, including the attention and feed-forward network components.
 
 The implementation leverages TT-NN performance techniques such as sharding, reuse/multicast matmul program configs, fused QKV projection, fused GELU in FFN, and optimized attention (explicit scaling and in-place softmax) to efficiently map ViT workloads onto the device.
 
-## 7. References
+## 6. References
 
 - ViT paper: https://arxiv.org/pdf/2010.11929
 - HuggingFace ViT docs: https://huggingface.co/docs/transformers/en/model_doc/vit
