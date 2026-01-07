@@ -656,7 +656,7 @@ class GptOssForCausalLM(Generator):
 
     # Class-level capabilities
     _model_capabilities = {
-        "supports_prefix_caching": True,
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
     }
 
     def __init__(self, *args, **kwargs):
