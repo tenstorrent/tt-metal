@@ -2304,12 +2304,15 @@ FORCE_INLINE void initialize_fabric_telemetry() {
     volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
         reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
 
+    // Get pointer to routing table, which contains some information we need to re-export
+    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+
     // Zero the entire telemetry structure to clear any garbage values
     memset(const_cast<FabricTelemetry*>(fabric_telemetry), 0, sizeof(FabricTelemetry));
 
     // Populate static_info fields with compile-time topology information
-    fabric_telemetry->static_info.mesh_id = fabric_telemetry_mesh_id;
-    fabric_telemetry->static_info.device_id = fabric_telemetry_device_id;
+    fabric_telemetry->static_info.mesh_id = routing_table_l1->my_mesh_id;
+    fabric_telemetry->static_info.device_id = routing_table_l1->my_device_id;
     fabric_telemetry->static_info.direction = static_cast<uint8_t>(my_direction);
     fabric_telemetry->static_info.fabric_config = 0;  // Reserved for future use
 
