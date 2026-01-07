@@ -4,8 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
@@ -48,26 +46,13 @@ void MAIN {
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
 
-            cb_wait_front(cb_max, 1);
-            cb_wait_front(cb_tmp, 1);
-
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_max);
-            copy_tile(cb_max, 0, dst0);
-
-            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_init_delta_with_dt<PoolType::MAX, REDUCE_DIM>(cb_max, cb_tmp, cb_bcast_scaler);
-            reduce_tile<PoolType::MAX, REDUCE_DIM>(cb_tmp, cb_bcast_scaler, 0, bcast_scaler0, dst0);
-            reduce_uninit();
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_max);
-            tile_regs_release();
-
-            cb_pop_front(cb_max, 1);
-            cb_pop_front(cb_tmp, 1);
-            cb_push_back(cb_max, 1);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+                cb_tmp,
+                cb_bcast_scaler,
+                cb_max,
+                compute_kernel_lib::TileShape::single(),
+                {},                                              // layout (use default)
+                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
 
         // compute x - max(x)
@@ -129,6 +114,7 @@ void MAIN {
                 cb_recipsumexps,
                 compute_kernel_lib::TileShape::row(Wt),
                 {},
+                {},  // accum parameter (use default NoAccumulation)
                 [](uint32_t dst_idx) {
                     log_tile_init();
                     log_tile(dst_idx);
@@ -142,6 +128,7 @@ void MAIN {
                 cb_recipsumexps,
                 compute_kernel_lib::TileShape::row(Wt),
                 {},
+                {},  // accum parameter (use default NoAccumulation)
                 [](uint32_t dst_idx) {
                     recip_tile_init();
                     recip_tile(dst_idx);
