@@ -543,12 +543,9 @@ class DeepseekGenerator:
 
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
-            # Reset teacher-forcing state per batch, if supported
-            if teacher_forcing is not None and hasattr(teacher_forcing, "reset"):
-                try:
-                    teacher_forcing.reset()
-                except Exception:
-                    pass
+            # Reset teacher-forcing state per batch.
+            if teacher_forcing is not None:
+                teacher_forcing.reset()
 
             # Prefill
             profiler.start("inference_prefill")
@@ -594,7 +591,7 @@ class DeepseekGenerator:
                 # First generated token comes from prefill's last-position logits
                 next_tokens = self._sample_greedy(last_logits)
                 if teacher_forcing is not None:
-                    # Only enforce for the first user to keep scope minimal
+                    # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
                     next_tokens[0] = int(forced0)
 
@@ -629,6 +626,7 @@ class DeepseekGenerator:
                     self.ccl.reset_sem_counters()
                     pred_tokens = self._sample_greedy(logits)
                     if teacher_forcing is not None:
+                        # Record user-0 prediction for accuracy, then force teacher token.
                         forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
                         pred_tokens[0] = int(forced)
                     next_tokens = pred_tokens

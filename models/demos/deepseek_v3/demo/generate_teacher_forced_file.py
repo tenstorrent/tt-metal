@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Reproducibility helper for DeepSeek V3 teacher-forcing reference files.
+
+This script regenerates the checked-in `.refpt` artifact so the reference can
+be refreshed or reproduced when needed.
+"""
+
 import os
 from pathlib import Path
 
