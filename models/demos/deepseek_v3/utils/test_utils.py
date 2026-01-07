@@ -12,7 +12,6 @@ import torch
 from loguru import logger
 from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -286,23 +285,13 @@ def run_reference_with_attention(
     zeroed_cache: bool,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
     """
-    Run reference model with attention, implementing several strategies to avoid OOM for large sequences:
+    Run reference model with attention, using memory optimizations for large sequences.
 
-    OOM Avoidance Strategies:
-    1. **Chunked Processing**: For sequences > 8192 tokens, split into chunks and process iteratively.
-       This limits peak memory by processing small portions at a time rather than the full sequence.
-
-    2. **CPU-side Mask Creation**: For sequences > 16384, create attention masks on CPU first,
-       then transfer to GPU only when needed. This defers GPU memory allocation.
-
-    3. **torch.no_grad()**: Wraps all model calls to prevent building computation graphs and storing
-       gradients, which can double or triple memory usage during inference.
-
-    4. **Explicit Memory Cleanup**: Uses `del` and `torch.cuda.empty_cache()` to aggressively free
-       intermediate tensors between chunks.
-
-    5. **output_attentions=False**: Prevents storing attention weights, which scale as O(seq_len²)
-       and can consume significant memory for long sequences.
+    For long sequences, the code splits processing into chunks to limit peak memory usage.
+    Attention masks are created on CPU first for very long sequences, then moved to GPU when needed.
+    All model calls are wrapped with torch.no_grad() to avoid building computation graphs and storing gradients.
+    Intermediate tensors are explicitly freed between chunks using del and torch.cuda.empty_cache().
+    Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
     """
     (batch_size,) = position_ids_or_seq_lens.shape
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
@@ -313,8 +302,9 @@ def run_reference_with_attention(
         max_seq_len = position_ids_or_seq_lens.max().item()
         position_ids = torch.arange(max_seq_len).unsqueeze(0).repeat(batch_size, 1)
 
-        # OOM Strategy #2: For very long sequences, create mask on CPU first to reduce GPU memory pressure
+        # For very long sequences, create mask on CPU first to reduce GPU memory pressure
         if max_position_id_or_seq_len > 16384:
+            device = activation.device
             mask = torch.triu(
                 torch.full(
                     (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
@@ -368,17 +358,16 @@ def run_reference_with_attention(
     kv_arg_name = "past_key_value" if layer_idx is not None else "past_key_values"
     deepcopied_cache = deepcopy(input_cache)
 
-    # OOM Strategy #4: Clear CUDA cache before model call
+    # Clear CUDA cache before model call
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # OOM Strategy #1: For sequences > 8192 tokens, use chunked processing
-    # CHUNK_SIZE: Optimal chunk size to avoid OOM while maintaining performance for long sequences
+    # For sequences longer than 8192 tokens, use chunked processing
     CHUNK_SIZE = 8192
     use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
 
     if use_chunked_processing:
-        device = activation.device if hasattr(activation, "device") else "cpu"
+        device = activation.device
         num_chunks = (max_position_id_or_seq_len + CHUNK_SIZE - 1) // CHUNK_SIZE
 
         output_chunks = []
@@ -396,25 +385,13 @@ def run_reference_with_attention(
                 position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
 
                 # Determine current cache length to properly construct mask
-                if hasattr(current_cache, "get_seq_length"):
-                    current_cache_length = current_cache.get_seq_length()
-                elif hasattr(current_cache, "get_usable_length"):
-                    current_cache_length = (
-                        current_cache.get_usable_length(chunk_size_actual, layer_idx) if layer_idx is not None else 0
-                    )
-                elif layer_idx is not None and hasattr(current_cache, "key_cache"):
+                if layer_idx is not None:
                     cache_tensor = current_cache.key_cache[layer_idx]
-                    current_cache_length = cache_tensor.shape[2] if cache_tensor is not None else 0
+                    current_cache_length = cache_tensor.shape[2]
                 else:
-                    current_cache_length = 0
-                    if hasattr(current_cache, "to_legacy_cache"):
-                        legacy_cache = current_cache.to_legacy_cache()
-                        if legacy_cache and len(legacy_cache) > 0:
-                            first_layer_cache = (
-                                legacy_cache[0][0] if isinstance(legacy_cache[0], tuple) else legacy_cache[0]
-                            )
-                            if first_layer_cache is not None and first_layer_cache.numel() > 0:
-                                current_cache_length = first_layer_cache.shape[2]
+                    legacy_cache = current_cache.to_legacy_cache()
+                    first_layer_cache = legacy_cache[0][0]
+                    current_cache_length = first_layer_cache.shape[2] if first_layer_cache.numel() > 0 else 0
 
                 kv_seq_len = current_cache_length + chunk_size_actual
 
@@ -434,7 +411,7 @@ def run_reference_with_attention(
 
                 chunk_cache = deepcopy(current_cache)
 
-                # OOM Strategy #5: Set output_attentions=False to avoid storing O(seq_len²) attention weights
+                # Set output_attentions=False to avoid storing attention weights that scale quadratically with sequence length
                 chunk_output = reference_model(
                     activation_chunk,
                     attention_mask=mask_chunk,
@@ -445,18 +422,12 @@ def run_reference_with_attention(
                 )
 
                 # Extract output and update cache
-                if isinstance(chunk_output, BaseModelOutputWithPast):
-                    chunk_out = chunk_output.last_hidden_state
-                    current_cache = chunk_output.past_key_values
-                elif isinstance(chunk_output, CausalLMOutputWithPast):
-                    chunk_out = chunk_output.logits
-                    current_cache = chunk_output.past_key_values
-                else:
-                    chunk_out, _, current_cache = chunk_output
+                chunk_out = chunk_output.last_hidden_state
+                current_cache = chunk_output.past_key_values
 
                 output_chunks.append(chunk_out)
 
-                # OOM Strategy #4: Aggressively free intermediate tensors
+                # Free intermediate tensors to reduce memory usage
                 del activation_chunk, position_ids_chunk, mask_chunk, chunk_cache, chunk_output
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -464,36 +435,28 @@ def run_reference_with_attention(
             # Concatenate all chunk outputs
             model_output_tensor = torch.cat(output_chunks, dim=1)
 
-            # OOM Strategy #4: Clean up chunk list
+            # Clean up chunk list
             del output_chunks
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
             # Create a mock output object for compatibility
-            # This shim allows chunked processing to return a compatible output structure
-            # that matches the expected transformers model output format
             class MockOutput:
-                """Compatibility shim for chunked processing output.
-
-                Provides the same interface as transformers model outputs (BaseModelOutputWithPast,
-                CausalLMOutputWithPast) to allow seamless integration with existing code paths.
-                """
-
-                def __init__(self, hidden_state: torch.Tensor, past_key_values: Any) -> None:
+                def __init__(self, hidden_state, past_key_values):
                     self.last_hidden_state = hidden_state
                     self.past_key_values = past_key_values
 
             model_output = MockOutput(model_output_tensor, current_cache)
     else:
         # Standard processing for shorter sequences or decode mode
-        # Move mask to device if it was created on CPU (OOM Strategy #2)
-        if mask is not None and mask.device.type == "cpu" and hasattr(activation, "device"):
+        # Move mask to device if it was created on CPU
+        if mask is not None and mask.device.type == "cpu":
             mask = mask.to(activation.device)
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-        # OOM Strategy #3: Use torch.no_grad() to prevent gradient accumulation
+        # Use torch.no_grad() to prevent gradient accumulation
         with torch.no_grad():
-            # OOM Strategy #5: Set output_attentions=False to save memory
+            # Set output_attentions=False to save memory
             model_output = reference_model(
                 activation,
                 attention_mask=mask,
@@ -503,16 +466,9 @@ def run_reference_with_attention(
                 **{kv_arg_name: deepcopied_cache},
             )
 
-    if isinstance(model_output, BaseModelOutputWithPast):
-        return model_output.last_hidden_state, input_cache, model_output.past_key_values
-    elif isinstance(model_output, CausalLMOutputWithPast):
-        return model_output.logits, input_cache, model_output.past_key_values
-
-    if hasattr(model_output, "last_hidden_state"):
-        out = model_output.last_hidden_state
-        output_cache = model_output.past_key_values
-    else:
-        out, _, output_cache = model_output
+    # Extract output
+    out = model_output.last_hidden_state
+    output_cache = model_output.past_key_values
     return out, input_cache, output_cache
 
 
@@ -626,23 +582,10 @@ def assert_hidden_dim_pcc(
     # For very large sequences, `comp_pcc` can OOM due to its internal clones + numpy conversion.
     # If the full PCC is estimated to exceed a memory threshold, process the sequence dimension in chunks.
     hidden_dim = tt_output_torch.shape[-1]
-    # Estimate memory used inside `comp_pcc`:
-    #   - BYTES_PER_FLOAT32: size of each float32 element (4 bytes)
-    #   - CLONE_OVERHEAD_FACTOR: `comp_pcc` internally clones its inputs (~2x memory)
-    #   - NUMPY_CONVERSION_FACTOR: additional copies during torch<->NumPy conversion (~2x)
-    BYTES_PER_FLOAT32 = 4
-    CLONE_OVERHEAD_FACTOR = 2
-    NUMPY_CONVERSION_FACTOR = 2
-    estimated_memory_bytes = (
-        seq_len_or_batch_size * hidden_dim * BYTES_PER_FLOAT32 * CLONE_OVERHEAD_FACTOR * NUMPY_CONVERSION_FACTOR
-    )
-    estimated_memory_gb = estimated_memory_bytes / (1024**3)
+    estimated_memory_gb = (seq_len_or_batch_size * hidden_dim * 4 * 2 * 2) / (1024**3)
 
-    # MAX_MEMORY_GB: Switch to chunking if the estimated full-tensor PCC exceeds this threshold.
-    # This value may need adjustment for different hardware configurations.
-    MAX_MEMORY_GB = 50
-    # CHUNK_SIZE: Compare up to 8K sequence positions per chunk to balance memory usage and performance.
-    CHUNK_SIZE = 8192
+    MAX_MEMORY_GB = 50  # Switch to chunking if the estimated full-tensor PCC exceeds this
+    CHUNK_SIZE = 8192  # Compare up to 8K sequence positions per chunk
 
     if estimated_memory_gb > MAX_MEMORY_GB and seq_len_or_batch_size > CHUNK_SIZE:
         num_chunks = (seq_len_or_batch_size + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -705,14 +648,28 @@ def get_rope_tensors(
     position_ids: torch.Tensor | None,
     mesh_device: ttnn.MeshDevice,
 ) -> dict[str, ttnn.Tensor]:
+    print("[DEBUG] get_rope_tensors: ENTER")
+    print(
+        f"[DEBUG] get_rope_tensors: batch_size_per_row={batch_size_per_row}, seq_len={seq_len}, position_ids={position_ids is not None}"
+    )
+    print("[DEBUG] get_rope_tensors: About to create RotarySetup")
     rope_setup = RotarySetup(
         device=mesh_device,
         batch_size_per_row=batch_size_per_row,
         hf_config=hf_config,
     )
+    print("[DEBUG] get_rope_tensors: RotarySetup created")
     if position_ids is None:
-        return rope_setup.get_rot_mats_table(seq_len)
-    return rope_setup.get_rot_mats(position_ids)
+        print(f"[DEBUG] get_rope_tensors: position_ids is None, calling get_rot_mats_table with seq_len={seq_len}")
+        result = rope_setup.get_rot_mats_table(seq_len)
+        print("[DEBUG] get_rope_tensors: get_rot_mats_table completed")
+        print("[DEBUG] get_rope_tensors: EXIT")
+        return result
+    print("[DEBUG] get_rope_tensors: position_ids is not None, calling get_rot_mats")
+    result = rope_setup.get_rot_mats(position_ids)
+    print("[DEBUG] get_rope_tensors: get_rot_mats completed")
+    print("[DEBUG] get_rope_tensors: EXIT")
+    return result
 
 
 def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
