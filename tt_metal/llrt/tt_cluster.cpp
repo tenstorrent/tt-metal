@@ -22,6 +22,7 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "common/executor.hpp"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -165,8 +166,12 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::N150) {
             cluster_type = tt::tt_metal::ClusterType::N150;
         } else if (board_type == BoardType::P100) {
-            TT_FATAL(num_chips == 1, "Unknown cluster type for P100 board with {}", num_chips);
-            cluster_type = tt::tt_metal::ClusterType::P100;
+            if (num_chips == 1) {
+                cluster_type = tt::tt_metal::ClusterType::P100;
+            } else {
+                log_warning(tt::LogDevice, "Using CUSTOM cluster type for P100 board with {} chips", num_chips);
+                cluster_type = tt::tt_metal::ClusterType::CUSTOM;
+            }
         } else if (board_type == BoardType::P150) {
             if (num_chips == 1) {
                 cluster_type = tt::tt_metal::ClusterType::P150;
@@ -177,7 +182,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             } else if (num_chips == 8) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X8;
             } else {
-                TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
+                log_warning(tt::LogDevice, "Using CUSTOM cluster type for P150 board with {} chips", num_chips);
+                cluster_type = tt::tt_metal::ClusterType::CUSTOM;
             }
         } else if (board_type == BoardType::P300) {
             // PCIe is enabled to both chips on the P300 board
@@ -186,7 +192,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             } else if (num_chips == 4) {
                 cluster_type = tt::tt_metal::ClusterType::P300_X2;
             } else {
-                TT_THROW("Unknown cluster type for P300 board with {} chips", num_chips);
+                log_warning(tt::LogDevice, "Using CUSTOM cluster type for P300 board with {} chips", num_chips);
+                cluster_type = tt::tt_metal::ClusterType::CUSTOM;
             }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
@@ -270,6 +277,11 @@ bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routi
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_ = this->driver_->get_cluster_description();
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::CUSTOM) {
+        TT_FATAL(
+            this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
+            "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
+    }
     if (this->target_type_ == TargetDevice::Simulator) {
         return;
     }
@@ -333,7 +345,7 @@ void Cluster::initialize_device_drivers() {
             auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = pci->is_mapping_buffer_to_noc_supported();
+                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
         }
     }
@@ -437,9 +449,21 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     this->driver_->start_device(device_params);
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
-        for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
-            ll_api::configure_static_tlbs(
-                this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+        // Configure TLBs on all MMIO devices in parallel
+        std::vector<std::shared_future<void>> futures;
+        const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
+        futures.reserve(mmio_device_ids.size());
+
+        for (const auto& mmio_device_id : mmio_device_ids) {
+            futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
+                ll_api::configure_static_tlbs(
+                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+            }));
+        }
+
+        // Wait for all TLB configurations to complete
+        for (auto& future : futures) {
+            future.get();
         }
     }
 }
