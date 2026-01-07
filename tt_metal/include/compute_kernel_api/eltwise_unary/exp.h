@@ -53,4 +53,26 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
         exponential, approx, DST_ACCUM_MODE, scale_en, skip_positive_check, iterations, idst, vector_mode, scale));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ *
+ * This init function is used for exponentialpiecewise approximation mode.
+ *
+ */
+template <bool approx = false>
+ALWI void exp_tile_piecewise_init() {
+    MATH(SFPU_INIT_KERNEL_CALL(exponential, sfpu::exp_piecewise_init, approx));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ *
+ * This init function is used for SDPA first column computation.
+ *
+ */
+template <bool approx = false>
+ALWI void exp_tile_sdpa_first_column_init() {
+    MATH(SFPU_INIT_KERNEL_CALL(exponential, sfpu::exp_sdpa_first_column_init, approx));
+}
+
 }  // namespace ckernel

@@ -311,5 +311,15 @@ void exp_init() {
     _init_exponential_<APPROXIMATION_MODE, scale>();
 }
 
+template <bool APPROXIMATION_MODE>
+void exp_piecewise_init() {
+    _init_exponential_piecewise_<APPROXIMATION_MODE>();
+}
+
+template <bool APPROXIMATION_MODE>
+void exp_sdpa_first_column_init() {
+    _init_exponential_sdpa_first_column_<APPROXIMATION_MODE>();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
