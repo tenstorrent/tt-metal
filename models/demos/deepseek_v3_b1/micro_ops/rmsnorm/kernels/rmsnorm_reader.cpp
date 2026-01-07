@@ -15,18 +15,9 @@ void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
     constexpr bool tiny_tile = get_compile_time_arg_val(4);
 
-    uint32_t epsilon = get_arg_val<uint32_t>(arg_idx++);
     uint32_t scalar = get_arg_val<uint32_t>(arg_idx++);
 
-    // Generate both scalar tiles in scalars_cb
-    // Tile 0: epsilon
-    // Tile 1: reduction scalar (1/sqrt(num_elements))
-    cb_reserve_back(scalars_cb, 1);
-    volatile tt_l1_ptr uint16_t* epsilon_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(scalars_cb));
-    epsilon_ptr[0] = epsilon;
-    cb_push_back(scalars_cb, 1);
-
+    // Generate reduction scalar (1/sqrt(num_elements))
     generate_reduce_scaler<tiny_tile>(scalars_cb, scalar);
 
     // Signal that input and gamma buffers are ready (backed by L1 shards)
