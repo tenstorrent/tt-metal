@@ -48,6 +48,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 

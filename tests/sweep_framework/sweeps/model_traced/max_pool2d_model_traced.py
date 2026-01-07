@@ -50,6 +50,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     """
     Run max_pool2d test with parameters extracted from traced JSON.

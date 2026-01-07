@@ -369,7 +369,9 @@ class FileResultDestination(ResultDestination):
                 error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
-                model_name=header.get("traced_source", "n/a"),
+                model_name=header.get("traced_source", "n/a")
+                if isinstance(header.get("traced_source"), str)
+                else ", ".join(header.get("traced_source", ["n/a"])),
                 op_kind=_op_kind,
                 op_name=_op_name,
                 framework_op_name="sweep",
