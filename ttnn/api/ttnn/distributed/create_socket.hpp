@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ttnn/distributed/isocket.hpp"
-#include "tt-metalium/mesh_socket.hpp"
+#include "tt-metalium/experimental/sockets/mesh_socket.hpp"
 
 namespace ttnn::distributed {
 

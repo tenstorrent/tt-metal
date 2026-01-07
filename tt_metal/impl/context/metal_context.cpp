@@ -158,8 +158,8 @@ void MetalContext::initialize(
             "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
     }
 
-    // Workaround for galaxy and BH, need to always re-init
-    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
+    // Workaround for galaxy, need to always re-init
+    if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster()) {
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
@@ -443,7 +443,7 @@ MetalContext::MetalContext() {
             platform_arch,
             is_base_routing_fw_enabled,
             rtoptions_.get_enable_2_erisc_mode(),
-            get_profiler_dram_bank_size_per_risc_bytes(rtoptions_));
+            get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
         rtoptions_.ParseAllFeatureEnv(*hal_);
         cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
         distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
