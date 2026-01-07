@@ -103,6 +103,7 @@ run_t3000_ttnn_tests() {
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
   ./build/test/ttnn/unit_tests_ttnn_accessor
   ./build/test/ttnn/test_ccl_multi_cq_multi_device
+  ./build/test/ttnn/unit_tests_ttnn_udm
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
   pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
