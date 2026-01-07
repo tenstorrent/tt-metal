@@ -10,6 +10,7 @@ from loguru import logger
 from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -38,7 +39,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     ]
     + [
         (EmbeddingClass, "prefill", seq_len)
-        for seq_len in (128, 512, 2048)
+        for seq_len in PREFILL_SEQ_LENS
         for EmbeddingClass in (Embedding1D, Embedding2D)
     ],
 )
@@ -60,6 +61,11 @@ def test_embedding_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and batch_size_or_seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={batch_size_or_seq_len} since this would cause us to exceed our available CI workload time"
+        )
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
 
