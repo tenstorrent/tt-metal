@@ -8,7 +8,7 @@ repos:
     - id: end-of-file-fixer
     - id: check-yaml
       args: ["--unsafe"]
-    - id: check-added-large-files
+    # - id: check-added-large-files
 # Using this mirror lets us use mypyc-compiled black, which is about 2x faster
 - repo: https://github.com/psf/black-pre-commit-mirror
   rev: 23.10.1

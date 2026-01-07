@@ -1,29 +1,59 @@
 Tests:
+  - name: "RandomPairing"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+    parametrization_params:
+      size: [1024, 2048, 4096]
+      num_packets: [5000]
+      num_links: [2]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 2
+
+  - name: "UnicastAlltoAll"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+    parametrization_params:
+      size: [1024, 2048, 4096]
+      num_packets: [5000]
+      num_links: [2]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+
+    patterns:
+      - type: all_to_all
+        iterations: 2
+
   - name: "SimpleUnicastWriteLinear"
     fabric_setup:
-      topology: Mesh
-      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+      topology: Torus
+      torus_config: XY
 
     senders:
-      # Cross Galaxy row
-      - device: [0, 3]
+      # Cross Galaxy Column (Galaxy 0 to Galaxy 2)
+      - device: [0, 0]
         patterns:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 4]
-      # Within Galaxy 0 col
-      - device: [0, 1]
+              device: [0, 120]
+      # Cross Galaxy Row (Galaxy 0 to Galaxy 1)
+      - device: [0, 0]
         patterns:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 17]
-      # Within Galaxy 1 col
+              device: [0, 7]
+      # Cross Galaxy Column (Galaxy 1 to Galaxy 3)
       - device: [0, 4]
         patterns:
           - ftype: unicast
@@ -31,7 +61,7 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 20]
+              device: [0, 124]
       # Traverse corner to corner
       - device: [0, 0]
         patterns:
@@ -40,4 +70,4 @@ Tests:
             size: 1024
             num_packets: 100
             destination:
-              device: [0, 63]
+              device: [0, 127]

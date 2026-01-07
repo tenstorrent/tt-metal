@@ -37,6 +37,11 @@ const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_
 };
 
 int main(int argc, char** argv) {
+    tt::tt_fabric::SetFabricConfig(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        std::nullopt,
+        tt::tt_fabric::FabricTensixConfig::DISABLED);
     std::vector<std::string> input_args(argv, argv + argc);
 
     auto fixture = std::make_shared<TestFixture>();
