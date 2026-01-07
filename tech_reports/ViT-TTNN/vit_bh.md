@@ -151,8 +151,7 @@ The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while
 
 ## 4. ViT TT-NN Code Structure
 
-This section outlines the code organization of the TT-NN Blackhole ViT implementation. The reference implementation is:
-- `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
+This section outlines the code organization of the TT-NN Blackhole ViT implementation. 
 
 ### 4.1 Top-level modules
 ViT model has 3 main modules: Embeddings, Encoder (12 Layers), and Classification head.
