@@ -656,6 +656,18 @@ if(TT_INSTALL)
     )
 endif()
 
+# Install ttnncpp to source tree for CI tar artifact
+# The tar artifact includes ttnn/ttnn/*.so, so ttnncpp must be there too
+# for executables (like ttml_tests) that link against it
+install(
+    TARGETS
+        ttnncpp
+        DESTINATION
+        ${PROJECT_SOURCE_DIR}/ttnn/ttnn
+        COMPONENT
+        tt_pybinds
+)
+
 if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
     add_library(TTNN::PYTHON ALIAS ttnn)

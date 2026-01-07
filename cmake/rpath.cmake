@@ -68,9 +68,14 @@ function(tt_set_runtime_rpath TARGET)
     list(JOIN INSTALL_RPATH_ENTRIES ";" INSTALL_RPATH_STRING)
 
     # Set properties on target
+    # BUILD_WITH_INSTALL_RPATH=FALSE ensures BUILD_RPATH is used during build
+    # (not INSTALL_RPATH which uses $ORIGIN-relative paths that won't work
+    # until the libraries are in their final locations)
     set_target_properties(
         ${TARGET}
         PROPERTIES
+            BUILD_WITH_INSTALL_RPATH
+                FALSE
             BUILD_RPATH
                 "${BUILD_RPATH_STRING}"
             INSTALL_RPATH
