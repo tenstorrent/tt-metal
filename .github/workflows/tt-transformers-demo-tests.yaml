@@ -117,7 +117,7 @@ jobs:
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
     with:
       device-type: 'p300'
-      runner-label: 'P300'
+      runner-label: 'P300-viommu'
       arch: 'blackhole'
       mesh-device-env: 'P300'
       model: ${{ inputs.model || 'llama3.1-8b' }}

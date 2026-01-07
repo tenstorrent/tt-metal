@@ -136,9 +136,12 @@ jobs:
       matrix:
         test: ${{ fromJson(needs.generate-test-matrix.outputs.matrix) }}
     name: "${{ inputs.device-type }} - ${{ inputs.model }} - ${{ matrix.test.name }}"
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - ${{ inputs.extra-tag }}
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'N150' || inputs.runner-label == 'N300')
+        && fromJSON(format('["cloud-virtual-machine", "{0}", "{1}"]', inputs.runner-label, inputs.extra-tag))
+        || fromJSON(format('["{0}", "{1}"]', inputs.runner-label, inputs.extra-tag))
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:
