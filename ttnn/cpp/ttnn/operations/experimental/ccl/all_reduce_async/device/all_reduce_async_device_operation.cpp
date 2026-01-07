@@ -98,31 +98,26 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
 
 tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
-    auto output_dtype = args.dtype;
+    const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
+    const ttnn::Tensor& buffer_tensor = tensor_args.buffer_tensor;
 
-    bool has_sub_device_id = args.sub_device_id.has_value();
-    auto worker_cores = has_sub_device_id
-                            ? input_tensor.device()->worker_cores(
-                                  tt::tt_metal::HalProgrammableCoreType::TENSIX, args.sub_device_id.value())
-                            : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    auto subdevice_id = args.sub_device_id;
+    auto* mesh_device = input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
     return tt::tt_metal::operation::hash_operation<AllReduceAsyncDeviceOperation>(
         args.num_links,
         args.ring_size,
+        args.dtype,
         args.output_mem_config,
         args.topology,
+        args.use_noc1_only,
+        args.use_optimal_ccl_for_llama,
         args.cluster_axis,
-        has_sub_device_id,
-        worker_cores,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config,
-        output_dtype);
+        subdevice_core_range_set,
+        input_tensor,
+        buffer_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::all_reduce_async
