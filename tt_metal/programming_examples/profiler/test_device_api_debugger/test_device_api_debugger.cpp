@@ -41,12 +41,7 @@ void RunFillUpAllBuffers(const std::shared_ptr<distributed::MeshDevice>& mesh_de
             .defines = {{"START_DELAY", "1000"}}});
 
     workload.add_program(device_range, std::move(program));
-    if (fast_dispatch) {
-        // Enqueue the same mesh workload multiple times to generate profiler events
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    } else {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    }
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 }
 
 int main() {
