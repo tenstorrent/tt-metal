@@ -41,8 +41,8 @@ void MAIN {
             negative_tile(1);
 
             // Apply exp with fast+approx mode to DST[1]: exp(-x)
-            exp_tile_init<true, true>();  // Fast+approx exp
-            exp_tile<true, true>(1);
+            exp_tile_init<true>();  // Fast+approx exp
+            exp_tile<true>(1);
 
             // Apply logsigmoid SFPU: logsigmoid(x) = -softplus(-x)
             logsigmoid_tile_init();

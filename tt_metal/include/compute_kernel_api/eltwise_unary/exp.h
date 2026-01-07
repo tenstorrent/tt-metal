@@ -15,13 +15,13 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is used when aprox and fast_and_approx are true and exp_tile is called with scale_en set to
+ * Template scale parameter is used when aprox is true and exp_tile is called with scale_en set to
  * true.
  *
  */
-template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000>
+template <bool approx = false, uint32_t scale = 0x3F800000>
 ALWI void exp_tile_init() {
-    MATH(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, approx, fast_and_approx, scale));
+    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(exponential, sfpu::exp_init, approx, scale));
 }
 
 // clang-format off
@@ -36,7 +36,6 @@ ALWI void exp_tile_init() {
  * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
- * | fast_and_approx         | If approx is true, enable fast approximation.                  | bool     | true, false      | true   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
  * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
@@ -48,15 +47,10 @@ ALWI void exp_tile_init() {
  * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
-template <
-    bool approx = false,
-    bool fast_and_approx = true,
-    bool scale_en = false,
-    bool skip_positive_check = false,
-    int iterations = 8>
+template <bool approx = false, bool scale_en = false, bool skip_positive_check = false, int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH(SFPU_TEMPLATE_PARAMS_KERNEL(
-        exponential, approx, fast_and_approx, DST_ACCUM_MODE, scale_en, skip_positive_check, iterations, idst, vector_mode, scale));
+        exponential, approx, DST_ACCUM_MODE, scale_en, skip_positive_check, iterations, idst, vector_mode, scale));
 }
 
 }  // namespace ckernel
