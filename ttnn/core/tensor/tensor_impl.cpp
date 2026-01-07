@@ -452,11 +452,11 @@ std::string to_string_impl(const Tensor& tensor) {
     auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
-        } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout_impl<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
-        } else {
-            return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
         }
+        if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+            return to_layout_impl<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+        }
+        return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
     };
 
     auto get_device_buffers = [&](const HostStorage& storage) {
@@ -642,14 +642,13 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
                     return {
                         replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
                         TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
-                } else {
-                    TT_FATAL(
-                        host_storage_shape == mesh_device_shape,
-                        "Distributed host buffer has different shape {} than the mesh device {}",
-                        host_storage_shape,
-                        mesh_device_shape);
-                    return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
                 }
+                TT_FATAL(
+                    host_storage_shape == mesh_device_shape,
+                    "Distributed host buffer has different shape {} than the mesh device {}",
+                    host_storage_shape,
+                    mesh_device_shape);
+                return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
             },
             [](const auto& s) -> std::pair<DeviceStorage, TensorTopology> {
                 TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
@@ -926,13 +925,12 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
     if (tensor_spec.layout() == Layout::TILE) {
         return tensor_impl::convert_layout_row_major_to_tile(
             physical_shape, tensor_spec.tile(), row_major_physical_data_span);
-    } else if (!row_major_physical_data.empty()) {
+    }
+    if (!row_major_physical_data.empty()) {
         // If conversion to physical data was performed, return the row major physical data to avoid extra copy.
         return row_major_physical_data;
-    } else {
-        // Otherwise, copy the `row_major_physical_data_span`.
-        return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());
-    }
+    }  // Otherwise, copy the `row_major_physical_data_span`.
+    return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
@@ -994,11 +992,11 @@ std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const Te
     // Check if conversion to logical data was performed, to avoid extra copy upon return.
     if (!logical_data.empty()) {
         return logical_data;
-    } else if (!row_major_physical_data.empty()) {
-        return row_major_physical_data;
-    } else {
-        return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
     }
+    if (!row_major_physical_data.empty()) {
+        return row_major_physical_data;
+    }
+    return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
 }
 
 bool logical_matches_physical(const TensorSpec& tensor_spec) {
@@ -1348,15 +1346,15 @@ tt::tt_metal::HostStorage preprocess_storage(
             auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
-    } else if (input_dtype == DataType::BFLOAT4_B) {
+    }
+    if (input_dtype == DataType::BFLOAT4_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             tt::stl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
-    } else {
-        return input_storage;
     }
+    return input_storage;
 }
 
 template <typename SrcType, typename DstType>

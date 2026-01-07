@@ -114,7 +114,8 @@ DispatchSettings DispatchSettings::defaults(
 
     if (core_type == CoreType::WORKER) {
         return worker_defaults(cluster, num_hw_cqs);
-    } else if (core_type == CoreType::ETH) {
+    }
+    if (core_type == CoreType::ETH) {
         return eth_defaults(cluster, num_hw_cqs);
     }
 
@@ -167,9 +168,7 @@ DispatchSettings& DispatchSettings::get(const CoreType& core_type, const uint32_
     auto& store = get_store();
     if (!store.contains(k)) {
         TT_THROW(
-            "DispatchSettings is not initialized for CoreType {}, {} CQs",
-            enchantum::to_string(core_type),
-            num_hw_cqs);
+            "DispatchSettings is not initialized for CoreType {}, {} CQs", enchantum::to_string(core_type), num_hw_cqs);
     }
     return store[k];
 }
