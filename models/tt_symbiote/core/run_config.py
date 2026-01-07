@@ -558,7 +558,11 @@ class DPLRun(NormalRun):
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
             # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
+            compare_fn_outputs(
+                tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
+                tree_map(wrap_to_torch_ttnn_tensor, func_args),
+                self.__class__.__name__,
+            )
             # Compare outputs
             compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
             result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
@@ -611,7 +615,11 @@ class DPLRunNoErrorProp(NormalRun):
             self.move_weights_to_device()
             ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
             # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
+            compare_fn_outputs(
+                tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
+                tree_map(wrap_to_torch_ttnn_tensor, func_args),
+                self.__class__.__name__,
+            )
             # Compare outputs
             compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
             result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
