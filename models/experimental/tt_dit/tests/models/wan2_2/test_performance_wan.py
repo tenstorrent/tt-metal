@@ -21,6 +21,7 @@ from ....utils.test import line_params, ring_params
     [
         [(1, 4), (1, 4), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -290,6 +291,7 @@ def test_pipeline_performance(
         device_name_map = {
             (1, 4): "BH_QB",
             (2, 4): "WH_T3K",
+            (1, 8): "BH_LB",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(
