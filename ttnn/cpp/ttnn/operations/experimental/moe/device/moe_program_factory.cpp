@@ -46,25 +46,26 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         ----------------------------------------------------------------------------------------
         |     Name      |   CB Index    |   Dtype    | Bytes/tile | Tiles/CB |  Total size (B) |
         ----------------------------------------------------------------------------------------
-        | cb_r2c_w0     | CBIndex::c_0  | bfloat16   |    2048    |    2     |      4096       |
-        | cb_s2c_in     | CBIndex::c_1  | sharded    |    var     |    var   |      var        |
-        | cb_c2c_mm0    | CBIndex::c_2  | bfloat16   |    2048    |    1     |      2048       |
-        | cb_c2c_mm1    | CBIndex::c_3  | bfloat16   |    2048    |    1     |      2048       |
-        | cb_c2w_elt    | CBIndex::c_4  | bfloat16   |    2048    |    1     |      2048       |
-        | cb_r2c_in2    | CBIndex::c_5  | bfloat16   |    2048    |    1     |      2048       |
-        | cb_c2w_mm2    | CBIndex::c_6  | bfloat16   |    2048    |    1     |      2048       |
+        | cb_r2c_w0     | CBIndex::c_0  | bfloat8_b  |    1024    |    2     |      2048       |
+        | cb_s2c_in     | CBIndex::c_1  | bfloat8_b  |    1024    |    2     |      2048       |
+        | cb_c2c_mm0    | CBIndex::c_2  | bfloat8_b  |    1024    |    1     |      1024       |
+        | cb_c2c_mm1    | CBIndex::c_3  | bfloat8_b  |    1024    |    1     |      1024       |
+        | cb_c2w_elt    | CBIndex::c_4  | bfloat8_b  |    1024    |    1     |      1024       |
+        | cb_r2c_in2    | CBIndex::c_5  | bfloat8_b  |    1024    |    2     |      2048       |
+        | cb_c2w_mm2    | CBIndex::c_6  | bfloat8_b  |    1024    |    1     |      1024       |
         ----------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, bytes_per_tile, tiles_per_cb>
     // Note: cb_s2c_in is handled separately as it's a sharded CB
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, uint32_t>> cb_specs = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Float16_b, 2048, 2},
-        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 2048, 1},
-        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 2048, 1},
-        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 2048, 1},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, 2048, 1},
-        {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, 2048, 1}};
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, 1024, 2},
+        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 1024, 2},
+        {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1024, 1},
+        {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1024, 1},
+        {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1024, 1},
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 1024, 2},
+        {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1024, 1}};
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
 
@@ -97,7 +98,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     }
 
     // Create kernels for the program
-    [[maybe_unused]] auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
+    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm0.cpp",
         cores,
@@ -106,7 +107,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = dm_compile_args});
 
-    [[maybe_unused]] auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
+    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
         cores,
@@ -115,7 +116,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = dm_compile_args});
 
-    [[maybe_unused]] auto compute_kernel_handle = tt::tt_metal::CreateKernel(
+    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
         cores,
@@ -142,6 +143,13 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
         }
+    }
+
+    auto all_worker_cores_ordered =
+        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
+            tt::tt_metal::NOC::RISCV_0_default);
+    for (const auto& core : all_worker_cores_ordered) {
+        log_warning(tt::LogOp, "Worker core: {}", core.str());
     }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
