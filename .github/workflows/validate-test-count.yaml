@@ -49,8 +49,6 @@ jobs:
 
       - name: Count and compare tests
         run: |
-          export PYTHONPATH="${PYTHONPATH}:${PWD}"
-
           # Define the paths to check for test counts
           declare -a PATHS=(
             "tests/ttnn/unit_tests/operations/eltwise"
