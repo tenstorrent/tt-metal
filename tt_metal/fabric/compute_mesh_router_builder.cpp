@@ -413,7 +413,10 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
                     static_cast<int>(target.type));
                 continue;
             }
-            if (target.target_direction.has_value() &&
+            // Only apply direction filtering for 2D routing or when there are multiple targets
+            // For 1D routing with a single target, skip direction check to avoid false negatives
+            bool should_check_direction = is_2D_routing || targets.size() > 1;
+            if (should_check_direction && target.target_direction.has_value() &&
                 target.target_direction.value() != downstream_router.get_location().direction) {
                 // connction mapping contains connection info to all downstream directions.
                 // Proceed with connection setup only for the current downstream direction.
