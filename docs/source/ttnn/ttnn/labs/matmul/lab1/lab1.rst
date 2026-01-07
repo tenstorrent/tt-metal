@@ -492,8 +492,8 @@ The two types of kernel arguments differ in *when* their values are determined a
 In summary, compile-time arguments specialize the kernel *code itself*, while runtime arguments specialize *what that code does on a particular launch*.
 
 In our example program, reader and writer kernels take information about tensor layout and data distribution as compile-time arguments.
-Compile-time arguments are passed as a vector of uint32_t values. TensorAccessorArgs utility is a clean way to append relevant tensor layout
-information into this vector, without programmer having to worry about internal details.
+Compile-time arguments are passed as a vector of ``uint32_t`` values. TensorAccessorArgs utility is a clean way to append relevant tensor layout
+information into this ``uint32_t``vector, without programmer having to worry about internal details.
 
 Dataflow kernels take the base addresses of the input and output buffers in device DRAM, along with the number of tiles to process
 as runtime arguments.
@@ -537,10 +537,12 @@ The kernel reads the base addresses of the two input tensors in DRAM and the tot
 The kernel uses two circular buffers (``c_0`` and ``c_1``) as destination buffers for the two input tensors.
 It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.
 
-``TensorAccessorArgs`` objects, whose information was placed into the compile-time arguments vector by the host program, are
-now reassembled into device-side ``TensorAccessorArgs`` objects that describe the tensors' layout in memory.
-These objects are then combined with the runtime base addresses to create address generator objects (``TensorAccessor``).
-These address generators abstract away the complexity of physical memory layout, such as data distribution among DRAM banks
+Recall that the ``TensorAccessorArgs`` utility was used in the host program to pass information about tensor shape and layout through 
+the compile-time arguments ``uint32_t`` vector. On device-side this data from the vector is assembled
+into a convenient device-side data structure of the same name (``TensorAccessorArgs``). However, host-side and device-side ``TensorAccessorArgs``
+objects are different underlying types.
+This device-side ``TensorAccessorArgs`` object is then combined with the runtime base addresses to create an address generator object (``TensorAccessor``).
+An address generator object abstracts away the complexity of physical memory layout, such as data distribution among DRAM banks,
 by automatically computing the physical DRAM address for any given tile index.
 
 The main processing loop iterates over all tiles, implementing a producer-consumer pattern with the compute kernel.
@@ -639,9 +641,33 @@ Example Program Summary
 
 It is useful to wrap up this example description by emphasizing one more time the nature of the Metalium programming model and
 division of tasks and data between host and device.
-The following diagram summarizes what code and data resides where (device, host, CBs, DRAM,...)
+At a high-level, all kernel code (``read_tiles.cpp``, ``write_tiles.cpp``, ``tiles_add.cpp``)
+executes on the device, and all its C++ objects are created on the device.
+Specifically:
 
-TODO: Have a diagram which shows what resides where (device, host, CBs, DRAM,...)
+* Ordinary local variables in kernel code are stored either in local SRAM or in RISC-V registers.
+
+* Tensor data is stored in device DRAM, which is directly attached to the Tensix processor.
+
+* Circular buffers are implemented in fast on-chip device SRAM and are used to store tiles of data,
+  containing a subset of the data in a tensor or intermediate results of computations.
+
+Conversely, all code in ``lab_eltwise_binary.cpp`` executes on the host, and all its C++ objects are created on the host
+(either in CPU registers or host DRAM). Obvious examples include vectors of data and various local variables.
+However, some host-side objects contain information about data and code on the device. Specifically:
+ 
+* ``Tensor`` objects are created on the host and contain information about the tensor shape and layout, but actual tensor data is stored in device DRAM.
+
+* ``TensorAccessorArgs`` objects exist on both host and device, but they are different underlying types, defined in different headers
+  (``tt_metal/api/tt-metalium/tensor_accessor_args.hpp`` for host-side and ``tt_metal/hw/inc/api/tensor/tensor_accessor_args.h`` for device-side).
+
+* Integers ``src0_addr``, ``src1_addr``, and ``dst_addr`` in the ``eltwise_add_tensix()`` function are host-side integers, but they contain addresses
+  of the input and output tensor data in device DRAM.
+
+* Kernel code and their arguments are JIT-compiled on the host, but then transferred to the device for execution.
+
+Understanding the location of data and code on the host and device is useful when debugging or analyzing performance.
+
 
 Kernel Compilation and Execution
 --------------------------------
@@ -654,8 +680,16 @@ when JIT compilation is triggered.
 Exercise 3: Observing JIT Compile Errors
 ========================================
 
-Introduce a syntax error in the kernel code and rerun the program to see how JIT compilation errors are reported.
-After observing the error, fix the error and rerun the program to confirm that the program now runs correctly.
+Perform the following steps:
+
+#. Introduce a syntax error in the kernel code
+
+#. Rebuild the programming examples by runing ``./build_metal.sh --build-programming-examples`` and observe that no error is reported. 
+
+#. Run the example program ``./build/programming_examples/metal_example_lab_eltwise_binary``.
+   Observe how JIT compilation errors are reported.
+
+#. Fix the syntax error and rerun the program to confirm that the program now runs correctly with no rebuilding step required.
 
 
 Debug Facilities in TT-Metalium
@@ -920,7 +954,7 @@ Exercise 6: Using Device Profiling to Profile Kernels
 
 #. **Compute elapsed firmware time**
 
-   In the CSV, each RISC processor on each core has several rows of data, each indicating a unique timer event.
+   In the CSV log file, each RISC processor on each core has several rows of data, each indicating a unique timer event.
    Column ``time[cycles since reset]`` indicates the number of cycles since the reset of the device until the specific timer event.
    For the purpose of this lab, it is sufficient to determine the overall firmware execution time, To compute it,
    simply subtract the maximum and minimum ``time[cycles since reset]`` values across all rows in the log file, and then multiply
