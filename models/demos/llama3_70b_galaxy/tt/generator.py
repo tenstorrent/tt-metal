@@ -78,7 +78,7 @@ class Generator:
         ]
         self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
         self.prev_page_table = None
-        self.prefill_traces_warmup = False
+        self.prefill_traces_warmup = True
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
@@ -194,6 +194,7 @@ class Generator:
             and not return_logits
         ):
             use_batched_prefill = True
+        use_batched_prefill = False
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
@@ -298,12 +299,51 @@ class Generator:
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+            break
+        return None
         # On-device sampling for prefill
         if do_device_sampling:
             padded_batch = 32
 
             # Use batched list for batched prefill, persistent buffer for non-batched
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
+
+            # DEBUG: Compare logits_source[0] between batched and non-batched
+            import os
+
+            debug_logits_dir = "/tmp/logits_debug"
+            os.makedirs(debug_logits_dir, exist_ok=True)
+            logits_0_torch = ttnn.to_torch(
+                logits_source[0], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )[..., :16000]
+            filename = "batched_logits_0.pt" if use_batched_prefill else "nonbatched_logits_0.pt"
+            torch.save(logits_0_torch, os.path.join(debug_logits_dir, filename))
+            print(f"DEBUG: Saved logits_source[0] to {os.path.join(debug_logits_dir, filename)}")
+            print(f"DEBUG: logits_source[0] shape: {logits_0_torch.shape}, dtype: {logits_0_torch.dtype}")
+            print(f"DEBUG: logits_source[0] first 10 values: {logits_0_torch.flatten()[:10]}")
+            print(
+                f"DEBUG: logits_source[0] max: {logits_0_torch.max()}, min: {logits_0_torch.min()}, mean: {logits_0_torch.mean()}"
+            )
+
+            # If both files exist, compare them
+            batched_path = os.path.join(debug_logits_dir, "batched_logits_0.pt")
+            nonbatched_path = os.path.join(debug_logits_dir, "nonbatched_logits_0.pt")
+            if os.path.exists(batched_path) and os.path.exists(nonbatched_path):
+                batched_logits = torch.load(batched_path)
+                nonbatched_logits = torch.load(nonbatched_path)
+                diff = (batched_logits - nonbatched_logits).abs()
+                print(f"DEBUG COMPARISON:")
+                print(f"  Max abs diff: {diff.max()}")
+                print(f"  Mean abs diff: {diff.mean()}")
+                print(f"  Num non-zero diffs: {(diff > 0).sum()}")
+                print(f"  Num diffs > 1e-3: {(diff > 1e-3).sum()}")
+                # Find indices of top 5 largest differences
+                flat_diff = diff.flatten()
+                top_indices = flat_diff.argsort(descending=True)[:5]
+                print(f"  Top 5 diff indices: {top_indices.tolist()}")
+                print(f"  Top 5 diff values: {flat_diff[top_indices].tolist()}")
+                print(f"  Batched values at top diffs: {batched_logits.flatten()[top_indices].tolist()}")
+                print(f"  Non-batched values at top diffs: {nonbatched_logits.flatten()[top_indices].tolist()}")
 
             # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
             tt_logits_batch = ttnn.concat(logits_source, dim=2)

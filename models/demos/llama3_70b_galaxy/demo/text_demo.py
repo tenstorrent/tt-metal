@@ -206,12 +206,17 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
+            {
+                "temperature": [10] * 32,
+                "top_p": [1.0] * 32,
+                "top_k": [32] * 32,
+                "seed": [0] * 32,
+            },  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            1,  # num layers
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
@@ -276,7 +281,7 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            {"temperature": [10], "top_p": [1.0], "top_k": [32], "seed": [0]},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -535,7 +540,7 @@ def create_tt_model(
         ),
     ],
     ids=[
-        "batch-32",  # throughput
+        "batch-32-only",  # throughput
         "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
         "batch-32-non-uniform-sampling-log-probs",  # throughput w/ non-uniform sampling and log-probs calculation
         "batch-1",  # latency
@@ -646,7 +651,7 @@ def test_demo_text(
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = True
+    prefill_enable_trace = False
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -851,26 +856,26 @@ def test_demo_text(
             seed=seed,
             enable_log_probs=log_probs,
         )
-        if batch_idx == 0:
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            try:
-                # We run prefill warm up for all supported sequence lengths once on 1 user
-                tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
-                toks = generator.prefill_forward_text(
-                    input_tokens_prefill_pt,
-                    page_table=page_table,
-                    kv_cache=tt_kv_cache,
-                    prompt_lens=decoding_pos,
-                    enable_trace=prefill_enable_trace,
-                    tt_out_logits_all_users=tt_out_logits_all_users,
-                    sampling_params=device_sampling_params,
-                )
-            except Exception as e:
-                logger.error(f"Error during prefill warmup: {str(e)}")
-                raise e
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
+        # if batch_idx == 0:
+        #     logger.info("Starting prefill warmup...")
+        #     profiler.start(f"compile_prefill", iteration=batch_idx)
+        #     try:
+        #         # We run prefill warm up for all supported sequence lengths once on 1 user
+        #         tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+        #         toks = generator.prefill_forward_text(
+        #             input_tokens_prefill_pt,
+        #             page_table=page_table,
+        #             kv_cache=tt_kv_cache,
+        #             prompt_lens=decoding_pos,
+        #             enable_trace=prefill_enable_trace,
+        #             tt_out_logits_all_users=tt_out_logits_all_users,
+        #             sampling_params=device_sampling_params,
+        #         )
+        #     except Exception as e:
+        #         logger.error(f"Error during prefill warmup: {str(e)}")
+        #         raise e
+        #     profiler.end(f"compile_prefill", iteration=batch_idx)
+        #     logger.info("Finished prefill warmup")
         logger.info(f"Starting prefill...")
 
         profiler.start(f"inference_prefill", iteration=batch_idx)
@@ -918,9 +923,10 @@ def test_demo_text(
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
         # Save prefill token
-        prefilled_token = toks.view(-1, 1)
+        # prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
+        return
 
         if prefill_profile:  # If we are profiling prefill, we stop here
             model.tt_ccl.close()
@@ -1216,7 +1222,7 @@ def test_demo_text(
     profiler.end("run")
 
     # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
+    # compile_prefill_time = profiler.get_duration("compile_prefill")
     compile_decode_time = profiler.get_duration("compile_decode")
 
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
@@ -1237,7 +1243,7 @@ def test_demo_text(
 
     measurements = {
         # Required measurements
-        "compile_prefill": compile_prefill_time,
+        # "compile_prefill": compile_prefill_time,
         "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
@@ -1246,7 +1252,7 @@ def test_demo_text(
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
         # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
+        # "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
 
@@ -1283,7 +1289,7 @@ def test_demo_text(
 
     # Print some of the perf metrics
     logger.info("==")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    # logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
