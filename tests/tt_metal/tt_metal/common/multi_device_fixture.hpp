@@ -106,6 +106,8 @@ protected:
         uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
         tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED;
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
     };
 
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -143,7 +145,12 @@ protected:
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
         if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
-            tt_fabric::SetFabricConfig(config_.fabric_config);
+            tt_fabric::SetFabricConfig(
+                config_.fabric_config,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                std::nullopt,
+                config_.fabric_tensix_config,
+                config_.fabric_udm_mode);
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
@@ -220,6 +227,28 @@ protected:
     MeshDevice2x4Fabric2DFixture() :
         MeshDeviceFixtureBase(
             Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
+};
+
+class MeshDevice1x4Fabric2DUDMFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x4Fabric2DUDMFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_shape = MeshShape{1, 4},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+            .fabric_tensix_config = tt_fabric::FabricTensixConfig::UDM,
+            .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED}) {}
+};
+
+class MeshDevice2x4Fabric2DUDMFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x4Fabric2DUDMFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_shape = MeshShape{2, 4},
+            .num_cqs = 1,
+            .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+            .fabric_tensix_config = tt_fabric::FabricTensixConfig::UDM,
+            .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED}) {}
 };
 
 }  // namespace tt::tt_metal
