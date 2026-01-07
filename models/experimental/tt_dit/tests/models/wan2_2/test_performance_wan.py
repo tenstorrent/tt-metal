@@ -273,6 +273,14 @@ def test_pipeline_performance(
             "vae": 200.0,
             "total": 3415.0,
         }
+    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
+        assert is_blackhole(), "1x8 is only supported for blackhole"
+        expected_metrics = {
+            "encoder": 10000.0,
+            "denoising": 10000.0,
+            "vae": 10000.0,
+            "total": 10000.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
