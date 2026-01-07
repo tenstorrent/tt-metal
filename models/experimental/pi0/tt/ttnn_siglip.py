@@ -94,8 +94,8 @@ class PatchEmbeddingTTNN:
         pad_len = self.in_features_padded - in_features
 
         if pad_len > 0:
-            padding = torch.zeros(out_channels, pad_len, dtype=linear_weight.dtype)
-            linear_weight = torch.cat([linear_weight, padding], dim=-1)
+            # Use F.pad for cleaner padding: (left, right) for last dimension
+            linear_weight = F.pad(linear_weight, (0, pad_len), value=0.0)
 
         # Transpose for TTNN linear: (hidden_size, padded_in) -> (padded_in, hidden_size)
         linear_weight = linear_weight.T.contiguous()
@@ -152,13 +152,13 @@ class PatchEmbeddingTTNN:
         # Step 2: Permute to (B, num_patches, C*patch_size*patch_size)
         x = x.permute(0, 2, 1)
 
-        # Step 3: Pad to tile-aligned dimension
+        # Step 3: Pad to tile-aligned dimension using F.pad
         in_features = x.shape[-1]
         pad_len = self.in_features_padded - in_features
 
         if pad_len > 0:
-            padding = torch.zeros((batch_size, x.shape[1], pad_len), dtype=x.dtype, device=x.device)
-            x = torch.cat([x, padding], dim=-1)
+            # F.pad format: (left, right) for last dimension
+            x = F.pad(x, (0, pad_len), value=0.0)
 
         # Step 4: Transfer to device
         x_ttnn = ttnn.from_torch(
@@ -231,8 +231,8 @@ class SigLIPAttentionTTNN:
                 if heads_out:
                     weight = weight.T  # (hidden, hidden) -> transpose for reshape
                 weight = weight.reshape(dim, self.num_heads, self.head_dim)
-                padding = torch.zeros(dim, self.num_heads, padding_size, dtype=weight.dtype)
-                weight = torch.cat([weight, padding], dim=-1)
+                # Use F.pad: (left, right) for last dimension
+                weight = F.pad(weight, (0, padding_size), value=0.0)
                 weight = weight.reshape(dim, self.num_heads * padded_head_dim)
                 if heads_out:
                     weight = weight.T  # Transpose back
@@ -245,27 +245,35 @@ class SigLIPAttentionTTNN:
 
             if padding_size > 0:
                 bias = bias.view(self.num_heads, self.head_dim)
-                padding = torch.zeros(self.num_heads, padding_size, dtype=bias.dtype)
-                bias = torch.cat([bias, padding], dim=-1)
+                # Use F.pad: (left, right) for last dimension
+                bias = F.pad(bias, (0, padding_size), value=0.0)
                 bias = bias.view(self.num_heads * padded_head_dim)
             return bias
 
         # OPTIMIZATION: Fused QKV weights - single linear instead of 3
-        # Pad each weight, transpose for TTNN linear, then concatenate
+        # Pad each weight, transpose for TTNN linear, convert to TTNN, then concatenate
         wq_padded = pad_head_dim_weight(weights["self_attn.q_proj.weight"])
         wk_padded = pad_head_dim_weight(weights["self_attn.k_proj.weight"])
         wv_padded = pad_head_dim_weight(weights["self_attn.v_proj.weight"])
 
-        # Concatenate Q, K, V weights: [hidden, 3 * num_heads * padded_head_dim]
-        wqkv_combined = torch.cat([wq_padded.T, wk_padded.T, wv_padded.T], dim=-1)
-
-        self.wqkv = ttnn.from_torch(
-            wqkv_combined.contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Convert each to TTNN
+        wq_ttnn = ttnn.from_torch(
+            wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
+        wk_ttnn = ttnn.from_torch(
+            wk_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        wv_ttnn = ttnn.from_torch(
+            wv_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        # Concatenate using TTNN: [hidden, 3 * num_heads * padded_head_dim]
+        self.wqkv = ttnn.concat(
+            [wq_ttnn, wk_ttnn, wv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(wq_ttnn)
+        ttnn.deallocate(wk_ttnn)
+        ttnn.deallocate(wv_ttnn)
 
         # Fused QKV biases
         if "self_attn.q_proj.bias" in weights:
@@ -273,16 +281,24 @@ class SigLIPAttentionTTNN:
             bk_padded = pad_head_dim_bias(weights["self_attn.k_proj.bias"])
             bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
 
-            # Concatenate biases
-            bqkv_combined = torch.cat([bq_padded, bk_padded, bv_padded], dim=-1)
-
-            self.bqkv = ttnn.from_torch(
-                bqkv_combined.unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Convert each to TTNN
+            bq_ttnn = ttnn.from_torch(
+                bq_padded.unsqueeze(0).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
             )
+            bk_ttnn = ttnn.from_torch(
+                bk_padded.unsqueeze(0).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            bv_ttnn = ttnn.from_torch(
+                bv_padded.unsqueeze(0).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            )
+
+            # Concatenate using TTNN
+            self.bqkv = ttnn.concat(
+                [bq_ttnn, bk_ttnn, bv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(bq_ttnn)
+            ttnn.deallocate(bk_ttnn)
+            ttnn.deallocate(bv_ttnn)
         else:
             self.bqkv = None
 
