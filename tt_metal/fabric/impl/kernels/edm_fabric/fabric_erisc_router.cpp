@@ -749,7 +749,12 @@ FORCE_INLINE void receiver_forward_packet(
         false;
 #endif
     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
-    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
+    if constexpr (NUM_DOWNSTREAM_CHANNELS == 0) {
+        // No downstream channels means that this packet cannot be forwarded and therefore can only be delivered to a
+        // local destination
+        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
             (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
@@ -1647,13 +1652,25 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
-            can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely(hop_cmd, downstream_edm_interfaces_vc0, local_relay_interface);
+            // If there are no downstream channels, then we don't need to check if we can forward the packet to
+            // downstream EDM interfaces
+            if constexpr (NUM_DOWNSTREAM_CHANNELS == 0) {
+                can_send_to_all_local_chip_receivers = true;
+            } else {
+                can_send_to_all_local_chip_receivers =
+                    can_forward_packet_completely(hop_cmd, downstream_edm_interfaces_vc0, local_relay_interface);
+            }
 #endif
         } else {
 #ifndef FABRIC_2D
-            can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
+            // If there are no downstream channels, then we don't need to check if we can forward the packet to
+            // downstream EDM interfaces
+            if constexpr (NUM_DOWNSTREAM_CHANNELS == 0) {
+                can_send_to_all_local_chip_receivers = true;
+            } else {
+                can_send_to_all_local_chip_receivers = can_forward_packet_completely(
+                    cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
+            }
 #endif
         }
         if constexpr (enable_trid_flush_check_on_noc_txn) {
