@@ -168,7 +168,7 @@ private:
         CoreCoord virtual_core,
         std::optional<CoreCoord> end_core);
     void initialize_worker_logical_to_virtual_tables(
-        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core, CoreCoord end_core);
+        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord start_core, CoreCoord end_core);
     void initialize_firmware(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,

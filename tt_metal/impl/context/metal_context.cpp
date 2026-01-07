@@ -1321,13 +1321,13 @@ void MetalContext::initialize_firmware(
                 launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
                 prepare_initial_launch_msg();
                 for (const auto& logical_core : dispatch_core_manager_->get_all_logical_dispatch_cores(device_id)) {
-                    auto virtual_core2 = cluster_->get_virtual_coordinate_from_logical_coordinates(
+                    auto virtual_dispatch_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::WORKER);
-                    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core2);
+                    auto programmable_core_type = llrt::get_core_type(device_id, virtual_dispatch_core);
                     cluster_->write_core(
                         init_launch_msg_data.data(),
                         init_launch_msg_data.size(),
-                        tt_cxy_pair(device_id, virtual_core2),
+                        tt_cxy_pair(device_id, virtual_dispatch_core),
                         hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
                 }
             }
