@@ -57,17 +57,15 @@ struct FullLikeOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        std::variant<float, int> fill_value,
-        const std::optional<DataType>& dtype,
-        const std::optional<Layout>& layout,
-        const std::optional<MemoryConfig>& memory_config);
 };
 
 }  // namespace ttnn::operations::full_like
 
 namespace ttnn::prim {
-constexpr auto moreh_full_like =
-    ttnn::register_operation<"ttnn::prim::moreh_full_like", ttnn::operations::full_like::FullLikeOperation>();
+ttnn::operations::full_like::FullLikeOperation::tensor_return_value_t moreh_full_like(
+    const Tensor& input,
+    std::variant<float, int> fill_value,
+    const std::optional<DataType>& dtype,
+    const std::optional<Layout>& layout,
+    const std::optional<MemoryConfig>& memory_config);
 }  // namespace ttnn::prim

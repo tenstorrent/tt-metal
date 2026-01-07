@@ -946,7 +946,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     for (auto& device : mesh_device_->get_devices()) {
-        if (chip_ids_in_workload.find(device->id()) == chip_ids_in_workload.end()) {
+        if (!chip_ids_in_workload.contains(device->id())) {
             write_go_signal(
                 id_,
                 mesh_device_,
@@ -1014,14 +1014,21 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    // TODO: #31963 Handle the case where there are multiple active grids.
-    TT_FATAL(active_grids_set.size() <= 1, "Cannot support non convex grids.");
     MeshCoordinateRange full_grid(mesh_device_->get_view().get_local_mesh_coord_range());
     MeshCoordinateRangeSet unused_grids_set(full_grid);
-    if (active_grids_set.size() == 1) {
-        MeshCoordinateRange active_grid = active_grids_set.ranges().front();
-        unused_grids_set = subtract(full_grid, active_grid);
+
+    // Subtract each active grid from the unused grids set to handle non-convex grids
+    for (const auto& active_grid : active_grids_set.ranges()) {
+        MeshCoordinateRangeSet new_unused_set;
+        for (const auto& unused_range : unused_grids_set.ranges()) {
+            auto subtracted_ranges = subtract(unused_range, active_grid);
+            for (const auto& range : subtracted_ranges.ranges()) {
+                new_unused_set.merge(range);
+            }
+        }
+        unused_grids_set = new_unused_set;
     }
+
     for (const auto& unused_grid : unused_grids_set.ranges()) {
         if (!mesh_device_->is_local(unused_grid.start_coord())) {
             continue;

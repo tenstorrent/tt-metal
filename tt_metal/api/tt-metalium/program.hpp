@@ -50,7 +50,7 @@ public:
     //////////////////////////////
 
     // Used in ops.
-    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
     // Get total CB memory allocated by this program (for memory tracking)
     // If device_id is specified, only counts CBs allocated on that specific device

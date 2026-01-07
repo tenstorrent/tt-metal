@@ -655,35 +655,6 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
 
 @pytest.fixture(scope="function")
-def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
-    import ttnn
-
-    if ttnn.get_num_devices() < 8:
-        pytest.skip("Not enough devices to run test")
-
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
-    updated_device_params = get_updated_device_params(device_params)
-    fabric_config = updated_device_params.pop("fabric_config", None)
-    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
-    reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 8),
-        **updated_device_params,
-    )
-
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
-
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
-
-
-@pytest.fixture(scope="function")
 def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
     # Generic blackhole configuration
     # This configures an [m,n] blackhole mesh device to appear as a [1,m*n] line or ring
@@ -796,8 +767,6 @@ def get_devices(request):
         devices = [request.getfixturevalue("device")]
     elif "mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("mesh_device")]
-    elif "t3k_mesh_device" in request.fixturenames:
-        devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("pcie_mesh_device")]
     elif "t3k_single_board_mesh_device" in request.fixturenames:

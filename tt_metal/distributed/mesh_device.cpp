@@ -274,15 +274,14 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
             TT_FATAL(
                 config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
             const auto& supplied_ids = config.physical_device_ids();
-            for (int i = 0; i < supplied_ids.size(); i++) {
+            for (int supplied_id : supplied_ids) {
                 auto fabric_node_id =
-                    MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-                        supplied_ids[i]);
+                    MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
                 TT_FATAL(
                     !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
                     "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
                     "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
-                    supplied_ids[i],
+                    supplied_id,
                     *fabric_node_id.mesh_id);
                 fabric_node_ids.push_back(fabric_node_id);
             }

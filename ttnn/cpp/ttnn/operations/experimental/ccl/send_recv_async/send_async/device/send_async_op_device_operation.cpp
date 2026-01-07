@@ -5,7 +5,7 @@
 #include "send_async_op_device_operation_types.hpp"
 #include "send_async_op_device_operation.hpp"
 
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -52,10 +52,18 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(mesh_socket, input_tensors);
 }
 
-std::tuple<SendAsyncDeviceOperation::operation_attributes_t, SendAsyncDeviceOperation::tensor_args_t>
-SendAsyncDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::ccl::send_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation::tensor_return_value_t send_async(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    return {operation_attributes_t(mesh_socket), tensor_args_t{.input_tensor = input_tensor}};
+    using OperationType = ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::send_async
+}  // namespace ttnn::prim

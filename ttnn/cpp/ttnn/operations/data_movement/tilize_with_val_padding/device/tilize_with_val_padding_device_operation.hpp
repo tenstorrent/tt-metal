@@ -40,23 +40,19 @@ struct TilizeWithValPaddingDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const ttnn::Shape& output_padded_shape,
-        const tt::tt_metal::PadValue& pad_value,
-        const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
-        const std::optional<tt::tt_metal::DataType>& output_dtype,
-        bool use_multicore,
-        bool enough_space_width,
-        bool enough_space_height,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto tilize_with_val_padding = ttnn::register_operation<
-    "ttnn::prim::tilize_with_val_padding",
-    ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation>();
+ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_return_value_t tilize_with_val_padding(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    const tt::tt_metal::PadValue& pad_value,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
+    const std::optional<tt::tt_metal::DataType>& output_dtype,
+    bool use_multicore,
+    bool enough_space_width,
+    bool enough_space_height,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

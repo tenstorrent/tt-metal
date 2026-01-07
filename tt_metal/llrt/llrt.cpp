@@ -120,17 +120,19 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
-        is_active_eth_core =
-            active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
-        is_inactive_eth_core =
-            inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != inactive_eth_cores.end();
+        is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
+        is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
         // we should not be operating on any reserved cores here.
         TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
     }
 
-    return is_active_eth_core     ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-           : is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH
-                                  : tt_metal::HalProgrammableCoreType::TENSIX;
+    if (is_active_eth_core) {
+        return tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    } else if (is_inactive_eth_core) {
+        return tt_metal::HalProgrammableCoreType::IDLE_ETH;
+    } else {
+        return tt_metal::HalProgrammableCoreType::TENSIX;
+    }
 }
 
 void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
@@ -238,7 +240,7 @@ namespace internal_ {
 bool is_active_eth_core(tt::ChipId chip_id, const CoreCoord& core) {
     auto active_eth_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
-    return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
+    return active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, core));
 }
 
 namespace {
@@ -282,8 +284,14 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
+    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
+    // timeout means: use the configured timeout for operations.
     if (is_simulator) {
         timeout_ms = 0;
+    } else if (timeout_ms == 0) {
+        timeout_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
+                .count();
     }
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -296,6 +304,9 @@ void wait_until_cores_done(
                     }
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+
+                tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
                     device_id,
