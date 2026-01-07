@@ -87,6 +87,42 @@ bool requires_more_connectivity(FabricType requested_type, FabricType available_
     return false;
 }
 
+uint32_t compute_max_1d_hops(const std::vector<MeshShape>& mesh_shapes) {
+    if (mesh_shapes.empty()) {
+        return 0;
+    }
+
+    uint32_t max_dimension = 0;
+    for (const auto& shape : mesh_shapes) {
+        // For 1D routing, find the maximum dimension (either rows or cols)
+        // Hops = max_dimension - 1 (e.g., 8 chips in a line = 7 hops)
+        uint32_t rows = shape[0];
+        uint32_t cols = shape[1];
+        uint32_t mesh_max_dim = std::max(rows, cols);
+        max_dimension = std::max(max_dimension, mesh_max_dim);
+    }
+
+    return (max_dimension > 0) ? (max_dimension - 1) : 0;
+}
+
+uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes) {
+    if (mesh_shapes.empty()) {
+        return 0;
+    }
+
+    uint32_t max_hops = 0;
+    for (const auto& shape : mesh_shapes) {
+        // For 2D routing, compute Manhattan distance from corner to corner
+        // Hops = (rows - 1) + (cols - 1)
+        uint32_t rows = shape[0];
+        uint32_t cols = shape[1];
+        uint32_t mesh_hops = (rows - 1) + (cols - 1);
+        max_hops = std::max(max_hops, mesh_hops);
+    }
+
+    return max_hops;
+}
+
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

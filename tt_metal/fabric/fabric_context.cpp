@@ -47,48 +47,32 @@ uint32_t FabricContext::get_max_1d_hops_from_topology() const {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // For 1D topologies: max hops determined by larger dimension of the mesh shape
-    // A 1D chain can be laid out as rows×1 or 1×cols, so we take max(rows, cols)
-    // Max hops = dimension_size - 1 (edges between nodes)
+    // Extract mesh shapes from topology
+    std::vector<MeshShape> mesh_shapes;
     auto mesh_ids = mesh_graph.get_mesh_ids();
-    uint32_t max_hops = 0;
-
+    mesh_shapes.reserve(mesh_ids.size());
     for (const auto& mesh_id : mesh_ids) {
-        auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-        uint32_t rows = mesh_shape[0];
-        uint32_t cols = mesh_shape[1];
-
-        // Max hops is the larger dimension minus 1
-        uint32_t mesh_max_hops = std::max(rows, cols);
-        if (mesh_max_hops > 0) {
-            mesh_max_hops -= 1;  // Convert size to hops (0-indexed)
-        }
-        max_hops = std::max(max_hops, mesh_max_hops);
+        mesh_shapes.push_back(mesh_graph.get_mesh_shape(mesh_id));
     }
 
-    return max_hops;
+    // Use helper function for hop calculation
+    return compute_max_1d_hops(mesh_shapes);
 }
 
 uint32_t FabricContext::get_max_2d_hops_from_topology() const {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // For 2D mesh: max hops determined by XY-routing formula
-    // Max hops = (rows - 1) + (cols - 1) for worst-case corner-to-corner routing
+    // Extract mesh shapes from topology
+    std::vector<MeshShape> mesh_shapes;
     auto mesh_ids = mesh_graph.get_mesh_ids();
-    uint32_t max_hops = 0;
-
+    mesh_shapes.reserve(mesh_ids.size());
     for (const auto& mesh_id : mesh_ids) {
-        auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-        uint32_t rows = mesh_shape[0];
-        uint32_t cols = mesh_shape[1];
-
-        // XY-routing: worst case is diagonal corner-to-corner
-        uint32_t mesh_max_hops = (rows > 0 ? rows - 1 : 0) + (cols > 0 ? cols - 1 : 0);
-        max_hops = std::max(max_hops, mesh_max_hops);
+        mesh_shapes.push_back(mesh_graph.get_mesh_shape(mesh_id));
     }
 
-    return max_hops;
+    // Use helper function for hop calculation
+    return compute_max_2d_hops(mesh_shapes);
 }
 
 uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const {
