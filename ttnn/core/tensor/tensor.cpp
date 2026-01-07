@@ -119,7 +119,8 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     return *this;
 }
 
-Tensor::Tensor(const Tensor& other) = default;
+Tensor::Tensor(const Tensor& other) :
+    tensor_attributes(other.tensor_attributes), id_(Tensor::next_id()), mesh_device_(other.mesh_device_) {}
 
 Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
 
@@ -473,7 +474,6 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     return output;
 }
-
 
 void memcpy(
     distributed::MeshCommandQueue& queue,
