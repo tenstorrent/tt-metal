@@ -5,11 +5,11 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -40,6 +40,26 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors where input_a_memory_config is not sharded.
+    sharded_to_interleaved requires the input to be sharded.
+    """
+    input_a_memory_config = test_vector.get("input_a_memory_config")
+
+    # Check if memory config is provided and is sharded
+    if input_a_memory_config is not None:
+        # Check if it's a valid sharded config
+        # The config should have is_sharded method or be a known sharded type
+        config_str = str(input_a_memory_config)
+        if "INTERLEAVED" in config_str or "DRAM" in config_str or "L1" in config_str:
+            # These are not sharded configs
+            if "SHARDED" not in config_str:
+                return True, "input_a_memory_config must be sharded for sharded_to_interleaved operation"
+
+    return False, None
+
+
 def mesh_device_fixture():
     """
     Override default device fixture for sharded_to_interleaved operation.
@@ -61,6 +81,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -122,17 +143,13 @@ def run(
     # Verify output is interleaved
     output_mem_config = output_tensor.memory_config()
     if output_mem_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError(
-            f"sharded_to_interleaved should produce interleaved output, but got {output_mem_config.memory_layout}"
-        )
+        return [(False, f"Expected interleaved output, got {output_mem_config.memory_layout}"), e2e_perf]
 
-    # Convert back to sharded to verify correctness (round-trip test)
-    # This ensures the data movement is correct
-    output_sharded = ttnn.interleaved_to_sharded(output_tensor, input_a_memory_config)
-    output_torch = ttnn.to_torch(output_sharded)
+    # Verify correctness by comparing tensors directly
+    output_torch = ttnn.to_torch(output_tensor)
     input_torch = ttnn.to_torch(sharded_tensor)
 
-    # Check with PCC - compare original sharded tensor with round-trip result
+    # Check with PCC - compare original sharded tensor with interleaved result
     pcc = check_with_pcc(input_torch, output_torch, 0.999)
 
     return [pcc, e2e_perf]

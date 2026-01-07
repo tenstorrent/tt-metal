@@ -4,11 +4,11 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -40,6 +40,25 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors with None shapes.
+    This can happen with certain traced configurations.
+    """
+    input_shape = test_vector.get("input_shape")
+
+    # Check if input_shape is None
+    if input_shape is None:
+        return True, "Input shape is None"
+
+    # Check if input_shape is a dict with None values
+    if isinstance(input_shape, dict):
+        if input_shape.get("self") is None or input_shape.get("other") is None:
+            return True, "Input shape contains None values"
+
+    return False, None
 
 
 def run(

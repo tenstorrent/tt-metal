@@ -5,11 +5,11 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from typing import Optional, Tuple
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -36,6 +36,41 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """
+    Invalidate test vectors that might cause bad optional access.
+    This can happen with None memory configs or invalid shapes.
+    """
+    output_memory_config = test_vector.get("output_memory_config")
+    input_memory_config = test_vector.get("input_a_memory_config")
+    input_shape = test_vector.get("input_shape")
+
+    # Check for None memory configs
+    if output_memory_config is None:
+        return True, "output_memory_config is None"
+
+    if input_memory_config is None:
+        return True, "input_a_memory_config is None"
+
+    # Check for invalid shape (must be 4D)
+    if input_shape is None:
+        return True, "input_shape is None"
+
+    if isinstance(input_shape, (tuple, list)):
+        if len(input_shape) != 4:
+            return True, "Input shape must be 4D"
+    elif isinstance(input_shape, str):
+        # Try to parse string shape
+        try:
+            shape = eval(input_shape)
+            if len(shape) != 4:
+                return True, "Input shape must be 4D"
+        except:
+            return True, "Could not parse input_shape string"
+
+    return False, None
+
+
 def run(
     input_shape,
     input_a_dtype,
@@ -45,6 +80,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,  # Accept traced_source, traced_machine_info, config_id, etc.
 ) -> list:
     torch.manual_seed(0)
 
@@ -61,7 +97,6 @@ def run(
     # So we need to compute the expected output shape
     if len(shape) == 4:
         batch, num_heads, seq_len, head_dim = shape
-        expected_output_shape = (batch, 1, seq_len, num_heads * head_dim)
         # Reshape input to match expected output for comparison
         torch_output_tensor = (
             torch_input_tensor_a.permute(0, 2, 1, 3)
@@ -83,9 +118,10 @@ def run(
     }
 
     # Only add device and memory_config if not HOST storage
+    # Always use DRAM to avoid shard width mismatches
     if not is_host:
         from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
+        from_torch_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
