@@ -69,7 +69,11 @@ namespace tt::tt_metal {
 
 namespace detail {
 
-void setControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device, std::vector<uint32_t>& control_buffer, bool force_slow_dispatch = false) {
+void setControlBuffer(
+    distributed::MeshDevice* mesh_device,
+    IDevice* device,
+    std::vector<uint32_t>& control_buffer,
+    bool force_slow_dispatch = false) {
 #if defined(TRACY_ENABLE)
     if (!getDeviceProfilerState()) {
         return;
@@ -978,9 +982,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
 }
 
 void ReadDeviceProfilerResults(
-    IDevice* device,
-    ProfilerReadState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    IDevice* device, ProfilerReadState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -1006,14 +1008,14 @@ void ReadDeviceProfilerResults(
     try {
         mesh_device = device->get_mesh_device().get();
     } catch (const std::exception&) {
-        log_info(
-            tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
+        log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
     if (useFastDispatch(mesh_device, device)) {
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
             ZoneScopedN("Skipping! Last FD dispatch is done");
             return;
-        } else if (state == ProfilerReadState::LAST_FD_READ) {
+        }
+        if (state == ProfilerReadState::LAST_FD_READ) {
             profiler.setLastFDReadAsDone();
         }
     }
@@ -1110,7 +1112,8 @@ void ReadMeshDeviceProfilerResults(
             if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
                 ZoneScopedN("Skipping! Last FD dispatch is done");
                 return;
-            } else if (state == ProfilerReadState::LAST_FD_READ) {
+            }
+            if (state == ProfilerReadState::LAST_FD_READ) {
                 profiler.setLastFDReadAsDone();
             }
         }

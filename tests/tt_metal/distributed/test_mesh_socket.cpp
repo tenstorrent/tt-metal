@@ -1560,12 +1560,10 @@ std::pair<MeshCoordinate, MeshCoordinate> get_random_mesh_coordinates(const Mesh
         }
         log_info(LogTest, "Random mesh coordinates: {} {}", coord0, coord1);
         return {coord0, coord1};
-    } else {
-        // 1D fabric config requires neighboring devices for now
-        auto coord0 = MeshCoordinate(0, 0);
-        auto coord1 = MeshCoordinate(1, 0);
-        return {coord0, coord1};
-    }
+    }  // 1D fabric config requires neighboring devices for now
+    auto coord0 = MeshCoordinate(0, 0);
+    auto coord1 = MeshCoordinate(1, 0);
+    return {coord0, coord1};
 }
 
 template <typename FixtureT>

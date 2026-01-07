@@ -153,9 +153,8 @@ public:
         auto it = map.find(key);
         if (it != map.end()) {
             return it->second;
-        } else {
-            return "";
         }
+        return "";
     }
     void insert(const KeyType& key, std::string opname) {
         std::scoped_lock<std::mutex> lock(map_mutex);
@@ -516,11 +515,10 @@ inline std::string op_meta_data_serialized_json(
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
         }
         return msg;
-    } else {
-        auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
-        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
-        return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
+    auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
+    runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
+    return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
 #else
     return {};
 #endif

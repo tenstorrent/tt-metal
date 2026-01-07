@@ -188,7 +188,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             page_id_per_tensor[j] = block_id * num_pages_per_block[j];
             if (id_within_block == 0) {
                 continue;
-            } else if (id_within_block >= num_pages_per_block[j]) {
+            }
+            if (id_within_block >= num_pages_per_block[j]) {
                 page_id_per_tensor[j] += num_pages_per_block[j];
                 id_within_block -= num_pages_per_block[j];
                 curr_tensor = j + 1;

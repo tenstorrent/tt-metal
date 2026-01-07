@@ -62,22 +62,20 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
             },
             compute_kernel_config);
         return defaultConfig;
-    } else {
-        if (arch == tt::ARCH::GRAYSKULL) {
-            return GrayskullComputeKernelConfig{
-                .math_fidelity = default_fidelity, .math_approx_mode = default_approx_mode};
-        } else if (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
-            return WormholeComputeKernelConfig{
-                .math_fidelity = default_fidelity,
-                .math_approx_mode = default_approx_mode,
-                .fp32_dest_acc_en = default_fp32_acc,
-                .packer_l1_acc = default_l1_acc,
-                .dst_full_sync_en = default_dst_full_sync_en,
-                .throttle_level = default_throttle_level};
-        } else {
-            TT_THROW("arch not supported");
-        }
     }
+    if (arch == tt::ARCH::GRAYSKULL) {
+        return GrayskullComputeKernelConfig{.math_fidelity = default_fidelity, .math_approx_mode = default_approx_mode};
+    }
+    if (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
+        return WormholeComputeKernelConfig{
+            .math_fidelity = default_fidelity,
+            .math_approx_mode = default_approx_mode,
+            .fp32_dest_acc_en = default_fp32_acc,
+            .packer_l1_acc = default_l1_acc,
+            .dst_full_sync_en = default_dst_full_sync_en,
+            .throttle_level = default_throttle_level};
+    }
+    TT_THROW("arch not supported");
 }
 
 tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

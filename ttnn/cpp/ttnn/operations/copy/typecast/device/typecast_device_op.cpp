@@ -13,11 +13,11 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return program::TypecastShardedProgramFactory{};
-    } else if (args.sub_core_grids.has_value()) {
-        return program::TypecastSubgridProgramFactory{};
-    } else {
-        return program::TypecastProgramFactory{};
     }
+    if (args.sub_core_grids.has_value()) {
+        return program::TypecastSubgridProgramFactory{};
+    }
+    return program::TypecastProgramFactory{};
 }
 
 void TypecastDeviceOperation::validate_on_program_cache_hit(

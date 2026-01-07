@@ -864,9 +864,8 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
         if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
             if (index >= choice) {
                 return {subblock_h, subblock_w};
-            } else {
-                index++;
             }
+            index++;
         }
     }
 

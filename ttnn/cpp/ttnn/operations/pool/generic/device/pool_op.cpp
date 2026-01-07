@@ -153,9 +153,8 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
         return {
             create_device_tensor(output_spec_data, tensor.input_tensor_.device()),
             create_device_tensor(output_spec_ind, tensor.input_tensor_.device())};
-    } else {
-        return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
     }
+    return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
 tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {

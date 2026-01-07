@@ -115,10 +115,8 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
             outputs.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
         return outputs;
-
-    } else {
-        return detail::split_with_slice_impl(input_tensor, split_sizes, dim, memory_config);
     }
+    return detail::split_with_slice_impl(input_tensor, split_sizes, dim, memory_config);
 }
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(

@@ -66,9 +66,8 @@ ttnn::Tensor ReshapeOperation::invoke(
     if (input_tensor.padded_shape() == padded_output_shape) {
         if (input_tensor.memory_config() != output_mem_config) {
             return ttnn::clone(input_tensor, std::nullopt, output_mem_config, std::nullopt);
-        } else {
-            return input_tensor;
         }
+        return input_tensor;
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.layout() == Layout::ROW_MAJOR &&

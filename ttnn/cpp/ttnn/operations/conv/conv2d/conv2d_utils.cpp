@@ -85,22 +85,22 @@ uint32_t get_input_channels_alignment(
             // NOLINTNEXTLINE(bugprone-branch-clone)
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
                 return tt::constants::TILE_WIDTH;
-            } else if (shard_width % 16 == 0) {
-                return 16U;
-            } else if (shard_width % 8 == 0) {
-                return 8U;
-            } else {
-                return tt::constants::TILE_WIDTH;
             }
-        } else {
-            // The minimum valid value for input channels alignment is 8.
-            // This requirement comes from the L1 alignment, which is 16 bytes.
-            // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
-            // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
-            // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
-            // (Network on Chip) in a single, aligned operation.
-            return tt::tt_metal::hal::get_l1_alignment() / 2;
+            if (shard_width % 16 == 0) {
+                return 16U;
+            }
+            if (shard_width % 8 == 0) {
+                return 8U;
+            }
+            return tt::constants::TILE_WIDTH;
         }
+        // The minimum valid value for input channels alignment is 8.
+        // This requirement comes from the L1 alignment, which is 16 bytes.
+        // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
+        // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
+        // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
+        // (Network on Chip) in a single, aligned operation.
+        return tt::tt_metal::hal::get_l1_alignment() / 2;
     }
     return tt::constants::TILE_WIDTH;
 }
@@ -757,9 +757,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             parallel_config,
             conv_config.act_block_h_override);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
-    } else {
-        return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
     }
+    return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
 }
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
@@ -891,22 +890,21 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             matmul_config.fused_activation = activation.value();
         }
         return matmul_config;
-    } else {
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
-            .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
-            .in0_block_w = conv_blocking_config.act_block_w_ntiles,
-            .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
-            .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
-            .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
-            .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
-            .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
-            .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
-            .transpose_mcast = transpose_mcast};
-        if (activation.has_value()) {
-            matmul_config.fused_activation = activation.value();
-        }
-        return matmul_config;
     }
+    ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
+        .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
+        .in0_block_w = conv_blocking_config.act_block_w_ntiles,
+        .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
+        .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
+        .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
+        .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
+        .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
+        .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
+        .transpose_mcast = transpose_mcast};
+    if (activation.has_value()) {
+        matmul_config.fused_activation = activation.value();
+    }
+    return matmul_config;
 }
 
 core_count_and_size calculate_L1_usage_for_conv_op(
@@ -1297,9 +1295,8 @@ bool auto_enable_kernel_folding(
         return (
             (input_memory_config.is_dram() && (input_layout == Layout::ROW_MAJOR || is_zero_padding)) ||
             (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
-    } else {
-        return enable_folding_.value();
     }
+    return enable_folding_.value();
 }
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
@@ -1347,9 +1344,8 @@ Tensor fold_input_tensor_if_required(
         padding_n4 = folding_result.padding_n4;  // Padding is zero after folding
         mm_conv = folding_result.mm_conv;
         return folded_input_tensor;
-    } else {
-        return input_tensor;
     }
+    return input_tensor;
 }
 
 ttnn::Tensor fold_tensor(

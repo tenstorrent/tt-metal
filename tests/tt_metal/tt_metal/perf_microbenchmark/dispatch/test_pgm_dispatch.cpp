@@ -94,7 +94,8 @@ struct TestInfo {
     bool use_left_cores{false};
 };
 
-// Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case harvesting, for consistency.
+// Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case
+// harvesting, for consistency.
 std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
@@ -753,14 +754,13 @@ static int pgm_dispatch(T& state, TestInfo info) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        if constexpr (std::is_same_v<T, benchmark::State>) {
-            state.SkipWithError("Test failed");
-        } else {
-            log_info(LogTest, "Test failed");
-        }
-        return 1;
     }
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        state.SkipWithError("Test failed");
+    } else {
+        log_info(LogTest, "Test failed");
+    }
+    return 1;
 }
 
 static void BM_pgm_dispatch(benchmark::State& state, TestInfo info) {
@@ -991,20 +991,28 @@ BENCHMARK_CAPTURE(
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     10000_kernel_all_cores_all_processors_32_cbs_trace,
-    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 10000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    TestInfo{
+        .warmup_iterations = 5000, .slow_kernel_cycles = 10000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     5000_kernel_all_cores_all_processors_32_cbs_trace,
-    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    TestInfo{
+        .warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
 // Intended to be GO-latency-bound
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch_vary_slow_cycles,
     256_bytes_brisc_only_all_processors_trace,
-    TestInfo{.warmup_iterations = 5000, .kernel_size = 256, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true, .use_all_cores = true})
+    TestInfo{
+        .warmup_iterations = 5000,
+        .kernel_size = 256,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        .use_trace = true,
+        .use_all_cores = true})
     ->Apply(KernelCycleArgs)
     ->UseManualTime();
 BENCHMARK_CAPTURE(

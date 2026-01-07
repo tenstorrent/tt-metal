@@ -15,12 +15,12 @@ uint32_t compute_weight_count_offset(
     const ttnn::MeshCoordinate& mesh_coordinate, uint32_t cluster_axis, uint32_t non_zero_per_device) {
     if (cluster_axis == 0) {
         return mesh_coordinate[0] * non_zero_per_device;
-    } else if (cluster_axis == 1) {
-        return mesh_coordinate[1] * non_zero_per_device;
-    } else {
-        TT_THROW("Unsupported cluster axis");
-        return 0;
     }
+    if (cluster_axis == 1) {
+        return mesh_coordinate[1] * non_zero_per_device;
+    }
+    TT_THROW("Unsupported cluster axis");
+    return 0;
 }
 }  // unnamed namespace
 
