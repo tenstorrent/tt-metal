@@ -549,7 +549,7 @@ public:
     bool get_skip_loading_fw() const { return skip_loading_fw; }
 
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
-    void set_jit_analytics_enabled(bool const enable) { jit_analytics_enabled = enable; }
+    void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
