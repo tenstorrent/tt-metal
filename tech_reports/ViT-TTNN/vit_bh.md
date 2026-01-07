@@ -725,16 +725,6 @@ layernorm_after_output = ttnn.layer_norm(
 )
 ```
 
-**Add and Norm Flow**:
-
-```mermaid
-flowchart LR
-  HS["hidden_states\n(b × 224 × 768)\nL1 block-sharded"] --> ADD["ttnn.add\n(residual)"]
-  SO["self_output\n(b × 224 × 768)\nL1 block-sharded"] --> ADD
-  ADD --> LN["ttnn.layer_norm\n(layernorm_after)\nL1 block-sharded"]
-  LN --> OUT["layernorm_after_output\n(b × 224 × 768)\nL1 block-sharded"]
-```
-
 **Add and Norm Diagram**:
 
 ![addnorm](images/addnorm.png)
