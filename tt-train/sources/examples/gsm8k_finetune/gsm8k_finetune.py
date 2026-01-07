@@ -62,33 +62,33 @@ class CollateFn:
         )
         mask_lens = []
 
-        for i in range(batch_size):
-            x_tokens = X[i]
-            y_tokens = Y[i]
+        for i, (x_tokens, y_tokens) in enumerate(zip(X, Y)):
+            x_len = len(x_tokens)
+            y_len = len(y_tokens)
+            total_len = x_len + y_len
+            max_len = self.max_sequence_length
 
-            # Concatenate question + answer
-            combined_length = len(x_tokens) + len(y_tokens)
-            if combined_length > self.max_sequence_length:
-                # Truncate if too long, prioritizing keeping the answer
-                available_space = self.max_sequence_length - len(y_tokens)
+            if total_len > max_len:
+                available_space = max_len - y_len
+
                 if available_space > 0:
+                    # Truncate question, keep full answer
                     x_tokens = x_tokens[:available_space]
-                    data_np[i, : len(x_tokens)] = x_tokens
-                    data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
-
+                    x_len = available_space
+                    data_np[i, :x_len] = x_tokens
+                    data_np[i, x_len : x_len + y_len] = y_tokens
                 else:
-                    # If answer is too long, just use the answer
-                    data_np[i, : self.max_sequence_length] = y_tokens[
-                        : self.max_sequence_length
-                    ]
-                    x_tokens = []
-
+                    # Answer alone is too long: keep only (part of) the answer
+                    y_tokens = y_tokens[:max_len]
+                    y_len = max_len
+                    data_np[i, :y_len] = y_tokens
+                    x_len = 0
             else:
                 # Normal case: concatenate question + answer
-                data_np[i, : len(x_tokens)] = x_tokens
-                data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
+                data_np[i, :x_len] = x_tokens
+                data_np[i, x_len : x_len + y_len] = y_tokens
 
-            mask_lens.append(len(x_tokens))
+            mask_lens.append(x_len)
 
         # Shape: [batch_size, 1, 1, max_sequence_length]
         X_np = np.expand_dims(data_np, axis=(1, 2))
