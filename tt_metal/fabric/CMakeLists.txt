@@ -60,6 +60,7 @@ target_sources(
         fabric_host_utils.cpp
         fabric_switch_manager.cpp
         fabric_telemetry_reader.cpp
+        fabric_edm_profiler_helper.cpp
         fabric_context.cpp
         fabric_builder_context.cpp
         fabric_mux_config.cpp
