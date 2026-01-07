@@ -150,7 +150,7 @@ class resnet50Bottleneck:
                 compute_config=ttnn.init_device_compute_kernel_config(
                     device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
                 ),
-                slice_config=ttnn.Conv2dL1FullSliceConfig,
+                slice_config=ttnn.Op2dL1FullSliceConfig,
                 return_output_dim=False,
                 return_weights_and_bias=True,
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -210,7 +210,7 @@ class resnet50Bottleneck:
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -323,7 +323,7 @@ class resnet50Bottleneck:
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -360,7 +360,7 @@ class resnet50Bottleneck:
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
             return_output_dim=False,
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -568,7 +568,7 @@ class resnet50:
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -846,7 +846,7 @@ class resnet50:
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],

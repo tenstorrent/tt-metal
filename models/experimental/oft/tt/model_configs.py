@@ -45,11 +45,11 @@ def create_slice_strategy(conv2d_slice_config):
     )
 
     slice_type = conv2d_slice_config.slice_type
-    if slice_type == ttnn.Conv2dL1Full:
+    if slice_type == ttnn.Op2dL1Full:
         return L1FullSliceStrategyConfiguration()
-    if slice_type == ttnn.Conv2dDRAMSliceHeight:
+    if slice_type == ttnn.Op2dDRAMSliceHeight:
         return HeightSliceStrategyConfiguration(conv2d_slice_config.num_slices)
-    elif slice_type == ttnn.Conv2dDRAMSliceWidth:
+    elif slice_type == ttnn.Op2dDRAMSliceWidth:
         return WidthSliceStrategyConfiguration(conv2d_slice_config.num_slices)
     else:
         return None
@@ -59,7 +59,7 @@ def update_conv2d_configuration(
     conv2d_configuration: Conv2dConfiguration,
     output_dtype: ttnn.DataType,
     conv2d_config: ttnn.Conv2dConfig,
-    conv2d_slice_config: ttnn.Conv2dSliceConfig,
+    conv2d_slice_config: ttnn.Op2dSliceConfig,
     compute_config: ttnn.WormholeComputeKernelConfig,
 ):
     """Update conv2d_config with values from conv2d_config_override that are not inherited from torch model"""
@@ -178,20 +178,20 @@ class ModelOptimizations:
         )
 
         # CONFIGURATION CONV SLICE CONFIG
-        self.conv_slice_configs["DEFAULT"] = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dL1Full,
+        self.conv_slice_configs["DEFAULT"] = ttnn.Op2dSliceConfig(
+            slice_type=ttnn.Op2dL1Full,
             num_slices=0,
         )
-        self.conv_slice_configs["HSLICE_2"] = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceHeight,
+        self.conv_slice_configs["HSLICE_2"] = ttnn.Op2dSliceConfig(
+            slice_type=ttnn.Op2dDRAMSliceHeight,
             num_slices=2,
         )
-        self.conv_slice_configs["HSLICE_4"] = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceHeight,
+        self.conv_slice_configs["HSLICE_4"] = ttnn.Op2dSliceConfig(
+            slice_type=ttnn.Op2dDRAMSliceHeight,
             num_slices=4,
         )
-        self.conv_slice_configs["HSLICE_8"] = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceHeight,
+        self.conv_slice_configs["HSLICE_8"] = ttnn.Op2dSliceConfig(
+            slice_type=ttnn.Op2dDRAMSliceHeight,
             num_slices=8,
         )
 

@@ -22,9 +22,9 @@ HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
-SliceHeight = ttnn.Conv2dDRAMSliceHeight
-SliceWidth = ttnn.Conv2dDRAMSliceWidth
-L1Full = ttnn.Conv2dL1Full
+SliceHeight = ttnn.Op2dDRAMSliceHeight
+SliceWidth = ttnn.Op2dDRAMSliceWidth
+L1Full = ttnn.Op2dL1Full
 try:
     from tracy import signpost
 except ImportError:
@@ -281,7 +281,7 @@ def run_conv(
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
     if not use_dram_slicing:
-        slice_config = ttnn.Conv2dL1FullSliceConfig
+        slice_config = ttnn.Op2dL1FullSliceConfig
 
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -2759,7 +2759,7 @@ def test_shallow_conv_with_tiled_input(device):
         groups=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         return_output_dim=True,
-        slice_config=ttnn.Conv2dL1FullSliceConfig,
+        slice_config=ttnn.Op2dL1FullSliceConfig,
     )
 
     tt_output_tensor = ttnn.from_device(tt_out)
@@ -3358,35 +3358,35 @@ def test_conv2d_sdxl_refiner(
         # VAE
         # Decoder
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  8,   32, 3),
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 16,   32, 0),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 16,  512, 0),
-        (1, 256, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  4,  512, 0),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth,  8,   32, 3),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth, 16,   32, 0),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth, 16,  512, 0),
+        (1, 256, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth,  4,  512, 0),
         (1, 512, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False,                      None,  1,  512, 0),
-        (1, 512, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  2,  256, 0),
-        (1, 512, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  8,  512, 0),
-        (1, 512, 512,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  8,  256, 0),
+        (1, 512, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth,  2,  256, 0),
+        (1, 512, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth,  8,  512, 0),
+        (1, 512, 512,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth,  8,  256, 0),
         # output_channels 3,
-        (1, 128,   3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   256, 0),
+        (1, 128,   3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth, 8,   256, 0),
         # input_channels 4,
         (1,   4, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                      None, 1,     0, 0),
 
         # Encoder
 
         # kernel 3x3
-        (1, 128, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth,  4,    64, 0),
-        (1, 256, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth,  2,  1024, 0),
+        (1, 128, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth,  4,    64, 0),
+        (1, 256, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth,  2,  1024, 0),
 
         # input_channels 3,
-        (1,   3, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   1024, 0),
+        (1,   3, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth, 8,   1024, 0),
 
         # input_channels 8,
-        (1, 512,   8, 128,   128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 2,     0,  0),
+        (1, 512,   8, 128,   128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth, 2,     0,  0),
 
         # stride 2x2
-        (1, 128,   128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), HS, False, ttnn.Conv2dDRAMSliceWidth, 8,   256, 0),
-        (1, 256,   256,  512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 4,   1024, 0),
-        (1, 512,   512,  256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dDRAMSliceWidth, 2,   512, 0),
+        (1, 128,   128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), HS, False, ttnn.Op2dDRAMSliceWidth, 8,   256, 0),
+        (1, 256,   256,  512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth, 4,   1024, 0),
+        (1, 512,   512,  256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Op2dDRAMSliceWidth, 2,   512, 0),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
@@ -3432,7 +3432,7 @@ def test_conv2d_vae_sdxl(
         slice_config = None
         use_dram_slicing = False
     else:
-        slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
+        slice_config = ttnn.Op2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
         use_dram_slicing = True
 
     run_conv(
@@ -3985,7 +3985,7 @@ def test_conv2d_act_dealloc(
     )
     slice_config = None
     if slice_type is not None:
-        slice_config = ttnn.Conv2dSliceConfig(
+        slice_config = ttnn.Op2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         )
@@ -4341,7 +4341,7 @@ def test_conv_dram_panoptic(
         input_layout=input_layout,
         output_layout=input_layout,
         shard_layout=shard_layout,
-        slice_config=ttnn.Conv2dSliceConfig(
+        slice_config=ttnn.Op2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
@@ -4567,7 +4567,7 @@ def test_conv2d_dram_oft(
         packer_l1_acc=packer_l1_acc,
         run_twice=False,
         fast_compare=True,
-        slice_config=ttnn.Conv2dSliceConfig(
+        slice_config=ttnn.Op2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
@@ -4931,7 +4931,7 @@ def test_conv2d_1kX1k(
     slice_config = None
 
     if slice_type != None:
-        slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type)
+        slice_config = ttnn.Op2dSliceConfig(slice_type=slice_type)
 
     run_conv(
         device=device,

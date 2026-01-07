@@ -16,7 +16,7 @@
 namespace ttnn {
 namespace operations::pool {
 
-using op_slicing::Op2DSliceConfig;
+using op_slicing::Op2dSliceConfig;
 
 struct MaxPoolWithIndicesResult {
     Tensor output;
@@ -36,7 +36,7 @@ struct MaxPool2DOp {
         std::array<uint32_t, 2> dilation,
         bool ceil_mode = false,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
+        const std::optional<Op2dSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
@@ -58,7 +58,7 @@ struct AvgPool2DOp {
         bool count_include_pad = true,
         std::optional<int32_t> divisor_override = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
+        const std::optional<Op2dSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         bool deallocate_input = false,

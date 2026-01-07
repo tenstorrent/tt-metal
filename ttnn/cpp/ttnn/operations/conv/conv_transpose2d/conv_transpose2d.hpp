@@ -46,7 +46,7 @@ struct ConvTranpose2dOperation {
         const std::optional<const conv2d::Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
+        const std::optional<const conv2d::Op2dSliceConfig>& dram_slice_config_ = std::nullopt,
         bool mirror_kernel = true,
         bool return_output_dim = false,
         bool return_weights_and_bias = false);

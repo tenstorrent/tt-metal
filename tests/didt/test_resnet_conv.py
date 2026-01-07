@@ -134,7 +134,7 @@ class ResnetConvTest(OpTestBase):
             input_height=self.input_height,
             input_width=self.input_width,
             conv_config=self.program_config,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
             compute_config=self.compute_config,
             groups=self.groups,
             dtype=self.out_dtype,

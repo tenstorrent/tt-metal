@@ -526,7 +526,7 @@ Convolution
    :template: class.rst
 
    ttnn.Conv2dConfig
-   ttnn.Conv2dSliceConfig
+   ttnn.Op2dSliceConfig
 
 Pooling
 =======

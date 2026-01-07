@@ -41,7 +41,7 @@ bottleneck_layer_optimisations = {
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "reshard_if_not_optimal": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         conv2={
             "act_block_h": 256,
@@ -52,14 +52,14 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         conv3={
             "act_block_h": 32,
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             "deallocate_activation": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         downsample={
             "act_block_h": 32,
@@ -70,7 +70,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
     ),
     "layer2": BottleneckOptimizer(
@@ -81,7 +81,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         conv2={
             "act_block_h": 256,
@@ -91,7 +91,7 @@ bottleneck_layer_optimisations = {
             "reshard_if_not_optimal": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         conv3={
             "act_block_h": 32,
@@ -102,7 +102,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         downsample={
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -112,7 +112,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
     ),
     "layer3": BottleneckOptimizer(
@@ -122,7 +122,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         conv2={
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -132,7 +132,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         conv3={
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -142,7 +142,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         downsample={
             "act_block_h": 32,
@@ -153,7 +153,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
     ),
     "layer4": BottleneckOptimizer(
@@ -164,7 +164,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
             "dtype": ttnn.bfloat16,
         },
         conv2={
@@ -176,7 +176,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
             "dtype": ttnn.bfloat16,
         },
         conv3={
@@ -187,7 +187,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
         downsample={
             "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -197,7 +197,7 @@ bottleneck_layer_optimisations = {
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
             "memory_config": ttnn.L1_MEMORY_CONFIG,
-            "slice_config": ttnn.Conv2dL1FullSliceConfig,
+            "slice_config": ttnn.Op2dL1FullSliceConfig,
         },
     ),
 }

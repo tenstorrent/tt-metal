@@ -191,7 +191,7 @@ def ttnn_retinanet_classification_head(
             compute_config=compute_config,
             conv_config=fpn_final_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Op2dL1FullSliceConfig,
         )
 
         N, H_out, W_out, _ = cls_logits.shape

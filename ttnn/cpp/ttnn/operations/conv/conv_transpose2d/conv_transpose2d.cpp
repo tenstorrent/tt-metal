@@ -536,7 +536,7 @@ public:
     uint32_t get_L1_usage(
         const IOShape& output_slice_start,
         const IOShape& output_slice_end,
-        const op_slicing::Op2DSliceConfig& slice_config) const override {
+        const op_slicing::Op2dSliceConfig& slice_config) const override {
         auto conv_config = this->conv_config;
         auto sliced_input_tensor_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
         if (!conv_config.shard_layout.has_value()) {
@@ -806,7 +806,7 @@ public:
 // Calls conv_transpose2d_L1 to perform the conv_transpose on the sliced input tensor.
 // Finally, it uses ttnn::experimental::slice_write to write the output tensor back to DRAM.
 // The function is called in a loop for each slice of the output tensor.
-// The Conv2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
+// The Op2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
 // number of such slices.
 Result conv_transpose2d_DRAM(
     const ttnn::Tensor& input_tensor,
@@ -828,7 +828,7 @@ Result conv_transpose2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const Op2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
@@ -963,7 +963,7 @@ Result conv_transpose2d_DRAM(
 }
 
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
-    const ttnn::Tensor& input_tensor, const std::optional<const Conv2dSliceConfig>& slice_config) {
+    const ttnn::Tensor& input_tensor, const std::optional<const Op2dSliceConfig>& slice_config) {
     return determine_conv_transpose2d_execution_path(
         input_tensor.storage_type(), input_tensor.memory_config(), slice_config);
 }
@@ -971,9 +971,9 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     const tt::tt_metal::StorageType& storage_type,
     const MemoryConfig& memory_config,
-    const std::optional<const op_slicing::Op2DSliceConfig>& slice_config) {
+    const std::optional<const op_slicing::Op2dSliceConfig>& slice_config) {
     // If slice config explicitly specifies L1_FULL, use L1 path
-    if (slice_config.has_value() && slice_config->slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+    if (slice_config.has_value() && slice_config->slice_type == Op2dSliceConfig::SliceType::L1_FULL) {
         return ConvT2dExecutionPath::L1;
     }
 
@@ -1049,7 +1049,7 @@ ResultWithOptions ConvTranpose2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const Op2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel,
     bool return_output_dim,
     bool return_weights_and_bias) {

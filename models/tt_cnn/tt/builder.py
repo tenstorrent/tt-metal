@@ -26,19 +26,19 @@ class SliceStrategyConfiguration:
 @dataclass
 class HeightSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return ttnn.Conv2dDRAMSliceHeight
+        return ttnn.Op2dDRAMSliceHeight
 
 
 @dataclass
 class WidthSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return ttnn.Conv2dDRAMSliceWidth
+        return ttnn.Op2dDRAMSliceWidth
 
 
 @dataclass
 class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return ttnn.Conv2dL1Full
+        return ttnn.Op2dL1Full
 
     def __post_init__(self):
         if self.num_slices <= 1:
@@ -50,7 +50,7 @@ class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
 @dataclass
 class L1FullSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return ttnn.Conv2dL1Full
+        return ttnn.Op2dL1Full
 
 
 SliceStrategy = Union[
@@ -494,10 +494,10 @@ def to_compute_config(configuration: Conv2dConfiguration, device: ttnn.Device):
 def to_slice_config(slice_strategy: Optional[SliceStrategy]):
     if slice_strategy is None:
         return None
-    # Channel slicing uses the predefined Conv2dL1FullSliceConfig
+    # Channel slicing uses the predefined Op2dL1FullSliceConfig
     if isinstance(slice_strategy, ChannelSliceStrategyConfiguration):
-        return ttnn.Conv2dL1FullSliceConfig
-    return ttnn.Conv2dSliceConfig(
+        return ttnn.Op2dL1FullSliceConfig
+    return ttnn.Op2dSliceConfig(
         slice_type=slice_strategy.get_slice_type(),
         num_slices=slice_strategy.get_num_slices(),
     )

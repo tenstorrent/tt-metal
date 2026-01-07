@@ -13,9 +13,9 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import math
 
-SliceHeight = ttnn.Conv2dDRAMSliceHeight
-SliceWidth = ttnn.Conv2dDRAMSliceWidth
-L1Full = ttnn.Conv2dL1Full
+SliceHeight = ttnn.Op2dDRAMSliceHeight
+SliceWidth = ttnn.Op2dDRAMSliceWidth
+L1Full = ttnn.Op2dL1Full
 
 
 def run_conv_transpose2d(
@@ -279,7 +279,7 @@ def test_convt2d_dram(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
-    dram_slice_config = ttnn.Conv2dSliceConfig(
+    dram_slice_config = ttnn.Op2dSliceConfig(
         slice_type=slice_type,
         num_slices=0 if auto_slice else num_slices,
     )
@@ -502,7 +502,7 @@ def test_convt2d_dram_without_weights_dtype_regression(device):
     )
 
     # Use DRAM slice config to exercise the DRAM sliced codepath in prepare_conv_transpose2d_weights
-    dram_slice_config = ttnn.Conv2dSliceConfig(
+    dram_slice_config = ttnn.Op2dSliceConfig(
         slice_type=SliceWidth,
         num_slices=4,
     )
@@ -609,7 +609,7 @@ def test_convt2d_dram_deallocate_activation_regression(device):
     )
 
     # Use DRAM slice config to exercise the DRAM sliced codepath
-    dram_slice_config = ttnn.Conv2dSliceConfig(
+    dram_slice_config = ttnn.Op2dSliceConfig(
         slice_type=SliceWidth,
         num_slices=4,
     )

@@ -268,11 +268,11 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
-        slice_config = ttnn.Conv2dSliceConfig(
+        slice_config = ttnn.Op2dSliceConfig(
             num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
                 (h, w, self.in_channels, self.out_channels)
             ],
-            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            slice_type=ttnn.Op2dDRAMSliceWidth,
         )
 
         try:

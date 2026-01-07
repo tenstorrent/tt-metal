@@ -26,7 +26,7 @@ def prepare_conv_weights_func(
     device,
     groups,
     is_owned,
-    slice_config=ttnn.Conv2dL1FullSliceConfig,
+    slice_config=ttnn.Op2dL1FullSliceConfig,
     weights_dtype=None,
     torch_weights_dtype=None,
     enable_kernel_stride_folding=False,
@@ -415,8 +415,8 @@ def test_prepare_bias(
     assert passing
 
 
-SliceHeight = ttnn.Conv2dDRAMSliceHeight
-SliceWidth = ttnn.Conv2dDRAMSliceWidth
+SliceHeight = ttnn.Op2dDRAMSliceHeight
+SliceWidth = ttnn.Op2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -466,7 +466,7 @@ def test_conv_dram(
         device,
         groups=1,
         is_owned=False,
-        slice_config=ttnn.Conv2dSliceConfig(
+        slice_config=ttnn.Op2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         ),

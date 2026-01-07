@@ -223,7 +223,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 512,
-        "slice_type": ttnn.Conv2dDRAMSliceWidth,
+        "slice_type": ttnn.Op2dDRAMSliceWidth,
         "num_slices": 4,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -241,7 +241,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 512,
-        "slice_type": ttnn.Conv2dDRAMSliceWidth,
+        "slice_type": ttnn.Op2dDRAMSliceWidth,
         "num_slices": 8,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -277,7 +277,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 256,
-        "slice_type": ttnn.Conv2dDRAMSliceWidth,
+        "slice_type": ttnn.Op2dDRAMSliceWidth,
         "num_slices": 2,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -295,7 +295,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 256,
-        "slice_type": ttnn.Conv2dDRAMSliceWidth,
+        "slice_type": ttnn.Op2dDRAMSliceWidth,
         "num_slices": 8,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -313,7 +313,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 512,
-        "slice_type": ttnn.Conv2dDRAMSliceWidth,
+        "slice_type": ttnn.Op2dDRAMSliceWidth,
         "num_slices": 16,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -388,7 +388,7 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
     slice_type = test_config["slice_type"]
     num_slices = test_config["num_slices"]
     slice_config = (
-        ttnn.Conv2dSliceConfig(
+        ttnn.Op2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
         )

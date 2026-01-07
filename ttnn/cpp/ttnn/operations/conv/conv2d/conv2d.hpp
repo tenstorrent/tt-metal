@@ -51,7 +51,7 @@ struct Conv2dOperation {
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-        const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
+        const std::optional<const Op2dSliceConfig>& dram_slice_config_ = std::nullopt,
         bool return_output_dim = false,
         bool return_weights_and_bias = false);
 };

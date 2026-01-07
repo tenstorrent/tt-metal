@@ -173,8 +173,8 @@ def test_conv_dram_config(
     )
 
 
-SliceHeight = ttnn.Conv2dDRAMSliceHeight
-SliceWidth = ttnn.Conv2dDRAMSliceWidth
+SliceHeight = ttnn.Op2dDRAMSliceHeight
+SliceWidth = ttnn.Op2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize(

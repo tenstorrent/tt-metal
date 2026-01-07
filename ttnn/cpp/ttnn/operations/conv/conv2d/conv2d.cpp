@@ -519,7 +519,7 @@ public:
     uint32_t get_L1_usage(
         const IOShape& output_slice_start,
         const IOShape& output_slice_end,
-        const op_slicing::Op2DSliceConfig& slice_config) const override {
+        const op_slicing::Op2dSliceConfig& slice_config) const override {
         // Remove this->conv_config from scope so that for each slice, conv_config can be calculated independently.
         auto conv_config = this->conv_config;
         bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -698,7 +698,7 @@ public:
 // Calls conv2d_L1 to perform the convolution on the sliced input tensor.
 // Finally, it uses ttnn::experimental::slice_write to write the output tensor back to DRAM.
 // The function is called in a loop for each slice of the output tensor.
-// The Conv2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
+// The Op2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
 // number of such slices.
 // Conv2dConfig does not control the final output, but rather the conv2d_L1 function that is called internally.
 Result conv2d_DRAM(
@@ -720,7 +720,7 @@ Result conv2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    const std::optional<const Op2dSliceConfig>& dram_slice_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -870,7 +870,7 @@ ResultWithOptions Conv2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const Conv2dSliceConfig>& slice_config_,
+    const std::optional<const Op2dSliceConfig>& slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
     // Determine execution path based on configuration and input properties
