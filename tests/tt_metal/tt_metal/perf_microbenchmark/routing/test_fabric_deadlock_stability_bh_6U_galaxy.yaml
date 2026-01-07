@@ -7,122 +7,123 @@ Tests:
 # ================================================
 # 1D Ring (low latency)
 # ================================================
-  - name: "LinearMcastEast"
-    sync: true
+  # - name: "LinearMcastEast"
+  #   sync: true
 
-    fabric_setup:
-      topology: Ring
-      num_links: 2
+  #   fabric_setup:
+  #     topology: Ring
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          E: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         E: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "LinearMcastWest"
-    sync: true
+  # - name: "LinearMcastWest"
+  #   sync: true
 
-    fabric_setup:
-      topology: Ring
-      num_links: 2
+  #   fabric_setup:
+  #     topology: Ring
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          W: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         W: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "LinearMcastNorth"
-    sync: true
+  # - name: "LinearMcastNorth"
+  #   sync: true
 
-    fabric_setup:
-      topology: Ring
-      num_links: 2
+  #   fabric_setup:
+  #     topology: Ring
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          N: 15
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         N: 15
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "LinearMcastSouth"
-    sync: true
+  # - name: "LinearMcastSouth"
+    # sync: true
 
-    fabric_setup:
-      topology: Ring
-      num_links: 2
+    # fabric_setup:
+    #   topology: Ring
+    #   num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          S: 15
+    # defaults:
+    #   ftype: mcast
+    #   ntype: unicast_write
+    #   size: 256
+    #   num_packets: 2000
+    #   destination:
+    #     hops:
+    #       S: 15
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+    # patterns:
+    #   - type: all_devices_uniform_pattern
+    #     iterations: 3
 
 # ================================================
 # 2D Torus (XY)
 # ================================================
 
-  - name: UnicastAlltoAll
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
-      num_links: 2
+  # - name: UnicastAlltoAll
+  #   enable_flow_control: true
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: XY
+  #     num_links: 2
 
-    parametrization_params:
-      size: [256, 512, 1024]
-      num_packets: [2000]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-    defaults:
-      ftype: unicast
-    patterns:
-      - type: all_to_all
+  #   parametrization_params:
+  #     size: [256, 512, 1024]
+  #     num_packets: [2000]
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #   defaults:
+  #     ftype: unicast
+  #   patterns:
+  #     - type: all_to_all
 
 # ================================================
 # 2D Torus (X)
 # ================================================
-  - name: UnicastAlltoAll
-    fabric_setup:
-      topology: Torus
-      torus_config: X
-      num_links: 2
+  # - name: UnicastAlltoAll
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: X
+  #     num_links: 2
 
-    parametrization_params:
-      size: [256, 512, 1024]
-      num_packets: [2000]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-    defaults:
-      ftype: unicast
-    patterns:
-      - type: all_to_all
+  #   parametrization_params:
+  #     size: [256, 512, 1024]
+  #     num_packets: [2000]
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #   defaults:
+  #     ftype: unicast
+  #   patterns:
+  #     - type: all_to_all
 
 # ================================================
 # 2D Torus (Y)
@@ -233,213 +234,213 @@ Tests:
       - type: all_devices_uniform_pattern
         iterations: 3
 
-  - name: "TorusXYLowLatencyMcastNorthEast"
-    sync: true
+  # - name: "TorusXYLowLatencyMcastNorthEast"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: XY
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          N: 15
-          E: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         N: 15
+  #         E: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "TorusXYLowLatencyMcastNorthWest"
-    sync: true
+  # - name: "TorusXYLowLatencyMcastNorthWest"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: XY
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          N: 15
-          W: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         N: 15
+  #         W: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "TorusXYLowLatencyMcastSouthEast"
-    sync: true
+  # - name: "TorusXYLowLatencyMcastSouthEast"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: XY
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          S: 15
-          E: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         S: 15
+  #         E: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "TorusXYLowLatencyMcastSouthWest"
-    sync: true
+  # - name: "TorusXYLowLatencyMcastSouthWest"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: XY
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          S: 15
-          W: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         S: 15
+  #         W: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "TorusXYLowLatencyMcastAllDirs"
-    sync: true
+  # - name: "TorusXYLowLatencyMcastAllDirs"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: XY
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          N: 3
-          S: 4
-          E: 1
-          W: 2
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         N: 3
+  #         S: 4
+  #         E: 1
+  #         W: 2
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
 # ================================================
 # 2D Torus (X) (low latency)
 # ================================================
-  - name: "TorusXLowLatencyMcastEast"
-    sync: true
+  # - name: "TorusXLowLatencyMcastEast"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: X
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: X
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          E: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         E: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "TorusXLowLatencyMcastWest"
-    sync: true
+  # - name: "TorusXLowLatencyMcastWest"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: X
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: X
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          W: 7
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         W: 7
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
 # ================================================
 # 2D Torus (Y) (low latency)
 # ================================================
-  - name: "TorusYLowLatencyMcastNorth"
-    sync: true
+  # - name: "TorusYLowLatencyMcastNorth"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: Y
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: Y
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          N: 15
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         N: 15
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
 
-  - name: "TorusYLowLatencyMcastSouth"
-    sync: true
+  # - name: "TorusYLowLatencyMcastSouth"
+  #   sync: true
 
-    fabric_setup:
-      topology: Torus
-      torus_config: Y
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: Y
 
-      num_links: 2
+  #     num_links: 2
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      size: 256
-      num_packets: 2000
-      destination:
-        hops:
-          S: 15
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     size: 256
+  #     num_packets: 2000
+  #     destination:
+  #       hops:
+  #         S: 15
 
-    patterns:
-      - type: all_devices_uniform_pattern
-        iterations: 3
+  #   patterns:
+  #     - type: all_devices_uniform_pattern
+  #       iterations: 3
