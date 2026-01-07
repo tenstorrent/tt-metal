@@ -107,7 +107,11 @@ void FabricContext::compute_packet_specifications() {
         if (max_2d_hops_ == 0) {
             log_warning(
                 tt::LogFabric,
-                "Max 2D routing hops were determined as 0, check mesh topology before running fabric workloads");
+                "Max 2D routing hops were determined as 0, check mesh topology before running fabric workloads, "
+                "defaulting to: {}",
+                Limits::MAX_2D_HOPS);
+            // NOTE: Default to a non-zero value as we might be running tests in a simulated/mock environment
+            max_2d_hops_ = Limits::MAX_2D_HOPS;
         }
 
         // Validate 2D topology against route buffer limits
@@ -127,7 +131,11 @@ void FabricContext::compute_packet_specifications() {
         if (max_1d_hops_ == 0) {
             log_warning(
                 tt::LogFabric,
-                "Max 1D routing hops were determined as 0, check mesh topology before running fabric workloads");
+                "Max 1D routing hops were determined as 0, check mesh topology before running fabric workloads, "
+                "defaulting to: {}",
+                Limits::MAX_1D_HOPS);
+            // NOTE: Default to a non-zero value as we might be running tests in a simulated/mock environment
+            max_1d_hops_ = Limits::MAX_1D_HOPS;
         }
 
         // Validate 1D topology against memory map limits
