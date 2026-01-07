@@ -168,6 +168,28 @@ TEST_F(MeshWatcherFixture, WatcherArgCountCheck) {
             EXPECT_EQ(read_result[i + rtas.size() + 2], crtas[i]);
         }
     }
+
+    // Call SetRuntimeArgs again. This tests the case when we're memcpying new data
+    // directly into the command issue queue with the arg count
+    auto& program_from_workload = workload.get_programs().at(device_range);
+    SetRuntimeArgs(program_from_workload, kernel, core_range, rtas);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    for (const auto& core : core_range) {
+        read_result.clear();
+        tt::tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, total_read_size, read_result);
+        // First check RTA and CRTA counts match as expected
+        EXPECT_EQ(read_result[0], rtas.size());
+        EXPECT_EQ(read_result[1], crtas.size());
+        // Second check if the RTA and CRTA payloads match as expected
+        for (uint32_t i = 0; i < rtas.size(); i++) {
+            EXPECT_EQ(read_result[i + 2], rtas[i]);
+        }
+        for (uint32_t i = 0; i < crtas.size(); i++) {
+            EXPECT_EQ(read_result[i + rtas.size() + 2], crtas[i]);
+        }
+    }
 }
 
 // This test sets MAX_RTA_IDX == size of RTA payload. This should trigger dev_msgs::DebugAssertRtaOutOfBounds
@@ -301,7 +323,8 @@ TEST_F(MeshWatcherFixture, WatcherCRTACountAsserts) {
 }
 
 // In this test no RTA or CRTA are set, so counts read back should be zero
-// This is an edge case since the dispatcher doesn't dispatch anything, but
+// This is an edge case since the dispatcher doesn't dispatch anything, but RTA and CRTA offsets
+// are initialized to 0xBEEF for device to interpret it as no arg case (no payload)
 // Tests run on RISCV_0 and TRISC0
 TEST_F(MeshWatcherFixture, WatcherZeroArgCheck) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");

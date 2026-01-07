@@ -508,8 +508,17 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
             logical_core.str(),
             set_rt_args.size(),
             runtime_args.size());
+        // If watcher is enabled, the second time set_runtime_args is called, make sure we dont overwrite
+        // the arg count by adding a +1 to the dest (which is now pointing to the command issue queue)
+        const bool watcher_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+                                     !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+        // Check if pointer has been retargeted to command stream (which has count header)
+        const bool pointer_retargeted =
+            (this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data != set_rt_args.data());
+        const uint32_t offset = (watcher_enabled && pointer_retargeted) ? 1 : 0;
         std::memcpy(
-            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
+            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data +
+                offset,  // +1 to skip count word
             runtime_args.data(),
             runtime_args.size() * sizeof(uint32_t));
     }
