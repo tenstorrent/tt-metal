@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 
 # Import from local reference files instead of HuggingFace
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -47,8 +48,8 @@ def reference_model(hf_config):
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 2048),
-    ],
+    ]
+    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
 def test_forward_pass(
     mode,
@@ -62,6 +63,13 @@ def test_forward_pass(
     topk_fallback,
 ):
     """Test forward pass against reference model."""
+
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
+
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights

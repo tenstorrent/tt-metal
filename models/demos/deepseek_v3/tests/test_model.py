@@ -8,6 +8,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -291,9 +292,8 @@ def run_test_forward_pass_dpmodel(
     "mode, seq_len, batch_size_per_row",
     [
         ("decode", 1, 32),
-        ("prefill", 128, 1),
-        # ("prefill", 2048),  # Test chunking # TODO: Uncomment once MLA prefill works
-    ],
+    ]
+    + [("prefill", seq_len, 1) for seq_len in PREFILL_SEQ_LENS],
 )
 @pytest.mark.parametrize("test_closure", [run_test_forward_pass_ppmodel, run_test_forward_pass_dpmodel])
 def test_forward_pass(
@@ -311,6 +311,11 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
 
