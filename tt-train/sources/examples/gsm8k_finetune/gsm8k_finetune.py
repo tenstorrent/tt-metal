@@ -44,10 +44,9 @@ CONFIG = "training_gsm8k_tinyllama.yaml"
 
 
 class CollateFn:
-    def __init__(self, 
-                eos_token_id: int, 
-                max_sequence_length: int, 
-                padded_vocab_size: int):
+    def __init__(
+        self, eos_token_id: int, max_sequence_length: int, padded_vocab_size: int
+    ):
         self.eos_token_id = eos_token_id
         self.max_sequence_length = max_sequence_length
         self.padded_vocab_size = padded_vocab_size
@@ -125,7 +124,6 @@ def get_batch_generator(
 
     while True:
         for X_np, y_np, loss_scaler_np in dataloader:
-
             X = ttml.autograd.Tensor.from_numpy(
                 X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
             )
@@ -188,7 +186,6 @@ def generate_text_tt(
     )
 
     with no_grad():
-
         for _ in range(max_gen_tokens):
             # Sliding window for long prompts
             if len(prompt_tokens) > max_sequence_length:
@@ -206,7 +203,9 @@ def generate_text_tt(
 
             # [1,1,1,T] -> TT tensor
             padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
-                padded_prompt_tokens, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+                padded_prompt_tokens,
+                ttml.Layout.ROW_MAJOR,
+                ttml.autograd.DataType.UINT32,
             )
 
             # Forward: logits [1,1,T,V]
@@ -237,7 +236,9 @@ def generate_text_tt(
             prompt_tokens.append(next_token)
 
         # Decode once at the end
-        out = tokenizer.decode(prompt_tokens if return_with_prompt else generated_tokens)
+        out = tokenizer.decode(
+            prompt_tokens if return_with_prompt else generated_tokens
+        )
 
     model.train()
 
@@ -257,12 +258,12 @@ def validate(
 ):
     """
     Validation function that computes loss and generates answers for a few samples.
-    
+
     tt_model: TT model
     tokenizer: HuggingFace tokenizer
     val_batch_generator: generator yielding validation batches (from get_batch_generator)
     testing_data: tokenized testing dataset
-    loss_fn: loss function 
+    loss_fn: loss function
     causal_mask: causal mask tensor
     logits_mask_tensor: logits mask tensor (mask that keeps answer tokens)
     max_sequence_length: maximum sequence length
@@ -327,6 +328,7 @@ class TokenizedDataset(torch.utils.data.Dataset):
     X: list of tokenized questions
     y: list of tokenized answers
     """
+
     def __init__(self, X, y):
         self.X = X
         self.y = y
@@ -349,8 +351,10 @@ def tokenize_dataset(data, tokenizer: AutoTokenizer) -> TokenizedDataset:
     X = [sample["question"] for sample in data]
     y = [sample["answer"] for sample in data]
 
-    tok = lambda texts: tokenizer(texts, return_tensors="np", add_special_tokens=False)["input_ids"]  
-    return TokenizedDataset(tok(X), tok(y))  
+    tok = lambda texts: tokenizer(texts, return_tensors="np", add_special_tokens=False)[
+        "input_ids"
+    ]
+    return TokenizedDataset(tok(X), tok(y))
 
 
 def train():

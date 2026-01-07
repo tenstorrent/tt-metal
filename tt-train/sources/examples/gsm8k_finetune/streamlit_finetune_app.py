@@ -726,12 +726,16 @@ def main():
         if current_data:
             # Display current metrics
             metrics = [
-                ("Current Step", f"{current_data['step']:,}", f"Epoch {current_data['epoch']}"),
+                (
+                    "Current Step",
+                    f"{current_data['step']:,}",
+                    f"Epoch {current_data['epoch']}",
+                ),
                 ("Training Loss", f"{current_data['training_loss']:.4f}", None),
                 ("Validation Loss", f"{current_data['val_loss']:.4f}", None),
                 ("Learning Rate", f"{current_data['lr']:.2e}", None),
             ]
-            
+
             for col, (label, value, delta) in zip([col1, col2, col3, col4], metrics):
                 with col:
                     if delta:
@@ -753,7 +757,7 @@ def main():
                 ("Validation Loss", "N/A"),
                 ("Learning Rate", "N/A"),
             ]
-    
+
             for col, (label, value) in zip([col1, col2, col3, col4], metrics):
                 with col:
                     st.metric(label, value)
