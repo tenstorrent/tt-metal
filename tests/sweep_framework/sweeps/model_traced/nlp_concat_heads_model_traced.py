@@ -16,7 +16,7 @@ from functools import partial
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 240
+TIMEOUT = 30
 
 # Load traced configurations from real model tests
 loader = MasterConfigLoader()
@@ -54,48 +54,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     Check if test vector is valid.
     Returns (True, "reason") if invalid (should skip), (False, None) if valid.
     """
-    input_a_memory_config = test_vector.get("input_a_memory_config")
-    input_shape = test_vector.get("input_shape")
-
-    # Skip HEIGHT_SHARDED config with large grid that causes TT_FATAL validation error
-    # Error: "physical_width == physical_shard_width" check fails
-    # Specific case: shape (8, 12, 384, 64) with HEIGHT_SHARDED on grid [0,0] to [5,7]
+    # NOTE: The HEIGHT_SHARDED config with large grid (8,12,384,64) on 48 cores that was
+    # previously filtered actually WORKS when using the correct output_memory_config
+    # (BLOCK_SHARDED). The loader properly extracts both input and output memory configs
+    # from the JSON, so no filtering is needed.
     # GitHub Issue: #35358
-
-    # Handle both dict (from JSON) and ttnn.MemoryConfig object (during generation)
-    if isinstance(input_a_memory_config, dict):
-        # JSON format
-        mem_layout = input_a_memory_config.get("data", {}).get("memory_layout")
-        shard_spec = input_a_memory_config.get("data", {}).get("shard_spec", {})
-
-        if mem_layout == "HEIGHT_SHARDED" and shard_spec:
-            grid = shard_spec.get("grid", [])
-            if grid and len(grid) > 0:
-                end = grid[0].get("end", {})
-                if end.get("x", 0) >= 5 and end.get("y", 0) >= 7:
-                    return True, "HEIGHT_SHARDED with large grid: physical_width != shard_width (TT_FATAL)"
-
-    elif hasattr(input_a_memory_config, "memory_layout") and hasattr(input_a_memory_config, "shard_spec"):
-        # ttnn.MemoryConfig object format (during parameter generation)
-        mem_layout_str = str(input_a_memory_config.memory_layout)
-
-        if "HEIGHT_SHARDED" in mem_layout_str and input_a_memory_config.shard_spec:
-            shard_spec = input_a_memory_config.shard_spec
-
-            if hasattr(shard_spec, "grid"):
-                grid = shard_spec.grid
-                # grid is a CoreRangeSet, check its ranges
-                if hasattr(grid, "ranges") and grid.ranges:
-                    for core_range in grid.ranges():
-                        # Check if end coordinates indicate large grid
-                        if hasattr(core_range, "end"):
-                            end = core_range.end
-                            if hasattr(end, "x") and hasattr(end, "y"):
-                                if end.x >= 5 and end.y >= 7:
-                                    return (
-                                        True,
-                                        "HEIGHT_SHARDED with large grid: physical_width != shard_width (TT_FATAL)",
-                                    )
 
     return False, None
 

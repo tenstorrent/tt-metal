@@ -91,7 +91,7 @@ def run(
     # nlp_create_qkv_heads_decode returns Q, K, V heads with shapes:
     # Input shape: [1, seq_len, batch, hidden_dim] where hidden_dim = (num_heads + 2*num_kv_heads) * head_dim
     # Outputs: Q [seq_len, batch, num_heads, head_dim], K [seq_len, batch, num_kv_heads, head_dim], V [seq_len, batch, num_kv_heads, head_dim]
-    # Reference implementation from test_nlp_create_qkv_heads_decode.py
+    # Reference implementation from test_nlp_create_qkv_heads_decode.py (lines 51-57)
     if len(shape) == 4:
         seq_len = shape[1]
         batch = shape[2]
@@ -104,7 +104,16 @@ def run(
         q_heads_torch = torch_input_tensor_a[:, :, :batch, : head_dim * num_heads].view(
             seq_len, batch, num_heads, head_dim
         )
+        # K heads: next num_kv_heads * head_dim elements
+        k_heads_torch = torch_input_tensor_a[
+            :, :, :batch, head_dim * num_heads : head_dim * (num_heads + num_kv_heads)
+        ].view(seq_len, batch, num_kv_heads, head_dim)
+        # V heads: remaining num_kv_heads * head_dim elements
+        v_heads_torch = torch_input_tensor_a[:, :, :batch, head_dim * (num_heads + num_kv_heads) :].view(
+            seq_len, batch, num_kv_heads, head_dim
+        )
 
+        # For comparison, use Q heads (the first output)
         torch_output_tensor = q_heads_torch
     else:
         torch_output_tensor = torch_input_tensor_a.clone()
@@ -138,7 +147,7 @@ def run(
         output_tensor = ttnn.to_torch(output_result)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC - using lower tolerance for complex operations
-    # The reference is zeros, so we expect low PCC but shapes should match
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.5)  # Lower tolerance for placeholder reference
+    # Check with PCC - using proper torch reference from unit test
+    # Compare Q heads (first output) with computed golden
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     return [pcc, e2e_perf]

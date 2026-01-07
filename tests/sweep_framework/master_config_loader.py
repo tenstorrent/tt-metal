@@ -297,7 +297,17 @@ class MasterConfigLoader:
             if nd_shard_spec and isinstance(nd_shard_spec, dict):
                 shard_spec = nd_shard_spec
 
-            if shard_spec and shard_spec != "std::nullopt" and tensor_shape:
+            # Check if shard_spec is nullopt - BLOCK_SHARDED can have nullopt shard_spec (default sharding)
+            if shard_spec == "std::nullopt" or not shard_spec:
+                # No shard spec - for BLOCK_SHARDED, return config without shard_spec
+                if "BLOCK_SHARDED" in memory_layout:
+                    # BLOCK_SHARDED without explicit shard_spec is valid (uses default sharding)
+                    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type_ttnn)
+                else:
+                    # Other sharded layouts need shard_spec, fall back to interleaved
+                    return ttnn.DRAM_MEMORY_CONFIG
+
+            if tensor_shape:
                 # Extract shard shape - prefer cleaner array format from nd_shard_spec
                 shard_shape = None
                 if "shard_shape" in shard_spec:
@@ -738,21 +748,22 @@ class MasterConfigLoader:
                                     parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # Determine output memory config based on operation
-                        # First, try to extract output memory config from arg1 (for operations like interleaved_to_sharded)
+                        # First, try to extract output memory config from arg1
                         output_mem_config = None
-                        if self._matches_operation(operation_name, "interleaved_to_sharded"):
-                            # interleaved_to_sharded has output memory config in arg1
-                            for arg in config:
-                                if isinstance(arg, dict) and "arg1" in arg:
-                                    if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
-                                        try:
-                                            output_mem_config = self.parse_memory_config(
-                                                arg["arg1"]["MemoryConfig"], tensor_config.shape
-                                            )
-                                            break
-                                        except Exception as e:
-                                            # If parsing fails, continue to next arg or use default
-                                            pass
+
+                        # Extract from arg1 for operations that have output memory config in arg1
+                        # (interleaved_to_sharded, nlp_concat_heads, etc.)
+                        for arg in config:
+                            if isinstance(arg, dict) and "arg1" in arg:
+                                if isinstance(arg["arg1"], dict) and "MemoryConfig" in arg["arg1"]:
+                                    try:
+                                        output_mem_config = self.parse_memory_config(
+                                            arg["arg1"]["MemoryConfig"], tensor_config.shape
+                                        )
+                                        break
+                                    except Exception as e:
+                                        # If parsing fails, continue to next arg or use default
+                                        pass
 
                         # If not extracted from arg1, use operation-specific defaults
                         if output_mem_config is None:
@@ -773,13 +784,9 @@ class MasterConfigLoader:
                                     output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
                                 else:
                                     output_mem_config = parsed_mem_config
-                            elif self._matches_operation(operation_name, "nlp_concat_heads"):
-                                # nlp_concat_heads changes output shape: [B,H,S,D] -> [B,1,S,H*D]
-                                # If input is sharded but output has nullopt shard_spec (incomplete config),
-                                # use INTERLEAVED as safe default since shard dimensions would differ
-                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
                             else:
-                                # For most unary ops, output matches input
+                                # For most unary ops (including nlp_concat_heads), output matches input
+                                # unless explicitly specified in arg1 (which is checked above)
                                 output_mem_config = parsed_mem_config
 
                         # Extract storage_type from tensor_config
@@ -972,6 +979,19 @@ class MasterConfigLoader:
                         "nlp_concat_heads_decode",
                         "experimental::nlp_concat_heads_decode",
                         "ttnn::experimental::nlp_concat_heads_decode",
+                        "split_query_key_value_and_split_heads",
+                        "experimental::split_query_key_value_and_split_heads",
+                        "ttnn::experimental::split_query_key_value_and_split_heads",
+                    ]
+                    else None
+                )
+                kv_input_height_list = (
+                    []
+                    if operation_name
+                    in [
+                        "split_query_key_value_and_split_heads",
+                        "experimental::split_query_key_value_and_split_heads",
+                        "ttnn::experimental::split_query_key_value_and_split_heads",
                     ]
                     else None
                 )
@@ -1136,6 +1156,19 @@ class MasterConfigLoader:
                         and "num_heads" in cfg
                     ):
                         num_heads_list.append(cfg["num_heads"])
+                    # Extract split_query_key_value_and_split_heads parameters
+                    if operation_name in [
+                        "split_query_key_value_and_split_heads",
+                        "experimental::split_query_key_value_and_split_heads",
+                        "ttnn::experimental::split_query_key_value_and_split_heads",
+                    ]:
+                        if "num_heads" in cfg:
+                            num_heads_list.append(cfg["num_heads"])
+                        if "kv_input_height" in cfg:
+                            kv_input_height_list.append(cfg["kv_input_height"])
+                        else:
+                            # Default value if not extracted (will be None)
+                            kv_input_height_list.append(None)
                     # Extract max_pool2d parameters
                     if self._matches_operation(operation_name, "max_pool2d"):
                         if "batch_size" in cfg:
@@ -1359,6 +1392,18 @@ class MasterConfigLoader:
                 ):
                     param_names.append("num_heads")
                     param_lists.append(num_heads_list)
+                # Add split_query_key_value_and_split_heads parameters
+                if operation_name in [
+                    "split_query_key_value_and_split_heads",
+                    "experimental::split_query_key_value_and_split_heads",
+                    "ttnn::experimental::split_query_key_value_and_split_heads",
+                ]:
+                    if num_heads_list:
+                        param_names.append("num_heads")
+                        param_lists.append(num_heads_list)
+                    if kv_input_height_list:
+                        param_names.append("kv_input_height")
+                        param_lists.append(kv_input_height_list)
                 # Add max_pool2d parameters
                 if self._matches_operation(operation_name, "max_pool2d"):
                     if batch_size_list and input_h_list and input_w_list and channels_list:
