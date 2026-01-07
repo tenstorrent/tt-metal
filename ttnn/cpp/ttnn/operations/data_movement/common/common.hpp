@@ -127,7 +127,7 @@ public:
             if (p2(args...)) {
                 *t2_required = true;
             }
-            return *t1_required or * t2_required;
+            return *t1_required or *t2_required;
         };
 
         auto merged_pre_transform = [t1 = this->pre_transform_,
