@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import ttnn
 
-from models.experimental.pi0.common.configs import GemmaConfig, PaliGemmaConfig, SigLIPConfig
+from models.experimental.pi0.common.configs import PaliGemmaConfig
 from .ttnn_gemma import (
     GemmaBlockTTNN,
     rms_norm_ttnn,
@@ -226,7 +226,7 @@ class PaliGemmaBackboneTTNN:
 
         for key, value in weights.items():
             if key.startswith(prefix):
-                new_key = key[len(prefix):]
+                new_key = key[len(prefix) :]
 
                 # Skip individual Q, K, V weights (now fused)
                 if new_key in ["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"]:
@@ -284,7 +284,7 @@ class PaliGemmaBackboneTTNN:
 
         for key, value in weights.items():
             if key.startswith(prefix):
-                new_key = key[len(prefix):]
+                new_key = key[len(prefix) :]
 
                 # Skip individual Q, K, V weights (now fused)
                 if new_key in ["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"]:

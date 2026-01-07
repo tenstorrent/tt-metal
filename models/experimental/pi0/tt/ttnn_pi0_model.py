@@ -34,8 +34,6 @@ from models.experimental.pi0.common.configs import (
     SuffixConfig,
     PaliGemmaConfig,
     DenoiseConfig,
-    GemmaConfig,
-    SigLIPConfig,
 )
 from models.experimental.pi0.common.weight_loader import PI0WeightLoader
 from .ttnn_prefix import PrefixEmbeddingTTNN

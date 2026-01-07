@@ -20,7 +20,6 @@ Optimizations over baseline:
 """
 
 import math
-from dataclasses import dataclass
 from typing import Dict
 
 import torch
@@ -768,7 +767,7 @@ class SigLIPVisionTowerTTNN:
         for prefix in prefixes:
             for key, value in weights.items():
                 if key.startswith(prefix):
-                    new_key = key[len(prefix):]
+                    new_key = key[len(prefix) :]
                     layer_weights[new_key] = value
         return layer_weights
 
