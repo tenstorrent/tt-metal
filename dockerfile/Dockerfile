@@ -66,17 +66,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install uv (not available via apt, install via pip)
-# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
-RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
-        python3 -m pip install --no-cache-dir --break-system-packages uv; \
-    else \
-        python3 -m pip install --no-cache-dir uv; \
-    fi
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY dockerfile/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 
-# Set up virtual environment using uv
+# Copy Python version configuration for consistent version across all stages
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && uv python install 3.10 && uv venv $PYTHON_ENV_DIR --python 3.10
+RUN . /tmp/python-version.conf && \
+    umask 000 && uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -202,17 +202,17 @@ FROM base AS release
 # Re-declare ARG to make it available in this stage
 ARG UBUNTU_VERSION
 
-# Install uv (not available via apt, install via pip)
-# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
-RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
-        python3 -m pip install --no-cache-dir --break-system-packages uv; \
-    else \
-        python3 -m pip install --no-cache-dir uv; \
-    fi
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY dockerfile/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 
-# Set up virtual environment using uv
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN uv python install 3.10 && uv venv $PYTHON_ENV_DIR --python 3.10
+RUN . /tmp/python-version.conf && \
+    uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -235,13 +235,9 @@ FROM base AS release-models
 # Re-declare ARG to make it available in this stage
 ARG UBUNTU_VERSION
 
-# Install uv (not available via apt, install via pip)
-# --break-system-packages required for PEP 668 compliance on Ubuntu 24.04+ (older pip doesn't support this flag)
-RUN if [ "$UBUNTU_VERSION" = "24.04" ]; then \
-        python3 -m pip install --no-cache-dir --break-system-packages uv; \
-    else \
-        python3 -m pip install --no-cache-dir uv; \
-    fi
+# Install uv with version pinning (centralized in install-uv.sh)
+COPY dockerfile/install-uv.sh /tmp/install-uv.sh
+RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh
 
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv

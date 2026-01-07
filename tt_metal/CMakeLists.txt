@@ -312,22 +312,12 @@ tt_set_library_rpath(tt_metal)
 #       so the system MPI libraries (in standard paths like /usr/lib64/openmpi/) will be found via
 #       the standard library search path, not via RPATH.
 #
-# Default ULFM prefix (matches distributed/CMakeLists.txt)
-# Can be overridden via -DULFM_PREFIX=/path/to/ulfm
-if(NOT DEFINED ULFM_DEFAULT_PREFIX)
-    set(ULFM_DEFAULT_PREFIX "/opt/openmpi-v5.0.7-ulfm")
-endif()
-
+# ULFM_PREFIX is set by cmake/mpi-config.cmake (included by distributed/CMakeLists.txt)
 set(TT_METAL_INSTALL_RPATH "$ORIGIN")
 if(TT_METAL_USING_ULFM)
     # Only add custom ULFM path when we're actually using it (Ubuntu builds with custom ULFM)
     # Fedora builds use system MPI and should NOT have this path in RPATH
-    # Use the same ULFM_PREFIX that was used during configuration
-    if(DEFINED ULFM_PREFIX)
-        list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_PREFIX}/lib")
-    else()
-        list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_DEFAULT_PREFIX}/lib")
-    endif()
+    list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_PREFIX}/lib")
 endif()
 set_target_properties(
     tt_metal

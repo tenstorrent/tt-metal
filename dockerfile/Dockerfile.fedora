@@ -20,7 +20,7 @@ timeout=10\n\
 minrate=100k\n\
 ' >> /etc/dnf/dnf.conf
 
-# Install uv early so all stages can use it
+# Install uv early so all stages can use it (Fedora has uv in its repos)
 RUN dnf install -y uv python3-devel && dnf clean all
 
 # Install runtime deps
@@ -80,9 +80,13 @@ RUN dnf install -y \
     && dnf install -y --setopt=install_weak_deps=False --exclude=openh264* doxygen graphviz \
     && dnf clean all
 
-# Set up virtual environment using uv
+# Copy Python version configuration for consistent version across all stages
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+RUN . /tmp/python-version.conf && \
+    umask 000 && uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -165,9 +169,13 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
-# Set up virtual environment using uv
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+RUN . /tmp/python-version.conf && \
+    uv python install $PYTHON_VERSION_RELEASE && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION_RELEASE
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -186,6 +194,9 @@ RUN uv pip install $WHEEL_FILENAME
 #############################################################
 
 FROM base AS release-models
+
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
 
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -241,9 +252,13 @@ RUN dnf install -y \
 
 FROM base AS basic-ttnn-runtime
 
-# Set up virtual environment using uv
+# Copy Python version configuration
+COPY dockerfile/python-version.conf /tmp/python-version.conf
+
+# Set up virtual environment using uv with centralized Python version
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
+RUN . /tmp/python-version.conf && \
+    uv python install $PYTHON_VERSION_RELEASE && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION_RELEASE
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"

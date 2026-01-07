@@ -31,10 +31,9 @@ if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
 endif()
 
-# ULFM MPI prefix - can be overridden via -DULFM_PREFIX=/path/to/ulfm
-if(NOT DEFINED ULFM_PREFIX)
-    set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
-endif()
+# Include centralized MPI configuration
+# This sets ULFM_PREFIX with appropriate defaults
+include(${CMAKE_SOURCE_DIR}/cmake/mpi-config.cmake)
 
 # Track whether we're using ULFM MPI (for RPATH configuration in parent scope)
 set(TT_METAL_USING_ULFM FALSE PARENT_SCOPE)

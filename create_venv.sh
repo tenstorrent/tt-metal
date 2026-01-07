@@ -1,6 +1,10 @@
 #!/bin/bash
 set -eo pipefail
 
+# Python version used by create_venv.sh
+# This should match dockerfile/python-version.conf for consistency
+VENV_PYTHON_VERSION="3.10"
+
 # Allow overriding Python command via environment variable
 if [ -z "$PYTHON_CMD" ]; then
     PYTHON_CMD="python3"
@@ -38,10 +42,10 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
 fi
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
-# Install Python 3.12 via uv and create virtual environment
-echo "Installing Python 3.12 via uv..."
-uv python install 3.12
-uv venv $PYTHON_ENV_DIR --python 3.12
+# Install Python via uv and create virtual environment
+echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
+uv python install ${VENV_PYTHON_VERSION}
+uv venv $PYTHON_ENV_DIR --python ${VENV_PYTHON_VERSION}
 source $PYTHON_ENV_DIR/bin/activate
 
 # Import functions for detecting OS

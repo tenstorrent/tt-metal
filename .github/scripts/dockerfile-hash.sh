@@ -21,11 +21,22 @@ if [[ $# -lt 1 ]]; then
 fi
 
 DOCKERFILE="$1"; shift
+
+# Validate that Dockerfile exists
+if [[ ! -f "$DOCKERFILE" ]]; then
+    echo "Error: Dockerfile not found: $DOCKERFILE" >&2
+    exit 1
+fi
+
 declare -a FILES=("$DOCKERFILE")
 
 # Add extra files passed as arguments
 for f in "$@"; do
-    [[ -f "$f" ]] && FILES+=("$f")
+    if [[ -f "$f" ]]; then
+        FILES+=("$f")
+    else
+        echo "Warning: Extra file not found, skipping: $f" >&2
+    fi
 done
 
 # Extract COPY source paths (skip --from=, skip ${VAR} refs, skip directories)
