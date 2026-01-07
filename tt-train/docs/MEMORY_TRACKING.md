@@ -251,8 +251,6 @@ Peak DRAM > Device Memory → Need optimization or larger device
 ```
 
 **Common optimizations:**
-- Enable activation recomputation (`memory_efficient` mode)
+- Enable gradient checkpointing (a.k.a activations recomputation) (`memory_efficient` mode)
 - Reduce batch size
-- Use gradient accumulation
-- Enable gradient checkpointing
-- Use mixed precision (fp16/bf16)
+- Use gradient accumulation (allows smaller per-iteration batch sizes)
