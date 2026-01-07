@@ -149,9 +149,9 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
-    semaphores.reserve(2);
-    // 2 semaphores: one for each round
-    for (size_t i = 0; i < 2; ++i) {
+    semaphores.reserve(3);
+    // 2 semaphores: one for each round + another semaphore for fw bw coordination
+    for (size_t i = 0; i < 3; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_root op");
