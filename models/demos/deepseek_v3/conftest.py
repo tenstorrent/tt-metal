@@ -276,7 +276,8 @@ def pytest_runtest_setup(item):
 
         # Check if current device is in the allowed list
         if current_device not in device_types:
+            # Use item.nodeid to show the actual test location and name
             pytest.skip(
-                f"Test requires device type(s) {device_types}, but current device is {current_device}. "
-                f"Use @pytest.mark.requires_device({device_types}) to mark this test."
+                f"{item.nodeid}: Test requires device type(s) {device_types}, but current device is {current_device}",
+                allow_module_level=False,
             )
