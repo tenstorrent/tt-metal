@@ -96,6 +96,11 @@ class Generator:
         self.enable_split_sampling = True
         self.mode = None
 
+    # Class-level capabilities (to be overridden by subclasses)
+    _model_capabilities = {
+        "supports_prefix_caching": True,
+    }
+
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
             return split_list(values, self.data_parallel)
