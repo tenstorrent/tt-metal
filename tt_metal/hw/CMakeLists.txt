@@ -118,10 +118,11 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
     OUTPUT_VARIABLE GPP_VERSION
 )
+
 message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 # check this is the version we want (the system version might be wrong)
-string(REGEX REPLACE "^\\([^:]*:([^)]*)\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
-if(NOT ${GPP_VERSION} STREQUAL ${SFPI_version})
+string(REGEX REPLACE "^\\([^:]+:([^[)]+)(\\[[0-9]+\\])?\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
+if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
     if(TT_USE_SYSTEM_SFPI)
         message(
             FATAL_ERROR
