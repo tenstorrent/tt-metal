@@ -146,7 +146,7 @@ void JitBuildEnv::init(
     }
 
     // Flags
-    string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions -fdump-rtl-all -fdump-tree-original ";
+    string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
 
     if(rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-frepo -fdump-rtl-all -fdump-tree-original ";
