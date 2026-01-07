@@ -20,12 +20,12 @@ Optimizations over baseline:
     3. Native ttnn.experimental.rotary_embedding (split-half pattern)
     4. Native ttnn.experimental.nlp_concat_heads for output
     5. Native ttnn.rms_norm (single fused kernel)
+    6. Pure TTNN RoPE precomputation (no torch dependency)
 """
 
 import math
 from typing import Dict, Optional, Tuple
 
-import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import GemmaConfig
@@ -69,11 +69,11 @@ def rms_norm_ttnn(
 def precompute_freqs_cis_meta_format(
     head_dim: int,
     max_seq_len: int,
+    device: ttnn.Device,
     base: float = 10000.0,
-    dtype: torch.dtype = torch.float32,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """
-    Precompute cos and sin for rotary embeddings for ttnn.experimental.rotary_embedding.
+    Precompute cos and sin for rotary embeddings using pure TTNN operations.
 
     ttnn.experimental.rotary_embedding uses the split-half pattern (same as Gemma):
     - rotate_half(x) = cat(-x[..., dim/2:], x[..., :dim/2])
@@ -87,33 +87,63 @@ def precompute_freqs_cis_meta_format(
     Args:
         head_dim: Dimension per head (must be even)
         max_seq_len: Maximum sequence length
+        device: TTNN device
         base: Base for frequency computation
-        dtype: Output dtype
 
     Returns:
-        Tuple of (cos, sin) each of shape (1, 1, max_seq_len, head_dim)
+        Tuple of (cos, sin) each of shape (1, 1, max_seq_len, head_dim) as TTNN tensors
     """
-    # Compute inverse frequencies
-    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=dtype) / head_dim))
+    half_dim = head_dim // 2
 
-    # Compute positions
-    t = torch.arange(max_seq_len, dtype=dtype)
+    # Compute inverse frequencies using ttnn.arange
+    # indices: [0, 2, 4, ..., head_dim-2]
+    indices = ttnn.arange(0, head_dim, 2, device=device, dtype=ttnn.float32)
+    # Convert to TILE_LAYOUT early (required for unary ops like pow, reciprocal, cos, sin)
+    indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
 
-    # Outer product: [max_seq_len, head_dim/2]
-    freqs_outer = torch.outer(t, freqs)
+    # freqs = 1.0 / (base ** (indices / head_dim))
+    exponents = ttnn.multiply(indices, 1.0 / head_dim)
+    ttnn.deallocate(indices)
+    base_powers = ttnn.pow(base, exponents)
+    ttnn.deallocate(exponents)
+    freqs = ttnn.reciprocal(base_powers)  # Shape: [half_dim]
+    ttnn.deallocate(base_powers)
 
-    # Compute cos/sin: [max_seq_len, head_dim/2]
-    cos = torch.cos(freqs_outer)
-    sin = torch.sin(freqs_outer)
+    # Compute positions: [0, 1, 2, ..., max_seq_len-1]
+    t = ttnn.arange(0, max_seq_len, 1, device=device, dtype=ttnn.float32)  # Shape: [max_seq_len]
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+
+    # Outer product: t[i] * freqs[j] -> [max_seq_len, half_dim]
+    # Reshape for broadcasting: t -> [max_seq_len, 1], freqs -> [1, half_dim]
+    t_col = ttnn.reshape(t, (max_seq_len, 1))
+    ttnn.deallocate(t)
+    freqs_row = ttnn.reshape(freqs, (1, half_dim))
+    ttnn.deallocate(freqs)
+    freqs_outer = ttnn.multiply(t_col, freqs_row)  # Shape: [max_seq_len, half_dim]
+    ttnn.deallocate(t_col)
+    ttnn.deallocate(freqs_row)
+
+    # Compute cos/sin: [max_seq_len, half_dim]
+    cos_half = ttnn.cos(freqs_outer)
+    sin_half = ttnn.sin(freqs_outer)
+    ttnn.deallocate(freqs_outer)
 
     # Repeat for full head_dim: [c0, c1, ..., c_{n/2-1}, c0, c1, ..., c_{n/2-1}]
     # This matches the split-half rotation where x[i] pairs with x[i+dim/2]
-    cos = torch.cat([cos, cos], dim=-1)  # [seq, dim]
-    sin = torch.cat([sin, sin], dim=-1)  # [seq, dim]
+    cos_2d = ttnn.concat([cos_half, cos_half], dim=-1)  # [seq, head_dim]
+    sin_2d = ttnn.concat([sin_half, sin_half], dim=-1)  # [seq, head_dim]
+    ttnn.deallocate(cos_half)
+    ttnn.deallocate(sin_half)
 
-    # Add batch and head dimensions: [1, 1, seq, dim]
-    cos = cos.unsqueeze(0).unsqueeze(0)
-    sin = sin.unsqueeze(0).unsqueeze(0)
+    # Reshape to add batch and head dimensions: [1, 1, seq, head_dim]
+    cos = ttnn.reshape(cos_2d, (1, 1, max_seq_len, head_dim))
+    sin = ttnn.reshape(sin_2d, (1, 1, max_seq_len, head_dim))
+    ttnn.deallocate(cos_2d)
+    ttnn.deallocate(sin_2d)
+
+    # Convert to bfloat16 for use with rotary_embedding
+    cos = ttnn.typecast(cos, ttnn.bfloat16)
+    sin = ttnn.typecast(sin, ttnn.bfloat16)
 
     return cos, sin
 
