@@ -66,6 +66,13 @@ def update_model_config(config, batch_size):
     core_grid_10x12 = ttnn.CoreGrid(y=10, x=12)  # Fixed full grid for Blackhole
 ```
 
+> **Note (Portable Alternative):** For cross-architecture compatibility, you can dynamically query the device's compute grid instead of hardcoding values:
+> ```python
+> compute_grid_size = device.compute_with_storage_grid_size()
+> core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
+> ```
+> This approach enables portability across different Tenstorrent architectures. The Blackhole ViT implementation uses hardcoded values (10×12) for maximum performance optimization on this specific architecture.
+
 ### 2.2 Compute Kernel Configuration
 
 Blackhole uses `WormholeComputeKernelConfig` which provides additional optimization options:
