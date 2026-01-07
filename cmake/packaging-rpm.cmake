@@ -47,13 +47,22 @@ set(CPACK_RPM_PACKAGE_URL "https://tenstorrent.com")
 # Fedora builds use system OpenMPI 5+ (with ULFM support) and do not include custom ULFM paths.
 #
 # TODO: Re-enable __brp_check_rpaths once all builds use system MPI only.
-# TODO: Create tracking issue and link here (e.g., https://github.com/tenstorrent/tt-metal/issues/XXXXX)
+#       Tracking: Create a GitHub issue to track re-enabling this security check.
+#       The issue should include:
+#       - Verification that all builds (Ubuntu and Fedora) use only system MPI
+#       - Removal of custom ULFM path from RPATH
+#       - Testing that __brp_check_rpaths passes on all supported distros
+#
 # Currently disabled because:
-#   1. The ULFM path may not exist on the build host (only on target systems for Ubuntu builds)
+#   1. The ULFM path (/opt/openmpi-v5.0.7-ulfm/lib) may not exist on the build host
+#      (only on target systems for Ubuntu builds with custom ULFM)
 #   2. System MPI paths added by find_package() may vary between build and target hosts
-# Once all builds (including Ubuntu) use only system MPI, the __brp_check_rpaths skip can be removed.
-# This is a security/quality check that validates RPATHs in binaries and helps prevent
-# security issues from hardcoded paths. It should be re-enabled as soon as possible.
+#   3. The check fails when RPATH contains paths that don't exist at build time
+#
+# Once all builds (including Ubuntu) use only system MPI (no custom ULFM paths in RPATH),
+# the __brp_check_rpaths skip can be removed. This is a security/quality check that validates
+# RPATHs in binaries and helps prevent security issues from hardcoded paths. It should be
+# re-enabled as soon as possible.
 set(CPACK_RPM_SPEC_MORE_DEFINE
     "%define __strip /bin/true
 %define __brp_strip /bin/true

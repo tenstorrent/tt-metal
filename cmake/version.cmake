@@ -2,6 +2,79 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Helper function to get RPM version suffix based on distribution
+#
+# This function generates the appropriate RPM version suffix (e.g., .fc43, .el9, .lp15.5)
+# based on the detected Linux distribution. The suffix follows standard RPM conventions.
+#
+# Parameters:
+#   DISTRO_ID_VAL - Lowercase distribution ID (e.g., "fedora", "rhel", "opensuse")
+#   DISTRO_ID_LIKE_VAL - Lowercase ID_LIKE value (e.g., "fedora", "rhel fedora")
+#   DISTRO_VERSION_VAL - Distribution version (e.g., "43", "9", "15.5")
+#   OUTPUT_VAR - Variable name to set with the suffix result
+#
+# Supported distributions:
+#   - Fedora: .fc{VERSION}
+#   - RHEL/CentOS/Rocky/AlmaLinux: .el{VERSION}
+#   - openSUSE Leap: .lp{VERSION}
+#   - openSUSE Tumbleweed: .tw
+#   - SLES: .sles{VERSION}
+#
+# For unknown distributions, a warning is issued and an empty suffix is returned.
+function(get_rpm_version_suffix DISTRO_ID_VAL DISTRO_ID_LIKE_VAL DISTRO_VERSION_VAL OUTPUT_VAR)
+    set(SUFFIX "")
+
+    if(DISTRO_ID_VAL STREQUAL "fedora")
+        string(APPEND SUFFIX ".fc${DISTRO_VERSION_VAL}")
+    elseif(
+        DISTRO_ID_VAL
+            STREQUAL
+            "rhel"
+        OR DISTRO_ID_VAL
+            STREQUAL
+            "centos"
+        OR DISTRO_ID_VAL
+            STREQUAL
+            "rocky"
+        OR DISTRO_ID_VAL
+            STREQUAL
+            "almalinux"
+    )
+        string(APPEND SUFFIX ".el${DISTRO_VERSION_VAL}")
+    elseif(DISTRO_ID_LIKE_VAL MATCHES "rhel|fedora")
+        # Handle RHEL/Fedora derivatives that might not be explicitly listed
+        # (e.g., Oracle Linux, Amazon Linux, Scientific Linux, etc.)
+        # Use .el suffix for RHEL derivatives, .fc for Fedora derivatives
+        if(DISTRO_ID_LIKE_VAL MATCHES "rhel")
+            string(APPEND SUFFIX ".el${DISTRO_VERSION_VAL}")
+        else()
+            string(APPEND SUFFIX ".fc${DISTRO_VERSION_VAL}")
+        endif()
+    elseif(DISTRO_ID_VAL STREQUAL "opensuse-leap" OR DISTRO_ID_VAL STREQUAL "opensuse")
+        # openSUSE Leap uses version numbers like 15.5
+        string(APPEND SUFFIX ".lp${DISTRO_VERSION_VAL}")
+    elseif(DISTRO_ID_VAL STREQUAL "opensuse-tumbleweed")
+        # Tumbleweed is rolling release, use "tw" suffix
+        string(APPEND SUFFIX ".tw")
+    elseif(DISTRO_ID_VAL STREQUAL "sles")
+        # SLES uses version numbers like 15.5, 12.5
+        string(APPEND SUFFIX ".sles${DISTRO_VERSION_VAL}")
+    else()
+        # Unknown RPM distro - warn but don't fail
+        # This allows the build to continue even if the distro isn't explicitly supported
+        if(DISTRO_ID_VAL)
+            message(
+                WARNING
+                "Unknown RPM distribution '${DISTRO_ID_VAL}' - no version suffix added. "
+                "Supported distros: fedora, rhel, centos, rocky, almalinux, opensuse, sles. "
+                "If packaging for this distro, set VERSION_RPM explicitly via -DVERSION_RPM=..."
+            )
+        endif()
+    endif()
+
+    set(${OUTPUT_VAR} "${SUFFIX}" PARENT_SCOPE)
+endfunction()
+
 # May be called prior to project()
 function(ParseGitDescribe)
     set(version "")
@@ -104,62 +177,7 @@ function(ParseGitDescribe)
     include(${CMAKE_CURRENT_LIST_DIR}/detect-distro.cmake)
     detect_distro()
 
-    # Helper function to get RPM version suffix based on distribution
-    # Note: This is a nested function inside ParseGitDescribe() - valid CMake but some linters may not recognize it
-    function(get_rpm_version_suffix DISTRO_ID_VAL DISTRO_ID_LIKE_VAL DISTRO_VERSION_VAL OUTPUT_VAR)
-        set(SUFFIX "")
-
-        if(DISTRO_ID_VAL STREQUAL "fedora")
-            string(APPEND SUFFIX ".fc${DISTRO_VERSION_VAL}")
-        elseif(
-            DISTRO_ID_VAL
-                STREQUAL
-                "rhel"
-            OR DISTRO_ID_VAL
-                STREQUAL
-                "centos"
-            OR DISTRO_ID_VAL
-                STREQUAL
-                "rocky"
-            OR DISTRO_ID_VAL
-                STREQUAL
-                "almalinux"
-        )
-            string(APPEND SUFFIX ".el${DISTRO_VERSION_VAL}")
-        elseif(DISTRO_ID_LIKE_VAL MATCHES "rhel|fedora")
-            # Handle RHEL/Fedora derivatives that might not be explicitly listed
-            # (e.g., Oracle Linux, Amazon Linux, Scientific Linux, etc.)
-            # Use .el suffix for RHEL derivatives, .fc for Fedora derivatives
-            if(DISTRO_ID_LIKE_VAL MATCHES "rhel")
-                string(APPEND SUFFIX ".el${DISTRO_VERSION_VAL}")
-            else()
-                string(APPEND SUFFIX ".fc${DISTRO_VERSION_VAL}")
-            endif()
-        elseif(DISTRO_ID_VAL STREQUAL "opensuse-leap" OR DISTRO_ID_VAL STREQUAL "opensuse")
-            # openSUSE Leap uses version numbers like 15.5
-            string(APPEND SUFFIX ".lp${DISTRO_VERSION_VAL}")
-        elseif(DISTRO_ID_VAL STREQUAL "opensuse-tumbleweed")
-            # Tumbleweed is rolling release, use "tw" suffix
-            string(APPEND SUFFIX ".tw")
-        elseif(DISTRO_ID_VAL STREQUAL "sles")
-            # SLES uses version numbers like 15.5, 12.5
-            string(APPEND SUFFIX ".sles${DISTRO_VERSION_VAL}")
-        else()
-            # Unknown RPM distro - warn but don't fail
-            # This allows the build to continue even if the distro isn't explicitly supported
-            if(DISTRO_ID_VAL)
-                message(
-                    WARNING
-                    "Unknown RPM distribution '${DISTRO_ID_VAL}' - no version suffix added. Supported distros: fedora, rhel, centos, rocky, almalinux, opensuse, sles"
-                )
-            endif()
-        endif()
-
-        set(${OUTPUT_VAR} "${SUFFIX}" PARENT_SCOPE)
-    endfunction()
-
     # Add distro suffix based on detected OS for RPM packages
-    # Note: get_rpm_version_suffix is a nested function defined above within ParseGitDescribe()
     get_rpm_version_suffix("${DISTRO_ID}" "${DISTRO_ID_LIKE}" "${DISTRO_VERSION}" RPM_SUFFIX)
     string(APPEND VERSION_RPM "${RPM_SUFFIX}")
 
@@ -172,8 +190,16 @@ function(ParseGitDescribe)
             # Ubuntu or Ubuntu-based distros (e.g., Pop!_OS, Linux Mint)
             string(APPEND VERSION_DEB "~ubuntu${DISTRO_VERSION}")
         else()
-            # Fallback: assume Ubuntu for backwards compatibility
-            string(APPEND VERSION_DEB "~ubuntu${DISTRO_VERSION}")
+            # Unknown DEB distro - warn and don't add suffix
+            # This prevents incorrect version suffixes for unsupported distros
+            if(DISTRO_ID)
+                message(
+                    WARNING
+                    "Unknown DEB distribution '${DISTRO_ID}' - no version suffix added. "
+                    "Supported distros: debian, ubuntu. "
+                    "If packaging for this distro, set VERSION_DEB explicitly via -DVERSION_DEB=..."
+                )
+            endif()
         endif()
     endif()
 
