@@ -86,10 +86,6 @@ Blackhole uses `WormholeComputeKernelConfig` which provides additional optimizat
 )
 ```
 
-**Key Blackhole-specific options:**
-- `fp32_dest_acc_en`: Enable FP32 destination accumulation for higher precision
-- `packer_l1_acc`: Enable L1 accumulation in packer for improved memory efficiency
-
 ## 3. ViT TT-NN Optimization Techniques
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
