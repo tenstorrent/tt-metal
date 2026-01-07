@@ -31,7 +31,6 @@ Authors: Vishal Shenoy, Mohamed Bahnas
     - [4.5 Add and Norm](#45-add-and-norm)
     - [4.6 Feed-Forward Network (FFN/MLP)](#46-feed-forward-network-ffnmlp)
     - [4.7 Output](#47-output)
-  - [5. To be added soon - High Resolution and Temporal Sharding](#5-to-be-added-soon---high-resolution-and-temporal-sharding)
   - [6. Conclusion](#6-conclusion)
   - [7. References](#7-references)
 
@@ -278,7 +277,7 @@ The Multi-Head Self-Attention implementation (`vit_attention`) is described in d
 
 ## 4. ViT Encoder Layer TT-NN Deep Dive (Blackhole)
 
-> Draft placeholder: This section will be a step-by-step walkthrough of the Blackhole ViT encoder layer implementation in TT-NN. It will cover the sharding strategy, matmul program configs, and the attention flow (including resharding, explicit scaling, in-place softmax, and any required reallocations).
+This section is a step-by-step walkthrough of the Blackhole ViT encoder layer implementation in TT-NN. It covers the sharding strategy, matmul program configs, and the attention flow (including resharding, explicit scaling, in-place softmax, and any required reallocations).
 
 ### 4.1 Input
 The input to a ViT encoder layer is a sequence of patch embeddings with shape:
@@ -637,19 +636,114 @@ if config.should_reallocate_in_attention:
 These reallocations are used to avoid fragmentation/defragmentation issues in the attention block for those runtime configurations.
 
 ### 4.5 Add and Norm
-> Draft placeholder
+After the self-attention block produces `self_output`, the encoder layer applies a residual add with the original input `hidden_states`:
+
+```python
+multi_head_attention_output = ttnn.add(
+    multi_head_attention_output,
+    hidden_states,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+)
+```
+
+This produces the “attention residual” tensor which remains **block-sharded** in L1.
+
+The subsequent normalization (the second LayerNorm in the layer) is described in Section **4.3**:
+- `layernorm_after_output_program_config`
+- `ln_compute_config`
 
 ### 4.6 Feed-Forward Network (FFN/MLP)
-> Draft placeholder
+The feed-forward network (FFN/MLP) expands the embedding dimension and projects it back down:
+
+`dim (768) → 4×dim (3072) → dim (768)`
+
+In the Blackhole implementation, the FFN is implemented as two sharded matmuls:
+- **FF1**: `hidden_states @ W1 (+ b1)` with **fused GELU**
+- **FF2**: `intermediate @ W2 (+ b2)` followed by a **residual add** with the attention output
+
+#### 4.6.1 FF1 (intermediate projection + fused GELU)
+
+```python
+output = ttnn.linear(
+    hidden_states,
+    parameters.dense.weight,
+    bias=parameters.dense.bias,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+    program_config=config.program_configs["ff1_matmul_program_config"],
+)
+ttnn.deallocate(hidden_states)
+```
+
+Program config (sized in tiles for the fixed 10×12 grid):
+
+```python
+"ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(12, 10),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=4,
+    per_core_M=7,
+    per_core_N=8,  # 4 * 2 tiles
+    transpose_mcast=False,
+    fused_activation=(ttnn.UnaryOpType.GELU, True),
+),
+```
+
+#### 4.6.2 FF2 (projection back to dim + residual add)
+
+```python
+output = ttnn.linear(
+    hidden_states,
+    parameters.dense.weight,
+    bias=parameters.dense.bias,
+    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    dtype=ttnn.bfloat8_b,
+    program_config=config.program_configs["ff2_matmul_program_config"],
+)
+ttnn.deallocate(hidden_states)
+
+output = ttnn.add(output, residual, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+ttnn.deallocate(residual)
+```
+
+Program config:
+
+```python
+"ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(12, 10),
+    in0_block_w=8,   # 4 * 2 tiles
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=7,
+    per_core_N=2,
+    transpose_mcast=False,
+    fused_activation=None,
+),
+```
+
+#### 4.6.3 FFN wrapper (`vit_feedforward`)
+The encoder layer calls the FFN through a small wrapper:
+
+```python
+intermediate = vit_intermediate(config, hidden_states, parameters=parameters.intermediate)
+hidden_states = vit_output(config, intermediate, attention_output, parameters=parameters.output)
+return hidden_states
+```
 
 ### 4.7 Output
-> Draft placeholder
+The output of the encoder layer after the FFN residual add has shape:
 
-## 5. To be added soon - High Resolution and Temporal Sharding
+`b × 224 × 768`
+
+This tensor remains **block-sharded** in L1 and is passed directly as input to the next encoder layer in the 12-layer loop.
 
 ## 6. Conclusion
 
-> Draft placeholder: Summarize Blackhole-specific aspects (grid strategy, reshard/reallocate, BFLOAT8_B usage) and point to next optimizations.
+This report provided an in-depth walkthrough of the Vision Transformer (ViT) implementation in the TT-NN library on Blackhole. It covered the end-to-end flow from patch embeddings through the encoder layer, including the attention and feed-forward network components.
+
+The implementation leverages TT-NN performance techniques such as sharding, reuse/multicast matmul program configs, fused QKV projection, fused GELU in FFN, and optimized attention (explicit scaling and in-place softmax) to efficiently map ViT workloads onto the device.
 
 ## 7. References
 
