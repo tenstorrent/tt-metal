@@ -83,10 +83,9 @@ RUN dnf install -y \
 # Copy Python version configuration for consistent version across all stages
 COPY dockerfile/python-version.conf /tmp/python-version.conf
 
-# Set up virtual environment using uv with centralized Python version
+# Set up virtual environment using uv with Python 3.12 for Fedora
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN . /tmp/python-version.conf && \
-    umask 000 && uv python install $PYTHON_VERSION && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION
+RUN umask 000 && uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -172,10 +171,9 @@ FROM base AS release
 # Copy Python version configuration
 COPY dockerfile/python-version.conf /tmp/python-version.conf
 
-# Set up virtual environment using uv with centralized Python version
+# Set up virtual environment using uv with Python 3.12 for Fedora
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN . /tmp/python-version.conf && \
-    uv python install $PYTHON_VERSION_RELEASE && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION_RELEASE
+RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -255,10 +253,9 @@ FROM base AS basic-ttnn-runtime
 # Copy Python version configuration
 COPY dockerfile/python-version.conf /tmp/python-version.conf
 
-# Set up virtual environment using uv with centralized Python version
+# Set up virtual environment using uv with Python 3.12 for Fedora
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN . /tmp/python-version.conf && \
-    uv python install $PYTHON_VERSION_RELEASE && uv venv $PYTHON_ENV_DIR --python $PYTHON_VERSION_RELEASE
+RUN uv python install 3.12 && uv venv $PYTHON_ENV_DIR --python 3.12
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
