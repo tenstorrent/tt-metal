@@ -145,7 +145,7 @@ jobs:
       upload-coverage: false
 
   build:
-    # if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
