@@ -51,7 +51,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 # may override these with per-target RPATH settings via tt_set_runtime_rpath() for more
 # specific requirements (e.g., TTNN dependencies).
 set(CMAKE_BUILD_RPATH
-    "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}" # /work/build/lib (for libtt_metal.so)
+    "${CMAKE_BINARY_DIR}/lib" # /work/build/lib (for libtt_metal.so; tar artifacts always use 'lib')
+    "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}" # /work/build/lib64 on Fedora (some deps may emit here)
     "${CMAKE_SOURCE_DIR}/ttnn/ttnn" # /work/ttnn/ttnn (for _ttnncpp.so)
 )
 set(CMAKE_INSTALL_RPATH

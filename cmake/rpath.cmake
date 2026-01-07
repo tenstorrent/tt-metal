@@ -77,7 +77,15 @@ function(tt_set_runtime_rpath TARGET)
     #
     # Note: The tar artifact is created WITHOUT cmake --install, so BUILD_RPATH
     # (not INSTALL_RPATH) is what's embedded in the binaries.
-    set(BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+    # Build artifacts (and CI tar bundles) place libraries under build/lib regardless of
+    # the install libdir (which may be lib64 on Fedora).
+    #
+    # Some third-party targets may still emit to build/${CMAKE_INSTALL_LIBDIR}, so include both
+    # to make build-time execution robust across distros.
+    set(BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/lib")
+    if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+        list(APPEND BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+    endif()
     if(ARG_TTNN)
         # Build tree location (for gtest_discover_tests during build)
         list(APPEND BUILD_RPATH_ENTRIES "${CMAKE_BINARY_DIR}/ttnn")
@@ -88,8 +96,13 @@ function(tt_set_runtime_rpath TARGET)
     # === INSTALL_RPATH: Relative paths for proper cmake --install ===
     # (Currently unused since tar artifact doesn't run cmake --install,
     # but kept for future FHS package installs)
-    file(RELATIVE_PATH LIB_REL_PATH "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+    # Prefer build/lib for install-time relative rpath, but include lib64 variant if applicable.
+    file(RELATIVE_PATH LIB_REL_PATH "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/lib")
     set(INSTALL_RPATH_ENTRIES "$ORIGIN/${LIB_REL_PATH}")
+    if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+        file(RELATIVE_PATH LIB64_REL_PATH "${OUTPUT_DIR}" "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+        list(APPEND INSTALL_RPATH_ENTRIES "$ORIGIN/${LIB64_REL_PATH}")
+    endif()
     if(ARG_TTNN)
         file(RELATIVE_PATH TTNN_REL_PATH "${OUTPUT_DIR}" "${CMAKE_SOURCE_DIR}/ttnn/ttnn")
         list(APPEND INSTALL_RPATH_ENTRIES "$ORIGIN/${TTNN_REL_PATH}")
@@ -141,19 +154,24 @@ endfunction()
 #   tt_set_library_rpath(my_lib)
 #
 function(tt_set_library_rpath TARGET)
-    # Set BUILD_RPATH to the build lib directory
-    # This ensures the library can find its dependencies during build-time linking
+    # Set BUILD_RPATH to build/lib (CI/tar layout) and also build/${CMAKE_INSTALL_LIBDIR} when it differs.
+    set(_build_rpath_entries "${CMAKE_BINARY_DIR}/lib")
+    if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+        list(APPEND _build_rpath_entries "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    list(JOIN _build_rpath_entries ";" _build_rpath_string)
+
     set_target_properties(
         ${TARGET}
         PROPERTIES
             BUILD_RPATH
-                "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
+                "${_build_rpath_string}"
             BUILD_WITH_INSTALL_RPATH
                 FALSE
     )
 
     # Debug message (only shown with cmake --log-level=DEBUG)
-    message(DEBUG "tt_set_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+    message(DEBUG "tt_set_library_rpath(${TARGET}): BUILD_RPATH=${_build_rpath_string}")
 endfunction()
 
 # CMake helper for setting RPATH on installable shared libraries
@@ -183,11 +201,18 @@ endfunction()
 #
 function(tt_set_installable_library_rpath TARGET)
     # Set BUILD_RPATH as backup for build-time linking (important for Fedora RUNPATH)
+    # Prefer build/lib (CI/tar layout) but also include build/${CMAKE_INSTALL_LIBDIR} when different.
+    set(_build_rpath_entries "${CMAKE_BINARY_DIR}/lib")
+    if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
+        list(APPEND _build_rpath_entries "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    list(JOIN _build_rpath_entries ";" _build_rpath_string)
+
     set_target_properties(
         ${TARGET}
         PROPERTIES
             BUILD_RPATH
-                "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
+                "${_build_rpath_string}"
             # Use INSTALL_RPATH during build for multi-layout support
             BUILD_WITH_INSTALL_RPATH
                 TRUE
@@ -206,6 +231,6 @@ function(tt_set_installable_library_rpath TARGET)
     # Debug message (only shown with cmake --log-level=DEBUG)
     message(
         DEBUG
-        "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}, INSTALL_RPATH=$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
+        "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${_build_rpath_string}, INSTALL_RPATH=$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
     )
 endfunction()
