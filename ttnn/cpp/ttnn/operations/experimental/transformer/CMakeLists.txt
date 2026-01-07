@@ -101,6 +101,12 @@ target_sources(
         fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_program_factory.cpp
         fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.cpp
         fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp
+        dit_layernorm_distributed/dit_layernorm_pre_all_gather.cpp
+        dit_layernorm_distributed/dit_layernorm_post_all_gather.cpp
+        dit_layernorm_distributed/device/dit_layernorm_pre_all_gather_device_operation.cpp
+        dit_layernorm_distributed/device/dit_layernorm_pre_all_gather_welford_program_factory.cpp
+        dit_layernorm_distributed/device/dit_layernorm_post_all_gather_device_operation.cpp
+        dit_layernorm_distributed/device/dit_layernorm_post_all_gather_welford_program_factory.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp
