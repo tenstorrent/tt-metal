@@ -227,27 +227,38 @@ Tensor RMSAllGatherDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    const auto& input_tensor = tensor_args.input;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
-    auto program_factory = select_program_factory(args, tensor_args);
+
+    const ttnn::Tensor& input_tensor = tensor_args.input;
+    const std::optional<ttnn::Tensor>& residual_input_tensor = tensor_args.residual_input_tensor;
+    const std::optional<ttnn::Tensor>& weight_tensor = tensor_args.weight;
+    const std::optional<ttnn::Tensor>& stats_tensor = tensor_args.stats;
+    const std::optional<ttnn::Tensor>& preallocated_output_tensor = tensor_args.preallocated_output;
+
+    auto subdevice_id = args.sub_device_id;
+    auto* mesh_device = input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,
+        args.output_mem_config,
+        args.subblock_wt,
+        args.block_wt,
+        args.inplace,
+        args.grid_size,
+        args.compute_kernel_config,
         args.dtype,
+        args.topology,
         args.num_links,
         args.ring_size,
-        args.output_mem_config,
-        args.topology,
         args.cluster_axis,
-        program_factory.index(),
-        tensor_args.residual_input_tensor.has_value(),
-        tensor_args.weight.has_value(),
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        args.use_noc1_only,
+        subdevice_core_range_set,
+        input_tensor,
+        residual_input_tensor,
+        weight_tensor,
+        stats_tensor,
+        preallocated_output_tensor);
 }
 
 }  // namespace ttnn::operations::fused::normalization
