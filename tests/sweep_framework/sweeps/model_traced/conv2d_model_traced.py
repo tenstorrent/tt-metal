@@ -59,6 +59,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     # Call the short sweep function
     if is_conv1d:
