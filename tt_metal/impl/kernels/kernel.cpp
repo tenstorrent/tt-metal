@@ -385,6 +385,33 @@ std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
+std::vector<uint32_t>& Kernel::get_watcher_runtime_args(const CoreCoord& logical_core) {
+    TT_FATAL(
+        logical_core.x < this->core_to_runtime_args_.size() &&
+            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
+        "Cannot get runtime args for kernel {} that is not placed on core {}",
+        this->name(),
+        logical_core.str());
+    if ((!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
+         tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) ||
+        core_to_runtime_args_[logical_core.x][logical_core.y].empty()) {
+        return core_to_runtime_args_[logical_core.x][logical_core.y];
+    }
+
+    // Build [count|args] on first access
+    if (runtime_args_watcher_.empty()) {
+        runtime_args_watcher_.reserve(1 + core_to_runtime_args_[logical_core.x][logical_core.y].size());
+        runtime_args_watcher_.push_back(
+            static_cast<uint32_t>(core_to_runtime_args_[logical_core.x][logical_core.y].size()));
+        runtime_args_watcher_.insert(
+            runtime_args_watcher_.end(),
+            core_to_runtime_args_[logical_core.x][logical_core.y].begin(),
+            core_to_runtime_args_[logical_core.x][logical_core.y].end());
+    }
+
+    return runtime_args_watcher_;
+}
+
 RuntimeArgsData& Kernel::runtime_args_data(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -404,20 +431,22 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
-std::vector<uint32_t>& Kernel::get_dispatch_common_runtime_args() {
-    if (MetalContext::instance().rtoptions().watcher_assert_disabled() || common_runtime_args_.empty()) {
+std::vector<uint32_t>& Kernel::get_watcher_common_runtime_args() {
+    if ((!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
+         tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) ||
+        common_runtime_args_.empty()) {
         return common_runtime_args_;
     }
 
     // Build [count|args] on first access
-    if (common_runtime_args_dispatch_.empty()) {
-        common_runtime_args_dispatch_.reserve(1 + common_runtime_args_.size());
-        common_runtime_args_dispatch_.push_back(static_cast<uint32_t>(common_runtime_args_.size()));
-        common_runtime_args_dispatch_.insert(
-            common_runtime_args_dispatch_.end(), common_runtime_args_.begin(), common_runtime_args_.end());
+    if (common_runtime_args_watcher_.empty()) {
+        common_runtime_args_watcher_.reserve(1 + common_runtime_args_.size());
+        common_runtime_args_watcher_.push_back(static_cast<uint32_t>(common_runtime_args_.size()));
+        common_runtime_args_watcher_.insert(
+            common_runtime_args_watcher_.end(), common_runtime_args_.begin(), common_runtime_args_.end());
     }
 
-    return common_runtime_args_dispatch_;
+    return common_runtime_args_watcher_;
 }
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.

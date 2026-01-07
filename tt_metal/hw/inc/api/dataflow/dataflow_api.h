@@ -108,8 +108,7 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  */
 // clang-format on
 static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && \
-    !(defined(IS_D_VARIANT) || defined(IS_H_VARIANT))  // Skip for dispatch kernels
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
     extern uint32_t rta_count;
     ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
 #endif
@@ -129,7 +128,7 @@ static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) {
  */
 // clang-format on
 static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !(defined(IS_D_VARIANT) || defined(IS_H_VARIANT))
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
     extern uint32_t crta_count;
     ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
 #endif

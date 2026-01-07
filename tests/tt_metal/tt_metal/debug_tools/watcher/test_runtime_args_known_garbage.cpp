@@ -20,6 +20,7 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include "debug_tools_fixture.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -300,7 +301,9 @@ TEST_F(MeshWatcherFixture, WatcherCRTACountAsserts) {
 }
 
 // In this test no RTA or CRTA are set, so counts read back should be zero
-TEST_F(MeshWatcherFixture, ZeroArgCheck) {
+// This is an edge case since the dispatcher doesn't dispatch anything, but
+// Tests run on RISCV_0 and TRISC0
+TEST_F(MeshWatcherFixture, WatcherZeroArgCheck) {
     auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
         GTEST_SKIP() << "This test can only be run with fast dispatch mode";
@@ -323,15 +326,16 @@ TEST_F(MeshWatcherFixture, ZeroArgCheck) {
     const uint32_t total_read_size = (2) * sizeof(uint32_t);
 
     // Configure CB to store read-back args
-    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
     uint32_t cb_size = tt::align(total_read_size, l1_alignment);
-    CircularBufferConfig cb_config =
-        CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float32}}).set_page_size(0, cb_size);
+    CircularBufferConfig cb0(cb_size, {{tt::CBIndex::c_0, tt::DataFormat::Float32}});
+    cb0.set_page_size(tt::CBIndex::c_0, cb_size);
+    // Use this to write back from TRISC0 (compute kernel)
+    uint32_t compute_scratch_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     distributed::MeshWorkload workload;
     Program program;
-    CreateCircularBuffer(program, core_range_set, cb_config);
+    CBHandle cb0_handle = CreateCircularBuffer(program, core_range_set, cb0);
 
     CreateKernel(
         program,
@@ -339,15 +343,34 @@ TEST_F(MeshWatcherFixture, ZeroArgCheck) {
         core_range_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
+        core_range_set,
+        ComputeConfig{.compile_args = {compute_scratch_addr}});
+
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 
+    auto& program_from_workload = workload.get_programs().at(device_range);
+
     std::vector<uint32_t> read_result;
     for (const auto& core : core_range) {
         read_result.clear();
-        tt::tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, total_read_size, read_result);
-        // Check RTA and CRTA counts match as expected
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device,
+            core,
+            program_from_workload.impl().get_circular_buffer(cb0_handle)->address(),
+            total_read_size,
+            read_result);
+        // RISCV_0: rta_count and crta_count should be set to 0
+        EXPECT_EQ(read_result[0], 0);
+        EXPECT_EQ(read_result[1], 0);
+
+        read_result.clear();
+        tt::tt_metal::detail::ReadFromDeviceL1(device, core, compute_scratch_addr, total_read_size, read_result);
+        // TRISC0: rta_count and crta_count should be set to 0
         EXPECT_EQ(read_result[0], 0);
         EXPECT_EQ(read_result[1], 0);
     }

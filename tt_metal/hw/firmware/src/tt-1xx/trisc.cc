@@ -8,6 +8,7 @@
 #include "risc_common.h"
 #include <tensix.h>
 #include "hostdev/dev_msgs.h"
+#include "hostdevcommon/common_values.hpp"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -168,14 +169,14 @@ int main(int argc, char* argv[]) {
         crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                              launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset);
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
-        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset == 0xBEEF) {
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL) {
             rta_count = 0;
         } else {
             rta_count = rta_l1_base[0];
             rta_l1_base = rta_l1_base + 1;
         }
 
-        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == 0xBEEF) {
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL) {
             crta_count = 0;
         } else {
             crta_count = crta_l1_base[0];
