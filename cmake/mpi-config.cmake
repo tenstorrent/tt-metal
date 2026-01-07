@@ -32,6 +32,13 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
         return()
     endif()
 
+    # If MPI was already configured in this CMake run, don't recreate targets.
+    # (This can happen if multiple subdirs include mpi-config.cmake.)
+    if(TARGET OpenMPI::MPI)
+        set(${use_mpi_out_var} TRUE PARENT_SCOPE)
+        return()
+    endif()
+
     # Try Custom ULFM MPI first (Ubuntu)
     if(EXISTS "${ULFM_PREFIX}/lib/libmpi.so.40")
         message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
@@ -72,26 +79,79 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
         message(WARNING "Non-OpenMPI implementation found. ULFM fault tolerance requires OpenMPI 5+")
     endif()
 
-    # Configure system MPI target
-    add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
+    # Configure a sanitized MPI interface target.
+    #
+    # Root cause of the Fedora RPM failure:
+    # - On some distros, CMake's FindMPI provides MPI usage requirements that include linker
+    #   rpath flags (e.g. -Wl,-rpath,/usr/lib64/openmpi/lib).
+    # - When those propagate (via our OBJECT library `distributed` into `tt_metal`), the
+    #   final link line can embed RUNPATH as:
+    #       /usr/lib64/openmpi/lib:$ORIGIN
+    #   which violates Fedora brp-check-rpaths (it requires $ORIGIN to be first).
+    #
+    # For system MPI we do NOT need any RPATH entries at all; the loader finds MPI via
+    # standard system paths. So we build our own interface target and explicitly strip
+    # any -Wl,-rpath* flags from the MPI link requirements.
+    add_library(tt_openmpi_mpi INTERFACE)
+    add_library(OpenMPI::MPI ALIAS tt_openmpi_mpi)
 
-    # Prevent MPI library directories from being added to RPATH
-    # Even with INSTALL_RPATH_USE_LINK_PATH=FALSE, CMake might still add library directories from
-    # imported targets' INTERFACE_LINK_DIRECTORIES. We explicitly clear them to prevent this.
-    # This is safe because:
-    # 1. For Fedora builds, system MPI libraries are in standard paths (/usr/lib64 or /usr/lib64/openmpi/lib)
-    #    and will be found via the standard library search path, not via RPATH
-    # 2. RPM's brp-check-rpaths requires $ORIGIN to be first in RPATH, and adding system paths violates this
-    # 3. The MPI library should be found via the system's library search mechanism, not via RPATH
-    get_target_property(MPI_LINK_DIRS MPI::MPI_C INTERFACE_LINK_DIRECTORIES)
-    if(MPI_LINK_DIRS)
-        # Clear INTERFACE_LINK_DIRECTORIES to prevent CMake from adding MPI paths to RPATH
-        # The libraries will still be found via standard library search paths
-        set_target_properties(
-            MPI::MPI_C
-            PROPERTIES
-                INTERFACE_LINK_DIRECTORIES
-                    ""
-        )
+    if(DEFINED MPI_C_INCLUDE_DIRS)
+        target_include_directories(tt_openmpi_mpi SYSTEM INTERFACE ${MPI_C_INCLUDE_DIRS})
+    endif()
+    if(DEFINED MPI_C_COMPILE_DEFINITIONS)
+        target_compile_definitions(tt_openmpi_mpi INTERFACE ${MPI_C_COMPILE_DEFINITIONS})
+    endif()
+    if(DEFINED MPI_C_COMPILE_OPTIONS)
+        target_compile_options(tt_openmpi_mpi INTERFACE ${MPI_C_COMPILE_OPTIONS})
+    endif()
+
+    # Sanitize MPI link flags/options
+    set(_mpi_link_opts ${MPI_C_LINK_FLAGS})
+    if(_mpi_link_opts)
+        # If FindMPI gave us a single string with spaces, split it.
+        if("${_mpi_link_opts}" MATCHES " ")
+            separate_arguments(_mpi_link_opts)
+        endif()
+        set(_mpi_link_opts_clean "")
+        set(_skip_next FALSE)
+        foreach(_opt IN LISTS _mpi_link_opts)
+            if(_skip_next)
+                set(_skip_next FALSE)
+                continue()
+            endif()
+            if(_opt STREQUAL "-Wl,-rpath" OR _opt STREQUAL "-Wl,-rpath-link")
+                set(_skip_next TRUE)
+                continue()
+            endif()
+            if(_opt MATCHES "^-Wl,-rpath(,|=)" OR _opt MATCHES "^-Wl,-rpath-link(,|=)")
+                continue()
+            endif()
+            list(APPEND _mpi_link_opts_clean "${_opt}")
+        endforeach()
+        if(_mpi_link_opts_clean)
+            target_link_options(tt_openmpi_mpi INTERFACE ${_mpi_link_opts_clean})
+        endif()
+    endif()
+
+    # Sanitize MPI libraries list (some FindMPI implementations put -Wl,-rpath* here)
+    set(_mpi_libs ${MPI_C_LIBRARIES})
+    set(_mpi_libs_clean "")
+    set(_skip_next FALSE)
+    foreach(_lib IN LISTS _mpi_libs)
+        if(_skip_next)
+            set(_skip_next FALSE)
+            continue()
+        endif()
+        if(_lib STREQUAL "-Wl,-rpath" OR _lib STREQUAL "-Wl,-rpath-link")
+            set(_skip_next TRUE)
+            continue()
+        endif()
+        if(_lib MATCHES "^-Wl,-rpath(,|=)" OR _lib MATCHES "^-Wl,-rpath-link(,|=)")
+            continue()
+        endif()
+        list(APPEND _mpi_libs_clean "${_lib}")
+    endforeach()
+    if(_mpi_libs_clean)
+        target_link_libraries(tt_openmpi_mpi INTERFACE ${_mpi_libs_clean})
     endif()
 endfunction()
