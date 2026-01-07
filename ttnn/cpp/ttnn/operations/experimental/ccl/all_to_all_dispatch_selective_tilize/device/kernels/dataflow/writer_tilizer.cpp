@@ -329,6 +329,8 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
         cb_wait_front(tilizer_output_cb_id, tiles_per_chunk);
         // TODO: Write tilized tiles to output/matmul cores here
+        print_tile_rows(tilizer_output_cb_id, 0, true);
+        print_tile_rows(tilizer_output_cb_id, 223, true);
         cb_pop_front(tilizer_output_cb_id, tiles_per_chunk);
     }
 }

@@ -117,6 +117,7 @@ FORCE_INLINE void process_chunk(
     uint32_t src_dev,
     uint32_t chunk_boundary,
     uint32_t linearized_mesh_coord,
+    uint32_t dispatch_index,
     uint32_t indices_pages,
     uint32_t& last_scanned_token,
     uint32_t& tokens_found_count,
@@ -180,9 +181,6 @@ FORCE_INLINE void process_chunk(
                         // Output offset = token_idx + src_dev * tokens_per_device
                         uint32_t output_offset = token_idx + src_dev * TokensPerDevice;
 
-                        // DPRINT << "  Token " << token_idx << " from D" << src_dev << " selected expert " << expert_id
-                        //        << " (local " << local_expert << ") -> output[" << output_offset << "]" << ENDL();
-
                         // Calculate write address for this token in the CB
                         // Each token slot is tilizer_subtoken_size bytes
                         uint32_t tilizer_cb_write_addr =
@@ -193,6 +191,13 @@ FORCE_INLINE void process_chunk(
                         uint64_t token_noc_addr =
                             get_noc_addr(output_offset, output_tensor_addr_gen, tilizer_subtoken_offset);
                         noc_async_read(token_noc_addr, tilizer_cb_write_addr, tilizer_subtoken_size);
+                        // noc_async_read_barrier();
+
+                        // Print last BF16 value for validation (compare with SEND print)
+                        // uint16_t* token_data = reinterpret_cast<uint16_t*>(tilizer_cb_write_addr);
+                        // uint16_t last_val = token_data[(tilizer_subtoken_size / sizeof(uint16_t)) - 1];
+                        // DPRINT << "RECV: src_D" << src_dev << " tgt_D" << dispatch_index << " token" << token_idx
+                        //        << " exp" << expert_id << " val=" << BF16(last_val) << ENDL();
 
                         tokens_found_in_chunk++;
                         break;  // Found match for this token, move to next token
@@ -498,6 +503,7 @@ void kernel_main() {
                             src_dev,
                             next_chunk_boundary,
                             linearized_mesh_coord,
+                            dispatch_index,
                             indices_pages,
                             last_scanned_token[local_expert][src_dev],
                             tokens_found_count[local_expert][src_dev],
@@ -548,6 +554,7 @@ void kernel_main() {
                                 src_dev,
                                 next_chunk_boundary,
                                 linearized_mesh_coord,
+                                dispatch_index,
                                 indices_pages,
                                 last_scanned_token[local_expert][src_dev],
                                 tokens_found_count[local_expert][src_dev],

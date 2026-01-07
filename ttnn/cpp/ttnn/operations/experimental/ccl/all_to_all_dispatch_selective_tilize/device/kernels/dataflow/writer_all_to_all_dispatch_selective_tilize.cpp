@@ -531,8 +531,15 @@ void kernel_main() {
             uint64_t ed_table_noc_addr =
                 get_noc_addr(drain_tilize_core_noc_x, drain_tilize_core_noc_y, ed_table_l1_addr);
 
-            DPRINT << "  Token " << local_token << " from D" << dispatch_index << " selected expert " << expert_chosen
-                   << " (local " << local_expert << ") -> output[" << global_token << "]" << ENDL();
+            // Compute target dispatch index from target device's linearized coord
+            uint32_t target_dispatch_index = (axis == ReplicateGroup::COLS) ? (d / mesh_cols) : (d % mesh_cols);
+
+            // Print last BF16 value for validation
+            // uint16_t* token_ptr = reinterpret_cast<uint16_t*>(input_token_read_addr);
+            // uint16_t last_val = token_ptr[(subtoken_size / sizeof(uint16_t)) - 1];
+            // DPRINT << "SEND: src_D" << dispatch_index << " tgt_D" << target_dispatch_index << " token" << local_token
+            //        << " exp" << expert_chosen << " val=" << BF16(last_val) << ENDL();
+
             if (send_preparation_buffer[(local_token * num_devices) + d] == 0) {
                 if (d == linearized_mesh_coord) {
                     // if the expert lives on the current device, we dispatch the input token to it
