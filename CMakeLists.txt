@@ -26,10 +26,13 @@ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
 
-# Ensure VERSION_NUMERIC is set - fallback if git describe failed
+# Ensure version variables are set - fallback if git describe failed
 if(NOT VERSION_NUMERIC)
     message(WARNING "VERSION_NUMERIC not set by ParseGitDescribe(), using fallback 0.0.0")
     set(VERSION_NUMERIC "0.0.0")
+    set(VERSION_FULL "0.0.0+unknown")
+    set(VERSION_DEB "0.0.0+unknown")
+    set(VERSION_RPM "0.0.0.unknown")
 endif()
 
 project(

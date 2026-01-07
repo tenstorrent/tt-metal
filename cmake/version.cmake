@@ -180,7 +180,7 @@ function(ParseGitDescribe)
 
     # Include distro version to disambiguate packages
     # Detect distro type from /etc/os-release
-    include(${CMAKE_CURRENT_LIST_DIR}/detect-distro.cmake)
+    include(detect-distro)
     detect_distro()
 
     # Add distro suffix based on detected OS for RPM packages

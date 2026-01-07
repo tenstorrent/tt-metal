@@ -41,13 +41,12 @@ set(CPACK_RPM_PACKAGE_URL "https://tenstorrent.com")
 
 # Build the RPM spec macros based on build configuration
 # Always disable strip for cross-compiled binaries (Tenstorrent hardware binaries)
-set(_RPM_SPEC_MACROS
-    "%define __strip /bin/true
-%define __brp_strip /bin/true
-%define __brp_strip_comment_note /bin/true
-%define __brp_strip_static_archive /bin/true
-%define debug_package %{nil}"
-)
+# Using separate lines joined with newlines for clarity
+set(_RPM_SPEC_MACROS "%define __strip /bin/true")
+string(APPEND _RPM_SPEC_MACROS "\n%define __brp_strip /bin/true")
+string(APPEND _RPM_SPEC_MACROS "\n%define __brp_strip_comment_note /bin/true")
+string(APPEND _RPM_SPEC_MACROS "\n%define __brp_strip_static_archive /bin/true")
+string(APPEND _RPM_SPEC_MACROS "\n%define debug_package %{nil}")
 
 # Only disable __brp_check_rpaths when using custom ULFM MPI
 # When using system OpenMPI (Fedora/RHEL with OpenMPI 5+), RPATH checking should pass
@@ -59,15 +58,8 @@ set(_RPM_SPEC_MACROS
 #
 # See: https://docs.fedoraproject.org/en-US/packaging-guidelines/#_rpath_for_internal_libraries
 if(TT_METAL_USING_ULFM)
-    message(
-        STATUS
-        "RPM packaging: Disabling __brp_check_rpaths (custom ULFM MPI in use). "
-        "The ULFM path ${ULFM_PREFIX}/lib may not exist on the build host."
-    )
-    set(_RPM_SPEC_MACROS
-        "${_RPM_SPEC_MACROS}
-%define __brp_check_rpaths /bin/true"
-    )
+    message(STATUS "RPM packaging: Disabling __brp_check_rpaths (custom ULFM MPI in use)")
+    string(APPEND _RPM_SPEC_MACROS "\n%define __brp_check_rpaths /bin/true")
 else()
     message(STATUS "RPM packaging: RPATH checking enabled (using system MPI or MPI disabled)")
 endif()
