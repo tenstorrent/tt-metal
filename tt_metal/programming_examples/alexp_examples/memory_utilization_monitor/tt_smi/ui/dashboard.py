@@ -110,8 +110,19 @@ class Dashboard:
         return table
 
     def render_process_table(self, devices: List[Device]) -> Table:
-        """Render per-process memory usage table."""
-        table = Table(title="Per-Process Memory Usage", box=box.ROUNDED, show_header=True, header_style="bold")
+        """Render per-process memory usage table (shows only devices with active processes)."""
+        # Filter to show only devices with processes to reduce clutter on large systems
+        devices_with_processes = [dev for dev in devices if dev.processes]
+
+        if not devices_with_processes:
+            return None
+
+        table = Table(
+            title=f"Per-Process Memory Usage ({len(devices_with_processes)} of {len(devices)} devices active)",
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold",
+        )
 
         table.add_column("Dev", style="cyan", width=12)
         table.add_column("PID", width=8)
@@ -123,7 +134,7 @@ class Dashboard:
         table.add_column("CB", width=10)
 
         has_processes = False
-        for dev in devices:
+        for dev in devices_with_processes:
             for proc in dev.processes:
                 has_processes = True
                 proc_name = proc["name"]
@@ -159,7 +170,12 @@ class Dashboard:
         proc_table = self.render_process_table(devices)
         if proc_table:
             layout["processes"].update(proc_table)
-            layout["processes"].size = min(len(devices) * 5 + 5, 20)
+            # Dynamic size based on terminal height and actual process count
+            # Count devices with processes
+            devices_with_procs = sum(1 for dev in devices if dev.processes)
+            max_size = self.console.height // 2  # Use up to half the terminal for process table
+            estimated_size = devices_with_procs * 3 + 5  # Header + rows
+            layout["processes"].size = min(estimated_size, max_size, 50)  # Cap at 50 to leave room
 
         return layout
 
@@ -190,6 +206,9 @@ class Dashboard:
             update_memory_func: Function to update memory stats
             graph_window: GraphWindow instance for telemetry graphs (or None for table view)
         """
+        # Import cleanup function once for efficiency
+        from ..core import cleanup_dead_processes
+
         try:
             devices = get_devices_func()
             if update_telemetry_parallel_func:
@@ -219,6 +238,13 @@ class Dashboard:
                 ) as live:
                     while True:
                         time.sleep(refresh_ms / 1000.0)
+
+                        # Clean up dead processes on every iteration (critical for memory accuracy)
+                        try:
+                            cleanup_dead_processes()
+                        except Exception:
+                            pass
+
                         devices = get_devices_func()
 
                         # Update telemetry each iteration (parallel)
@@ -248,6 +274,13 @@ class Dashboard:
                 ) as live:
                     while True:
                         time.sleep(refresh_ms / 1000.0)
+
+                        # Clean up dead processes on every iteration (critical for memory accuracy)
+                        try:
+                            cleanup_dead_processes()
+                        except Exception:
+                            pass
+
                         devices = get_devices_func()
 
                         # Update telemetry each iteration (parallel)

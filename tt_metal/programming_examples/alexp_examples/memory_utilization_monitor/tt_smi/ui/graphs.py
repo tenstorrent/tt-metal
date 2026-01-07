@@ -231,6 +231,37 @@ class GraphWindow:
         self.console = console
         self.history_size = history_size
 
+    def _calculate_optimal_layout(self, num_devices: int, terminal_width: int, terminal_height: int) -> tuple:
+        """
+        Calculate optimal grid layout with preference for wide layouts (more columns, fewer rows).
+
+        For monitoring dashboards, wider layouts (4×8 instead of 8×4) are preferred because:
+        - More devices visible side-by-side
+        - Better use of wide monitors
+        - Easier horizontal scanning
+
+        Returns:
+            (rows, cols) tuple for optimal grid layout
+        """
+        # Simple strategy: Prefer wide layouts
+        # For 32 devices: try 8 cols first, then 6, then 4
+
+        if num_devices <= 2:
+            return (1, num_devices)
+        elif num_devices <= 4:
+            return (2, 2)
+        elif num_devices <= 8:
+            return (2, 4)  # 2 rows × 4 columns (wide)
+        elif num_devices <= 16:
+            return (2, 8)  # 2 rows × 8 columns (very wide)
+        elif num_devices <= 32:
+            return (4, 8)  # 4 rows × 8 columns (WIDE for Galaxy systems)
+        else:
+            # For >32 devices, use 8 columns and calculate rows
+            cols = 8
+            rows = (num_devices + cols - 1) // cols
+            return (rows, cols)
+
     def update_device(self, device) -> None:
         """Update telemetry history for a device."""
         device_id = device.display_id if hasattr(device, "display_id") else str(device.chip_id)
@@ -358,16 +389,9 @@ class GraphWindow:
         header_overhead = 3
         per_device_overhead = 10  # Device header, bars, borders, padding
 
-        # Determine rows and columns based on layout
-        if num_devices <= 2:
-            rows = 1
-            cols = num_devices
-        elif num_devices <= 4:
-            rows = 2
-            cols = 2
-        else:
-            rows = 4
-            cols = 2
+        # Intelligently determine optimal rows and columns based on terminal size
+        # This maximizes chart visibility while ensuring readability
+        rows, cols = self._calculate_optimal_layout(num_devices, terminal_width, terminal_height)
 
         # Calculate available height per device
         available_height = terminal_height - header_overhead
@@ -396,41 +420,27 @@ class GraphWindow:
             device_id = dev.display_id if hasattr(dev, "display_id") else str(dev.chip_id)
             device_panels.append(self.render_device_card(device_id, dev, chart_height, chart_width))
 
-        # Layout in matrix grid (2x2, 2x4, 4x4, etc.)
+        # Apply the calculated layout dynamically (rows × cols)
         num_devices = len(device_panels)
 
         if num_devices == 1:
             root_layout["devices"].update(device_panels[0])
         elif num_devices == 2:
-            # 1x2 layout
+            # 1×2 layout
             root_layout["devices"].split_row(Layout(device_panels[0]), Layout(device_panels[1]))
-        elif num_devices <= 4:
-            # 2x2 layout
-            root_layout["devices"].split_row(Layout(name="col1"), Layout(name="col2"))
-            # Distribute devices evenly
-            col1_devices = [device_panels[i] for i in range(0, num_devices, 2)]  # 0, 2
-            col2_devices = [device_panels[i] for i in range(1, num_devices, 2)]  # 1, 3
-
-            if col1_devices:
-                root_layout["col1"].split_column(*[Layout(d) for d in col1_devices])
-            if col2_devices:
-                root_layout["col2"].split_column(*[Layout(d) for d in col2_devices])
-        elif num_devices <= 8:
-            # 2x4 layout (2 columns, 4 rows each)
-            root_layout["devices"].split_row(Layout(name="col1"), Layout(name="col2"))
-            # Split each column into rows
-            col1_devices = [device_panels[i] for i in range(0, num_devices, 2)]
-            col2_devices = [device_panels[i] for i in range(1, num_devices, 2)]
-
-            root_layout["col1"].split_column(*[Layout(d) for d in col1_devices])
-            root_layout["col2"].split_column(*[Layout(d) for d in col2_devices])
         else:
-            # For more than 8 devices, 4x4 grid (show first 16)
-            root_layout["devices"].split_row(
-                Layout(name="col1"), Layout(name="col2"), Layout(name="col3"), Layout(name="col4")
-            )
-            for col_idx, col_name in enumerate(["col1", "col2", "col3", "col4"]):
-                col_devices = [device_panels[i] for i in range(col_idx, min(16, num_devices), 4)]
-                root_layout[col_name].split_column(*[Layout(d) for d in col_devices])
+            # Use calculated rows/cols for optimal layout
+            # For 32 devices: rows=4, cols=8 → 4 rows × 8 columns (WIDE)
+
+            # Create column layouts
+            col_names = [f"col{i}" for i in range(1, cols + 1)]
+            root_layout["devices"].split_row(*[Layout(name=name) for name in col_names])
+
+            # Distribute devices across columns (fills row-by-row)
+            for col_idx, col_name in enumerate(col_names):
+                # Each column gets devices at positions: col_idx, col_idx+cols, col_idx+2*cols, ...
+                col_devices = [device_panels[i] for i in range(col_idx, num_devices, cols)]
+                if col_devices:
+                    root_layout[col_name].split_column(*[Layout(d) for d in col_devices])
 
         return root_layout
