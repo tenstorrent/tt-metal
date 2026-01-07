@@ -35,7 +35,7 @@ def decode_forward(
         program_config: Model-specific program configs
 
     Returns:
-        Expert output [batch, 1, hidden_size]
+        Expert output [1, batch, 1, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
     batch_dim = 1

@@ -193,7 +193,7 @@ def prefill_forward(
         prefill_sparsity: Cached prefill sparsity mask
 
     Returns:
-        Expert output [batch, seq_len, hidden_size]
+        Expert output [1, batch, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
     batch_dim = 1

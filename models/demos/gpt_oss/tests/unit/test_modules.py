@@ -217,7 +217,7 @@ def run_topk_router_component(
         logger.info(f"TopK Router weights test passed. Output: {weights_output}")
 
 
-def run_experts_component(
+def run_throughput_experts_component(
     mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, is_row_sharded, pcc_threshold
 ):
     """Test experts component - extracted from decoder layer"""
@@ -271,10 +271,70 @@ def run_experts_component(
 
     # Extract TT experts from decoder layer
     tt_experts = decoder_layer.mlp.experts
-    tt_output = tt_experts(tt_hidden_states, tt_router_indices, tt_routing_weights, is_decode)
+    tt_output = tt_experts(
+        hidden_states=tt_hidden_states,
+        topk_expert_indices=tt_router_indices,
+        topk_expert_weights=tt_routing_weights,
+        is_decode=is_decode,
+    )
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch * seq_len, :hidden_size]
+    # Compare outputs
+    passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
+    if passing:
+        logger.info(f"Experts test passed. Output: {output}")
+    else:
+        assert passing, f"Experts test failed. Output: {output}"
+
+
+def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
+    """Test experts component - extracted from decoder layer"""
+
+    # Create input
+    batch_size, seq_len, hidden_size = hidden_shape
+    hidden_states = torch.randn(hidden_shape)
+    import itertools
+
+    router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
+    routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+
+    for b, s in itertools.product(range(batch_size), range(seq_len)):
+        active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+        router_indices[b * seq_len + s, :] = active_experts
+        weights = torch.rand(config.num_experts_per_tok)
+        weights = weights / weights.sum()  # Normalize
+        routing_weights[b * seq_len + s, active_experts] = weights
+
+    # Extract reference experts from reference layer
+    reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
+    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+
+    # Convert to TTNN tensors
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(0),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+    )
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+    )
+
+    # Extract TT experts from decoder layer
+    tt_experts = decoder_layer.mlp.experts
+    tt_output = tt_experts(
+        hidden_states=tt_hidden_states,
+        topk_expert_weights=tt_routing_weights,
+        is_decode=is_decode,
+    )
+    mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+    tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch_size * seq_len, :hidden_size]
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
@@ -302,7 +362,8 @@ def run_full_mlp_pipeline(
         else None
     )
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.reshape(-1, 1, 2880),
+        # hidden_states.reshape(-1, 1, 2880),
+        hidden_states.unsqueeze(1),
         device=mesh_device,
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
@@ -374,19 +435,20 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         (32, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
-        # (1, 4096),  # prefill 4k TODO: 20b fails attention pcc and 120b runs out of DRAM in experts
+        (1, 4096),  # prefill 4k TODO: 20b fails attention pcc and 120b runs out of DRAM in experts
     ],
     ids=[
         "decode_1",
         "decode_32",
         "decode_128",
         "prefill_1",
-        # "prefill_4096",
+        "prefill_4096",
     ],
 )
 @pytest.mark.parametrize(
     "mesh_shape",
     [
+        (1, 8),
         (4, 8),
     ],
     ids=[
@@ -424,8 +486,12 @@ def test_decoder(
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
-    if mesh_shape[0] == 1 and seq_len > 128 and os.environ.get("CI"):
+    if mesh_shape[0] == 1 and seq_len > 128 and os.environ.get("CI") == "true":
         pytest.skip("Skip test for mesh_shape[0] == 1 and seq_len > 128 in CI due to known issue (see #35313).")
+    if mesh_shape[0] == 1 and batch_size > 1:
+        pytest.skip(
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported for mesh shape (1, 8)."
+        )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -563,9 +629,21 @@ def test_decoder(
             logger.info("Router test only runs in decode mode (seq_len=1). Skipping...")
 
     if should_test("experts"):
-        if seq_len * batch_size > 1:
-            logger.info("Testing Experts...")
+        # We can't run EP=32 on a mesh shape of (1, 8) so run EP=4 tests
+        if mesh_shape[0] == 1:
+            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {mesh_shape}...")
             run_experts_component(
+                setup["mesh_device"],
+                hidden_states.shape,
+                config,
+                reference_layer,
+                decoder_layer,
+                is_decode=is_decode,
+                pcc_threshold=pcc_thresholds["experts"],
+            )
+        elif mesh_shape[0] == 4:
+            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            run_throughput_experts_component(
                 setup["mesh_device"],
                 hidden_states.shape,
                 config,
@@ -576,7 +654,9 @@ def test_decoder(
                 pcc_threshold=pcc_thresholds["experts"],
             )
         else:
-            logger.info("Experts test only runs for seq_len * batch_size > 1. Skipping...")
+            raise ValueError(
+                f"Got unexpected mesh shape {mesh_shape}. Only mesh shapes (1, 8) and (4, 8) are supported."
+            )
 
     if should_test("attention"):
         logger.info("Testing Attention...")

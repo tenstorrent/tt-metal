@@ -21,4 +21,6 @@ def state_dict():
 
 @pytest.fixture
 def test_thresholds(request):
-    return json.load(open("models/demos/gpt_oss/unit_test_thresholds.json", "r"))
+    with open("models/demos/gpt_oss/unit_test_thresholds.json", "r") as f:
+        thresholds = json.load(f)
+    return thresholds
