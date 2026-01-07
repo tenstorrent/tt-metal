@@ -55,7 +55,7 @@ on:
         options:
           - N150
           - N300
-          - BH
+          - P150b
       timeout:
         required: false
         type: number
@@ -83,7 +83,8 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false },
+            { name: "wormhole_b0 sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0" },
+            { name: "blackhole deepseek blitz op tests", cmd: "echo insert tests here", merge_gate: false, arch: "blackhole" }
           ]]
     steps:
       - name: Compute tests
@@ -97,7 +98,7 @@ jobs:
           echo $default_ops_tests | jq
           requested_ops_tests=$default_ops_tests
 
-          requested_ops_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$requested_ops_tests")
+          requested_ops_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" --arg arch "${{ inputs.arch }}" '[.[] | select(.merge_gate == $merge_gate_call and .arch == $arch)]' <<< "$requested_ops_tests")
           echo "[info] after filtering for requested workflow tests: $requested_ops_tests"
 
           # Check that we have a valid test list that's not empty
@@ -115,14 +116,9 @@ jobs:
       matrix:
         test-group: ${{ fromJSON(needs.define-ops-tests.outputs.ops-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     container:
-      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
