@@ -11,9 +11,12 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to conv3d need to be on device!");
+    
+    // Addressing Review: Re-enabling ROW_MAJOR support
     bool valid_layout = (input_tensor.get_layout() == tt::tt_metal::Layout::TILE || 
                          input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR);
     TT_FATAL(valid_layout, "Input to conv3d must be TILE or ROW_MAJOR");
+
     if (input_tensor.is_sharded()) {
         auto mem_config = input_tensor.memory_config();
         bool valid_sharding = (mem_config.memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
