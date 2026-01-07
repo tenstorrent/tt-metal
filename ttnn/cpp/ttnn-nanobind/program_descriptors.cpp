@@ -118,7 +118,7 @@ void py_module_types(nb::module_& mod) {
     // Bind RuntimeArgs helper classes for Python 2D indexing syntax: rtargs[x][y] = [args]
     nb::class_<RuntimeArgsColProxy>(mod, "RuntimeArgsColProxy", R"pbdoc(
         Proxy class for getting/setting runtime args at a specific x-coordinate.
-        Used internally to enable rtargs[x][y] = [args] and rtargs[x][y] syntax.
+        Used internally to enable rtargs[x][y] = [args] syntax.
     )pbdoc")
         .def(
             "__setitem__",
@@ -127,9 +127,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("values"),
             R"pbdoc(
                 Set runtime args for a specific core coordinate (upsert).
-
-                If args already exist for this coordinate, they are replaced.
-                Otherwise, a new entry is appended.
 
                 Args:
                     y: Y coordinate of the core
@@ -141,16 +138,8 @@ void py_module_types(nb::module_& mod) {
             nb::arg("y"),
             nb::rv_policy::reference_internal,
             R"pbdoc(
-                Get runtime args for a specific core coordinate.
-
-                Args:
-                    y: Y coordinate of the core
-
-                Returns:
-                    List of runtime argument values (for reading/printing)
-
-                Raises:
-                    IndexError: If no args exist for the specified coordinate
+                Get runtime args for a specific y core coordinate.
+                Returns mutable reference to the runtime args.
             )pbdoc")
         .def(
             "extend",
@@ -159,10 +148,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("values"),
             R"pbdoc(
                 Extend runtime args for a specific core coordinate.
-
-                Args:
-                    y: Y coordinate of the core
-                    values: List of values to append
             )pbdoc")
         .def(
             "append",
@@ -171,10 +156,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("value"),
             R"pbdoc(
                 Append a value to runtime args for a specific core coordinate.
-
-                Args:
-                    y: Y coordinate of the core
-                    value: Value to append
             )pbdoc");
 
     nb::class_<RuntimeArgsWrapper>(mod, "RuntimeArgs", R"pbdoc(
@@ -637,6 +618,14 @@ void py_module_types(nb::module_& mod) {
                 Can also be set using:
                 1. A RuntimeArgs wrapper with 2D indexing: rtargs[i][j] = [args]
                 2. A list of (CoreCoord, args) pairs directly
+
+                Example using RuntimeArgs wrapper:
+                    >>> rtargs = ttnn.RuntimeArgs()
+                    >>> rtargs[0][0] = [1, 2, 3]
+                    >>> kernel_desc.runtime_args = rtargs
+
+                Example using direct list:
+                    >>> kernel_desc.runtime_args = [(ttnn.CoreCoord(0, 0), [1, 2, 3])]
             )pbdoc")
         .def_rw(
             "common_runtime_args",
@@ -701,12 +690,6 @@ void py_module_types(nb::module_& mod) {
 
         A mesh program is a collection of ProgramDescriptors, one for each device in the mesh.
         This behaves like a dict mapping MeshCoordinateRange to ProgramDescriptor.
-
-        Example:
-            desc = ttnn.MeshProgramDescriptor()
-            desc[range] = program_descriptor
-            # or initialize with a dict:
-            desc = ttnn.MeshProgramDescriptor({range1: prog1, range2: prog2})
     )pbdoc")
         .def(nb::init<>(), R"pbdoc(
             Default constructor. Creates an empty MeshProgramDescriptor.
@@ -729,6 +712,8 @@ void py_module_types(nb::module_& mod) {
                 mesh_programs: Dictionary mapping MeshCoordinateRange to ProgramDescriptor
 
             Example:
+                desc = ttnn.MeshProgramDescriptor()
+                desc[range] = program_descriptor
                 # Positional argument:
                 desc = ttnn.MeshProgramDescriptor({range1: prog1, range2: prog2})
                 # Keyword argument:
@@ -747,15 +732,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("key"),
             R"pbdoc(
                 Get the ProgramDescriptor for a given MeshCoordinateRange.
-
-                Args:
-                    key: MeshCoordinateRange to look up
-
-                Returns:
-                    ProgramDescriptor for the given range
-
-                Raises:
-                    RuntimeError: If the key is not found
             )pbdoc")
         .def(
             "__setitem__",
@@ -766,19 +742,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("value"),
             R"pbdoc(
                 Set the ProgramDescriptor for a given MeshCoordinateRange.
-
-                Args:
-                    key: MeshCoordinateRange
-                    value: ProgramDescriptor to associate with the range
-            )pbdoc")
-        .def(
-            "__len__",
-            [](const tt::tt_metal::experimental::MeshProgramDescriptor& self) { return self.mesh_programs.size(); },
-            R"pbdoc(
-                Get the number of entries in the MeshProgramDescriptor.
-
-                Returns:
-                    Number of MeshCoordinateRange -> ProgramDescriptor mappings
             )pbdoc")
         .def(
             "__contains__",
@@ -787,12 +750,6 @@ void py_module_types(nb::module_& mod) {
             nb::arg("key"),
             R"pbdoc(
                 Check if a MeshCoordinateRange exists in the MeshProgramDescriptor.
-
-                Args:
-                    key: MeshCoordinateRange to check
-
-                Returns:
-                    True if the key exists, False otherwise
             )pbdoc")
         .def(
             "__iter__",
@@ -806,9 +763,6 @@ void py_module_types(nb::module_& mod) {
             nb::keep_alive<0, 1>(),
             R"pbdoc(
                 Iterate over the MeshCoordinateRange keys in the MeshProgramDescriptor.
-
-                Returns:
-                    Iterator over MeshCoordinateRange keys
             )pbdoc");
 
     // TODO_NANOBIND: AFFECTS BEHAVIOR

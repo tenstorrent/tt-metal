@@ -59,17 +59,11 @@ struct GenericOpDeviceOperation {
 
     using program_factory_t = std::variant<GenericMeshProgram>;
 
-    // Mandatory methods
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
-
-    // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 

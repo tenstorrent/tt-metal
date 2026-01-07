@@ -25,7 +25,6 @@ struct GenericOp {
         const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
 
     // Convenience entry point for single ProgramDescriptor (SPMD mode)
-    // Creates a MeshProgramDescriptor that broadcasts the program to the entire mesh
     static Tensor invoke(
         const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 };  // struct GenericOp
