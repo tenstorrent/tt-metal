@@ -30,6 +30,7 @@ from ....utils.test import line_params, ring_params
     ids=[
         "1x4sp0tp1",
         "2x4sp0tp1",
+        "1x8sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
     ],
