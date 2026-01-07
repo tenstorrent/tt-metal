@@ -39,7 +39,7 @@ on:
       extra-tag:
         required: false
         type: string
-        default: "pipeline-perf"
+        default: "in-service"
         description: "Extra tag for runner selection"
 
 jobs:
@@ -69,13 +69,41 @@ jobs:
               HF_MODEL="meta-llama/Llama-3.2-3B"
               CACHE_DIR="meta-llama/Llama-3.2-3B"
               ;;
-            qwen2.5-7b)
-              HF_MODEL="Qwen/Qwen2.5-7B"
-              CACHE_DIR="Qwen/Qwen2.5-7B"
+            llama3.2-11b-vision)
+              HF_MODEL="meta-llama/Llama-3.2-11B-Vision"
+              CACHE_DIR="meta-llama/Llama-3.2-11B-Vision"
+              ;;
+            llama3.2-90b-vision)
+              HF_MODEL="meta-llama/Llama-3.2-90B-Vision"
+              CACHE_DIR="meta-llama/Llama-3.2-90B-Vision"
               ;;
             mistral-7b)
               HF_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
               CACHE_DIR="mistralai/Mistral-7B-Instruct-v0.3"
+              ;;
+            qwen2.5-7b)
+              HF_MODEL="Qwen/Qwen2.5-7B"
+              CACHE_DIR="Qwen/Qwen2.5-7B"
+              ;;
+            qwen2.5-coder-32b)
+              HF_MODEL="Qwen/Qwen2.5-Coder-32B"
+              CACHE_DIR="Qwen/Qwen2.5-Coder-32B"
+              ;;
+            qwen2.5-72b)
+              HF_MODEL="Qwen/Qwen2.5-72B"
+              CACHE_DIR="Qwen/Qwen2.5-72B"
+              ;;
+            qwen3-32b)
+              HF_MODEL="Qwen/Qwen3-32B"
+              CACHE_DIR="Qwen/Qwen3-32B"
+              ;;
+            phi-3-mini-128k)
+              HF_MODEL="microsoft/Phi-3-mini-128k-instruct"
+              CACHE_DIR="microsoft/Phi-3-mini-128k-instruct"
+              ;;
+            deepseek-r1-distill-llama-70b)
+              HF_MODEL="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
+              CACHE_DIR="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
               ;;
             *)
               echo "Unknown model: ${{ inputs.model }}"
@@ -138,8 +166,8 @@ jobs:
     name: "${{ inputs.device-type }} - ${{ inputs.model }} - ${{ matrix.test.name }}"
     runs-on: >-
       ${{
-        (contains(inputs.runner-label, 'N150') || contains(inputs.runner-label, 'n150') || contains(inputs.runner-label, 'N300') || contains(inputs.runner-label, 'n300'))
-        && fromJSON(format('["cloud-virtual-machine", "{0}", "{1}"]', inputs.runner-label, inputs.extra-tag))
+        inputs.runner-label == 'topology-6u'
+        && fromJSON(format('["{0}", "{1}", "{2}"]', inputs.arch == 'blackhole' && 'arch-blackhole' || 'arch-wormhole_b0', inputs.runner-label, inputs.extra-tag))
         || fromJSON(format('["{0}", "{1}"]', inputs.runner-label, inputs.extra-tag))
       }}
     container:

@@ -16,6 +16,8 @@ on:
           - p300
           - wh-qb
           - bh-qb
+          - wh-glx
+          - bh-blx
       model:
         description: 'Select model to test'
         required: false
@@ -26,8 +28,15 @@ on:
           - llama3.1-70b
           - llama3.2-1b
           - llama3.2-3b
-          - qwen2.5-7b
+          - llama3.2-11b-vision
+          - llama3.2-90b-vision
           - mistral-7b
+          - qwen2.5-7b
+          - qwen2.5-coder-32b
+          - qwen2.5-72b
+          - qwen3-32b
+          - phi-3-mini-128k
+          - deepseek-r1-distill-llama-70b
       regenerate-ttnn-cache:
         description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
         required: false
@@ -145,7 +154,7 @@ jobs:
 
   # BH QuietBox Tests (Blackhole 8 chips)
   bh-quietbox-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'bh-quietbox' }}
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
@@ -159,3 +168,39 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # WH Galaxy Tests (Wormhole Galaxy 32 chips)
+  wh-galaxy-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'wh-glx' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'WH-GLX'
+      runner-label: 'topology-6u'
+      arch: 'wormhole_b0'
+      mesh-device-env: 'TG'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
+
+  # BH Galaxy Tests (Blackhole Galaxy 32 chips)
+  bh-galaxy-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-blx' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'BH-BLX'
+      runner-label: 'topology-6u'
+      arch: 'blackhole'
+      mesh-device-env: 'TG'
+      model: ${{ inputs.model || 'llama3.1-8b' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
