@@ -31,6 +31,20 @@
         }
       },
       {
+        "name": "clang-static-analyzer",
+        "inherits": "default",
+        "description": "Run Clang Static Analyzer",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/.build/clang-static-analyzer",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": {"value": "Debug"},
+          "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "TT_UMD_BUILD_SIMULATION": {"value": "FALSE"}
+        }
+      },
+      {
         "name": "clang-tidy-fix",
         "inherits": "clang-tidy",
         "description": "Run Clang Tidy and apply fixes",
