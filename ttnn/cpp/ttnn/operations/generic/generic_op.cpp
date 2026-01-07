@@ -21,7 +21,8 @@ Tensor GenericOp::invoke(
 
     // Create SPMD MeshProgramDescriptor; same program for the entire mesh
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
-    mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
+    mesh_program_descriptor.mesh_programs.emplace_back(
+        ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
 
     return invoke(io_tensors, mesh_program_descriptor);
 }

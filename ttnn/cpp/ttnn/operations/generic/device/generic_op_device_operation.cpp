@@ -6,20 +6,36 @@
 #include "ttnn/device_operation.hpp"
 
 #include <tt_stl/reflection.hpp>
+#include <unordered_set>
 
 namespace ttnn::operations::generic {
 
 using namespace tt::tt_metal;
+
+void verify_no_duplicate_mesh_coord_ranges(
+    const tt::tt_metal::experimental::MeshProgramDescriptor::MeshPrograms& mesh_programs) {
+    std::unordered_set<ttnn::MeshCoordinateRange> seen;
+    seen.reserve(mesh_programs.size());
+    for (const auto& [range, _] : mesh_programs) {
+        auto [it, inserted] = seen.insert(range);
+        TT_FATAL(inserted, "Duplicate MeshCoordinateRange found in MeshProgramDescriptor: {}", range);
+    }
+}
+
 GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return GenericMeshProgram{};
 }
 
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
+}
 
 void GenericOpDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
+}
 
 GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {

@@ -1350,7 +1350,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             });
         }
 
-        mesh_program_descriptor.mesh_programs.emplace(ttnn::MeshCoordinateRange(device_coord), std::move(program_desc));
+        mesh_program_descriptor.mesh_programs.emplace_back(
+            ttnn::MeshCoordinateRange(device_coord), std::move(program_desc));
     }
 
     log_info(tt::LogTest, "Executing all_gather via generic_op with MUX...");

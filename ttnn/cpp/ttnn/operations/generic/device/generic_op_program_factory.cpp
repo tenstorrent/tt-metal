@@ -120,14 +120,25 @@ void GenericOpDeviceOperation::GenericMeshProgram::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_mesh_workload.workload.get_programs()) {
-        auto& shared_vars = cached_mesh_workload.shared_variables.at(mesh_coord_range);
-        auto& program_shared_vars = shared_vars.program_shared_variables;
+    auto& workload_programs = cached_mesh_workload.workload.get_programs();
+    const auto& mesh_programs = operation_attributes.mesh_programs;
 
-        auto it = operation_attributes.mesh_programs.find(mesh_coord_range);
-        if (it != operation_attributes.mesh_programs.end()) {
-            override_program_runtime_arguments(program, program_shared_vars, it->second);
-        }
+    TT_FATAL(
+        workload_programs.size() == mesh_programs.size(),
+        "Size mismatch between cached workload programs ({}) and operation mesh_programs ({})",
+        workload_programs.size(),
+        mesh_programs.size());
+
+    for (const auto& [range, program_descriptor] : mesh_programs) {
+        auto program_it = workload_programs.find(range);
+        TT_FATAL(
+            program_it != workload_programs.end(),
+            "MeshCoordinateRange {} not found in cached workload programs",
+            range);
+
+        auto& shared_vars = cached_mesh_workload.shared_variables.at(range);
+        override_program_runtime_arguments(
+            program_it->second, shared_vars.program_shared_variables, program_descriptor);
     }
 }
 }  // namespace ttnn::operations::generic
