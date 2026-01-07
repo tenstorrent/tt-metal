@@ -26,10 +26,12 @@ set_target_properties(
     PROPERTIES
         EXCLUDE_FROM_ALL
             TRUE
+        # Output library to build/lib (not build/lib64) for CI tar artifacts
+        # CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
         LIBRARY_OUTPUT_DIRECTORY
-            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
+            "${CMAKE_BINARY_DIR}/lib"
         ARCHIVE_OUTPUT_DIRECTORY
-            "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
+            "${CMAKE_BINARY_DIR}/lib"
         OUTPUT_NAME
             "tracy"
 )
