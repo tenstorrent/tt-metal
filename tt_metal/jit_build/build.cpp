@@ -149,7 +149,7 @@ void JitBuildEnv::init(
     string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions -fdump-rtl-all -fdump-tree-original ";
 
     if(rtoptions.get_jit_analytics_enabled()) {
-        common_flags += "-fdump-rtl-all -fdump-tree-original ";
+        common_flags += "-frepo -fdump-rtl-all -fdump-tree-original ";
     }
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
