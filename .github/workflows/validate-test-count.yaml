@@ -44,11 +44,13 @@ jobs:
       - name: Install tt-metal wheel and dependencies
         if: ${{ inputs.wheel-artifact-name != '' }}
         run: |
-          pip install pytest torch loguru transformers
+          pip install pytest torch
           pip install ./wheels/*.whl
 
       - name: Count and compare tests
-        run: |          
+        run: |
+          export PYTHONPATH="${PYTHONPATH}:${PWD}"
+
           # Define the paths to check for test counts
           declare -a PATHS=(
             "tests/ttnn/unit_tests/operations/eltwise"
