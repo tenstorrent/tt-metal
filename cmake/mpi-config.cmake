@@ -75,11 +75,23 @@ function(tt_configure_mpi enable_distributed use_mpi_out_var)
     # Configure system MPI target
     add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
 
-    # Note: We do NOT export the MPI library directory for RPATH construction because:
+    # Prevent MPI library directories from being added to RPATH
+    # Even with INSTALL_RPATH_USE_LINK_PATH=FALSE, CMake might still add library directories from
+    # imported targets' INTERFACE_LINK_DIRECTORIES. We explicitly clear them to prevent this.
+    # This is safe because:
     # 1. For Fedora builds, system MPI libraries are in standard paths (/usr/lib64 or /usr/lib64/openmpi/lib)
     #    and will be found via the standard library search path, not via RPATH
     # 2. RPM's brp-check-rpaths requires $ORIGIN to be first in RPATH, and adding system paths violates this
     # 3. The MPI library should be found via the system's library search mechanism, not via RPATH
-    # 4. Even with INSTALL_RPATH_USE_LINK_PATH=FALSE, CMake might still add library directories from
-    #    imported targets' INTERFACE_LINK_DIRECTORIES, so we rely on system library search instead
+    get_target_property(MPI_LINK_DIRS MPI::MPI_C INTERFACE_LINK_DIRECTORIES)
+    if(MPI_LINK_DIRS)
+        # Clear INTERFACE_LINK_DIRECTORIES to prevent CMake from adding MPI paths to RPATH
+        # The libraries will still be found via standard library search paths
+        set_target_properties(
+            MPI::MPI_C
+            PROPERTIES
+                INTERFACE_LINK_DIRECTORIES
+                    ""
+        )
+    endif()
 endfunction()
