@@ -306,25 +306,31 @@ tt_set_library_rpath(tt_metal)
 
 # Set INSTALL_RPATH after distributed subdirectory is processed
 # $ORIGIN must come first - it allows the library to find sibling libraries in the install directory
-# Only include ULFM path if we're actually using the custom ULFM MPI build (set by distributed/CMakeLists.txt)
-# Note: TT_METAL_USING_ULFM is only TRUE when the custom ULFM path exists.
-#       For Fedora builds using system OpenMPI 5 (with ULFM support), TT_METAL_USING_ULFM will be FALSE,
-#       so the system MPI libraries (in standard paths like /usr/lib64/openmpi/) will be found via
-#       the standard library search path, not via RPATH.
-#
-# ULFM_PREFIX is set by cmake/mpi-config.cmake (included by distributed/CMakeLists.txt)
+# We explicitly manage the RPATH to ensure $ORIGIN is first, followed by any required system paths.
 set(TT_METAL_INSTALL_RPATH "$ORIGIN")
+
 if(TT_METAL_USING_ULFM)
-    # Only add custom ULFM path when we're actually using it (Ubuntu builds with custom ULFM)
-    # Fedora builds use system MPI and should NOT have this path in RPATH
+    # Ubuntu builds with custom ULFM: Add the custom path
     list(APPEND TT_METAL_INSTALL_RPATH "${ULFM_PREFIX}/lib")
+else()
+    # Fedora builds with system OpenMPI:
+    # We need to ensure the system MPI library path is in RPATH *after* $ORIGIN
+    # if it's not in a standard location (like /usr/lib64/openmpi/lib).
+    # Since INSTALL_RPATH_USE_LINK_PATH=FALSE, we must add it manually if needed.
+    # We use the variable exported from distributed/CMakeLists.txt which finds the exact lib path.
+    if(DEFINED TT_METAL_MPI_LIB_DIR)
+        list(APPEND TT_METAL_INSTALL_RPATH "${TT_METAL_MPI_LIB_DIR}")
+    endif()
 endif()
+
 set_target_properties(
     tt_metal
     PROPERTIES
         # Prevent build paths from leaking into install RPATH
         BUILD_WITH_INSTALL_RPATH
             FALSE
+        # We manually constructed the RPATH, so don't let CMake auto-append paths
+        # (This avoids the issue where system paths might be prepended or order messed up)
         INSTALL_RPATH_USE_LINK_PATH
             FALSE
         INSTALL_RPATH

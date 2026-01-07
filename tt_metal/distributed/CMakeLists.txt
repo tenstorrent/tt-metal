@@ -35,90 +35,24 @@ endif()
 # This sets ULFM_PREFIX with appropriate defaults
 include(${CMAKE_SOURCE_DIR}/cmake/mpi-config.cmake)
 
-# Track whether we're using ULFM MPI (for RPATH configuration in parent scope)
-set(TT_METAL_USING_ULFM FALSE PARENT_SCOPE)
-
-# Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
-if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
-    message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
-    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
-    set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
-    set(USE_MPI TRUE)
-    set(TT_METAL_USING_ULFM TRUE PARENT_SCOPE)
-
-    add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
-
-    set_target_properties(
-        OpenMPI::MPI
-        PROPERTIES
-            EXCLUDE_FROM_ALL
-                TRUE
-    )
-
-    set_target_properties(
-        OpenMPI::MPI
-        PROPERTIES
-            IMPORTED_LOCATION
-                ${ULFM_LIB}
-            INTERFACE_INCLUDE_DIRECTORIES
-                ${ULFM_PREFIX}/include
-    )
-elseif(ENABLE_DISTRIBUTED)
-    # Try to find system MPI if distributed is enabled
-    find_package(MPI QUIET COMPONENTS C)
-    if(MPI_FOUND)
-        # Check if system MPI is OpenMPI with ULFM support (version 5+ has ULFM by default)
-        set(ULFM_AVAILABLE FALSE)
-        if(MPI_C_LIBRARY_VERSION_STRING MATCHES "Open MPI")
-            # Extract major version from the library version string
-            # Format is typically: "Open MPI vX.Y.Z, ..."
-            string(REGEX MATCH "Open MPI v([0-9]+)" _ompi_match "${MPI_C_LIBRARY_VERSION_STRING}")
-            if(_ompi_match)
-                set(OMPI_MAJOR_VERSION ${CMAKE_MATCH_1})
-                if(OMPI_MAJOR_VERSION GREATER_EQUAL 5)
-                    set(ULFM_AVAILABLE TRUE)
-                    message(
-                        STATUS
-                        "Using system OpenMPI ${OMPI_MAJOR_VERSION}.x with ULFM support (version 5+ has ULFM by default)"
-                    )
-                else()
-                    message(
-                        WARNING
-                        "System OpenMPI ${OMPI_MAJOR_VERSION}.x found but ULFM support requires version 5 or higher. "
-                        "Fault tolerance features may not be available."
-                    )
-                endif()
-            else()
-                message(
-                    WARNING
-                    "Could not determine OpenMPI version from: ${MPI_C_LIBRARY_VERSION_STRING}. "
-                    "ULFM support requires OpenMPI version 5 or higher."
-                )
-            endif()
-        else()
-            message(
-                WARNING
-                "Non-OpenMPI implementation found: ${MPI_C_LIBRARY_VERSION_STRING}. "
-                "ULFM fault tolerance requires OpenMPI version 5 or higher."
-            )
-        endif()
-
-        add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
-        set(USE_MPI TRUE)
-        list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
-    else()
-        message(
-            FATAL_ERROR
-            "ENABLE_DISTRIBUTED is ON but no MPI implementation found. Please install MPI or disable distributed support."
-        )
-    endif()
-else()
-    message(STATUS "Multihost compute with MPI disabled, using single host context.")
-    set(USE_MPI FALSE)
-    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
-endif()
+# Configure MPI support using centralized logic
+# This handles:
+# 1. Detection of custom ULFM MPI (Ubuntu) or System MPI (Fedora)
+# 2. Setup of OpenMPI::MPI target
+# 3. Setting USE_MPI and TT_METAL_USING_ULFM variables
+# 4. Adding appropriate source files to DISTRIBUTED_SRC
+tt_configure_mpi(${ENABLE_DISTRIBUTED} USE_MPI DISTRIBUTED_SRC)
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
+
+# Prevent MPI library paths from being added to RPATH when linking distributed
+# This is crucial for Fedora's brp-check-rpaths which requires $ORIGIN to be first in RPATH
+set_target_properties(
+    distributed
+    PROPERTIES
+        INSTALL_RPATH_USE_LINK_PATH
+            FALSE
+)
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(distributed)
