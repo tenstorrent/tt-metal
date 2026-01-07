@@ -167,7 +167,7 @@ test_suite_wh_6u_metal_unit_tests() {
 
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
-    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
 }
 
 test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
