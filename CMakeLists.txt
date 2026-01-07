@@ -25,6 +25,13 @@ endif()
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
+
+# Ensure VERSION_NUMERIC is set - fallback if git describe failed
+if(NOT VERSION_NUMERIC)
+    message(WARNING "VERSION_NUMERIC not set by ParseGitDescribe(), using fallback 0.0.0")
+    set(VERSION_NUMERIC "0.0.0")
+endif()
+
 project(
     Metalium
     VERSION ${VERSION_NUMERIC}
