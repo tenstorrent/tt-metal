@@ -58,7 +58,10 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FABRIC_ROUTING_FIELDS_1D = 37,
         FABRIC_ROUTING_FIELDS_2D = 38,
 
-        UNSUPPORTED = 39
+        READ_TRAILER = 39,
+        WRITE_TRAILER = 40,
+
+        UNSUPPORTED = 41,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -82,6 +85,12 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         }
         uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
     };
+
+    // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled
+    struct LocalNocEventTrailer {
+        NocEventType noc_xfer_type;
+        uint32_t dst_addr;
+    } __attribute__((packed));
 
     // represents a fabric NOC event
     enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH, DYNAMIC_MESH };
@@ -128,6 +137,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     union EventData {
         RawEvent raw_event;
         LocalNocEvent local_event;
+        LocalNocEventTrailer local_event_trailer;
         FabricNoCEvent fabric_event;
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields1D fabric_routing_fields_1d;
@@ -142,7 +152,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     }
 
     static bool isValidEventType(NocEventType event_type) {
-        return event_type >= NocEventType::READ && event_type <= NocEventType::FABRIC_ROUTING_FIELDS_2D;
+        return event_type >= NocEventType::READ && event_type <= NocEventType::WRITE_TRAILER;
     }
 
     static bool isFabricEventType(NocEventType event_type) {
@@ -172,8 +182,18 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
 
+    static bool isLocalEventTrailer(NocEventType event_type) {
+        return event_type == NocEventType::READ_TRAILER || event_type == NocEventType::WRITE_TRAILER;
+    }
+
     // Getter to return the correct variant based on the tag
-    std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields1D, FabricRoutingFields2D>
+    std::variant<
+        LocalNocEvent,
+        LocalNocEventTrailer,
+        FabricNoCEvent,
+        FabricNoCScatterEvent,
+        FabricRoutingFields1D,
+        FabricRoutingFields2D>
     getContents() const {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
@@ -185,6 +205,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
             return data.fabric_routing_fields_1d;
         } else if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_2d;
+        } else if (isLocalEventTrailer(data.raw_event.noc_xfer_type)) {
+            return data.local_event_trailer;
         } else {
             return data.local_event;
         }

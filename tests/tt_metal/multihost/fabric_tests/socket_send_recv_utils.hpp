@@ -19,7 +19,7 @@
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
 // System Types currently supported for testing
-enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX };
+enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX, SPLIT_GALAXY };
 
 // Socket Test Variants
 enum class TestVariant { SINGLE_CONN_BWD, SINGLE_CONN_FWD, MULTI_CONN_FWD, MULTI_CONN_BIDIR };
@@ -73,5 +73,7 @@ void test_multi_mesh_multi_conn_bidirectional(
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
+
+uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::MeshId recv_mesh_id);
 
 }  // namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils

@@ -252,19 +252,6 @@ std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) con
     return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
 }
 
-template <typename T>
-T Tensor::item(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    TT_FATAL(
-        this->logical_shape().volume() == 1,
-        "tensor.item() requires tensor to have exactly one element, but got {} elements",
-        this->logical_shape().volume());
-
-    // Use existing infrastructure: to_vector() already handles multi-device and host tensors correctly
-    // by calling cpu() internally when needed
-    auto vector_data = this->to_vector<T>(cq_id);
-    return vector_data[0];
-}
-
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
@@ -374,13 +361,6 @@ template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_me
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-
-template float Tensor::item<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template bfloat16 Tensor::item<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template int32_t Tensor::item<int32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint8_t Tensor::item<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint16_t Tensor::item<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
-template uint32_t Tensor::item<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 
 Tensor Tensor::to_device(
     distributed::MeshDevice* mesh_device,
@@ -494,16 +474,6 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
     return output;
 }
 
-Tensor create_device_tensor(
-    const tt::tt_metal::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    return create_device_tensor(
-        TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config)), device);
-}
 
 void memcpy(
     distributed::MeshCommandQueue& queue,
@@ -614,39 +584,6 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
 
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
-}
-
-void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
-    ZoneScoped;
-    TT_FATAL(
-        (is_device_tensor(src) && is_cpu_tensor(dst)) ||    // device to host
-            (is_cpu_tensor(src) && is_device_tensor(dst)),  // host to device
-        "Unsupported data transfer direction; source storage type: {}, destination storage type: {}",
-        src.storage_type(),
-        dst.storage_type());
-
-    if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host(src, dst, blocking, cq_id);
-        return;
-    }
-
-    TT_FATAL(
-        src.logical_shape() == dst.logical_shape(),
-        "Source and destination tensors must have the same logical shape. Source: {}, Destination: {}",
-        src.logical_shape(),
-        dst.logical_shape());
-    TT_FATAL(
-        src.dtype() == dst.dtype(),
-        "Source and destination tensors must have the same data type. Source: {}, Destination: {}",
-        src.dtype(),
-        dst.dtype());
-    TT_FATAL(
-        src.tensor_spec().page_config() == dst.tensor_spec().page_config(),
-        "Source and destination tensors must have the same page configuration");
-
-    auto mesh_buffer = dst.device_storage().mesh_buffer;
-    TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device(src, dst, cq_id);
 }
 
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }

@@ -110,6 +110,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::FILL:
+            // NOLINTNEXTLINE(bugprone-branch-clone)
             if (input_dtype == DataType::INT32) {
                 return {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
             } else if (input_dtype == DataType::UINT32) {
@@ -444,7 +445,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0))};
-        case UnaryOpType::HARDSHRINK: return {};
+        case UnaryOpType::HARDSHRINK:
         case UnaryOpType::LOGIT: return {};
         case UnaryOpType::SOFTSHRINK:
             return {
@@ -517,11 +518,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
-        case UnaryOpType::RSQRT:{
+        case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
-        case UnaryOpType::SQRT:{
-            return {"sqrt_tile_init<false>();", fmt::format("sqrt_tile<false, {1}>({0});", idst, param0_raw)};
+        case UnaryOpType::SQRT: {
+            return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
@@ -670,16 +671,20 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::TAN: return {"tan_tile_init();", fmt::format("tan_tile({});", idst)};
         case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
         case UnaryOpType::FLOOR:
-            TT_FATAL(input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("floor_tile({});", idst)};
         case UnaryOpType::CEIL:
-            TT_FATAL(input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
         case UnaryOpType::TRUNC:
-            TT_FATAL(input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
         case UnaryOpType::FRAC:
-            TT_FATAL(input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::RELU6: return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::NEG:
@@ -694,17 +699,16 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
-        case UnaryOpType::MISH: return {};
-        case UnaryOpType::IDENTITY: return {};
+        case UnaryOpType::MISH:
+        case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
-            return {};
-        case UnaryOpType::TANHSHRINK: return {};
-        case UnaryOpType::HARDSWISH: return {};
-        case UnaryOpType::CBRT: return {};
-        case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
+        case UnaryOpType::TANHSHRINK:
+        case UnaryOpType::HARDSWISH:
+        case UnaryOpType::CBRT:
         case UnaryOpType::LOGSIGMOID: return {};
+        case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }
