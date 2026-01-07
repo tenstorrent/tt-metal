@@ -100,6 +100,8 @@ ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation
 
 ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "ReduceScatterDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor = tensor_args.optional_output_tensor;
 

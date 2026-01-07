@@ -143,6 +143,8 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
 ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor = tensor_args.optional_output_tensor;
 

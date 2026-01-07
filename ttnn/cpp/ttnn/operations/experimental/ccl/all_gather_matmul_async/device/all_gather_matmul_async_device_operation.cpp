@@ -123,6 +123,7 @@ tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors
 tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
     const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;

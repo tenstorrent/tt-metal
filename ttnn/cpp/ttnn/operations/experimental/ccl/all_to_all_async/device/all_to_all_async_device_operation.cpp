@@ -180,6 +180,8 @@ AllToAllAsyncDeviceOperation::tensor_return_value_t AllToAllAsyncDeviceOperation
 
 tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "AllToAllAsyncDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& persistent_intermediate_buffer = tensor_args.persistent_intermediate_buffer;
     const ttnn::Tensor& persistent_output_buffer = tensor_args.persistent_output_buffer;

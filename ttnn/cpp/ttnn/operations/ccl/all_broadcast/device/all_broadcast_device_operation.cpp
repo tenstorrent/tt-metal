@@ -79,6 +79,7 @@ tensor_return_value_t AllBroadcastDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
     auto subdevice_id = operation_attributes.sub_device_id;

@@ -90,7 +90,8 @@ AllGatherConcatDeviceOperation::tensor_return_value_t AllGatherConcatDeviceOpera
 
 tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "compute_program_hash is called");
+    log_trace(tt::LogOp, "AllGatherConcatDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
     auto subdevice_id = args.sub_device_id;

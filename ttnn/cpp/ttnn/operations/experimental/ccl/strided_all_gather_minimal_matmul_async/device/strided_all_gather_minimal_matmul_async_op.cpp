@@ -65,6 +65,8 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
 
 tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "StridedAllGatherMinimalMatmulAsync::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& weight_tensor = tensor_args.weight_tensor;
     const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;

@@ -173,7 +173,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
 
 tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "compute_program_hash is called");
+    log_trace(tt::LogOp, "RingAttentionAllGatherAsync::compute_program_hash is called");
 
     const ttnn::Tensor& input_tensor = input_tensors[0];
 

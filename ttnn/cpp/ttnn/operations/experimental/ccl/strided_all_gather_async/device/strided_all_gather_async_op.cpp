@@ -45,6 +45,8 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "StridedAllGatherAsync::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const std::optional<ttnn::Tensor>& persistent_output_buffer = tensor_args.persistent_output_buffer;
 

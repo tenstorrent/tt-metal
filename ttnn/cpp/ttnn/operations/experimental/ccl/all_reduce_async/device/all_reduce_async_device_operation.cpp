@@ -98,6 +98,8 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
 
 tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const ttnn::Tensor& buffer_tensor = tensor_args.buffer_tensor;
 

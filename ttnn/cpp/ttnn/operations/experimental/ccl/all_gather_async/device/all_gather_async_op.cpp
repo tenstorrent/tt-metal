@@ -238,9 +238,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
 
 tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
+
     const ttnn::Tensor& input_tensor = input_tensors[0];
     const std::optional<ttnn::Tensor>& persistent_output_buffer = input_tensors[1];
-    // TODO: Update after AG op infra migration PR
+    // TODO: Update after AG op infra migration PR (also update the log)
 
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
