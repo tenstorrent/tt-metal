@@ -226,7 +226,7 @@ def run_test_forward_pass_dpmodel(
         t0,
     )
 
-    debug_pcc_breakdown = 1
+    debug_pcc_breakdown = int(os.getenv("DEEPSEEK_V3_TEST_DEBUG_PCC_BREAKDOWN", "0"))
     if debug_pcc_breakdown:
         # This is intentionally lightweight: compute PCC on small slices to identify if a single mesh
         # row/col shard is corrupt (e.g., bad row) vs the whole tensor.
@@ -310,9 +310,12 @@ def run_test_forward_pass_dpmodel(
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row",
     [
+        # NOTE: Most test configurations are temporarily disabled to focus on testing
+        # sequence length 8192 which is the primary use case for this PR.
+        # These can be re-enabled once CI resources and test timeouts are addressed.
         # ("decode", 1, 32),
         # ("prefill", 128, 1),
-        # test all prefill from 512 to 128k
+        # Test all prefill from 512 to 128k
         # ("prefill", 512, 1),
         # ("prefill", 1024, 1),
         # ("prefill", 2048, 1),

@@ -315,7 +315,6 @@ def run_reference_with_attention(
 
         # OOM Strategy #2: For very long sequences, create mask on CPU first to reduce GPU memory pressure
         if max_position_id_or_seq_len > 16384:
-            device = activation.device if hasattr(activation, "device") else "cpu"
             mask = torch.triu(
                 torch.full(
                     (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
@@ -374,6 +373,7 @@ def run_reference_with_attention(
         torch.cuda.empty_cache()
 
     # OOM Strategy #1: For sequences > 8192 tokens, use chunked processing
+    # CHUNK_SIZE: Optimal chunk size to avoid OOM while maintaining performance for long sequences
     CHUNK_SIZE = 8192
     use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
 
@@ -470,8 +470,16 @@ def run_reference_with_attention(
                 torch.cuda.empty_cache()
 
             # Create a mock output object for compatibility
+            # This shim allows chunked processing to return a compatible output structure
+            # that matches the expected transformers model output format
             class MockOutput:
-                def __init__(self, hidden_state, past_key_values):
+                """Compatibility shim for chunked processing output.
+
+                Provides the same interface as transformers model outputs (BaseModelOutputWithPast,
+                CausalLMOutputWithPast) to allow seamless integration with existing code paths.
+                """
+
+                def __init__(self, hidden_state: torch.Tensor, past_key_values: Any) -> None:
                     self.last_hidden_state = hidden_state
                     self.past_key_values = past_key_values
 
@@ -618,10 +626,23 @@ def assert_hidden_dim_pcc(
     # For very large sequences, `comp_pcc` can OOM due to its internal clones + numpy conversion.
     # If the full PCC is estimated to exceed a memory threshold, process the sequence dimension in chunks.
     hidden_dim = tt_output_torch.shape[-1]
-    estimated_memory_gb = (seq_len_or_batch_size * hidden_dim * 4 * 2 * 2) / (1024**3)
+    # Estimate memory used inside `comp_pcc`:
+    #   - BYTES_PER_FLOAT32: size of each float32 element (4 bytes)
+    #   - CLONE_OVERHEAD_FACTOR: `comp_pcc` internally clones its inputs (~2x memory)
+    #   - NUMPY_CONVERSION_FACTOR: additional copies during torch<->NumPy conversion (~2x)
+    BYTES_PER_FLOAT32 = 4
+    CLONE_OVERHEAD_FACTOR = 2
+    NUMPY_CONVERSION_FACTOR = 2
+    estimated_memory_bytes = (
+        seq_len_or_batch_size * hidden_dim * BYTES_PER_FLOAT32 * CLONE_OVERHEAD_FACTOR * NUMPY_CONVERSION_FACTOR
+    )
+    estimated_memory_gb = estimated_memory_bytes / (1024**3)
 
-    MAX_MEMORY_GB = 50  # Switch to chunking if the estimated full-tensor PCC exceeds this
-    CHUNK_SIZE = 8192  # Compare up to 8K sequence positions per chunk
+    # MAX_MEMORY_GB: Switch to chunking if the estimated full-tensor PCC exceeds this threshold.
+    # This value may need adjustment for different hardware configurations.
+    MAX_MEMORY_GB = 50
+    # CHUNK_SIZE: Compare up to 8K sequence positions per chunk to balance memory usage and performance.
+    CHUNK_SIZE = 8192
 
     if estimated_memory_gb > MAX_MEMORY_GB and seq_len_or_batch_size > CHUNK_SIZE:
         num_chunks = (seq_len_or_batch_size + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -684,28 +705,14 @@ def get_rope_tensors(
     position_ids: torch.Tensor | None,
     mesh_device: ttnn.MeshDevice,
 ) -> dict[str, ttnn.Tensor]:
-    print("[DEBUG] get_rope_tensors: ENTER")
-    print(
-        f"[DEBUG] get_rope_tensors: batch_size_per_row={batch_size_per_row}, seq_len={seq_len}, position_ids={position_ids is not None}"
-    )
-    print("[DEBUG] get_rope_tensors: About to create RotarySetup")
     rope_setup = RotarySetup(
         device=mesh_device,
         batch_size_per_row=batch_size_per_row,
         hf_config=hf_config,
     )
-    print("[DEBUG] get_rope_tensors: RotarySetup created")
     if position_ids is None:
-        print(f"[DEBUG] get_rope_tensors: position_ids is None, calling get_rot_mats_table with seq_len={seq_len}")
-        result = rope_setup.get_rot_mats_table(seq_len)
-        print("[DEBUG] get_rope_tensors: get_rot_mats_table completed")
-        print("[DEBUG] get_rope_tensors: EXIT")
-        return result
-    print("[DEBUG] get_rope_tensors: position_ids is not None, calling get_rot_mats")
-    result = rope_setup.get_rot_mats(position_ids)
-    print("[DEBUG] get_rope_tensors: get_rot_mats completed")
-    print("[DEBUG] get_rope_tensors: EXIT")
-    return result
+        return rope_setup.get_rot_mats_table(seq_len)
+    return rope_setup.get_rot_mats(position_ids)
 
 
 def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:

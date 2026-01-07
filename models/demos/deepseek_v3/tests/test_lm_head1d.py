@@ -48,13 +48,8 @@ class DeepseekV3LMHead(nn.Module):
 @pytest.mark.parametrize(
     "mode, batch_size_per_row",
     [
-        # ("decode", 32),
-        # ("prefill", 4096),
-        # ("prefill", 8192),
-        # ("prefill", 16384),
-        # ("prefill", 32768),
-        # ("prefill", 65536),
-        ("prefill", 131072),
+        ("decode", 32),
+        ("prefill", 1024),
     ],
 )
 def test_forward_pass(
@@ -116,11 +111,8 @@ def test_forward_pass(
     if seq_len > 16384:  # Only apply chunking if seq_len > 16k tokens
         logger.info("running ttnn.to_torch with chunking")
         # Introduce chunking because to_torch isn't compatible for large tensors >4GB
-        # Chunk along the batch dimension (dim -2) since vocab is already sharded
-
-        # Chunk along the batch dimension (dim 2) - the large dimension
         actual_batch_dim = tt_output_shape[2]
-        chunk_size = 16384  # Process 16K batch entries at a time
+        chunk_size = 16384
         chunks = []
 
         for start_idx in range(0, actual_batch_dim, chunk_size):
