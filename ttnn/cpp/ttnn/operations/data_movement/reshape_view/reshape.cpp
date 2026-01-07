@@ -348,7 +348,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     return invoke(
         tensor,
-        tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
+        detail::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
         reshape_map_mode,

@@ -1497,7 +1497,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
+                return ttnn::reshape(self, ttnn::SmallVector<int>{N, C, H, W});
             },
             R"doc(
                 Reshapes TT tensor
@@ -1518,9 +1518,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
-                return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
-            },
+            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 
