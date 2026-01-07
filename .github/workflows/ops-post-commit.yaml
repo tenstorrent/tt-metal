@@ -9,10 +9,6 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
-        required: false
-        type: number
-        default: 5
       docker-image:
         required: true
         type: string
@@ -56,10 +52,6 @@ on:
           - N150
           - N300
           - P150b
-      timeout:
-        required: false
-        type: number
-        default: 40
       docker-image:
         required: true
         type: string
@@ -83,8 +75,8 @@ jobs:
       matrix:
         default-ops-tests:
           [[
-            { name: "wormhole_b0 sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0" },
-            { name: "blackhole deepseek blitz op tests", cmd: "echo insert tests here", merge_gate: false, arch: "blackhole" }
+            { name: "wormhole_b0 sdxl op tests", cmd: "pytest -n auto --timeout 300 models/experimental/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k \"_performance\" -xv --tb=short", merge_gate: false, arch: "wormhole_b0", timeout: 5 },
+            { name: "blackhole deepseek blitz op tests", cmd: "echo insert tests here", merge_gate: false, arch: "blackhole", timeout: 5 }
           ]]
     steps:
       - name: Compute tests
@@ -150,7 +142,7 @@ jobs:
           slow-dispatch-timeout: 10.0
 
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
 
