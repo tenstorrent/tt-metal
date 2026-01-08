@@ -1,4 +1,4 @@
-name: "TT-Transformers Demo Tests"
+name: "All Models Demo Tests"
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ on:
           - all
           - n150
           - n300
+          - p100
           - p150
           - wh-qb
           - bh-qb
@@ -53,7 +54,6 @@ jobs:
       device-type: 'n150'
       runner-label: 'N150'
       arch: 'wormhole_b0'
-      mesh-device-env: 'N150'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -69,7 +69,21 @@ jobs:
       device-type: 'n300'
       runner-label: 'N300'
       arch: 'wormhole_b0'
-      mesh-device-env: 'N300'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P100 Tests (Blackhole single chip)
+  p100-tests:
+    if: ${{ inputs.device == 'all' || inputs.device == 'p100' }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    with:
+      device-type: 'p100'
+      runner-label: 'P100'
+      arch: 'blackhole'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -85,13 +99,12 @@ jobs:
       device-type: 'p150'
       runner-label: 'P150'
       arch: 'blackhole'
-      mesh-device-env: 'P150'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
-  # WH QuietBox Tests (T3K - Wormhole 8 chips)
+  # WH QuietBox Tests (4xN300)
   wh-quietbox-tests:
     if: ${{ inputs.device == 'all' || inputs.device == 'wh-qb' }}
     needs: build-artifact
@@ -101,13 +114,12 @@ jobs:
       device-type: 'WH-QB'
       runner-label: 'config-t3000'
       arch: 'wormhole_b0'
-      mesh-device-env: 'T3K'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
-  # BH QuietBox Tests (Blackhole 8 chips)
+  # BH QuietBox Tests (2xP300)
   bh-quietbox-tests:
     if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb' }}
     needs: build-artifact
@@ -117,7 +129,6 @@ jobs:
       device-type: 'BH-QB'
       runner-label: 'BH-QB-GE'
       arch: 'blackhole'
-      mesh-device-env: 'P150x8'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -133,7 +144,6 @@ jobs:
       device-type: 'WH-6U'
       runner-label: 'topology-6u'
       arch: 'wormhole_b0'
-      mesh-device-env: 'TG'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -150,7 +160,6 @@ jobs:
       device-type: 'BH-6U'
       runner-label: 'topology-6u'
       arch: 'blackhole'
-      mesh-device-env: 'TG'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

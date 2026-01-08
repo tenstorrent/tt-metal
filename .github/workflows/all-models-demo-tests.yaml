@@ -1,4 +1,4 @@
-name: "TT-Transformers Demo Tests"
+name: "All Models Demo Tests"
 
 on:
   workflow_dispatch:
