@@ -110,10 +110,10 @@ jobs:
       #   run: |
       #     pip install pytest torch loguru transformers
 
-      - name: Install tt-metal wheel (for ttnn Python module)
-        if: ${{ inputs.wheel-artifact-name != '' }}
-        run: |
-          pip install ./wheels/*.whl
+      # - name: Install tt-metal wheel (for ttnn Python module)
+      #   if: ${{ inputs.wheel-artifact-name != '' }}
+      #   run: |
+      #     pip install ./wheels/*.whl
 
       - name: Count and compare tests
         run: |
