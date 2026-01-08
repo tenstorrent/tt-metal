@@ -727,8 +727,18 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Install PostgreSQL Client
-        run: apt-get update && apt-get install postgresql-client-common postgresql-client -y
+      - name: Install PostgreSQL 18 Client
+        run: |
+         apt-get update
+         apt-get install -y wget gnupg lsb-release
+
+         echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list
+
+         wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+
+         apt-get update
+         apt-get install -y postgresql-client-18
       - name: 🔌 Setup Local Database
         timeout-minutes: 5
         run: |
