@@ -704,7 +704,7 @@ Then run the program using ``gdb``:
 
    gdb ./build/programming_examples/metal_example_lab_eltwise_binary
 
-Kernels cannot be directly debugged using ``gdb``, but TT-Metalium provides a number of other methods for debugging kernels.
+Kernels cannot be easily debugged using ``gdb``, and TT-Metalium provides a number of other methods for debugging kernels.
 These methods are useful for debugging hangs and other issues that may not be apparent from the host-side code.
 
 
