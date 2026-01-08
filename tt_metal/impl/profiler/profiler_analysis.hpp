@@ -4,9 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
+#include <filesystem>
+#include <map>
+#include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -93,4 +99,20 @@ void writeProgramsPerfResultsToCSV(
     const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
+
+namespace detail {
+
+// Shared utility for building a quantized (uniform-width) histogram in nanoseconds.
+//
+// - `bucket_edges_ns` will have size (buckets + 1)
+// - `bucket_counts` will have size (buckets)
+// - The bucket width is quantized to `quantum_ns` (default 100ns) and chosen to cover the full [min_ns..max_ns] span.
+experimental::DurationHistogram make_quantized_histogram_ns(
+    const std::vector<uint64_t>& samples_ns,
+    uint64_t min_ns,
+    uint64_t max_ns,
+    uint32_t buckets,
+    uint64_t quantum_ns = 100);
+
+}  // namespace detail
 }  // namespace tt::tt_metal

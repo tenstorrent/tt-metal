@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -255,9 +255,9 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         auto& sender_program = programs[sender_device->id()];
         auto& receiver_program = programs[receiver_device->id()];
         CoreCoord sender_receiver_core;
-        for (uint32_t j = 0; j < sender_receivers.size(); ++j) {
-            if (std::get<1>(sender_receivers[j])->get_devices()[0]->id() == sender_device->id()) {
-                sender_receiver_core = sender_device->ethernet_core_from_logical_core(std::get<3>(sender_receivers[j]));
+        for (const auto& sender_receiver : sender_receivers) {
+            if (std::get<1>(sender_receiver)->get_devices()[0]->id() == sender_device->id()) {
+                sender_receiver_core = sender_device->ethernet_core_from_logical_core(std::get<3>(sender_receiver));
             }
         }
         auto sender_ethernet_config = tt_metal::EthernetConfig{
@@ -302,10 +302,9 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         ////////////////////////////////////////////////////////////////////////////
         // Clear expected value at ethernet L1 address
         CoreCoord receiver_sender_core;
-        for (uint32_t j = 0; j < sender_receivers.size(); ++j) {
-            if (std::get<0>(sender_receivers[j])->get_devices()[0]->id() == receiver_device->id()) {
-                receiver_sender_core =
-                    receiver_device->ethernet_core_from_logical_core(std::get<2>(sender_receivers[j]));
+        for (const auto& sender_receiver : sender_receivers) {
+            if (std::get<0>(sender_receiver)->get_devices()[0]->id() == receiver_device->id()) {
+                receiver_sender_core = receiver_device->ethernet_core_from_logical_core(std::get<2>(sender_receiver));
             }
         }
 
@@ -342,8 +341,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 
     std::vector<std::thread> ths;
     ths.reserve(sender_receivers.size());
-    for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
-        const auto& device = std::get<0>(sender_receivers[i]);
+    for (const auto& sender_receiver : sender_receivers) {
+        const auto& device = std::get<0>(sender_receiver);
         workloads[device->get_devices()[0]->id()].add_program(
             device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
@@ -408,9 +407,9 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
         const auto& device = std::get<0>(sender_receivers[i]);
         const auto& eth_sender_core = std::get<2>(sender_receivers[i]);
         CoreCoord eth_receiver_core;
-        for (uint32_t j = 0; j < sender_receivers.size(); ++j) {
-            if (std::get<1>(sender_receivers[j])->id() == device->id()) {
-                eth_receiver_core = std::get<3>(sender_receivers[j]);
+        for (const auto& sender_receiver : sender_receivers) {
+            if (std::get<1>(sender_receiver)->id() == device->id()) {
+                eth_receiver_core = std::get<3>(sender_receiver);
                 break;
             }
         }
@@ -499,8 +498,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
     std::vector<std::thread> ths;
     ths.reserve(sender_receivers.size());
-    for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
-        const auto& device = std::get<0>(sender_receivers[i]);
+    for (const auto& sender_receiver : sender_receivers) {
+        const auto& device = std::get<0>(sender_receiver);
         workloads[device->get_devices()[0]->id()].add_program(
             device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {

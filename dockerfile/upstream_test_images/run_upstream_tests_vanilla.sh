@@ -159,7 +159,6 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
 test_suite_wh_6u_metal_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream metalium unit tests. Note that skips should be treated as failures"
-    ./build/test/tt_metal/tt_fabric/test_system_health
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
@@ -168,7 +167,7 @@ test_suite_wh_6u_metal_unit_tests() {
 
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
-    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
 }
 
 test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
@@ -311,10 +310,12 @@ test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
-hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
-test_suite_wh_6u_llama_demo_tests
-test_suite_wh_6u_metal_unit_tests
+# test_suite_wh_6u_llama_demo_tests was removed because of
+# https://github.com/tenstorrent/tt-metal/issues/34990
+hw_topology_test_suites["wh_6u"]="
 test_suite_wh_6u_metal_torus_xy_health_check_tests
+test_suite_wh_6u_model_unit_tests
+test_suite_wh_6u_metal_unit_tests
 test_suite_wh_6u_metal_qsfp_links_health_check_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="

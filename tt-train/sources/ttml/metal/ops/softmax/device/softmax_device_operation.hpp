@@ -30,17 +30,15 @@ struct SoftmaxDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        int32_t dim = 3U,  // Use last dimension by default
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::softmax::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_softmax =
-    ttnn::register_operation<"ttnn::prim::ttml_softmax", ttml::metal::ops::softmax::device::SoftmaxDeviceOperation>();
+ttml::metal::ops::softmax::device::SoftmaxDeviceOperation::tensor_return_value_t ttml_softmax(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim = 3U,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+
 }  // namespace ttnn::prim

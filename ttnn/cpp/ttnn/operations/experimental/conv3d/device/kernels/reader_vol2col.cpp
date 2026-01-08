@@ -81,82 +81,91 @@ void kernel_main() {
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;
+    constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
-    for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
-        const uint32_t c_in_offset_bytes = c_in_block * C_in_block_bytes;
-        // Iterate only over assigned C_out blocks
-        for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
-            // 3D blocking loops over assigned ranges:
-            for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
-                const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
-                const uint32_t t_block_s_start = t_block * stride_t;
-                const uint32_t t_block_s_end = t_block_end * stride_t;
+    // Process each batch element
+    for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
+        for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
+            const uint32_t c_in_offset_bytes = c_in_block * C_in_block_bytes;
+            // Iterate only over assigned C_out blocks
+            for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
+                // 3D blocking loops over assigned ranges:
+                for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
+                    const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
+                    const uint32_t t_block_s_start = t_block * stride_t;
+                    const uint32_t t_block_s_end = t_block_end * stride_t;
 
-                for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
-                    const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
-                    const uint32_t h_block_s_start = h_block * stride_h;
-                    const uint32_t h_block_s_end = h_block_end * stride_h;
+                    for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
+                        const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
+                        const uint32_t h_block_s_start = h_block * stride_h;
+                        const uint32_t h_block_s_end = h_block_end * stride_h;
 
-                    for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                        const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
-                        const uint32_t w_block_s_start = w_block * stride_w;
-                        const uint32_t w_block_s_end = w_block_end * stride_w;
-                        // Now iterate through the sub-tile
-                        cb_reserve_back(cb_vol2col, num_patches);
-                        const uint32_t cb_write_ptr = get_write_ptr(cb_vol2col);
-                        uint32_t cb_write_addr = cb_write_ptr;
-                        for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
-                            for (uint32_t h = h_block_s_start; h < h_block_s_end; h += stride_h) {
-                                for (uint32_t w = w_block_s_start; w < w_block_s_end; w += stride_w) {
-                                    // For each output coordinate (t, h, w),
-                                    // gather the kT*kH*kW patch around (t,h,w).
-                                    for (uint32_t kt = 0; kt < kT; kt++) {
-                                        int32_t t_idx = (int32_t)(t + kt) - padding_t;
-                                        const bool outside_t = (t_idx < 0 || t_idx >= (int32_t)T_in);
-                                        t_idx = clampIndex(t_idx, 0, (int32_t)T_in - 1);
+                        for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+                            const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
+                            const uint32_t w_block_s_start = w_block * stride_w;
+                            const uint32_t w_block_s_end = w_block_end * stride_w;
+                            // Now iterate through the sub-tile
+                            cb_reserve_back(cb_vol2col, num_patches);
+                            const uint32_t cb_write_ptr = get_write_ptr(cb_vol2col);
+                            uint32_t cb_write_addr = cb_write_ptr;
+                            for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
+                                for (uint32_t h = h_block_s_start; h < h_block_s_end; h += stride_h) {
+                                    for (uint32_t w = w_block_s_start; w < w_block_s_end; w += stride_w) {
+                                        // For each output coordinate (t, h, w),
+                                        // gather the kT*kH*kW patch around (t,h,w).
+                                        for (uint32_t kt = 0; kt < kT; kt++) {
+                                            int32_t t_idx = static_cast<int32_t>(t + kt) - padding_t;
+                                            const bool outside_t = (t_idx < 0 || t_idx >= static_cast<int32_t>(T_in));
+                                            t_idx = clampIndex(t_idx, 0, static_cast<int32_t>(T_in) - 1);
 
-                                        for (uint32_t kh = 0; kh < kH; kh++) {
-                                            int32_t h_idx = (int32_t)(h + kh) - padding_h;
-                                            const bool outside_h = (h_idx < 0 || h_idx >= (int32_t)H_in);
-                                            h_idx = clampIndex(h_idx, 0, (int32_t)H_in - 1);
+                                            for (uint32_t kh = 0; kh < kH; kh++) {
+                                                int32_t h_idx = static_cast<int32_t>(h + kh) - padding_h;
+                                                const bool outside_h =
+                                                    (h_idx < 0 || h_idx >= static_cast<int32_t>(H_in));
+                                                h_idx = clampIndex(h_idx, 0, static_cast<int32_t>(H_in) - 1);
 
-                                            for (uint32_t kw = 0; kw < kW; kw++) {
-                                                int32_t w_idx = (int32_t)(w + kw) - padding_w;
-                                                const bool outside_w = (w_idx < 0 || w_idx >= (int32_t)W_in);
-                                                const bool in_padding = (outside_t || outside_h || outside_w);
-                                                w_idx = clampIndex(w_idx, 0, (int32_t)W_in - 1);
+                                                for (uint32_t kw = 0; kw < kW; kw++) {
+                                                    int32_t w_idx = static_cast<int32_t>(w + kw) - padding_w;
+                                                    const bool outside_w =
+                                                        (w_idx < 0 || w_idx >= static_cast<int32_t>(W_in));
+                                                    const bool in_padding = (outside_t || outside_h || outside_w);
+                                                    w_idx = clampIndex(w_idx, 0, static_cast<int32_t>(W_in) - 1);
 
-                                                if constexpr (is_padding_zeros) {
-                                                    if (in_padding) {
-                                                        // Zero fill
-                                                        zeroPad<C_in_block_bytes>(cb_write_addr);
-                                                        cb_write_addr += C_in_block_bytes;
-                                                        continue;
+                                                    if constexpr (is_padding_zeros) {
+                                                        if (in_padding) {
+                                                            // Zero fill
+                                                            zeroPad<C_in_block_bytes>(cb_write_addr);
+                                                            cb_write_addr += C_in_block_bytes;
+                                                            continue;
+                                                        }
                                                     }
+
+                                                    // Now do the normal read from DRAM.
+                                                    // Flattened index in the input (including batch offset)
+                                                    const uint32_t in_page_idx =
+                                                        batch_idx * T_in_H_in_W_in +
+                                                        static_cast<uint32_t>(t_idx) * H_in_W_in +
+                                                        static_cast<uint32_t>(h_idx) * W_in +
+                                                        static_cast<uint32_t>(w_idx);
+                                                    const uint64_t in_noc_addr = in_reader.get_noc_addr(
+                                                        in_page_idx, c_in_offset_bytes /*offset*/);
+                                                    noc_async_read(in_noc_addr, cb_write_addr, C_in_block_bytes);
+
+                                                    cb_write_addr += C_in_block_bytes;
                                                 }
-
-                                                // Now do the normal read from DRAM.
-                                                // Flattened index in the input
-                                                const uint32_t in_page_idx = (uint32_t)(t_idx)*H_in_W_in +
-                                                                             (uint32_t)(h_idx)*W_in + (uint32_t)(w_idx);
-                                                const uint64_t in_noc_addr =
-                                                    in_reader.get_noc_addr(in_page_idx, c_in_offset_bytes /*offset*/);
-                                                noc_async_read(in_noc_addr, cb_write_addr, C_in_block_bytes);
-
-                                                cb_write_addr += C_in_block_bytes;
                                             }
                                         }
                                     }
                                 }
                             }
+                            noc_async_read_barrier();
+                            cb_push_back(cb_vol2col, num_patches);
+                            // End of w_block
                         }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_vol2col, num_patches);
-                        // End of w_block
+                        // End of h_block
                     }
-                    // End of h_block
+                    // End of t_block
                 }
-                // End of t_block
             }
         }
     }

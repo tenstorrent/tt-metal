@@ -29,21 +29,19 @@ struct RMSNormBackwardDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& gamma_tensor,
-        const ttnn::Tensor& rms_tensor,
-        const ttnn::Tensor& dL_dout_tensor,
-        float epsilon = 1e-6F,
-        const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device
 
 namespace ttnn::prim {
-constexpr auto ttml_rmsnorm_bw = ttnn::register_operation<
-    "ttnn::prim::ttml_rmsnorm_bw",
-    ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation>();
-}
+
+ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
+    const ttnn::Tensor& rms_tensor,
+    const ttnn::Tensor& dL_dout_tensor,
+    float epsilon = 1e-6F,
+    const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt);
+
+}  // namespace ttnn::prim

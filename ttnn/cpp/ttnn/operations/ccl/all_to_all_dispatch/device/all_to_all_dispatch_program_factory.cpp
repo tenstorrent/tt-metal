@@ -419,7 +419,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
-    for (uint32_t i = 0; i < sender_cores.size(); i++) {
+    for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = {
             input_tensor.buffer()->address(),
             indices_tensor.buffer()->address(),
@@ -445,7 +445,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 mesh_coordinate[1],
                 neighbor_coordinate[0],
                 neighbor_coordinate[1],
-                sender_cores.at(i),
+                sender_core,
                 link_id,
                 reader_runtime_args[6],
                 reader_runtime_args[7]);
@@ -454,12 +454,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,
                 program,
-                sender_cores.at(i),
+                sender_core,
                 writer_runtime_args);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_core, writer_runtime_args);
         link_id++;
     }
 

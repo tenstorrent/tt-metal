@@ -354,6 +354,7 @@ def run_test_FalconDecoder_inference(
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_FalconDecoder_inference(
     num_devices,
     model_version,
@@ -366,7 +367,7 @@ def test_FalconDecoder_inference(
     cache_pcc,
     token_pcc,
     model_config_str,
-    t3k_mesh_device,
+    mesh_device,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
@@ -375,14 +376,14 @@ def test_FalconDecoder_inference(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     run_test_FalconDecoder_inference(
-        t3k_mesh_device,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

@@ -125,9 +125,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             int stick_id = stick_ids_per_core[j];
 
             // if it is pad stick, we need to leave a gap between the previous non-pad stick and next non-pad stick.
-            if (stick_id == -2) {  // front padding
-                core_stick_map[prev_xy_pair].push_back(stick_id);
-            } else if (stick_id == -1) {  // end padding
+            if (stick_id == -2 || stick_id == -1) {  // front or end padding
                 core_stick_map[prev_xy_pair].push_back(stick_id);
             } else {
                 uint32_t shard_id = stick_id / num_sticks_per_core_unpadded;

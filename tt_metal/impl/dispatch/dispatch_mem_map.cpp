@@ -87,12 +87,12 @@ uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
     if (last_core_type == CoreType::WORKER) {
         // There are 64 streams. CBs use entries 8-39.
         return 48u + index;
-    } else if (last_core_type == CoreType::ETH) {
+    }
+    if (last_core_type == CoreType::ETH) {
         // There are 32 streams.
         return 16u + index;
-    } else {
-        TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
     }
+    TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
 }
 
 uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {
@@ -123,8 +123,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     constexpr uint8_t num_dev_cq_addrs = enchantum::count<CommandQueueDeviceAddrType>;
     std::vector<uint32_t> device_cq_addr_sizes_(num_dev_cq_addrs, 0);
     for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
-        CommandQueueDeviceAddrType dev_addr_type =
-            enchantum::cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
+        CommandQueueDeviceAddrType dev_addr_type = enchantum::cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
         if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
@@ -159,11 +158,11 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     }
 
     uint32_t prefetch_dispatch_unreserved_base =
-    device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(
-        CommandQueueDeviceAddrType::UNRESERVED)];
+        device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
-    dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    dispatch_buffer_base_ =
+        align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
     dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 

@@ -56,7 +56,7 @@ bool check_min_connection_count_satisfied(
         auto asic_b = get_asic_id(conn.second);
         auto asic_pair = make_asic_pair(asic_a, asic_b);
         // Initialize to 0 if not present (we count from discovered connections)
-        if (asic_pair_connection_counts.find(asic_pair) == asic_pair_connection_counts.end()) {
+        if (!asic_pair_connection_counts.contains(asic_pair)) {
             asic_pair_connection_counts[asic_pair] = 0;
         }
     }
@@ -67,7 +67,7 @@ bool check_min_connection_count_satisfied(
         auto asic_b = get_asic_id(conn.second);
         auto asic_pair = make_asic_pair(asic_a, asic_b);
         // Only count if this pair is expected (exists in FSD)
-        if (asic_pair_connection_counts.find(asic_pair) != asic_pair_connection_counts.end()) {
+        if (asic_pair_connection_counts.contains(asic_pair)) {
             asic_pair_connection_counts[asic_pair]++;
         }
     }
@@ -268,7 +268,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         }
 
         // Check for duplicates before inserting
-        if (generated_connections.find(connection_pair_sorted) != generated_connections.end()) {
+        if (generated_connections.contains(connection_pair_sorted)) {
             duplicate_generated_connections.insert(connection_pair_sorted);
         } else {
             generated_connections.insert(connection_pair_sorted);
@@ -324,7 +324,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             }
 
             // Check for duplicates before inserting
-            if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
+            if (discovered_connections.contains(connection_pair_sorted)) {
                 duplicate_discovered_connections.insert(connection_pair_sorted);
             } else {
                 discovered_connections.insert(connection_pair_sorted);
@@ -366,7 +366,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             }
 
             // Check for duplicates before inserting
-            if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
+            if (discovered_connections.contains(connection_pair_sorted)) {
                 duplicate_discovered_connections.insert(connection_pair_sorted);
             } else {
                 discovered_connections.insert(connection_pair_sorted);
@@ -473,7 +473,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     // Only in strict validation: also find connections in GSD but not in FSD
     if (strict_validation) {
         for (const auto& conn : discovered_connections) {
-            if (generated_connections.find(conn) == generated_connections.end()) {
+            if (!generated_connections.contains(conn)) {
                 extra_in_gsd.insert(conn);
             }
         }
@@ -690,7 +690,7 @@ std::string generate_cluster_descriptor_from_fsd(
         {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
     };
 
-    if (ubb_bus_ids.find(arch) == ubb_bus_ids.end()) {
+    if (!ubb_bus_ids.contains(arch)) {
         throw std::runtime_error("No bus ID mapping for architecture: " + arch_str);
     }
     const auto& tray_bus_ids = ubb_bus_ids.at(arch);
@@ -713,7 +713,7 @@ std::string generate_cluster_descriptor_from_fsd(
         TrayId tray_id{board_location.tray_id()};
         for (uint32_t asic_location : asic_locations_on_board) {
             auto key = std::make_tuple(host_id, tray_id, asic_location);
-            if (asic_to_unique_chip_id.find(key) == asic_to_unique_chip_id.end()) {
+            if (!asic_to_unique_chip_id.contains(key)) {
                 asic_to_unique_chip_id[key] = next_unique_chip_id;
                 unique_chip_id_to_asic[next_unique_chip_id] = key;
                 next_unique_chip_id++;

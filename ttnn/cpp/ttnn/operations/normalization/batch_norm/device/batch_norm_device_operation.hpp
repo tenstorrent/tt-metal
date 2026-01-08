@@ -64,20 +64,18 @@ struct BatchNormOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const Tensor& batch_mean,
-        const Tensor& batch_var,
-        float eps,
-        std::optional<Tensor> weight,
-        std::optional<Tensor> bias,
-        std::optional<Tensor> output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {
-constexpr auto batch_norm =
-    ttnn::register_operation<"ttnn::prim::batch_norm", ttnn::operations::normalization::BatchNormOperation>();
-}
+ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch_norm(
+    const Tensor& input,
+    const Tensor& batch_mean,
+    const Tensor& batch_var,
+    float eps,
+    std::optional<Tensor> weight,
+    std::optional<Tensor> bias,
+    std::optional<Tensor> output,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+}  // namespace ttnn::prim

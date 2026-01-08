@@ -21,9 +21,8 @@ struct CoreDescriptorComparator {
     bool operator()(const umd::CoreDescriptor& x, const umd::CoreDescriptor& y) const {
         if (x.coord == y.coord) {
             return x.type < y.type;
-        } else {
-            return x.coord < y.coord;
         }
+        return x.coord < y.coord;
     }
 };
 using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator>;

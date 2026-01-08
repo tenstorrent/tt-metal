@@ -41,8 +41,9 @@ class Emb(torch.nn.Module):
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_model_perf(
-    t3k_mesh_device,
+    mesh_device,
     generation_start_pos,
     expected_compile_time,
     expected_inference_time,
@@ -59,7 +60,7 @@ def test_mixtral_model_perf(
     max_seqlen = 16384
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seqlen)
+    model_args = TtModelArgs(mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seqlen)
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -85,7 +86,7 @@ def test_mixtral_model_perf(
     profiler.start("Mixtral_model_setup")
     # Load TTNN model
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -104,7 +105,7 @@ def test_mixtral_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("e2e_decode_compile")
 
-    ttnn.ReadDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -151,8 +152,9 @@ def test_mixtral_model_perf(
         # "prefill_32k",  # FIXME out of memory (decode)
     ],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_model_with_prefill_perf(
-    t3k_mesh_device,
+    mesh_device,
     prefill_seqlen,
     expected_compile_time,
     expected_inference_time,
@@ -177,7 +179,7 @@ def test_mixtral_model_with_prefill_perf(
         batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=seq_len)
+    model_args = TtModelArgs(mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -211,7 +213,7 @@ def test_mixtral_model_with_prefill_perf(
         model_args,
         dtype,
         False,
-        t3k_mesh_device,
+        mesh_device,
         2,
     )
 
@@ -222,7 +224,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.start("Mixtral_model_setup")
     # Load TTNN model
     tt_model = TtTransformer(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -236,26 +238,26 @@ def test_mixtral_model_with_prefill_perf(
         signpost("prefill warmup")
     profiler.clear()
     profiler.start(f"e2e_prefill_warmup")
-    run_inference_prefill(tt_model, model_args, prefill_seqlen, t3k_mesh_device, pt_prefill_input, 1)
+    run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_warmup")
     profiler.print(units="ms")
     prefill_warmup_time = profiler.get("e2e_prefill_warmup")
 
     # Profiler read, ready for real run
-    ttnn.ReadDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill perf run")
     profiler.clear()
     profiler.start(f"e2e_prefill_1_user")
     # Prefill a single user, as this will be the real-world usage
-    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seqlen, t3k_mesh_device, pt_prefill_input, 1)
+    run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_1_user")
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
 
     # profile read
-    ttnn.ReadDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
     generation_start_pos = prefill_seqlen
@@ -271,7 +273,7 @@ def test_mixtral_model_with_prefill_perf(
     decode_warmup_time = profiler.get("e2e_decode_warmup")
 
     # Profiler read, ready for real run
-    ttnn.ReadDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")

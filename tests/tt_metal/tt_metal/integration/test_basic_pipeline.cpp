@@ -13,8 +13,8 @@
 // and number of repetitions
 //////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>

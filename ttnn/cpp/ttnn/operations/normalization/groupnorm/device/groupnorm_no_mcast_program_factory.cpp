@@ -381,7 +381,7 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
-        if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges_all.end()) {
+        if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {
             group_index += 1;
         }
         if (group_index >= static_cast<int>(mcast_groups.size())) {
@@ -1017,12 +1017,12 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
             }
 
             std::vector<uint32_t> mcast_noc_xy;
-            for (size_t c = 0; c < group.size(); ++c) {
-                CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+            for (const auto& core : group) {
+                CoreCoord coord = device->worker_core_from_logical_core(core);
                 mcast_noc_xy.push_back(coord.x);
             }
-            for (size_t c = 0; c < group.size(); ++c) {
-                CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+            for (const auto& core : group) {
+                CoreCoord coord = device->worker_core_from_logical_core(core);
                 mcast_noc_xy.push_back(coord.y);
             }
             mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());

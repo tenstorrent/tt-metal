@@ -41,7 +41,7 @@ class TestFactory:
         mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
         # Setup CCL
-        ccl_manager = CCLManager(mesh_device)
+        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
         # state_dict = TestFactory._generate_dummy_state_dict(config)

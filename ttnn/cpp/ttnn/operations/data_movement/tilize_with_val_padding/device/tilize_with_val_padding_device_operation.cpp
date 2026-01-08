@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -27,7 +29,30 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     if (!operation_attributes.use_multicore) {
         return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreFactory{};
     }
+    auto* device = input_tensor.device();
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid =
+        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
+    uint32_t num_blocks = operation_attributes.output_padded_shape.volume() /
+                          operation_attributes.output_padded_shape[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = operation_attributes.output_padded_shape[-1] / tt::constants::TILE_WIDTH;
 
+    uint32_t num_tiles_per_col = operation_attributes.output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
+
+    size_t grid_area = available_grid.num_cores();
+    auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block &&
+        (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
+        uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
+                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+        if (ncores < ncores_wh.ncores) {
+            return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        }
+    }
     return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedFactory{};
 }
 
@@ -140,21 +165,22 @@ TilizeWithValPaddingDeviceOperation::tensor_return_value_t TilizeWithValPaddingD
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<
-    TilizeWithValPaddingDeviceOperation::operation_attributes_t,
-    TilizeWithValPaddingDeviceOperation::tensor_args_t>
-TilizeWithValPaddingDeviceOperation::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation::tensor_return_value_t tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue& pad_value,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const bool use_multicore,
-    const bool enough_space_width,
-    const bool enough_space_height,
+    bool use_multicore,
+    bool enough_space_width,
+    bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return {
-        TilizeWithValPaddingDeviceOperation::operation_attributes_t{
+    using OperationType = ttnn::operations::data_movement::TilizeWithValPaddingDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
@@ -164,7 +190,6 @@ TilizeWithValPaddingDeviceOperation::invoke(
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
         },
-        TilizeWithValPaddingDeviceOperation::tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

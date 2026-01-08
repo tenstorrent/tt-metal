@@ -51,8 +51,7 @@ std::set<std::string> get_instance_names_by_type(const MeshGraphDescriptor& desc
 void check_instances_have_names(const MeshGraphDescriptor& desc, const std::string& type, const std::vector<std::string>& expected_names) {
     auto names = get_instance_names_by_type(desc, type);
     for (const auto& expected_name : expected_names) {
-        EXPECT_TRUE(names.find(expected_name) != names.end())
-            << "Should have " << type << " instance '" << expected_name << "'";
+        EXPECT_TRUE(names.contains(expected_name)) << "Should have " << type << " instance '" << expected_name << "'";
     }
 }
 void check_sub_instances(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count, const std::unordered_set<std::string_view>& expected_names) {
@@ -110,8 +109,7 @@ void check_connections(
     uint32_t expected_channel_count,
     GlobalNodeId expected_parent_instance_id,
     const std::unordered_set<std::string>& expected_node_names) {
-    for (size_t idx = 0; idx < connections.size(); ++idx) {
-        const auto connection_id = connections[idx];
+    for (unsigned int connection_id : connections) {
         const auto& connection = desc.get_connection(connection_id);
 
         EXPECT_EQ(connection.count, expected_channel_count);

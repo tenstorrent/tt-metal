@@ -60,19 +60,17 @@ struct MorehClipGradNormStep1Operation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& inputs,
-        float norm_type,
-        uint32_t tile_offset_of_tmp_pow_sum,
-        const Tensor& tmp_pow_sum,
-        const std::optional<MemoryConfig>& memory_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1
 
 namespace ttnn::prim {
-constexpr auto moreh_clip_grad_norm_step1 = ttnn::register_operation<
-    "ttnn::prim::moreh_clip_grad_norm_step1",
-    ttnn::operations::moreh::moreh_clip_grad_norm_step1::MorehClipGradNormStep1Operation>();
+ttnn::operations::moreh::moreh_clip_grad_norm_step1::MorehClipGradNormStep1Operation::tensor_return_value_t
+moreh_clip_grad_norm_step1(
+    const std::vector<Tensor>& inputs,
+    float norm_type,
+    uint32_t tile_offset_of_tmp_pow_sum,
+    const Tensor& tmp_pow_sum,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 }  // namespace ttnn::prim

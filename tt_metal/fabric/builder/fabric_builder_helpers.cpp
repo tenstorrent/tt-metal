@@ -42,10 +42,8 @@ std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions
     if (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST) {
         // E/W -> perpendicular are N/S
         return {eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
-    } else {
-        // N/S -> perpendicular are E/W
-        return {eth_chan_directions::EAST, eth_chan_directions::WEST};
-    }
+    }  // N/S -> perpendicular are E/W
+    return {eth_chan_directions::EAST, eth_chan_directions::WEST};
 }
 
 std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction) {

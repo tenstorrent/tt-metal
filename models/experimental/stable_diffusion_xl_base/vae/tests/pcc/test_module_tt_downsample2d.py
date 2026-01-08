@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_downsample2d import TtDownsample2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -50,7 +50,7 @@ def test_downsample2d(
     torch_downsample = vae.encoder.down_blocks[down_block_id].downsamplers[0]
     groups = 1
 
-    model_config = ModelOptimisations()
+    model_config = VAEModelOptimisations()
     tt_downsample = TtDownsample2D(
         device,
         state_dict,

@@ -6,7 +6,7 @@
 
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
 #include <atomic>
@@ -181,7 +181,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
     for (auto& mesh_trace_data : trace_buffer->desc->ordered_trace_data) {
         auto& device_range = mesh_trace_data.device_range;
-        if (write_offset_per_device_range.find(device_range) == write_offset_per_device_range.end()) {
+        if (!write_offset_per_device_range.contains(device_range)) {
             write_offset_per_device_range.insert({device_range, 0});
         }
         std::vector<uint32_t> write_data = mesh_trace_data.data;

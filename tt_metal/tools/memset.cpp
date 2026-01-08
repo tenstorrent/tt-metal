@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include "impl/context/metal_context.hpp"
 #include <tt_stl/span.hpp>
 #include <unistd.h>

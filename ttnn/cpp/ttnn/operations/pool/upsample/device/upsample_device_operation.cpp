@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
@@ -22,11 +23,9 @@ static std::array<uint32_t, 4> get_input_shape(const operation_attributes_t& arg
             slidingWindowConfig.input_hw.first,
             slidingWindowConfig.input_hw.second,
             slidingWindowConfig.channels};
-    } else {
-        // For nearest mode use input tensor dimensions
-        const Shape& input_shape = input.logical_shape();
-        return {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
-    }
+    }  // For nearest mode use input tensor dimensions
+    const Shape& input_shape = input.logical_shape();
+    return {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
 }
 
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
@@ -36,15 +35,14 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
         // Bilinear is only supported for sharded inputs
         // In case of interleaved input, autosharding had previously been performed
         return program::UpsampleBilinearProgramFactory{};
-    } else if (args.mode == "nearest") {
+    }
+    if (args.mode == "nearest") {
         if (input_tensor_0.is_sharded()) {
             return program::UpsampleMultiCoreShardedProgramFactory{};
-        } else {
-            return program::UpsampleMultiCoreInterleavedProgramFactory{};
         }
-    } else {
-        TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
+        return program::UpsampleMultiCoreInterleavedProgramFactory{};
     }
+    TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");
 }
 
 void UpsampleOperation::validate_on_program_cache_miss(
@@ -157,7 +155,10 @@ UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensor
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-std::tuple<UpsampleOperation::operation_attributes_t, UpsampleOperation::tensor_args_t> UpsampleOperation::invoke(
+}  // namespace ttnn::operations::pool::upsample
+
+namespace ttnn::prim {
+ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     const int scale_factor_h,
     const int scale_factor_w,
@@ -165,14 +166,15 @@ std::tuple<UpsampleOperation::operation_attributes_t, UpsampleOperation::tensor_
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
-    return {
-        operation_attributes_t{
+    using OperationType = ttnn::operations::pool::upsample::UpsampleOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
             .scale_factor_h = scale_factor_h,
             .scale_factor_w = scale_factor_w,
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
             .sliding_window_config = sliding_window_config},
-        tensor_args_t{.input_tensor = input_tensor}};
+        OperationType::tensor_args_t{.input_tensor = input_tensor});
 }
-}  // namespace ttnn::operations::pool::upsample
+}  // namespace ttnn::prim

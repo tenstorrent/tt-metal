@@ -28,23 +28,20 @@ struct SDPAForwardDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& query_tensor,
-        const ttnn::Tensor& key_tensor,
-        const ttnn::Tensor& value_tensor,
-        const std::optional<ttnn::Tensor>& mask,  // attention mask
-        const float dropout_probability = 0.0F,   // default value
-        const bool return_intermediates = false,
-        const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,
-        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::sdpa_fw::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_sdpa_fw = ttnn::
-    register_operation<"ttnn::prim::ttml_sdpa_fw", ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation>();
+ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_value_t ttml_sdpa_fw(
+    const ttnn::Tensor& query_tensor,
+    const ttnn::Tensor& key_tensor,
+    const ttnn::Tensor& value_tensor,
+    const std::optional<ttnn::Tensor>& mask,
+    const float dropout_probability = 0.0F,
+    const bool return_intermediates = false,
+    const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

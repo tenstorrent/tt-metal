@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <ctype.h>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -102,7 +102,8 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
 tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
         return tt::CoreType::WORKER;
-    } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
+    }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
         return tt::CoreType::ETH;
     }
 
@@ -132,16 +133,14 @@ CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCo
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
-    } else {
-        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
-        // the system this coordinate belongs to.
-        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
-        CoreCoord physical_coord = {
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-            device_id, physical_coord);
-    }
+    }  // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
+    // the system this coordinate belongs to.
+    // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+    CoreCoord physical_coord = {
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+        device_id, physical_coord);
 }
 
 // Helper function to get string rep of noc target.
@@ -496,9 +495,14 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
             reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
-    string core_type_str = programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ? "acteth"
-                           : programmable_core_type == HalProgrammableCoreType::IDLE_ETH ? "idleth"
-                                                                                         : "worker";
+    string core_type_str;
+    if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        core_type_str = "acteth";
+    } else if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
+        core_type_str = "idleth";
+    } else {
+        core_type_str = "worker";
+    }
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_coord.x,
@@ -862,9 +866,9 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
             if (curr_idx == 0) {
                 if (ring_buf_data.wrapped() == 0) {
                     break;  // No wrapping, so no extra data available
-                } else {
-                    curr_idx = ring_buffer_elements - 1;  // Loop
                 }
+                curr_idx = ring_buffer_elements - 1;  // Loop
+
             } else {
                 curr_idx--;
             }

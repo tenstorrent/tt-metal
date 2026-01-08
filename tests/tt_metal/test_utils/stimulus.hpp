@@ -68,10 +68,10 @@ std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
-    if constexpr (std::is_integral<ValueType>::value) {
+    if constexpr (std::is_integral_v<ValueType>) {
         std::uniform_int_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
-    } else if constexpr (std::is_floating_point<ValueType>::value) {
+    } else if constexpr (std::is_floating_point_v<ValueType>) {
         std::uniform_real_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {
@@ -86,7 +86,7 @@ std::vector<ValueType> generate_normal_random_vector(
     ValueType mean, ValueType stdev, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
-    if constexpr (std::is_integral<ValueType>::value or std::is_floating_point<ValueType>::value) {
+    if constexpr (std::is_integral_v<ValueType> or std::is_floating_point_v<ValueType>) {
         std::normal_distribution<ValueType> dis(mean, stdev);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {

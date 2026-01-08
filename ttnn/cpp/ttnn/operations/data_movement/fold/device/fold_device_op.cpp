@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fold_device_op.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -10,7 +11,8 @@ Fold::program_factory_t Fold::select_program_factory(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     if (op_attr.is_sharded) {
         return MultiCore{};
-    } else if (op_attr.is_dram_interleaved) {
+    }
+    if (op_attr.is_dram_interleaved) {
         return MultiCoreDRAMFold{};
     }
     return SingleCore{};
@@ -88,7 +90,8 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             output_shape,
             tt::tt_metal::TensorLayout(
                 output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config))};
-    } else if (op_attr.is_dram_interleaved) {
+    }
+    if (op_attr.is_dram_interleaved) {
         ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
         if (input_tensor.layout() == Layout::ROW_MAJOR) {
             output_logical_shape = ttnn::Shape(
@@ -116,7 +119,10 @@ Fold::tensor_return_value_t Fold::create_output_tensors(
     return create_device_tensor(compute_output_specs(op_attr, tensors), tensors.input_tensor.device());
 }
 
-std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
     const ttnn::Tensor& input_tensor,
     uint32_t stride_h,
     uint32_t stride_w,
@@ -124,15 +130,16 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w) {
+    using OperationType = ttnn::operations::data_movement::Fold;
     bool is_sharded = input_tensor.is_sharded();
     bool is_dram_interleaved =
         input_tensor.storage_type() == StorageType::DEVICE && input_tensor.memory_config().is_dram();
-    Fold::operation_attributes_t op_attr = {
+    auto operation_attributes = OperationType::operation_attributes_t{
         .stride_h = stride_h,
         .stride_w = stride_w,
         .is_sharded = is_sharded,
         .is_dram_interleaved = is_dram_interleaved};
-    return {op_attr, Fold::tensor_args_t{.input_tensor = input_tensor}};
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::prim

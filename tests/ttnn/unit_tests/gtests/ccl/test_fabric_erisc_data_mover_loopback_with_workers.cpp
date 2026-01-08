@@ -6,8 +6,8 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <algorithm>
 #include <functional>
 #include <memory>

@@ -49,20 +49,17 @@ struct BcastDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        ttnn::BcastOpMath bcast_op,
-        ttnn::BcastOpDim bcast_dim,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        bool in_place,
-        const std::optional<Tensor>& preallocated_output);
 };
 
 }  // namespace ttnn::operations::data_movement::bcast
 
 namespace ttnn::prim {
-constexpr auto bcast =
-    ttnn::register_operation<"ttnn::prim::bcast", ttnn::operations::data_movement::bcast::BcastDeviceOperation>();
+ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_value_t bcast(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    ttnn::BcastOpMath bcast_op,
+    ttnn::BcastOpDim bcast_dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool in_place,
+    const std::optional<Tensor>& preallocated_output);
 }  // namespace ttnn::prim

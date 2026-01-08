@@ -32,20 +32,14 @@ struct ManualSeedDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::variant<uint32_t, Tensor>& seeds,
-        std::optional<std::reference_wrapper<MeshDevice>> device,
-        const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::reduction::manual_seed
 
 namespace ttnn::prim {
-
-constexpr auto manual_seed = ttnn::register_operation<
-    "ttnn::prim::manual_seed",
-    ttnn::operations::reduction::manual_seed::ManualSeedDeviceOperation>();
-
+ttnn::Tensor manual_seed(
+    const std::variant<uint32_t, Tensor>& seeds,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
+    const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

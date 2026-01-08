@@ -604,8 +604,7 @@ void AllToAllAsyncProgram::override_runtime_arguments(
         }
 
         // Update receiver runtime args
-        for (uint32_t i = 0; i < shared_vars.receiver_worker_cores.size(); i++) {
-            const auto core = shared_vars.receiver_worker_cores[i];
+        for (const auto& core : shared_vars.receiver_worker_cores) {
             auto& receiver_writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
             receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.buffer()->address();
 

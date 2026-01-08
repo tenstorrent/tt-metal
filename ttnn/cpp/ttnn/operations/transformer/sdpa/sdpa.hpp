@@ -33,7 +33,7 @@ struct ExecuteChunkedScaledDotProductAttention {
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
         const ttnn::Tensor& page_table_tensor,
-        int64_t chunk_start_idx,
+        int64_t chunk_start_idx,  // Must be a multiple of program_config.q_chunk_size
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
@@ -115,7 +115,7 @@ struct ExecuteRingDistributedScaledDotProductAttention {
             std::nullopt,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        const std::optional<SDPAProgramConfig>& program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 

@@ -369,7 +369,7 @@ def test_graph_capture_with_hang_device_operation(device):
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
     try:
-        ttnn.prim.test_hang_device_operation(tt_input)
+        ttnn.test_hang_device_operation(tt_input)
         # this allows the device to throw the exception inside the try block
         ttnn._ttnn.device.synchronize_device(device)
     except Exception as e:

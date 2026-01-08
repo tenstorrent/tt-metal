@@ -104,7 +104,9 @@ class PerCoreCheckResult(PerBlockCheckResult):
 
 
 def is_galaxy(device: Device) -> bool:
-    return device.cluster_desc["chip_to_boardtype"][device._id] == "GALAXY"
+    import tt_umd
+
+    return device._context.cluster_descriptor.get_board_type(device._id) == tt_umd.BoardType.GALAXY
 
 
 def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:

@@ -195,6 +195,8 @@ init_packages() {
                 "$gpp_package"
                 "pandoc"
                 "xz-utils"
+                "openssl"
+                "libssl-dev"
                 "python3-dev"
                 "python3-pip"
                 "python3-venv"
@@ -221,9 +223,13 @@ init_packages() {
                 "gcc"
                 "gcc-c++"
                 "make"
+                "llvm"
                 "clang"
+                "clang-tools-extra" # for linker-wrapper
                 "cmake"
                 "ninja-build"
+                "openssl"
+                "openssl-devel"
                 "pkgconf-pkg-config"
                 "xz"
                 "python3-devel"
@@ -275,8 +281,18 @@ prep_ubuntu_system() {
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Add Kitware repository for latest CMake
-    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+    # If the kitware-archive-keyring package has not been installed previously, manually obtain a copy of our signing key
+    test -f /usr/share/doc/kitware-archive-keyring/copyright || wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+
+    # Add the repository to sources list and update
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $OS_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    apt-get update
+
+    # If the kitware-archive-keyring package was not installed previously, remove the manually obtained key to make room for the package
+    test -f /usr/share/doc/kitware-archive-keyring/copyright || rm /usr/share/keyrings/kitware-archive-keyring.gpg
+
+    # Install the kitware-archive-keyring package to ensure that your keyring stays up to date as keys are rotated
+    apt-get install -y --no-install-recommends kitware-archive-keyring
 
     # Add GCC toolchain repository for specific g++ versions if needed
     if [[ "$OS_ID" == "ubuntu" ]]; then

@@ -11,7 +11,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 
@@ -131,10 +131,8 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
     if (curr_stage_index > neighbor_stage_index) {
         // Neighbor feeds into my stage
         return std::make_pair(my_stage.entry_node_coord, neighbor_stage.exit_node_coord);
-    } else {
-        // My stage feeds into neighbor
-        return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
-    }
+    }  // My stage feeds into neighbor
+    return std::make_pair(my_stage.exit_node_coord, neighbor_stage.entry_node_coord);
 }
 
 PhysicalSystemDescriptor create_physical_system_descriptor() {
@@ -179,10 +177,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     const auto upstream_mesh_id = my_mesh_id - 1;
     const auto downstream_mesh_id = my_mesh_id + 1;
 
-    const distributed::SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = BufferType::L1,
-        .fifo_size = socket_fifo_size,
-    };
+    const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
 
     const auto tensor_spec = TensorSpec(
         ttnn::Shape({1, 1, 1, XFER_SIZE / sizeof(uint32_t)}),
@@ -196,12 +191,10 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     // Helper to create an intermediate socket pair for local forwarding
     auto create_intermed_socket_pair = [&](const distributed::MeshCoordinate& sender_coord,
                                            const distributed::MeshCoordinate& recv_coord) {
-        distributed::SocketConnection connection = {
-            .sender_core = {sender_coord, send_core_coord}, .receiver_core = {recv_coord, recv_core_coord}};
-        distributed::SocketConfig config = {
-            .socket_connection_config = {connection},
-            .socket_mem_config = socket_mem_config,
-        };
+        distributed::SocketConnection connection(
+            distributed::MeshCoreCoord(sender_coord, send_core_coord),
+            distributed::MeshCoreCoord(recv_coord, recv_core_coord));
+        distributed::SocketConfig config({connection}, socket_mem_config);
         return distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, config);
     };
 
@@ -215,7 +208,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     const bool is_pipeline_end = (*distributed_context->rank() == *pipeline_end_rank);
     const bool is_intermediate = !is_pipeline_start && !is_pipeline_end;
 
-    Tensor intermediate_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+    Tensor intermediate_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
 
     if (is_pipeline_start) {
         // Pipeline start: Copy data from start coord to exit node using an intermediate socket
@@ -224,13 +217,14 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
-        distributed::SocketConnection fwd_connection = {
-            .sender_core = {my_sender, send_core_coord}, .receiver_core = {downstream_recv, recv_core_coord}};
-        distributed::SocketConfig send_socket_config = {
-            .socket_connection_config = {fwd_connection},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
-            .receiver_rank = distributed::multihost::Rank(downstream_mesh_id)};
+        distributed::SocketConnection fwd_connection(
+            distributed::MeshCoreCoord(my_sender, send_core_coord),
+            distributed::MeshCoreCoord(downstream_recv, recv_core_coord));
+        distributed::SocketConfig send_socket_config(
+            {fwd_connection},
+            socket_mem_config,
+            distributed_context->rank(),
+            distributed::multihost::Rank(downstream_mesh_id));
         auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
         auto run_sender_step = [&](uint32_t i) {
@@ -253,24 +247,26 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     } else {
         auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, my_mesh_id, upstream_mesh_id);
 
-        distributed::SocketConnection bwd_connection = {
-            .sender_core = {upstream_send, send_core_coord}, .receiver_core = {my_recv, recv_core_coord}};
-        distributed::SocketConfig recv_socket_config = {
-            .socket_connection_config = {bwd_connection},
-            .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed::multihost::Rank(upstream_mesh_id),
-            .receiver_rank = distributed_context->rank()};
+        distributed::SocketConnection bwd_connection(
+            distributed::MeshCoreCoord(upstream_send, send_core_coord),
+            distributed::MeshCoreCoord(my_recv, recv_core_coord));
+        distributed::SocketConfig recv_socket_config(
+            {bwd_connection},
+            socket_mem_config,
+            distributed::multihost::Rank(upstream_mesh_id),
+            distributed_context->rank());
         auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
 
         if (is_intermediate) {
             auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
-            distributed::SocketConnection fwd_connection = {
-                .sender_core = {my_sender, send_core_coord}, .receiver_core = {downstream_recv, recv_core_coord}};
-            distributed::SocketConfig send_socket_config = {
-                .socket_connection_config = {fwd_connection},
-                .socket_mem_config = socket_mem_config,
-                .sender_rank = distributed_context->rank(),
-                .receiver_rank = distributed::multihost::Rank(downstream_mesh_id)};
+            distributed::SocketConnection fwd_connection(
+                distributed::MeshCoreCoord(my_sender, send_core_coord),
+                distributed::MeshCoreCoord(downstream_recv, recv_core_coord));
+            distributed::SocketConfig send_socket_config(
+                {fwd_connection},
+                socket_mem_config,
+                distributed_context->rank(),
+                distributed::multihost::Rank(downstream_mesh_id));
             auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
             auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_recv, my_sender);
@@ -294,7 +290,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
             auto run_receiver_step = [&](uint32_t i) {
                 ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
                 ttnn::experimental::send_async(intermediate_tensor, intermed_send);
-                Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+                Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
                 ttnn::experimental::recv_async(output_tensor, intermed_recv);
                 auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
                 auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();

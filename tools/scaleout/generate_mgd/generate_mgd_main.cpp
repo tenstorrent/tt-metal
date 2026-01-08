@@ -26,12 +26,12 @@ int main(int argc, char* argv[]) {
     try {
         const auto result = options.parse(argc, argv);
 
-        if (result.count("help") || argc == 1) {
+        if (result.contains("help") || argc == 1) {
             std::cout << options.help() << '\n';
             return 0;
         }
 
-        if (!result.count("cabling-descriptor-path")) {
+        if (!result.contains("cabling-descriptor-path")) {
             throw std::invalid_argument("--cabling-descriptor-path is required");
         }
 

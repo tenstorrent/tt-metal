@@ -36,23 +36,19 @@ struct NLPCreateQKVHeadsDecodeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        uint32_t num_q_heads,
-        uint32_t num_kv_heads,
-        uint32_t head_dim,
-        bool overlap_qk_coregrid,
-        bool input_on_subcoregrids,
-        const std::optional<const Tensor>& batch_offset,
-        std::optional<uint32_t> slice_size,
-        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
 }  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode
 
 namespace ttnn::prim {
-constexpr auto nlp_create_qkv_heads_decode = ttnn::register_operation<
-    "ttnn::prim::nlp_create_qkv_heads_decode",
-    ttnn::operations::experimental::nlp_create_qkv_heads_decode::NLPCreateQKVHeadsDecodeDeviceOperation>();
+std::vector<Tensor> nlp_create_qkv_heads_decode(
+    const Tensor& input_tensor,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool overlap_qk_coregrid,
+    bool input_on_subcoregrids,
+    const std::optional<const Tensor>& batch_offset,
+    std::optional<uint32_t> slice_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim

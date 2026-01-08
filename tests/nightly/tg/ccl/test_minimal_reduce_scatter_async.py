@@ -54,17 +54,20 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
             },
             ttnn.Topology.Linear,
         ),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_manager": ttnn.FabricManagerMode.ENABLED,
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-        ),
+        # (
+        #    {
+        #        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        #        "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+        #        "trace_region_size": 90112,
+        #    },
+        #    ttnn.Topology.Linear,
+        # ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear", "fabric_manager_enabled_linear"],
+    ids=[
+        "fabric_linear",
+        # "fabric_manager_enabled_linear" # test removed due to issue 35320
+    ],
 )
 @pytest.mark.parametrize("chunks_per_sync", [2])
 @pytest.mark.parametrize("num_workers_per_link", [2])

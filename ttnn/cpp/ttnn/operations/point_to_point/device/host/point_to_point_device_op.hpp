@@ -101,18 +101,6 @@ struct PointToPointOp {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const ::ttnn::ccl::Topology& topology,
-        const MeshCoordinate& receiver_coord,
-        const MeshCoordinate& sender_coord,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt) {
-        return std::make_tuple(
-            operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
-            tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
-    };
-
 private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -158,7 +146,12 @@ device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>
 }  // namespace operations::point_to_point
 
 namespace prim {
-constexpr auto point_to_point =
-    ttnn::register_operation<"ttnn::prim::point_to_point", ttnn::operations::point_to_point::PointToPointOp>();
+ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to_point(
+    const Tensor& input_tensor,
+    const ::ttnn::ccl::Topology& topology,
+    const MeshCoordinate& receiver_coord,
+    const MeshCoordinate& sender_coord,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

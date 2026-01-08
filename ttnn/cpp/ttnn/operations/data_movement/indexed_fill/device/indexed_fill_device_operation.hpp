@@ -28,19 +28,15 @@ struct IndexedFillDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& batch_id,
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        int64_t dim);
 };
 
 }  // namespace ttnn::operations::data_movement::indexed_fill
 
 namespace ttnn::prim {
-constexpr auto indexed_fill = ttnn::register_operation<
-    "ttnn::prim::indexed_fill",
-    ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation>();
+ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation::tensor_return_value_t indexed_fill(
+    const Tensor& batch_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    int64_t dim);
 }  // namespace ttnn::prim

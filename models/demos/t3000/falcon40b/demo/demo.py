@@ -622,6 +622,7 @@ def run_falcon_demo_kv(
 @pytest.mark.parametrize("greedy_sampling", (False,))
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_demo(
     perf_mode,
     greedy_sampling,
@@ -629,7 +630,7 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    t3k_mesh_device,
+    mesh_device,
 ):
     return run_falcon_demo_kv(
         user_input=user_input,
@@ -641,7 +642,7 @@ def test_demo(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         prefill_on_host=False,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

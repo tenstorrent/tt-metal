@@ -118,8 +118,8 @@ class GatherSingleCore:
         semaphores = []
 
         # Create CoreRangeSets for NOC0 and NOC1 cores
-        noc0_core_range_set = ttnn.CoreRangeSet(noc0_cores)
-        noc1_core_range_set = ttnn.CoreRangeSet(noc1_cores)
+        noc0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc0_cores])
+        noc1_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in noc1_cores])
 
         # Create receiver kernel (only if we have cores on that NOC)
         if not noc0_core_range_set.empty() or not noc1_core_range_set.empty():
@@ -156,11 +156,8 @@ class GatherSingleCore:
         sender_kernel_path = "models/demos/deepseek_v3_b1/micro_ops/gather/kernels/gather_sender.cpp"
 
         # Build runtime args as 2D list: runtime_args[core_x][core_y] = [args]
-        # TODO: Simplify the runtime args building logic (#33903)
-        max_x = max(core.x for core in input_cores_list)
-        max_y = max(core.y for core in input_cores_list)
-        sender_noc0_runtime_args = [[[] for _ in range(max_y + 1)] for _ in range(max_x + 1)]
-        sender_noc1_runtime_args = [[[] for _ in range(max_y + 1)] for _ in range(max_x + 1)]
+        sender_noc0_runtime_args = ttnn.RuntimeArgs()
+        sender_noc1_runtime_args = ttnn.RuntimeArgs()
 
         # Set runtime arguments for sender kernels
         for i, core in enumerate(input_cores_list):

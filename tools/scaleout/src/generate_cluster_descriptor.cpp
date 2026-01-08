@@ -40,7 +40,7 @@ InputConfig parse_arguments(int argc, char** argv) {
     try {
         auto result = options.parse(argc, argv);
 
-        if (result.count("help") || argc == 1) {
+        if (result.contains("help") || argc == 1) {
             std::cout << options.help() << std::endl;
             std::cout << "\nDescription:" << std::endl;
             std::cout << "  This tool generates cluster descriptor YAML files from a Factory System Descriptor."
@@ -64,7 +64,7 @@ InputConfig parse_arguments(int argc, char** argv) {
             exit(0);
         }
 
-        if (!result.count("fsd")) {
+        if (!result.contains("fsd")) {
             throw std::invalid_argument("Factory System Descriptor (FSD) path is required");
         }
 

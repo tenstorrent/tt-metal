@@ -229,8 +229,8 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
     optional_output_tensors.reserve(persistent_output_buffer.size());
-    for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-        optional_output_tensors.push_back(persistent_output_buffer[i]);
+    for (const auto& buffer : persistent_output_buffer) {
+        optional_output_tensors.push_back(buffer);
     }
 
     return tt::tt_metal::operation::run(

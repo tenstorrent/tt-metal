@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <kernel_types.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include "impl/context/metal_context.hpp"
 #include <utility>
 #include <llrt/tt_cluster.hpp>

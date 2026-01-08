@@ -44,29 +44,26 @@ struct StridedAllGatherAsync {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        const std::optional<ttnn::Tensor>& persistent_output_buffer,
-        uint32_t dim,
-        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-        uint32_t num_links,
-        const std::optional<MemoryConfig>& memory_config,
-        ttnn::ccl::Topology topology,
-        const std::optional<uint32_t>& cluster_axis,
-        const std::optional<uint32_t>& tiles_per_chunk,
-        const std::optional<uint32_t>& num_workers_per_link,
-        const std::optional<uint32_t>& num_buffers_per_channel,
-        const std::optional<uint32_t>& mm_cores_y,
-        const std::optional<uint32_t>& mm_block_ht,
-        const std::optional<uint32_t>& mm_block_wt);
 };
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
 
 namespace ttnn::prim {
 
-constexpr auto strided_all_gather_async = ttnn::register_operation<
-    "ttnn::prim::strided_all_gather_async",
-    ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync>();
+ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync::tensor_return_value_t
+strided_all_gather_async(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<uint32_t>& cluster_axis,
+    const std::optional<uint32_t>& tiles_per_chunk,
+    const std::optional<uint32_t>& num_workers_per_link,
+    const std::optional<uint32_t>& num_buffers_per_channel,
+    const std::optional<uint32_t>& mm_cores_y,
+    const std::optional<uint32_t>& mm_block_ht,
+    const std::optional<uint32_t>& mm_block_wt);
 
 }  // namespace ttnn::prim

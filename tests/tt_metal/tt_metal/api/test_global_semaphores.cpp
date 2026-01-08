@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>

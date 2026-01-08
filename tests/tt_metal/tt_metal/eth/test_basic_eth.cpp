@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
+#include <cstddef>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>

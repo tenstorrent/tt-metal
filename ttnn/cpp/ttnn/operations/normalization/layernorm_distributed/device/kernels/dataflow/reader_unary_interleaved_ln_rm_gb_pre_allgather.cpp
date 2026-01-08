@@ -26,28 +26,26 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
+    uint32_t scaler = get_arg_val<uint32_t>(4);
+    generate_reduce_scaler(cb_reduce, scaler);
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
     // Generate constant tiles for reduce scalar
-    uint32_t scaler = get_arg_val<uint32_t>(4);
-    generate_reduce_scaler(cb_reduce, scaler);
-
     uint32_t inp_tile_idx = tile_offset;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_reserve_back(cb_inp, blk);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
-
             for (uint32_t r = 0; r < blk; r++) {
+                cb_reserve_back(cb_inp, 1);
                 noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 inp_tile_idx++;
+                noc_async_read_barrier();
+                cb_push_back(cb_inp, 1);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_inp, blk);
 
         }  // wt loop
 

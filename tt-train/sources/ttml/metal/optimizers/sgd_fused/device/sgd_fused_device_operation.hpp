@@ -30,23 +30,20 @@ struct SGDFusedDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& param,
-        const ttnn::Tensor& grad,
-        float lr,
-        float momentum,
-        float dampening,
-        float weight_decay,
-        bool nesterov,
-        const std::optional<ttnn::Tensor>& momentum_buffer = std::nullopt);
 };
 
 }  // namespace ttml::metal::optimizers::sgd_fused::device
 
 namespace ttnn::prim {
 
-constexpr auto ttml_sgd_fused = ttnn::register_operation<
-    "ttnn::prim::ttml_sgd_fused",
-    ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation>();
+ttml::metal::optimizers::sgd_fused::device::SGDFusedDeviceOperation::tensor_return_value_t ttml_sgd_fused(
+    const ttnn::Tensor& param,
+    const ttnn::Tensor& grad,
+    float lr,
+    float momentum,
+    float dampening,
+    float weight_decay,
+    bool nesterov,
+    const std::optional<ttnn::Tensor>& momentum_buffer = std::nullopt);
+
 }  // namespace ttnn::prim

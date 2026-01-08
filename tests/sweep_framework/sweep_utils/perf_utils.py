@@ -147,7 +147,15 @@ def simplify_device_perf(perf: Optional[dict]) -> dict:
 
 def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]]]:
+) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, Dict]]]:
+    # Capture peak memory (NO_DISPATCH mode) if enabled
+    peak_memory = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory
+
+        logger.info("Capturing peak memory in NO_DISPATCH mode")
+        peak_memory = capture_peak_memory(test_module, test_vector, device)
+
     # Prepare program cache state
     prepare_program_cache_for_comparison(device)
 
@@ -210,20 +218,27 @@ def run_with_cache_comparison(
             simplified_perf["uncached"] = simplify_device_perf(device_perf_uncached)
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
-        return status, message, e2e_perf, simplified_perf
+        return status, message, e2e_perf, simplified_perf, peak_memory
     else:
-        return status, message, e2e_perf, None
+        return status, message, e2e_perf, None, peak_memory
 
 
 def run_single(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Optional[float], Optional[dict]]:
+) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[Dict]]:
     status, message, e2e_ms = execute_test(test_module, test_vector, device)
+
+    # Capture peak memory if enabled
+    peak_memory = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory
+
+        peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
     if getattr(config, "measure_device_perf", False):
         perf_result = gather_single_test_perf(device, status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
-        return status, message, e2e_ms, simplified_perf
+        return status, message, e2e_ms, simplified_perf, peak_memory
     else:
-        return status, message, e2e_ms, None
+        return status, message, e2e_ms, None, peak_memory

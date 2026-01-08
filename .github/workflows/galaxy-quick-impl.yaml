@@ -64,7 +64,7 @@ jobs:
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
-          ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
+          ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
           for i in {0..31}; do TT_VISIBLE_DEVICES="$i" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter=Cluster.ReportSystemHealth; done
           TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*";
           TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*";
@@ -151,7 +151,7 @@ jobs:
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
-          ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
+          ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
           # pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
 
           # https://github.com/tenstorrent/tt-metal/issues/34990
@@ -160,20 +160,26 @@ jobs:
           # pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
           # CCL smoke tests - exactly one representative test from each op category
 
+          pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
+
+          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_1d_line]" --timeout=300;
+
+          pytest "tests/nightly/tg/ccl/test_all_broadcast.py::test_all_broadcast_trace[wormhole_b0-mesh_device0-device_params0-3-mem_config0-deepseek_1]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]" --timeout=300;
+
           # Use Fabric Manager to initialize/teardown Fabric 2D and run all tests without initializing/tearing down fabric
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --initialize-fabric
-          pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]" --timeout=300;
+          pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_combine_fabric_manager_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_manager_enabled_2d]" --timeout=300;
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_2D --terminate-fabric
 
           # Use Fabric Manager to initialize/teardown Fabric 1D and run all tests without initializing/tearing down fabric
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --initialize-fabric
-          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_manager_enabled_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
+          pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_gather_async_fabric_manager[wormhole_b0-mesh_device0-normal-2-2-20-fabric_manager_enabled_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
+          pytest "tests/scale_out/test_ccl_fabric_manager.py::test_reduce_scatter_async_fabric_manager[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
+          pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_dispatch_fabric_manager_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --terminate-fabric
-
-          pytest "tests/nightly/tg/ccl/test_all_broadcast.py::test_all_broadcast_trace[wormhole_b0-mesh_device0-device_params0-3-mem_config0-deepseek_1]" --timeout=300;
-          pytest "tests/nightly/tg/ccl/test_all_reduce.py::test_line_all_reduce_on_TG_rows_post_commit[wormhole_b0-device_params0-ReduceType.Sum-8x4_grid-8-BufferType.DRAM-DataType.BFLOAT16-4-2-per_chip_output_shape0-Layout.TILE]" --timeout=300;
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

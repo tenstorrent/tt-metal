@@ -42,22 +42,19 @@ struct WindowedScaledDotProductAttentionDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t& output_tensor);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_q,
-        const Tensor& input_tensor_k,
-        const Tensor& input_tensor_v,
-        const Tensor& cu_window_seqlens,
-        std::optional<float> scale,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        std::optional<SDPAProgramConfig> program_config,
-        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::transformer::sdpa_windowed
 
 namespace ttnn::prim {
-constexpr auto windowed_scaled_dot_product_attention = ttnn::register_operation<
-    "ttnn::prim::windowed_scaled_dot_product_attention",
-    ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation>();
+ttnn::operations::transformer::sdpa_windowed::WindowedScaledDotProductAttentionDeviceOperation::tensor_return_value_t
+windowed_scaled_dot_product_attention(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const Tensor& input_tensor_v,
+    const Tensor& cu_window_seqlens,
+    std::optional<float> scale,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 }  // namespace ttnn::prim

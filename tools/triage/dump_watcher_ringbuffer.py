@@ -21,7 +21,6 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.elf import MemoryAccess
 
 
 script_config = ScriptConfig(

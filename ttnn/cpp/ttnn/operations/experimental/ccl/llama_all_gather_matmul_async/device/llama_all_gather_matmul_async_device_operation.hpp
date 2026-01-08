@@ -40,8 +40,15 @@ struct LlamaAllGatherMatmulAsyncDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGatherMatmulAsyncDeviceOperation::
+    tensor_return_value_t
+    llama_all_gather_matmul_async(
         const Tensor& input0,
         const Tensor& input1,
         const Tensor& intermediate_tensor,
@@ -58,14 +65,5 @@ struct LlamaAllGatherMatmulAsyncDeviceOperation {
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
-
-namespace ttnn::prim {
-
-constexpr auto llama_all_gather_matmul_async = ttnn::register_operation<
-    "ttnn::prim::llama_all_gather_matmul_async",
-    ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::LlamaAllGatherMatmulAsyncDeviceOperation>();
 
 }  // namespace ttnn::prim

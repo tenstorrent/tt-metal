@@ -377,7 +377,7 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
 }
 
 template <typename T>
-typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std::ostream& os, const T& value) {
+typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
     os << enchantum::scoped::to_string(value);
     return os;
 }
@@ -493,7 +493,7 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
-    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
+    requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
     os << "(";
@@ -944,7 +944,7 @@ struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::suppor
 };
 
 template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum<T>::value>> {
+struct fmt::formatter<T, char, std::enable_if_t<std::is_enum_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& value, format_context& ctx) const -> format_context::iterator {
@@ -1077,8 +1077,8 @@ struct fmt::formatter<std::unordered_map<K, V>> {
 
 template <typename T>
     requires(
-        ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
-                                               ttsl::reflection::detail::supports_conversion_to_string_v<T>))
+        ttsl::concepts::Reflectable<T> and
+        not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
@@ -1241,9 +1241,9 @@ inline hash_t hash_object(const T& object) noexcept {
         }
         if (object.has_value()) {
             return hash_object(object.value());
-        } else {
-            return 0;
         }
+        return 0;
+
     } else if constexpr (ttsl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
@@ -1325,9 +1325,8 @@ struct to_json_t<T> {
     nlohmann::json operator()(const T& object) noexcept {
         if (object) {
             return to_json(*object);
-        } else {
-            return nullptr;
         }
+        return nullptr;
     }
 };
 
@@ -1337,9 +1336,8 @@ struct from_json_t<T> {
     T operator()(const nlohmann::json& json_object) noexcept {
         if (json_object.is_null()) {
             return nullptr;
-        } else {
-            throw std::runtime_error("Cannot load pointer from JSON");
         }
+        throw std::runtime_error("Cannot load pointer from JSON");
     }
 };
 
@@ -1417,9 +1415,8 @@ struct to_json_t<std::optional<T>> {
     nlohmann::json operator()(const std::optional<T>& optional) noexcept {
         if (optional.has_value()) {
             return to_json(optional.value());
-        } else {
-            return nullptr;
         }
+        return nullptr;
     }
 };
 
@@ -1428,9 +1425,8 @@ struct from_json_t<std::optional<T>> {
     std::optional<T> operator()(const nlohmann::json& json_object) noexcept {
         if (json_object.is_null()) {
             return std::nullopt;
-        } else {
-            return from_json<T>(json_object);
         }
+        return from_json<T>(json_object);
     }
 };
 

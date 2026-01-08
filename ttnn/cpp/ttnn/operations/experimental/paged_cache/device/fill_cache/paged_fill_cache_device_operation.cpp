@@ -15,9 +15,8 @@ PagedFillCacheDeviceOperation::program_factory_t PagedFillCacheDeviceOperation::
     // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
     if (args.mesh_coords.has_value()) {
         return program::PagedFillCacheMeshWorkloadFactory{};
-    } else {
-        return program::PagedFillCacheProgramFactory{};
     }
+    return program::PagedFillCacheProgramFactory{};
 }
 
 void PagedFillCacheDeviceOperation::validate_on_program_cache_hit(
@@ -84,25 +83,32 @@ tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
         args.mesh_coords, tensor_args, program_factory.index());
 }
 
-std::tuple<PagedFillCacheDeviceOperation::operation_attributes_t, PagedFillCacheDeviceOperation::tensor_args_t>
-PagedFillCacheDeviceOperation::invoke(
+}  // namespace ttnn::operations::experimental::paged_cache::fill
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation::tensor_return_value_t
+paged_fill_cache(
     const Tensor& cache_tensor,
     const Tensor& input_tensor,
     const Tensor& page_table,
     const std::optional<Tensor>& batch_idx_tensor,
     uint32_t batch_idx_fallback,
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords) {
-    return {
-        operation_attributes_t{
-            .batch_idx_fallback = batch_idx_fallback,
-            .mesh_coords = mesh_coords,
-        },
-        tensor_args_t{
-            .cache_tensor = cache_tensor,
-            .input_tensor = input_tensor,
-            .page_table = page_table,
-            .batch_idx_tensor_opt = batch_idx_tensor,
-        }};
+    using OperationType = ttnn::operations::experimental::paged_cache::fill::PagedFillCacheDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .batch_idx_fallback = batch_idx_fallback,
+        .mesh_coords = mesh_coords,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .cache_tensor = cache_tensor,
+        .input_tensor = input_tensor,
+        .page_table = page_table,
+        .batch_idx_tensor_opt = batch_idx_tensor,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::fill
+}  // namespace ttnn::prim

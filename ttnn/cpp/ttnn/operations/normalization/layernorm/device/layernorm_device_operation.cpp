@@ -4,6 +4,7 @@
 
 #include "layernorm_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
@@ -18,9 +19,8 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return LayerNormShardedProgramFactory{};
-    } else {
-        return LayerNormMultiCoreProgramFactory{};
     }
+    return LayerNormMultiCoreProgramFactory{};
 }
 
 void LayerNormDeviceOperation::validate_on_program_cache_hit(
@@ -352,7 +352,8 @@ spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
                     auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
-                } else if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
+                }
+                if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     auto output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
@@ -404,37 +405,40 @@ tensor_return_value_t LayerNormDeviceOperation::create_output_tensors(
         operation_attributes.program_config);
 }
 
-std::tuple<LayerNormDeviceOperation::operation_attributes_t, LayerNormDeviceOperation::tensor_args_t>
-LayerNormDeviceOperation::invoke(
+}  // namespace ttnn::operations::normalization::layer_norm
+
+namespace ttnn::prim {
+ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_return_value_t layer_norm(
     const Tensor& input_tensor,
     float epsilon,
     const std::optional<const Tensor>& weight,
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& residual_input_tensor,
     const MemoryConfig& output_mem_config,
-    const LayerNormProgramConfig& program_config,
+    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
-    LayerNormType norm_type,
-    DistributedLayerNormStage distributed_norm_stage,
+    ttnn::operations::normalization::LayerNormType norm_type,
+    ttnn::operations::normalization::DistributedLayerNormStage distributed_norm_stage,
     const std::optional<const Tensor>& stats) {
-    return {
-        operation_attributes_t{
-            .norm_type = norm_type,
-            .distributed_norm_stage = distributed_norm_stage,
-            .eps = epsilon,
-            .output_mem_config = output_mem_config,
-            .program_config = program_config,
-            .compute_kernel_config = compute_kernel_config,
-            .dtype = dtype,
-        },
-        tensor_args_t{
-            .input = input_tensor,
-            .residual_input_tensor = residual_input_tensor,
-            .weight = weight,
-            .bias = bias,
-            .stats = stats,
-        }};
-}
+    using OperationType = ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .norm_type = norm_type,
+        .distributed_norm_stage = distributed_norm_stage,
+        .eps = epsilon,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .dtype = dtype,
+    };
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input_tensor,
+        .residual_input_tensor = residual_input_tensor,
+        .weight = weight,
+        .bias = bias,
+        .stats = stats,
+    };
 
-}  // namespace ttnn::operations::normalization::layer_norm
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+}  // namespace ttnn::prim

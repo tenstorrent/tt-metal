@@ -179,7 +179,7 @@ DeviceAddr AllocatorState::total_allocated_size() const {
 }
 
 bool AllocatorState::has_buffer_type(BufferType buffer_type) const {
-    return states_per_buffer_type_.find(buffer_type) != states_per_buffer_type_.end();
+    return states_per_buffer_type_.contains(buffer_type);
 }
 
 const std::vector<std::pair<DeviceAddr, DeviceAddr>>& AllocatorState::get_allocated_regions(

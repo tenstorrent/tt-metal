@@ -63,7 +63,7 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
                             uint32_t physical_chip_id) {
         // Skip if link is down or already in temp_buffer_map
         if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core) ||
-            temp_buffer_map[fabric_node_id].count(eth_core)) {
+            temp_buffer_map[fabric_node_id].contains(eth_core)) {
             return;
         }
 

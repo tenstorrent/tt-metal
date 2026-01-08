@@ -160,10 +160,9 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             "(use_all_gather_async_llama_sharded=true). Please use the regular all_gather_async API instead of "
             "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
-    } else {
-        TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
-        return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
+    TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
+    return AllGatherAsyncVersion::MINIMAL_DEFAULT;
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_workload(

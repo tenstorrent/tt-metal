@@ -210,10 +210,8 @@ void BcastShardedHOptimisedProgramFactory::override_runtime_arguments(
     const uint32_t C = ashape[1];
     const uint32_t bN = tensor_args.input_b.padded_shape()[0];
     const uint32_t NC = N * C;
-    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else {

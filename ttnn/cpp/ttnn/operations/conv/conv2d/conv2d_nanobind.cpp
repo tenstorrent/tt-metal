@@ -271,48 +271,6 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("compute_config") = nb::none(),
         nb::arg("slice_config") = nb::none());
 
-    auto py_conv_slice_config = nb::class_<Conv2dSliceConfig>(
-        mod,
-        "Conv2dSliceConfig",
-        R"doc(
-        | Conv2dSliceConfig is a structure that is used to configure how the input & output tensors of Conv2D are sliced when they are placed in DRAM. \
-        | Conv2D only supports inputs in L1. If the input tensor or output tensor are too large to fit into L1, then the Conv2d_DRAM version can be used. \
-        | It slices the input & output into slices and applies the Conv2D op on each slice. \
-        | Conv2dSliceConfig determines how this slicing happens.
-        )doc");
-
-    py_conv_slice_config.def(
-        nb::init<Conv2dSliceConfig::SliceType, uint32_t>(),
-        nb::kw_only(),
-        nb::arg("slice_type"),
-        nb::arg("num_slices"));
-
-    py_conv_slice_config.def(nb::init<Conv2dSliceConfig::SliceType>(), nb::kw_only(), nb::arg("slice_type"));
-    py_conv_slice_config.def("__repr__", [](const Conv2dSliceConfig& config) { return fmt::format("{}", config); });
-    py_conv_slice_config.def_rw(
-        "slice_type",
-        &Conv2dSliceConfig::slice_type,
-        R"doc(
-        | The type of slice to be used. Can be either SliceHeight or SliceWidth. When the tensor is in [N, H, W, C] format, then it can slice either along the height or width dimension.
-        | Slicing along the width is preferable as it reduces the size of the output of the Halo operation.
-        | Use SliceHeight only when the height dimension is much larger than the width dimension.
-        )doc");
-
-    py_conv_slice_config.def_rw(
-        "num_slices",
-        &Conv2dSliceConfig::num_slices,
-        R"doc(
-        | The number of slices that the input & output tensors are divided into.
-        | The output tensor is divided into num_slices slices along the slice_type dimension.
-        | The corresponding input tensor needed to calculate that output is determined and sliced.
-        | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
-        )doc");
-
-    nb::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
-        .value("L1Full", Conv2dSliceConfig::SliceType::L1_FULL)
-        .value("DRAMSliceHeight", Conv2dSliceConfig::SliceType::DRAM_HEIGHT)
-        .value("DRAMSliceWidth", Conv2dSliceConfig::SliceType::DRAM_WIDTH);
-
     auto py_conv_config = nb::class_<Conv2dConfig>(
         mod,
         "Conv2dConfig",

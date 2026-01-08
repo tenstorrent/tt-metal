@@ -30,7 +30,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
         const auto& all_eth_connections = cluster.get_cluster_description()->get_ethernet_connections();
         TT_ASSERT(cluster.get_cluster_description()->is_chip_mmio_capable(mmio_chip_id));
 
-        if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
+        if (!all_eth_connections.contains(mmio_chip_id)) {
             tunnels_from_mmio_device.insert({mmio_chip_id, {}});
             continue;
         }
@@ -45,7 +45,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
 
         for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
             const auto& other_chip_id = std::get<0>(connected_chip_chan);
-            if (device_ids.find(other_chip_id) != device_ids.end()) {
+            if (device_ids.contains(other_chip_id)) {
                 // mmio chip is connected to a remote chip in its mmio group.
                 // erase from the pool so multiple ethernet connections to same remote device do not
                 // pollute the counts.

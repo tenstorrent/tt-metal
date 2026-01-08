@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <unordered_set>

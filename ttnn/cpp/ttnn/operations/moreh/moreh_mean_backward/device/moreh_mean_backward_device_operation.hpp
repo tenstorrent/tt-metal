@@ -61,20 +61,17 @@ struct MorehMeanBackwardOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& output_grad,
-        const ttnn::SmallVector<int64_t>& dims,
-        bool keepdim,
-        const std::optional<ttnn::Shape>& input_grad_shape,
-        const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_mean_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_mean_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_mean_backward",
-    ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation>();
+ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor_return_value_t moreh_mean_backward(
+    const Tensor& output_grad,
+    const ttnn::SmallVector<int64_t>& dims,
+    bool keepdim,
+    const std::optional<ttnn::Shape>& input_grad_shape,
+    const std::optional<Tensor>& input_grad,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

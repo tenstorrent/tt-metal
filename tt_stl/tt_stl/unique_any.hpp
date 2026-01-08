@@ -11,6 +11,7 @@
 
 namespace ttsl {
 
+// NOLINTBEGIN(modernize-type-traits)
 template <auto MAX_STORAGE_SIZE, auto ALIGNMENT>
 struct unique_any final {
     using storage_t = std::array<std::byte, MAX_STORAGE_SIZE>;
@@ -81,6 +82,7 @@ private:
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 };
+// NOLINTEND(modernize-type-traits)
 
 }  // namespace ttsl
 

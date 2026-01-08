@@ -46,7 +46,7 @@ InputConfig parse_arguments(int argc, char** argv) {
     try {
         auto result = options.parse(argc, argv);
 
-        if (result.count("help") || argc == 1) {
+        if (result.contains("help") || argc == 1) {
             std::cout << options.help() << std::endl;
             std::cout << "\nOutput files:" << std::endl;
             std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto" << std::endl;
@@ -65,11 +65,11 @@ InputConfig parse_arguments(int argc, char** argv) {
             exit(0);
         }
 
-        if (!result.count("cabling")) {
+        if (!result.contains("cabling")) {
             throw std::invalid_argument("Cabling descriptor path is required");
         }
 
-        if (!result.count("deployment")) {
+        if (!result.contains("deployment")) {
             throw std::invalid_argument("Deployment descriptor path is required");
         }
 

@@ -176,7 +176,7 @@ FabricTensixDatamoverBaseConfig::FabricTensixDatamoverBaseConfig(
 size_t FabricTensixDatamoverBaseConfig::get_num_channels(ChannelTypes channel_type) const {
     // Return the number of channels for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).num_channels;
@@ -190,7 +190,7 @@ size_t FabricTensixDatamoverBaseConfig::get_total_num_channels() const {
 size_t FabricTensixDatamoverBaseConfig::get_num_buffers(ChannelTypes channel_type) const {
     // Return number of buffers for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).num_buffers_per_channel;
@@ -199,7 +199,7 @@ size_t FabricTensixDatamoverBaseConfig::get_num_buffers(ChannelTypes channel_typ
 size_t FabricTensixDatamoverBaseConfig::get_buffer_size_bytes(ChannelTypes channel_type) const {
     // Return buffer size for the specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     return channel_configs_.at(channel_type).buffer_size_bytes;
@@ -321,7 +321,7 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
 void FabricTensixDatamoverBaseConfig::validate_channel_id(ChannelTypes channel_type, size_t channel_id) const {
     // Validate that the channel_id is valid for this specific channel type
     TT_FATAL(
-        channel_configs_.find(channel_type) != channel_configs_.end(),
+        channel_configs_.contains(channel_type),
         "Channel type {} not found in channel_configs_",
         static_cast<uint32_t>(channel_type));
     const auto& config = channel_configs_.at(channel_type);
@@ -418,7 +418,7 @@ MuxConnectionInfo FabricTensixDatamoverMuxConfig::get_mux_connection_info(
 std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     // In legacy MUX mode, we don't have MUX_TO_MUX_CHANNEL, so return empty vector (size 0)
-    if (channel_configs_.find(tt::tt_fabric::ChannelTypes::MUX_TO_MUX_CHANNEL) == channel_configs_.end()) {
+    if (!channel_configs_.contains(tt::tt_fabric::ChannelTypes::MUX_TO_MUX_CHANNEL)) {
         // Legacy MUX mode - no downstream mux connections
         return std::vector<MuxConnectionInfo>();
     }
@@ -881,9 +881,8 @@ const char* FabricTensixDatamoverMuxBuilder::get_kernel_file_path() const {
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp";
-    } else {
-        return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp";
     }
+    return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp";
 }
 
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverMuxBuilder::build_connection_to_fabric_channel(
@@ -1096,8 +1095,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
     } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
         // Add sender_channel_is_traffic_injection_channel_array to ct args for MUX mode
-        for (size_t i = 0; i < sender_channel_is_traffic_injection_channel_array.size(); i++) {
-            ct_args.push_back(sender_channel_is_traffic_injection_channel_array[i] ? 1 : 0);
+        for (bool is_injection : sender_channel_is_traffic_injection_channel_array) {
+            ct_args.push_back(is_injection ? 1 : 0);
         }
     }
 

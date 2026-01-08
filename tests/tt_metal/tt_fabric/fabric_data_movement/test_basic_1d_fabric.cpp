@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
@@ -110,7 +110,7 @@ void get_mcast_receivers(
     RoutingDirection trunk_direction,
     RoutingDirection branch_direction) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    if (mcast_ref.find(branch_direction) != mcast_ref.end()) {
+    if (mcast_ref.contains(branch_direction)) {
         auto node_ids = mcast_ref[branch_direction];
         for (auto node : node_ids) {
             auto curr_fabric_node_id = node;
@@ -180,7 +180,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     // Compute physical IDs for mcast group chips
     std::vector<ChipId> mcast_group_phys_ids = {};
     if (spine_hops) {
-        if (mcast_group_phys_ids_per_dir.find(RoutingDirection::N) != mcast_group_phys_ids_per_dir.end()) {
+        if (mcast_group_phys_ids_per_dir.contains(RoutingDirection::N)) {
             mcast_start_phys_id = mcast_group_phys_ids_per_dir[RoutingDirection::N][0];
             mcast_start_id = mcast_group[RoutingDirection::N][0];
             mcast_group_phys_ids.insert(mcast_group_phys_ids.end(), mcast_group_phys_ids_per_dir[RoutingDirection::N].begin(), mcast_group_phys_ids_per_dir[RoutingDirection::N].end());
@@ -194,7 +194,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
             get_mcast_receivers(mcast_group, mcast_group_phys_ids, RoutingDirection::S, RoutingDirection::W);
         }
     } else if (branch_hops) {
-        if (mcast_group_phys_ids_per_dir.find(RoutingDirection::E) != mcast_group_phys_ids_per_dir.end()) {
+        if (mcast_group_phys_ids_per_dir.contains(RoutingDirection::E)) {
             mcast_start_phys_id = mcast_group_phys_ids_per_dir[RoutingDirection::E][0];
             mcast_start_id = mcast_group[RoutingDirection::E][0];
             mcast_group_phys_ids.insert(mcast_group_phys_ids.end(), mcast_group_phys_ids_per_dir[RoutingDirection::E].begin(), mcast_group_phys_ids_per_dir[RoutingDirection::E].end());
@@ -836,9 +836,9 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
     for (const auto& mmio_chip_id : mmio_chip_ids) {
         const auto& tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id);
-        for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+        for (const auto& tunnel : tunnels_from_mmio) {
             // idx 0 in the tunnel is the mmio chip itself
-            const auto remote_chip_id = tunnels_from_mmio[t][1];
+            const auto remote_chip_id = tunnel[1];
             log_info(tt::LogTest, "Running tests for chips: {} and {}", mmio_chip_id, remote_chip_id);
             run_unicast_test_bw_chips(fixture, mmio_chip_id, remote_chip_id, 1);
             run_unicast_test_bw_chips(fixture, remote_chip_id, mmio_chip_id, 1);
@@ -1052,7 +1052,7 @@ void RunTestMCastConnAPI(
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
 
     // Wait for receivers to finish
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
             auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
             fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
@@ -1078,15 +1078,11 @@ void RunTestMCastConnAPI(
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            log_info(
-                tt::LogTest,
-                "Checking Status of {} Rx on physical device {}",
-                routing_direction,
-                physical_end_device_ids[i]);
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (int device_id : physical_end_device_ids) {
+            log_info(tt::LogTest, "Checking Status of {} Rx on physical device {}", routing_direction, device_id);
 
-            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
+            const auto& receiver_device = fixture->get_device(device_id);
             std::vector<uint32_t> recv_status;
 
             tt_metal::detail::ReadFromDeviceL1(
@@ -1623,10 +1619,10 @@ void RunTest2DMCastConnAPI(
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (uint32_t i = 0; i < rx_physical_device_ids.size(); i++) {
-        log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_ids[i]);
+    for (unsigned int rx_physical_device_id : rx_physical_device_ids) {
+        log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_id);
 
-        const auto& receiver_device = fixture->get_device(rx_physical_device_ids[i]);
+        const auto& receiver_device = fixture->get_device(rx_physical_device_id);
         std::vector<uint32_t> recv_status;
 
         tt_metal::detail::ReadFromDeviceL1(
@@ -1818,7 +1814,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     log_info(tt::LogTest, "Sender Finished");
 
     // Wait for receivers to finish
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
             auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
             fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
@@ -1844,9 +1840,9 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
+    for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (int device_id : physical_end_device_ids) {
+            const auto& receiver_device = fixture->get_device(device_id);
 
             log_info(
                 tt::LogTest,
@@ -1854,7 +1850,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
                 routing_direction,
                 receiver_logical_core.x,
                 receiver_logical_core.y,
-                physical_end_device_ids[i]);
+                device_id);
 
             std::vector<uint32_t> recv_status;
 
@@ -2862,7 +2858,7 @@ void Fabric2DMulticastCommon(
     for (const auto& dir_configs : connection_configs) {
         for (auto [dir, start_distance, range] : dir_configs) {
             uint32_t max_hop = start_distance + range;
-            if (fabric_hops.find(dir) == fabric_hops.end() || fabric_hops[dir] < max_hop) {
+            if (!fabric_hops.contains(dir) || fabric_hops[dir] < max_hop) {
                 fabric_hops[dir] = max_hop;
             }
         }
