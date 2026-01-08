@@ -72,57 +72,51 @@ struct TernaryDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
-    // tensor-tensor-tensor invocation (TTT)
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType op_type,
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const Tensor& input_c,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids);
-
-    // tensor-tensor-tensor invocation (TTT) with additional scalar
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType op_type,
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const Tensor& input_c,
-        float scalar,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids);
-
-    // tensor-tensor-scalar invocation (TTS)
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType op_type,
-        const Tensor& input_a,
-        const Tensor& input_b,
-        float scalar_c,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids);
-
-    // tensor-scalar-tensor invocation (TST)
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType op_type,
-        const Tensor& input_a,
-        float scalar_b,
-        const Tensor& input_c,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::ternary
 
 namespace ttnn::prim {
-constexpr auto ternary =
-    ttnn::register_operation<"ttnn::prim::ternary", ttnn::operations::ternary::TernaryDeviceOperation>();
+
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float scalar,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float scalar_c,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
+    ttnn::operations::ternary::TernaryOpType op_type,
+    const Tensor& input_a,
+    float scalar_b,
+    const Tensor& input_c,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

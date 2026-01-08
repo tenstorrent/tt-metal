@@ -12,6 +12,7 @@ namespace ttnn::operations::data_movement::copy {
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
+    bool backwards = false;
 };
 
 struct tensor_args_t {

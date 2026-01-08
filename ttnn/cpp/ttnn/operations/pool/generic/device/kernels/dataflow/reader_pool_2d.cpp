@@ -4,13 +4,13 @@
 #include <sys/types.h>
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
@@ -111,8 +111,8 @@ ALWI void initialize_return_indices_data() {
     // Calculate initial index based on padding conditions
     uint16_t init_index = 0;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
-    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
-    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(1);
+    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(2);
 
     if (start_row <= pad_t) {
         // top left is in top padding, we increment from the padding index in the top left
@@ -517,19 +517,7 @@ void kernel_main() {
     }
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
-    bool first_row_value = reader_id == 0;
-
-    uint32_t reader_indices_on_core = 0;
-
-    if (use_split_reader) {
-        if (reader_id == 0) {
-            reader_indices_on_core = (reader_nindices + 1) / 2;
-        } else {
-            reader_indices_on_core = reader_nindices / 2;
-        }
-    } else {
-        reader_indices_on_core = reader_nindices;
-    }
+    bool first_row_value = reader_id == 0 || !use_split_reader;
 
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
@@ -551,7 +539,6 @@ void kernel_main() {
                     use_split_reader,
                     multi_buffering_factor>(scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
-            reader_indices_on_core--;
             read_kernel_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
@@ -583,43 +570,5 @@ void kernel_main() {
                 first_row_value = false;
             }
         }
-    }
-
-    while (reader_indices_on_core--) {
-        if constexpr (!one_scalar_per_core) {
-            fill_scalar<
-                one_scalar_per_core,
-                in_scalar_cb_id,
-                reader_nindices,
-                use_split_reader,
-                multi_buffering_factor>(scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
-        }
-        read_kernel_with_top_left_index<
-            in_nblocks_c,
-            in_cb_id,
-            kernel_h,
-            kernel_w,
-            in_w_padded,
-            in_nbytes_leftover,
-            in_c,
-            max_sticks_for_reduction,
-            total_elems_to_reduce,
-            is_avg_pool,
-            wide_reduction,
-            clear_value_cb_id,
-            in_cb_ntiles,
-            in_nbytes_c,
-            shard_width_bytes,
-            is_large_kernel,
-            last_tile_is_partial,
-            dilation_h,
-            dilation_w,
-            return_indices,
-            zero_pages,
-            out_cb_id,
-            out_idx_cb_id,
-            reader_id,
-            pack_tmp_cb_id,
-            pack_idx_tmp_cb_id>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

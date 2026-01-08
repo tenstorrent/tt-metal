@@ -157,6 +157,7 @@ struct ParsedTestConfig {
     bool global_sync = false;  // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                // cross-chip start-skew effects
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
@@ -181,6 +182,7 @@ struct TestConfig {
     bool global_sync = false;  // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                // cross-chip start-skew effects
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
 };
 

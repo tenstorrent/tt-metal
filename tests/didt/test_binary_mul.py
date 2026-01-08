@@ -12,7 +12,7 @@ from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
 MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
-MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
+MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 # This test was created to measure power consumption of BH chip on non-matmul workload.

@@ -5,7 +5,7 @@
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
                             }
                         } else {
                             uint32_t* pcie_addr = ((uint32_t*)pcie_base) + offset;
-                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)&blank[0], page_size_g);
+                            nt_memcpy((uint8_t*)pcie_addr, (uint8_t*)blank.data(), page_size_g);
                         }
                         page++;
                     }
@@ -503,8 +503,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        log_fatal(LogTest, "Test Failed\n");
-        return 1;
     }
+    log_fatal(LogTest, "Test Failed\n");
+    return 1;
 }

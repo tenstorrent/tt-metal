@@ -40,10 +40,10 @@ message(STATUS "Building Unified Library for all architectures, thanks to blozan
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # FIXME: Why are we setting these ourselves?
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 
-# Defining build types is the pervue of the top-level project
+# Defining build types is the purview of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)
 endif()
@@ -99,8 +99,7 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
-# TODO(afuller): Re-enable this after we sort out compatibility with old tools.
-# include(linking)
+include(linking)
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
@@ -168,20 +167,19 @@ target_link_libraries(
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
+    -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
     -Werror
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-int-in-bool-context>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
@@ -281,7 +279,7 @@ if(BUILD_TELEMETRY)
 endif()
 
 ############################################################################################################################
-# Install targets for build artifacts and pybinds
+# Install targets for build artifacts and nanobinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################

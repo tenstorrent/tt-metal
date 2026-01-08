@@ -1488,6 +1488,14 @@ jobs:
                 echo "U08TVGQGGAE"
                 return 0
                 ;;
+              "ncvetkovicTT")
+                echo "U07AUABTEP6"
+                return 0
+                ;;
+              "jvegaTT")
+                echo "U07M7QZ0BQA"
+                return 0
+                ;;
             esac
 
             # Try exact matching first
@@ -2138,7 +2146,44 @@ jobs:
                       done
                       TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
 
-                      # Select up to 2 owners from this pending team
+                      # Special handling for @tenstorrent/metalium-api-owners - always include akerteszTT
+                      # BUT ONLY for files under tt_metal/api/
+                      if [ "$team" = "@tenstorrent/metalium-api-owners" ]; then
+                        # Check if any of the files in this group are under tt_metal/api/
+                        FILES_UNDER_API=false
+                        IFS=',' read -ra FILES_ARRAY <<< "$team_files"
+                        for file in "${FILES_ARRAY[@]}"; do
+                          # Use case statement for more robust pattern matching
+                          # Handles paths with or without leading slashes
+                          case "$file" in
+                            tt_metal/api/*|/tt_metal/api/*|./tt_metal/api/*)
+                              FILES_UNDER_API=true
+                              echo "Found file under tt_metal/api/: $file"
+                              break
+                              ;;
+                          esac
+                        done
+
+                        if [ "$FILES_UNDER_API" = "true" ]; then
+                          echo "Special handling for metalium-api-owners team (tt_metal/api/ files) - ensuring akerteszTT is always included"
+                          # Check if akerteszTT is in unapproved list and not already approved
+                          if echo "$TEAM_UNAPPROVED" | grep -q "akerteszTT"; then
+                            # akerteszTT is available, ensure they're selected
+                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS"akerteszTT","
+                            # Remove akerteszTT from unapproved list for random selection
+                            TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | tr ',' '\n' | grep -v "^akerteszTT$" | tr '\n' ',' | sed 's/,$//')
+                            echo "Added akerteszTT as required reviewer for metalium-api-owners (tt_metal/api/ files)"
+                          else
+                            echo "akerteszTT already approved or not in team, not adding to selection"
+                          fi
+                        else
+                          echo "metalium-api-owners team owns non-API files (e.g., programming_examples/), using standard selection"
+                        fi
+                      fi
+
+                      # Common selection logic: select up to 2 owners from remaining unapproved members
+                      # For metalium-api-owners API files: this is in addition to akerteszTT (if added above)
+                      # For all other cases: this is the primary selection
                       if [ -n "$TEAM_UNAPPROVED" ]; then
                         IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
                         TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
@@ -2438,6 +2483,14 @@ jobs:
                   ;;
                 "nsextonTT")
                   echo "U08TVGQGGAE"
+                  return 0
+                  ;;
+                "ncvetkovicTT")
+                  echo "U07AUABTEP6"
+                  return 0
+                  ;;
+                "jvegaTT")
+                  echo "U07M7QZ0BQA"
                   return 0
                   ;;
               esac

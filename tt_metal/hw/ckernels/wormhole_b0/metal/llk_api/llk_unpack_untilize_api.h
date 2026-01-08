@@ -9,31 +9,6 @@
 /*************************************************************************
  * LLK UNPACK UNTILIZE
  *************************************************************************/
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack_untilize_params) {
-    constexpr bool is_row_pool = false;
-    constexpr bool within_face_16x16_transpose = false;
-    constexpr StochRndType stoch_rnd_mode = StochRndType::None;
-
-    const uint32_t unpA_operand_id = get_operand_id(unpack_untilize_params->unpA_operand);
-    const uint32_t unpA_num_faces = 4;
-    const uint32_t unpA_face_r_dim = FACE_R_DIM;
-
-    _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpA_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_A_params_t unpack_untilize_params = {
-        .unpA_operand = unpA_operand,
-    };
-    llk_unpack_untilize_hw_configure<is_fp32_dest_acc_en>(&unpack_untilize_params);
-}
 
 inline void llk_unpack_untilize_mop_config() { _llk_unpack_untilize_mop_config_(); }
 
@@ -41,21 +16,8 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = 1;
 
-    // Disable transpose when unused
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
-
-    // Save state of unpacker config for quick restore
-    TTI_RDCFG(
-        p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0,
-        UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);  // Save unpack stride config
-    TTI_RDCFG(
-        p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1,
-        THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);  // Save tile x dim per context
-    TTI_RDCFG(
-        p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);  // Save descriptor 1
-
     _llk_unpack_untilize_init_(
-        unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim);
+        unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim, true);
 }
 
 inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {

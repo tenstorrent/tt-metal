@@ -52,7 +52,7 @@ void MAIN {
         // in0 tile index: k (from sharded input)
         // in1 tile index: k (from sharded weights)
         // dst index: 0 (single output tile, accumulating)
-        matmul_tiles(in0_cb, in1_cb, k, k, 0, false);
+        matmul_tiles(in0_cb, in1_cb, k, k, 0);
     }
 
     tile_regs_commit();

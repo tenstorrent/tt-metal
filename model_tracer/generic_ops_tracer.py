@@ -6,17 +6,22 @@
 """
 Generic Operations Tracer
 
-Takes any model test path and extracts ttnn operations by running pytest
-with tracing enabled. No model-specific code or device initialization needed.
+Takes any model test path and extracts ttnn operations by running it with tracing enabled.
+Automatically detects if it's a pytest test or standalone Python script.
+No model-specific code or device initialization needed.
 
 Usage:
     python generic_ops_tracer.py <test_path> [--output-dir <dir>] [--store]
 
-Examples:
+Examples (Pytest):
     python generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
     python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
     python generic_ops_tracer.py /path/to/test.py::test_function --store
-    python generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
+
+Examples (Standalone Python):
+    python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
+    python generic_ops_tracer.py models/experimental/some_model/run_model.py --store
+    python generic_ops_tracer.py /path/to/script.py --output-dir ./my_traces
 """
 
 import sys
@@ -26,6 +31,167 @@ import json
 import tempfile
 import argparse
 from datetime import datetime
+
+
+def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
+    """Standalone function to fix UnparsedElements - can be used anywhere"""
+    # Prevent infinite recursion (safety measure)
+    if depth >= max_depth:
+        if depth == max_depth:  # Only print once
+            print(f"⚠️  Warning: Max recursion depth ({max_depth}) reached while fixing unparsed elements")
+        return obj
+
+    if isinstance(obj, dict):
+        # Check if this is an UnparsedElement
+        if "UnparsedElement" in obj:
+            unparsed_data = obj["UnparsedElement"]
+            element_info = unparsed_data.get("element_info", "")
+
+            # Convert to string if needed
+            if not isinstance(element_info, str):
+                element_info = str(element_info)
+
+            # Try to parse with regex fixes
+            if element_info and element_info.startswith("{"):
+                try:
+                    import re
+                    import json as json_module
+
+                    fixed_json_str = element_info
+
+                    # STEP 1: Fix improperly escaped nested JSON strings
+                    # Pattern: {"arg0": "[{\"key\":...}" should be {"arg0": "[{\\\"key\":...}"}
+                    # This happens when the value is a JSON-stringified array/object
+                    # The problem: after "arg0": ", the quotes in the nested JSON are not escaped
+                    #
+                    # Detection: Look for pattern like {"argN": "[{" or {"argN": "{{"
+                    # Solution: Find the string value and properly escape all internal quotes
+
+                    # Use non-greedy quantifier to avoid over-matching with nested quotes
+                    match = re.match(r'\{"(arg\d+)"\s*:\s*"(.+?)"\}$', fixed_json_str)
+                    if match:
+                        # Extract the key and problematic value
+                        arg_key = match.group(1)
+                        inner_value = match.group(2)
+
+                        # Check if it looks like unescaped JSON (starts with [ or {)
+                        if inner_value.startswith("[") or inner_value.startswith("{"):
+                            # This is the problematic case - the inner JSON is not properly escaped
+                            # We need to:
+                            # 1. Fix any C++ formatting issues (like "{32, 32}" -> [32, 32])
+                            # 2. Then parse it as JSON
+
+                            # Apply C++ formatting fixes first
+                            inner_fixed = inner_value
+                            # Fix tile_shape and face_shape patterns: "{32, 32}" -> [32, 32]
+                            inner_fixed = re.sub(
+                                r'"tile_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"tile_shape":[\1, \2]', inner_fixed
+                            )
+                            inner_fixed = re.sub(
+                                r'"face_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"face_shape":[\1, \2]', inner_fixed
+                            )
+
+                            # Now try to parse it
+                            try:
+                                parsed_inner = json_module.loads(inner_fixed)
+
+                                # Success! Now fix any remaining string values in the parsed structure
+                                # (e.g., if tile_shape/face_shape are still strings)
+                                def fix_string_arrays(obj):
+                                    """Fix string values that should be arrays like '{32, 32}' -> [32, 32]"""
+                                    if isinstance(obj, dict):
+                                        for key, value in obj.items():
+                                            if isinstance(value, str):
+                                                # Check if it's a brace-delimited number pair
+                                                match_braces = re.match(r"^\{(\d+),\s*(\d+)\}$", value)
+                                                if match_braces:
+                                                    obj[key] = [int(match_braces.group(1)), int(match_braces.group(2))]
+                                                else:
+                                                    obj[key] = value
+                                            elif isinstance(value, (dict, list)):
+                                                obj[key] = fix_string_arrays(value)
+                                    elif isinstance(obj, list):
+                                        return [fix_string_arrays(item) for item in obj]
+                                    return obj
+
+                                parsed_inner = fix_string_arrays(parsed_inner)
+                                # Reconstruct the outer dict with parsed inner value (using captured key)
+                                result = {arg_key: parsed_inner}
+                                return fix_unparsed_elements_standalone(result, depth + 1, max_depth)
+                            except (json_module.JSONDecodeError, ValueError, TypeError):
+                                # If parsing fails, continue to other fixing strategies
+                                pass
+
+                    # STEP 2: Try normal JSON parsing (in case it's already valid)
+                    try:
+                        first_parse = json_module.loads(fixed_json_str)
+                        if isinstance(first_parse, dict):
+                            # Check if any values are stringified JSON (start with [ or {)
+                            for key, value in first_parse.items():
+                                if isinstance(value, str) and (value.startswith("[") or value.startswith("{")):
+                                    # Try to parse the inner JSON string with fixes
+                                    inner_json = value
+                                    # Apply regex fixes to the inner string
+                                    inner_json = re.sub(r':\s*"\\{(\d+),\s*(\d+)\\}"', r":[\1, \2]", inner_json)
+                                    inner_json = re.sub(r'"(\w+)":(\d+),(\d+)', r'"\1":[\2,\3]', inner_json)
+                                    inner_json = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', inner_json)
+                                    inner_json = re.sub(
+                                        r'"tile_shape":"\\{(\d+),\s*(\d+)\\}"', r'"tile_shape":[\1, \2]', inner_json
+                                    )
+                                    inner_json = re.sub(
+                                        r'"face_shape":"\\{(\d+),\s*(\d+)\\}"', r'"face_shape":[\1, \2]', inner_json
+                                    )
+
+                                    try:
+                                        # Try to parse the fixed inner JSON
+                                        parsed_inner = json_module.loads(inner_json)
+                                        first_parse[key] = parsed_inner
+                                    except (json_module.JSONDecodeError, ValueError, TypeError):
+                                        # If inner parsing fails, keep as string
+                                        pass
+
+                            # Recursively fix any nested UnparsedElements
+                            return fix_unparsed_elements_standalone(first_parse, depth + 1, max_depth)
+                    except (json_module.JSONDecodeError, ValueError, TypeError):
+                        # First parse failed, continue with regex fixes
+                        pass
+
+                    # STEP 3: Apply regex fixes for common C++ formatting issues
+                    # Fix patterns like "tile_shape":"{32, 32}" -> "tile_shape":[32, 32]
+                    fixed_json_str = re.sub(r':\s*"\{(\d+),\s*(\d+)\}"', r":[\1, \2]", fixed_json_str)
+                    # Fix patterns like "compute_grid":8,8 -> "compute_grid":[8,8]
+                    fixed_json_str = re.sub(r'"(\w+)":(\d+),(\d+)', r'"\1":[\2,\3]', fixed_json_str)
+                    # Fix remaining ":{...}" patterns
+                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
+                    # Fix grid patterns like "grid":{[...],[...]} -> "grid":[[...],[...]]
+                    fixed_json_str = re.sub(
+                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
+                    )
+                    # Fix range patterns like {8, 8} - {0, 0} -> [8, 8], [0, 0]
+                    fixed_json_str = re.sub(r"(\{[^}]+\})\s*-\s*(\{[^}]+\})", r"\1, \2", fixed_json_str)
+                    # Fix placeholder {...} to null
+                    fixed_json_str = re.sub(r":\{\.\.\.}", r":null", fixed_json_str)
+
+                    # Parse and return the fixed data
+                    parsed_data = json_module.loads(fixed_json_str)
+                    # Recursively fix any nested UnparsedElements
+                    return fix_unparsed_elements_standalone(parsed_data, depth + 1, max_depth)
+                except Exception:
+                    pass
+
+            # If parsing failed, return as-is
+            return obj
+        else:
+            # Recursively fix nested structures - create new dict to avoid circular refs
+            result = {}
+            for k, v in obj.items():
+                result[k] = fix_unparsed_elements_standalone(v, depth + 1, max_depth)
+            return result
+    elif isinstance(obj, list):
+        # Create new list to avoid circular refs
+        return [fix_unparsed_elements_standalone(item, depth + 1, max_depth) for item in obj]
+    else:
+        return obj
 
 
 def get_base_dir():
@@ -56,6 +222,65 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 
 
+def get_machine_info():
+    """
+    Get machine info (board type, device series, and card count) using tt-smi command.
+    Returns a dict with 'board_type', 'device_series', and 'card_count' or None on failure.
+    Gracefully handles command not found or other errors.
+    """
+    try:
+        # Run tt-smi -ls and parse the output
+        result = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=10)
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+
+        # Parse the table output
+        # Look for lines in the "Boards that can be reset" table
+        # Example line: "│ 0      │ Wormhole │ n300              L │"
+        in_table = False
+        machines = {}  # {(board_type, device_series): count}
+
+        for line in result.stdout.split("\n"):
+            if "Boards that can be reset" in line:
+                in_table = True
+                continue
+
+            if not in_table:
+                continue
+
+            # Check if this is a table row (starts with │)
+            if line.strip().startswith("│"):
+                # Split by │ and clean up
+                parts = [p.strip() for p in line.split("│") if p.strip()]
+
+                # We expect: [index, board_type, device_series]
+                if len(parts) >= 3:
+                    board_type = parts[1]
+                    device_series = parts[2].rstrip("L").strip()  # Remove trailing 'L' and whitespace
+
+                    # Skip header row or empty entries
+                    if board_type and device_series and board_type != "Board Type":
+                        key = (board_type, device_series)
+                        machines[key] = machines.get(key, 0) + 1
+
+        # Return the first (most common) machine configuration
+        if machines:
+            (board_type, device_series), card_count = max(machines.items(), key=lambda x: x[1])
+            return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+
+        return None
+
+    except subprocess.TimeoutExpired:
+        return None
+    except FileNotFoundError:
+        # tt-smi command not found
+        return None
+    except Exception:
+        # Any other error - silently fail
+        return None
+
+
 def create_tracing_plugin(output_dir):
     """
     Create a pytest plugin that captures operations during test execution.
@@ -75,9 +300,63 @@ import ttnn
 from ttnn.graph_tracer_utils import GraphTracerUtils
 import json
 import os
+import subprocess
 from datetime import datetime
 
 BASE_DIR_PLACEHOLDER = "BASE_DIR_VALUE"
+
+
+def get_machine_info():
+    """
+    Get machine info (board type, device series, and card count) using tt-smi command.
+    Returns a dict with 'board_type', 'device_series', and 'card_count' or None on failure.
+    Gracefully handles command not found or other errors.
+    """
+    try:
+        # Run the bash command to extract machine info with card count
+        cmd = """
+        tt-smi -ls \\
+        | sed 's/│/|/g' \\
+        | awk -F'|' '
+        /Boards that can be reset:/ {in_table=1; next}
+        in_table && $0 ~ /^\\|/ {
+            gsub(/^[ \\t]+|[ \\t]+$/, "", $3)
+            gsub(/^[ \\t]+|[ \\t]+$/, "", $4)
+            sub(/[[:space:]]+L$/, "", $4)
+            if ($3 != "") machines[$3" "$4]++
+        }
+        END {
+            for (m in machines) print m, machines[m], (machines[m] > 1 ? "cards" : "card")
+        }'
+        """
+
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)  # 10 second timeout
+
+        if result.returncode == 0 and result.stdout.strip():
+            # Parse the output: "Wormhole n300 1 card" or "Blackhole tt-galaxy-bh 32 cards"
+            lines = result.stdout.strip().split("\\n")
+            if lines:
+                # Take the first line (should be the primary board)
+                parts = lines[0].strip().split()
+                if len(parts) >= 3:
+                    board_type = parts[0]  # e.g., "Wormhole" or "Blackhole"
+                    device_series = parts[1]  # e.g., "n300", "n150", "tt-galaxy-bh"
+                    card_count = int(parts[2])  # e.g., 1, 2, 32
+                    return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+
+        # If we get here, command didn't produce expected output
+        return None
+
+    except subprocess.TimeoutExpired:
+        # Command took too long
+        return None
+    except FileNotFoundError:
+        # tt-smi command not found
+        return None
+    except Exception:
+        # Any other error - silently fail
+        return None
+
 
 class OperationsTracingPlugin:
     def __init__(self):
@@ -87,6 +366,9 @@ class OperationsTracingPlugin:
         self.test_counter = 0  # Counter to make each trace file unique
         self.valid_operations = self.load_valid_operations()
         self.current_test_source = None  # Will be set in pytest_runtest_setup
+
+        # Get machine info once at initialization and reuse it for all operations
+        self.machine_info = get_machine_info()
 
         # Operations to exclude from tracing (even if in Allops.txt)
         self.excluded_operations = {
@@ -154,119 +436,44 @@ class OperationsTracingPlugin:
 
         return op_name in self.valid_operations
 
-    def fix_unparsed_elements(self, obj):
-        """Pre-process to fix UnparsedElements before main cleaning"""
-        if isinstance(obj, dict):
-            # Check if this is an UnparsedElement
-            if "UnparsedElement" in obj:
-                unparsed_data = obj["UnparsedElement"]
-                element_info = unparsed_data.get("element_info", "")
-
-                # Convert to string if needed
-                if not isinstance(element_info, str):
-                    element_info = str(element_info)
-
-                # Try to parse with regex fixes
-                if element_info and element_info.startswith('{'):
-                    try:
-                        import re
-                        import json as json_module
-
-                        fixed_json_str = element_info
-                        # Apply regex fixes
-                        fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-                        fixed_json_str = re.sub(r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str)
-                        fixed_json_str = re.sub(r'(\{[^}]+\})\s*-\s*(\{[^}]+\})', r'\1, \2', fixed_json_str)
-
-                        # Parse and return the fixed data
-                        parsed_data = json_module.loads(fixed_json_str)
-                        # Recursively fix any nested UnparsedElements
-                        fixed_result = self.fix_unparsed_elements(parsed_data)
-                        # Debug: confirm success
-                        if "SHARDED" in element_info:
-                            print("✅ Fixed sharded UnparsedElement")
-                        return fixed_result
-                    except Exception as e:
-                        if "SHARDED" in element_info:
-                            print(f"❌ Failed to fix sharded UnparsedElement: {str(e)[:80]}")
-                        pass
-
-                # If parsing failed, return as-is
-                return obj
-            else:
-                # Recursively fix nested structures
-                return {k: self.fix_unparsed_elements(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [self.fix_unparsed_elements(item) for item in obj]
-        else:
-            return obj
-
     def clean_operation_data(self, operation):
         """Clean operation data to ensure it's JSON serializable"""
         if not isinstance(operation, dict):
             return None
 
-        # First, fix all UnparsedElements
-        operation = self.fix_unparsed_elements(operation)
-
-        def clean_recursive(obj):
+        # Aggressive cleaning that serializes everything to JSON string and back
+        # This breaks all circular references by creating new objects
+        def clean_recursive(obj, depth=0, max_depth=20):
             """Recursively clean objects to ensure JSON serialization"""
+            # Prevent infinite recursion
+            if depth > max_depth:
+                return {"_max_depth_exceeded": True}
+
+            # Base case: primitives are already JSON-serializable
+            if isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
+
+            # For dicts and lists, try to serialize them directly first
+            # If they contain circular refs, this will fail
+            if isinstance(obj, (dict, list)):
+                try:
+                    # Try to serialize the whole structure at once
+                    # This will fail on circular refs
+                    json_str = json.dumps(obj, default=str)
+                    # If successful, parse it back to get clean copy
+                    return json.loads(json_str)
+                except (ValueError, TypeError):
+                    # Circular reference or other issue - clean piece by piece
+                    pass
+
+            # If we get here, need to clean recursively
             if isinstance(obj, dict):
                 cleaned = {}
                 for key, value in obj.items():
-                    try:
-                        # Try to clean the value recursively
-                        cleaned_value = clean_recursive(value)
-                        # Test if this specific value is JSON serializable
-                        json.dumps(cleaned_value)
-                        cleaned[key] = cleaned_value
-                    except Exception as e:
-                        # For problematic values, try to parse as JSON first
-                        # Don't truncate yet - we need the full string for parsing
-                        value_str = str(value)
-
-                        # Try to parse as JSON if it looks like JSON
-                        if value_str.startswith('{') and value_str.endswith('}'):
-                            try:
-                                # First try direct JSON parsing
-                                parsed_data = json.loads(value_str)
-                                # Recursively clean the parsed data
-                                cleaned[key] = clean_recursive(parsed_data)
-                                continue
-                            except:
-                                # Try to fix common C++ representation issues
-                                try:
-                                    import re
-                                    fixed_json_str = value_str
-
-                                    # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
-                                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-
-                                    # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
-                                    # This handles CoreRangeSet structures with multiple ranges
-                                    fixed_json_str = re.sub(r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str)
-
-                                    # Fix grid ranges like [{"x":0,"y":0} - {"x":7,"y":7}] -> [{"x":0,"y":0}, {"x":7,"y":7}]
-                                    fixed_json_str = re.sub(r'(\{[^}]+\})\s*-\s*(\{[^}]+\})', r'\1, \2', fixed_json_str)
-
-                                    parsed_data = json.loads(fixed_json_str)
-                                    cleaned[key] = clean_recursive(parsed_data)
-                                    continue
-                                except:
-                                    pass
-
-                        # If JSON parsing fails, create UnparsedElement with full string for later parsing
-                        cleaned[key] = {
-                            "UnparsedElement": {
-                                "error": str(e),
-                                "element_info": value_str  # Keep full string for sweep test parsing
-                            }
-                        }
+                    cleaned[key] = clean_recursive(value, depth + 1, max_depth)
                 return cleaned
             elif isinstance(obj, list):
-                return [clean_recursive(item) for item in obj]
-            elif isinstance(obj, (str, int, float, bool)) or obj is None:
-                return obj
+                return [clean_recursive(item, depth + 1, max_depth) for item in obj]
             else:
                 # For non-JSON serializable objects, convert to string
                 return str(obj)
@@ -307,6 +514,69 @@ class OperationsTracingPlugin:
         signature = hashlib.md5(args_str.encode()).hexdigest()
         return signature
 
+    def _merge_source(self, existing_config, new_source):
+        """
+        Merge source into an existing configuration.
+        Converts single source string to list and appends if not already present.
+        """
+        if 'source' not in existing_config:
+            existing_config['source'] = new_source
+            return
+
+        existing_source = existing_config['source']
+
+        # Convert single string to list
+        if isinstance(existing_source, str):
+            if existing_source == new_source:
+                # Same source, no need to add
+                return
+            existing_config['source'] = [existing_source, new_source]
+        elif isinstance(existing_source, list):
+            # Already a list, append if not present
+            if new_source not in existing_source:
+                existing_source.append(new_source)
+
+    def _merge_machine_info(self, existing_config, new_machine_info):
+        """
+        Merge machine info into an existing configuration.
+
+        Simplified approach to prevent circular references:
+        - Keeps device_series as simple string (not nested lists)
+        - Checks for exact duplicates before adding
+        - Avoids complex list merging that can create circular refs
+        """
+        # Skip if new_machine_info is None
+        if new_machine_info is None:
+            return
+
+        if 'machine_info' not in existing_config:
+            # No existing machine info, just add as list
+            existing_config['machine_info'] = [new_machine_info]
+            return
+
+        existing_machine_info = existing_config['machine_info']
+
+        # Handle legacy single-dict format - convert to list
+        if isinstance(existing_machine_info, dict):
+            existing_machine_info = [existing_machine_info]
+            existing_config['machine_info'] = existing_machine_info
+
+        # Check if we already have this exact machine info
+        # This prevents duplicates AND avoids circular reference issues
+        new_board_type = new_machine_info.get('board_type')
+        new_device_series = new_machine_info.get('device_series')
+        new_card_count = new_machine_info.get('card_count')
+
+        for entry in existing_machine_info:
+            if (entry.get('board_type') == new_board_type and
+                entry.get('device_series') == new_device_series and
+                entry.get('card_count') == new_card_count):
+                # Already exists, don't duplicate
+                return
+
+        # Add as new entry (no complex merging to avoid circular refs)
+        existing_machine_info.append(new_machine_info)
+
     def update_master_file(self, master_file_path, new_operations, test_name):
         """Update master file with unique operation configurations grouped by operation name"""
 
@@ -317,11 +587,16 @@ class OperationsTracingPlugin:
         max_retries = 5
         retry_delay = 0.1  # 100ms
 
-        if os.path.exists(master_file_path):
+        if os.path.exists(master_file_path) and os.path.getsize(master_file_path) > 0:
             for attempt in range(max_retries):
                 try:
                     with open(master_file_path, 'r') as f:
-                        master_data = json.load(f)
+                        content = f.read().strip()
+                        if not content:
+                            # Empty file, start fresh silently
+                            master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
+                            break
+                        master_data = json.loads(content)
                     break  # Success, exit retry loop
                 except (IOError, json.JSONDecodeError) as e:
                     if attempt < max_retries - 1:
@@ -330,8 +605,7 @@ class OperationsTracingPlugin:
                         time.sleep(retry_delay)
                         continue
                     else:
-                        # Last attempt failed
-                        print(f"⚠️ Could not load existing master file after {max_retries} attempts: {str(e)}. Starting fresh.")
+                        # Last attempt failed, start fresh silently
                         master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
                         break
 
@@ -396,11 +670,9 @@ class OperationsTracingPlugin:
         new_configs_added = 0
 
         for operation in new_operations:
-            # Clean the operation data first
-            clean_op = self.clean_operation_data(operation)
-            if clean_op:
-                op_name = clean_op.get('operation', 'unknown')
-                op_args = clean_op.get('arguments', [])
+            if operation:
+                op_name = operation.get('operation', 'unknown')
+                op_args = operation.get('arguments', [])
 
                 # Initialize operation entry if not exists
                 if op_name not in master_data['operations']:
@@ -408,8 +680,12 @@ class OperationsTracingPlugin:
 
                 # Check if this argument configuration already exists
                 arg_signature = self.get_arguments_signature(op_args)
-                existing_signatures = set()
 
+                # Use the machine info that was fetched once at plugin initialization
+                new_machine_info = self.machine_info
+
+                # Find matching configuration to merge machine info
+                matching_config = None
                 for existing_config in master_data['operations'][op_name]["configurations"]:
                     # Handle both old format (list) and new format (dict with source)
                     if isinstance(existing_config, list):
@@ -420,17 +696,34 @@ class OperationsTracingPlugin:
                         existing_args = existing_config
 
                     existing_sig = self.get_arguments_signature(existing_args)
-                    existing_signatures.add(existing_sig)
+                    if existing_sig == arg_signature:
+                        matching_config = existing_config
+                        break
 
-                # Add configuration if it's unique (in new format with source tag)
-                if arg_signature not in existing_signatures:
-                    # Store in new format: dict with arguments and source
+                if matching_config is None:
+                    # New configuration - add it
+                    # Don't serialize/deserialize - it doesn't help and may cause issues
+                    # Just use op_args directly
+                    op_args_clean = op_args
+
                     config_entry = {
-                        "arguments": op_args,
+                        "arguments": op_args_clean,
                         "source": test_name
                     }
+
+                    if new_machine_info:
+                        config_entry["machine_info"] = [new_machine_info]
+
                     master_data['operations'][op_name]["configurations"].append(config_entry)
                     new_configs_added += 1
+                else:
+                    # Configuration exists - merge machine info and source if needed
+                    if isinstance(matching_config, dict):
+                        # Merge machine info
+                        if new_machine_info:
+                            self._merge_machine_info(matching_config, new_machine_info)
+                        # Merge source
+                        self._merge_source(matching_config, test_name)
 
         # Update metadata
         if test_name not in master_data['metadata']['models']:
@@ -460,8 +753,50 @@ class OperationsTracingPlugin:
         try:
             # Write to temporary file first (atomic operation)
             temp_file = master_file_path + '.tmp'
+
+            # Custom serializer that recursively converts everything to JSON-safe primitives
+            # This breaks circular references by tracking visited objects
+            def make_json_safe(obj, visited=None, depth=0, max_depth=100):
+                if visited is None:
+                    visited = set()
+
+                if depth > max_depth:
+                    return "_max_depth_"
+
+                # Check for circular reference
+                obj_id = id(obj)
+                if obj_id in visited:
+                    return "_circular_ref_"
+
+                # Primitives are already safe
+                if isinstance(obj, (str, int, float, bool)) or obj is None:
+                    return obj
+
+                # Track this object
+                if isinstance(obj, (dict, list)):
+                    visited.add(obj_id)
+
+                try:
+                    if isinstance(obj, dict):
+                        result = {str(k): make_json_safe(v, visited, depth + 1, max_depth) for k, v in obj.items()}
+                        visited.discard(obj_id)
+                        return result
+                    elif isinstance(obj, list):
+                        result = [make_json_safe(item, visited, depth + 1, max_depth) for item in obj]
+                        visited.discard(obj_id)
+                        return result
+                    else:
+                        return str(obj)
+                except:
+                    visited.discard(obj_id)
+                    return str(obj)
+
             with open(temp_file, 'w') as f:
-                json.dump(master_data, f, indent=2, default=str)
+                # Apply our custom serializer to break circular references
+                safe_master_data = make_json_safe(master_data)
+                # Now json.dumps should work without circular reference errors
+                json_str = json.dumps(safe_master_data, indent=2)
+                f.write(json_str)
 
             # Atomic rename (replaces existing file atomically)
             shutil.move(temp_file, master_file_path)
@@ -640,6 +975,7 @@ class OperationsTracingPlugin:
                 if 'content' in cleaned_trace_data:
                     cleaned_operations = []
                     for op in cleaned_trace_data['content']:
+                        # Clean for JSON serialization
                         cleaned_op = self.clean_operation_data(op)
                         if cleaned_op:
                             cleaned_operations.append(cleaned_op)
@@ -727,31 +1063,222 @@ def pytest_configure(config):
     return plugin_file
 
 
-def run_test_with_tracing(test_path, output_dir, keep_traces=False):
+def detect_pytest_tests(test_path):
     """
-    Run pytest with operations tracing enabled.
+    Detect if a file/path contains pytest test cases.
 
     Args:
-        test_path: Path to test (e.g., /path/to/test.py::test_function)
+        test_path: Path to test file or test case (e.g., /path/to/test.py or /path/to/test.py::test_function)
+
+    Returns:
+        bool: True if pytest tests are found, False otherwise
+    """
+    try:
+        python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
+
+        # Use pytest --collect-only to check if any tests are collected
+        # 60 second timeout to handle TTNN initialization time
+        result = subprocess.run(
+            [python_cmd, "-m", "pytest", test_path, "--collect-only", "-q"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Check if any tests were collected
+        # pytest --collect-only will output test names if found
+        # If no tests found, it typically shows "no tests collected" or empty output
+        if result.returncode == 0:
+            output = result.stdout.lower()
+            # Look for indicators that tests were collected
+            if "test" in output or "collected" in output:
+                # Check if it says "no tests collected" or "collected X items"
+                if "no tests collected" in output or "collected 0" in output:
+                    return False
+                return True
+
+        return False
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        # If pytest collect fails, assume it's not a pytest file
+        return False
+
+
+def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None):
+    """
+    Run test with operations tracing enabled.
+    Automatically detects if it's a pytest test or standalone Python script.
+
+    Args:
+        test_path: Path to test (e.g., /path/to/test.py or /path/to/test.py::test_function)
         output_dir: Directory to save trace outputs
         keep_traces: If True, keep individual trace files after adding to master JSON
+        debug_mode: If True, show live test output in terminal (no capture)
+        extra_args: Additional arguments to pass to pytest or standalone script
 
     Returns:
         dict: Results of the test run
     """
+    extra_args = extra_args or []
 
     print(f"🚀 Running test with operations tracing...")
+    if debug_mode:
+        print(f"🐛 Debug mode enabled - showing live test output...")
     plugin_file = create_tracing_plugin(output_dir)
 
-    # Run pytest from tt-metal directory with our plugin
     # Use the same python executable that's running this script
     python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
-    result = subprocess.run(
-        [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"],
-        cwd=BASE_DIR,
-        capture_output=True,
-        text=True,
-    )
+
+    # Detect if this is a pytest test or standalone script
+    # If path contains ::, it's definitely a pytest test case
+    is_pytest = "::" in test_path or detect_pytest_tests(test_path)
+
+    if is_pytest:
+        print(f"✅ Detected pytest test cases, running with pytest...")
+        if extra_args:
+            print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
+
+        # In debug mode, don't capture output at all - let it stream directly to terminal
+        # Otherwise, we suppress output for cleaner tracer messages
+        if debug_mode:
+            result = subprocess.run(
+                [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
+                cwd=BASE_DIR,
+                text=True,
+            )
+        else:
+            result = subprocess.run(
+                [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+            )
+    else:
+        print(f"✅ No pytest cases detected, running as standalone Python script...")
+        # For standalone scripts, we need to inject tracing differently
+        # Import the conftest_tracer module and enable tracing programmatically
+
+        # Extract the Python file path (remove ::test_name if present)
+        script_path = test_path.split("::")[0] if "::" in test_path else test_path
+
+        # Create a wrapper script that:
+        # 1. Imports the tracer plugin
+        # 2. Begins graph capture
+        # 3. Runs the target script
+        # 4. Ends graph capture and saves results
+        wrapper_script = f"""
+import sys
+import os
+import ttnn
+from ttnn.graph_tracer_utils import GraphTracerUtils
+import json
+from datetime import datetime
+
+# Import the tracing plugin
+sys.path.insert(0, '{BASE_DIR}')
+import conftest_tracer
+
+# Create plugin instance
+plugin = conftest_tracer.OperationsTracingPlugin()
+
+# Begin tracing
+print("\\n🔍 Starting operations trace for standalone script")
+os.makedirs(plugin.output_dir, exist_ok=True)
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+try:
+    # Run the target script
+    with open('{script_path}', 'r') as f:
+        script_content = f.read()
+
+    # Execute the script in its own namespace
+    script_globals = {{'__name__': '__main__', '__file__': '{script_path}'}}
+    exec(script_content, script_globals)
+
+except Exception as e:
+    print(f"❌ Error running script: {{e}}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+
+finally:
+    # Capture operations after script execution
+    try:
+        print("📊 Capturing operations...")
+        captured_graph = ttnn.graph.end_graph_capture()
+        trace_data = GraphTracerUtils.serialize_graph(captured_graph)
+
+        # Filter to only include TTNN operations
+        if isinstance(trace_data, dict) and 'content' in trace_data:
+            original_operations = trace_data['content']
+            filtered_operations = []
+
+            for op in original_operations:
+                if isinstance(op, dict) and 'operation' in op:
+                    op_name = op['operation']
+                    if plugin.is_valid_operation(op_name):
+                        filtered_operations.append(op)
+
+            trace_data['content'] = filtered_operations
+            print(f"🎯 Filtered to {{len(filtered_operations)}} TTNN operations (from {{len(original_operations)}} total)")
+
+            # Update master JSON file
+            master_file = os.path.join(plugin.output_dir, 'ttnn_operations_master.json')
+            test_source = os.path.relpath('{script_path}', '{BASE_DIR}')
+            new_configs_added = plugin.update_master_file(master_file, filtered_operations, test_source)
+            print(f"📝 Added {{new_configs_added}} new unique configurations to master file (source: {{test_source}})")
+            print(f"   📊 Captured {{len(filtered_operations)}} operations from this script")
+
+            # Save individual trace file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            trace_file = os.path.join(plugin.output_dir, f"standalone_script_ops_{{timestamp}}_001.json")
+
+            cleaned_trace_data = trace_data.copy()
+            if 'content' in cleaned_trace_data:
+                cleaned_operations = []
+                for op in cleaned_trace_data['content']:
+                    cleaned_op = plugin.clean_operation_data(op)
+                    if cleaned_op:
+                        cleaned_operations.append(cleaned_op)
+                cleaned_trace_data['content'] = cleaned_operations
+
+            with open(trace_file, 'w') as f:
+                json.dump(cleaned_trace_data, f, indent=2, default=str)
+            print(f"💾 Operations saved to: {{trace_file}}")
+
+    except Exception as e:
+        print(f"❌ Error capturing operations: {{e}}")
+        import traceback
+        traceback.print_exc()
+"""
+
+        # Write wrapper script to temp file
+        wrapper_file = os.path.join(BASE_DIR, f"_tracer_wrapper_{os.getpid()}.py")
+        with open(wrapper_file, "w") as f:
+            f.write(wrapper_script)
+
+        try:
+            # In debug mode, don't capture output - let it stream directly to terminal
+            if debug_mode:
+                result = subprocess.run(
+                    [python_cmd, wrapper_file],
+                    cwd=BASE_DIR,
+                    text=True,
+                )
+            else:
+                result = subprocess.run(
+                    [python_cmd, wrapper_file],
+                    cwd=BASE_DIR,
+                    capture_output=True,
+                    text=True,
+                )
+        finally:
+            # Clean up wrapper script
+            try:
+                os.remove(wrapper_file)
+            except:
+                pass
 
     # Check for created trace files - get all files from current run
     # Use timestamp in filename to group files from same run (more reliable than mtime)
@@ -819,25 +1346,70 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False):
         "success": result.returncode == 0,
         "exit_code": result.returncode,
         "trace_files": trace_files,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
+        "stdout": "",
+        "stderr": "",
         "plugin_file": plugin_file,
         "keep_traces": keep_traces,
+        "output_dir": output_dir,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="TTNN Operations Tracer - Extract operation configurations from model tests",
+        description="TTNN Operations Tracer - Extract operation configurations from model tests or scripts",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-    python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
-    python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
-    python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
+Examples (Pytest tests):
+    # Run specific test with pytest -k filter
+    python model_tracer/generic_ops_tracer.py test.py -k "test_pow"
+
+    # Run with pytest markers and verbose output
+    python model_tracer/generic_ops_tracer.py test.py -m "slow" -v
+
+    # Debug mode - show live test output in terminal
+    python model_tracer/generic_ops_tracer.py test.py -d
+    python model_tracer/generic_ops_tracer.py test.py --debug -k "test_name"
+
+    # Mix tracer args with pytest args (automatic mode)
+    python model_tracer/generic_ops_tracer.py test.py --store -k "test_name"
+
+    # Explicit separator '--' (left=tracer, right=pytest)
+    python model_tracer/generic_ops_tracer.py test.py -d --store -- -v -k "test"
+    python model_tracer/generic_ops_tracer.py test.py --output-dir ./traces -- -v -s -x
+
+Examples (Standalone Python scripts):
+    # Run script with custom arguments
+    python model_tracer/generic_ops_tracer.py model.py --model-name resnet50 --batch 32
+
+    # With tracer args and debug mode
+    python model_tracer/generic_ops_tracer.py model.py --store --debug --output-dir ./my_traces
+
+    # Explicit separator for standalone scripts
+    python model_tracer/generic_ops_tracer.py model.py -d -- --model-name resnet50 --batch 32
+
+Note: The tracer automatically detects pytest vs standalone scripts.
+      Unknown arguments are automatically passed to pytest or the script.
+      Use -d/--debug to see live test logs in the terminal.
+
+Argument Handling (Two Modes):
+
+      Mode 1 - Automatic (Default):
+      - Tracer-specific flags: -o/--output-dir, --store, -d/--debug
+      - These are consumed by the tracer and NOT passed to pytest/script
+      - All other flags (like -v, -k, -m) are passed through to pytest/script
+      - If a flag name conflicts, the tracer takes precedence (consumed first)
+
+      Mode 2 - Explicit Separator (use '--'):
+      - Everything BEFORE '--' goes to tracer
+      - Everything AFTER '--' goes to pytest/script
+      - Example: python tracer.py test.py -d --store -- -v -k "test"
+                 Tracer gets: test.py, -d, --store
+                 Pytest gets: -v, -k "test"
         """,
     )
-    parser.add_argument("test_path", help="Path to test file (e.g., /path/to/test.py::test_function)")
+    parser.add_argument(
+        "test_path", help="Path to test file or script (e.g., /path/to/test.py or /path/to/test.py::test_function)"
+    )
     parser.add_argument(
         "--output-dir",
         "-o",
@@ -850,18 +1422,55 @@ Examples:
         action="store_true",
         help="Keep individual trace files after adding to master JSON (default: delete them)",
     )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Show live test output in terminal (debug mode - shows all logs in real-time)",
+    )
 
-    args = parser.parse_args()
+    # Handle explicit separator '--' for explicit argument separation
+    # If '--' is present, split arguments: left side for tracer, right side for pytest/script
+    import sys
 
-    print("🚀 TTNN Operations Tracer")
-    print("=" * 50)
-    print(f"📁 {os.path.basename(args.test_path)}")
-    if args.store:
-        print(f"💾 Keeping individual trace files")
-    print("=" * 50)
+    if "--" in sys.argv:
+        separator_index = sys.argv.index("--")
+        tracer_argv = sys.argv[1:separator_index]  # Everything before '--'
+        extra_args = sys.argv[separator_index + 1 :]  # Everything after '--'
+
+        # Parse only tracer arguments
+        args = parser.parse_args(tracer_argv)
+
+        print("🚀 TTNN Operations Tracer")
+        print("=" * 50)
+        print(f"📁 {os.path.basename(args.test_path)}")
+        print(f"🔀 Explicit separator '--' detected")
+        print(f"   Left side (tracer): {' '.join(tracer_argv)}")
+        print(f"   Right side (pytest/script): {' '.join(extra_args)}")
+        if args.store:
+            print(f"💾 Keeping individual trace files")
+        if args.debug:
+            print(f"🐛 Debug mode enabled - showing live test output")
+        print("=" * 50)
+    else:
+        # Default behavior: automatic detection with parse_known_args
+        args, extra_args = parser.parse_known_args()
+
+        print("🚀 TTNN Operations Tracer")
+        print("=" * 50)
+        print(f"📁 {os.path.basename(args.test_path)}")
+        if args.store:
+            print(f"💾 Keeping individual trace files")
+        if args.debug:
+            print(f"🐛 Debug mode enabled - showing live test output")
+        if extra_args:
+            print(f"📎 Extra arguments passed to pytest/script: {' '.join(extra_args)}")
+            print(f"ℹ️  Note: Tracer flags (-d, --store, -o) are consumed by tracer")
+            print(f"ℹ️  Note: Unknown flags are automatically passed to pytest/script")
+        print("=" * 50)
 
     try:
-        result = run_test_with_tracing(args.test_path, args.output_dir, args.store)
+        result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
 
         print("\\n" + "=" * 50)
         print("📋 RESULTS")
@@ -938,6 +1547,46 @@ Examples:
             print("\\n⚠️ Test passed but no operations captured")
         else:
             print("\\n❌ Test failed or operations not captured")
+
+        # POST-PROCESSING: Fix unparsed elements in the master JSON
+        # This is the place where UnparsedElements are converted to proper JSON structures
+        # By doing this after all operations are collected, we ensure efficient single-pass processing
+        try:
+            master_file = os.path.join(result.get("output_dir", "traced_operations"), "ttnn_operations_master.json")
+            if os.path.exists(master_file):
+                print("\\n🔧 Post-processing master JSON (fixing unparsed elements)...")
+                with open(master_file, "r") as f:
+                    master_data = json.load(f)
+
+                # Check for unparsed elements
+                def has_unparsed(obj):
+                    if isinstance(obj, dict):
+                        if obj.get("__class__") == "UnparsedElement":
+                            return True
+                        return any(has_unparsed(v) for v in obj.values())
+                    elif isinstance(obj, list):
+                        return any(has_unparsed(item) for item in obj)
+                    return False
+
+                unparsed_before = has_unparsed(master_data)
+
+                # Fix all unparsed elements in one pass
+                master_data = fix_unparsed_elements_standalone(master_data)
+
+                unparsed_after = has_unparsed(master_data)
+
+                # Save the cleaned data
+                with open(master_file, "w") as f:
+                    json.dump(master_data, f, indent=2)
+
+                if not unparsed_before:
+                    print("   ✅ No unparsed elements found")
+                elif unparsed_after:
+                    print("   ⚠️  Warning: Some unparsed elements remain")
+                else:
+                    print("   ✅ All unparsed elements fixed!")
+        except Exception as e:
+            print(f"   ⚠️  Could not perform post-processing: {e}")
 
         return 0 if result["success"] else 1
 

@@ -1,2 +1,2 @@
 InheritParentConfig: true
-Checks: -misc-use-anonymous-namespace
+Checks: -misc-use-anonymous-namespace, -readability-static-accessed-through-instance

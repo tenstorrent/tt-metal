@@ -9,6 +9,11 @@ on:
       runner-label:
         required: true
         type: string
+      post_commit_only:
+        description: "If true, run post-commit-only (exclude @pytest.mark.skip_post_commit). If false, run full profiler regression."
+        required: false
+        type: boolean
+        default: true
       timeout:
         required: false
         type: number
@@ -26,6 +31,14 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-lightweight-kernel-asserts:
+        description: 'Enable lightweight kernel asserts'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        description: 'Enable LLK asserts'
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       arch:
@@ -41,6 +54,11 @@ on:
           - N150
           - N300
           - BH
+      post_commit_only:
+        description: "Run post-commit-only (exclude @pytest.mark.skip_post_commit)"
+        required: false
+        type: boolean
+        default: true
       timeout:
         required: false
         type: number
@@ -106,11 +124,17 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher }}
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          if [[ "${{ inputs.post_commit_only }}" == "true" ]]; then
+            ./tests/scripts/run_profiler_regressions.sh --post-commit
+          else
+            ./tests/scripts/run_profiler_regressions.sh --full
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

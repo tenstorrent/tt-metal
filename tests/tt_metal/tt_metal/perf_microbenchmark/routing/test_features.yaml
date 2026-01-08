@@ -325,3 +325,24 @@ Tests:
           - num_packets: 256  # collect 256 independent latency samples
             destination:
               device: [0, 3]  # Destination 3 hops away in ring topology
+
+  # ======================================================================================
+    # Test 13: Skip packet validation during testing
+    # This demonstrates the ability to skip packet validation during test execution.
+    # This is useful for testing focused on pure volume and traffic throughput
+  # ======================================================================================
+  - name: "SkipPacketValidation"
+    skip_packet_validation: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0 # Source is physical chip 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: 1 # Destination is physical chip 1

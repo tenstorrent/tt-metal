@@ -41,7 +41,7 @@ std::mutex global_mempool_names_mutex;
 const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
     std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
     int name_combo = (int)buffer_type * 1000 + device_id;
-    if (global_mempool_names.find(name_combo) == global_mempool_names.end()) {
+    if (!global_mempool_names.contains(name_combo)) {
         std::string global_mempool_name = fmt::format("Device {} {}", device_id, enchantum::to_string(buffer_type));
         global_mempool_names.emplace(name_combo, global_mempool_name);
     }
@@ -489,11 +489,11 @@ uint32_t Buffer::num_dev_pages() const {
 HalMemType Buffer::memory_type() const {
     if (this->is_dram()) {
         return HalMemType::DRAM;
-    } else if (this->is_l1()) {
-        return HalMemType::L1;
-    } else {
-        TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
     }
+    if (this->is_l1()) {
+        return HalMemType::L1;
+    }
+    TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
 }
 
 CoreType Buffer::core_type() const {

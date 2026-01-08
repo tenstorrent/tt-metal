@@ -210,8 +210,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
-    static constexpr uint32_t num_virtual_channels = 2;
-
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
@@ -281,15 +279,17 @@ struct FabricEriscDatamoverConfig {
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
-        Topology topology = Topology::Linear,
-        FabricEriscDatamoverOptions options = {});
+        Topology topology,
+        FabricEriscDatamoverOptions options,
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
 
     std::size_t channel_buffer_size_bytes = 0;
 
     std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, 2> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, 2> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
@@ -340,13 +340,7 @@ struct FabricRiscConfig {
     size_t iterations_between_ctx_switch_and_teardown_checks() const {
         return iterations_between_ctx_switch_and_teardown_checks_;
     };
-    bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
-    bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
     tt::tt_metal::NOC get_configured_noc() const { return noc_; };
-    void reset_sender_channel_serviced() { is_sender_channel_serviced_.fill(false); }
-    void set_sender_channel_serviced(size_t channel_idx, bool enabled) {
-        is_sender_channel_serviced_[channel_idx] = enabled;
-    }
 
     void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
     bool telemetry_enabled() const { return telemetry_enabled_; }
@@ -360,8 +354,6 @@ private:
     bool enable_handshake_ = false;
     bool enable_context_switch_ = false;
     bool enable_interrupts_ = false;
-    std::array<bool, builder_config::num_max_sender_channels> is_sender_channel_serviced_{};
-    std::array<bool, builder_config::num_max_receiver_channels> is_receiver_channel_serviced_{};
     bool telemetry_enabled_ = true;
     uint8_t telemetry_stats_mask_ = 0xFF;
 };
@@ -384,7 +376,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
 
 void append_worker_to_fabric_edm_sender_rt_args(
     tt::tt_fabric::chan_id_t eth_channel,
-    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 
@@ -393,7 +385,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     ChipId chip_id,
     const CoreRangeSet& worker_cores,
-    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx = 0);
@@ -440,7 +432,9 @@ public:
         eth_chan_directions direction,
         std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        bool has_tensix_extension = false);
+        bool has_tensix_extension = false,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -452,7 +446,9 @@ public:
         std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
-        bool has_tensix_extension = false);
+        bool has_tensix_extension = false,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -464,10 +460,13 @@ public:
         std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
-        bool has_tensix_extension = false);
+        bool has_tensix_extension = false,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc = std::nullopt,
+        std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc = std::nullopt);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const override;
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t ds_edm) const;
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
@@ -503,6 +502,7 @@ public:
 
     FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    bool is_inter_mesh = false;  // True if this data mover connects to a different mesh (inter-mesh router)
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
@@ -552,6 +552,10 @@ public:
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
+    // Per-RISC channel servicing flags [risc_id][channel_id]
+    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
+    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+
     // first level acks are acknowledgement credits sent from receiver to sender channels on receipt of packets
     // and can be used to know when the sender is able to recover a buffer slot in the channel, for new data from
     // its producer(s).
@@ -560,8 +564,15 @@ private:
     bool enable_first_level_ack = false;
 
     // Shared helper for setting up VC connections
+    // upstream_vc_idx: VC of this router's receiver channel
+    // downstream_vc_idx: VC of downstream router's sender channel
+    // For normal connections: upstream_vc_idx == downstream_vc_idx
+    // For crossover (inter-mesh to intra-mesh): upstream_vc_idx=0, downstream_vc_idx=1
     void setup_downstream_vc_connection(
-        FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id);
+        FabricDatamoverBuilderBase* downstream_builder,
+        uint32_t upstream_vc_idx,
+        uint32_t downstream_vc_idx,
+        uint32_t channel_id);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder);

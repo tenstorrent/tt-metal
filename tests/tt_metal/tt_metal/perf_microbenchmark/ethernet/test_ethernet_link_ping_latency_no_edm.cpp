@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.h>
+#include <cassert>
 #include <fmt/base.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -47,7 +47,7 @@ using namespace tt::test_utils::df;
 
 class N300TestDevice {
 public:
-    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
@@ -82,7 +82,7 @@ public:
     size_t num_devices_;
 
 private:
-    bool device_open;
+    bool device_open{false};
 };
 
 struct ChipSenderReceiverEthCore {
