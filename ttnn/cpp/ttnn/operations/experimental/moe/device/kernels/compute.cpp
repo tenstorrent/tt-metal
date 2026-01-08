@@ -4,6 +4,8 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/matmul.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -35,41 +37,88 @@ void MAIN {
     constexpr uint32_t w0_w1_stride = 64;
     constexpr uint32_t w2_stride_w = 1;
     constexpr uint32_t w2_stride_h = 224;
+    constexpr uint32_t dst0 = 0;
 
     const uint32_t w0_tile_id_start = core_id;
     const uint32_t w1_tile_id_start = core_id;
     const uint32_t w2_tile_id_start = core_id < 32 ? 4 * core_id : 4 * 32 + 3 * (core_id - 32);
 
     // Read W0 and W1 from CB into registers
+    mm_init(cb_s2c_in, cb_r2c_w0, cb_c2c_mm0);
+    tile_regs_acquire();
+    tile_regs_wait();
     for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_wait_front(cb_r2c_w0, 1);
+        matmul_tiles(cb_s2c_in, cb_r2c_w0, i, 0, dst0);
         cb_pop_front(cb_r2c_w0, 1);
+    }
+    silu_tile_init();
+    silu_tile(dst0);
+    tile_regs_commit();
+    pack_tile(dst0, cb_c2c_mm0);
+    cb_reserve_back(cb_c2c_mm0, 1);
+    cb_push_back(cb_c2c_mm0, 1);
+    tile_regs_release();
 
+    // optional
+    mm_init_short(cb_s2c_in, cb_r2c_w1, cb_c2c_mm1);
+    // optional
+
+    tile_regs_acquire();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < num_w0_w1_tiles; ++i) {
         cb_wait_front(cb_r2c_w1, 1);
+        matmul_tiles(cb_s2c_in, cb_r2c_w1, i, 0, dst0);
         cb_pop_front(cb_r2c_w1, 1);
     }
+    tile_regs_commit();
+    pack_tile(dst0, cb_c2c_mm1);
+    cb_reserve_back(cb_c2c_mm1, 1);
+    cb_push_back(cb_c2c_mm1, 1);
+    tile_regs_release();
 
     // Write to cb_c2w_elt
+    mul_tiles_init(cb_c2c_mm0, cb_c2c_mm1);
+    reconfig_data_format(cb_c2c_mm0, cb_c2c_mm1);
+    pack_reconfig_data_format(cb_c2w_elt);
     for (uint32_t i = 0; i < num_elt_tiles; ++i) {
+        tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_c2c_mm0, 1);
+        cb_wait_front(cb_c2c_mm1, 1);
+        mul_tiles(cb_c2c_mm0, cb_c2c_mm1, 0, 0, dst0);
+        cb_pop_front(cb_c2c_mm0, 1);
+        cb_pop_front(cb_c2c_mm1, 1);
+        tile_regs_commit();
         cb_reserve_back(cb_c2w_elt, 1);
+        pack_tile(dst0, cb_c2w_elt);
+        tile_regs_release();
         cb_push_back(cb_c2w_elt, 1);
     }
 
-    // Read W2 from DRAM into CB
+    mm_init_short(cb_r2c_in2, cb_r2c_w2, cb_c2w_mm2);
+    reconfig_data_format(cb_r2c_in2, cb_r2c_w2);
+    pack_reconfig_data_format(cb_c2w_mm2);
+    tile_regs_acquire();
+    tile_regs_wait();
     for (uint32_t i = 0; i < num_w2_tiles_h; ++i) {
         cb_wait_front(cb_r2c_in2, 1);
-        cb_pop_front(cb_r2c_in2, 1);
-
         for (uint32_t j = 0; j < num_w2_tiles_w; ++j) {
             cb_wait_front(cb_r2c_w2, 1);
+            matmul_tiles(cb_r2c_in2, cb_r2c_w2, 0, 0, j);
             cb_pop_front(cb_r2c_w2, 1);
         }
+        cb_pop_front(cb_r2c_in2, 1);
     }
+
+    tile_regs_commit();
 
     // Write to cb_c2w_mm2
     for (uint32_t i = 0; i < num_mm2_tiles; ++i) {
         cb_reserve_back(cb_c2w_mm2, 1);
+        pack_tile(i, cb_c2w_mm2);
         cb_push_back(cb_c2w_mm2, 1);
     }
+    tile_regs_release();
 }
 }  // namespace NAMESPACE
