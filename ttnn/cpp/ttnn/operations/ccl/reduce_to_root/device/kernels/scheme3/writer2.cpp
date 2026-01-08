@@ -151,6 +151,8 @@ void kernel_main() {
     uint64_t receiver_core_semaphore_noc_addr = safe_get_noc_addr(core_noc_x, core_noc_y, device_semaphore, 0);
     noc_semaphore_inc(receiver_core_semaphore_noc_addr, 1);
     noc_async_atomic_barrier();
+
+    DPRINT << " end of round 1\n";
     cb_push_back(packet_cb_id, 1);
 
     const uint64_t dst_noc_addr = get_noc_addr(current_core_x, current_core_y, receiver_base_address);
@@ -169,7 +171,8 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        noc_semaphore_wait(termination_sync_ptr, 3);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =

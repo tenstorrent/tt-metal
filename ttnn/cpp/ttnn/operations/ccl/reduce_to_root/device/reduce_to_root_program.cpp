@@ -1575,14 +1575,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     worker_cores_per_link.push_back(CoreRangeSet(worker_cores_link_2));
 
     // Set termination master to the first core of each link
-    std::vector<CoreCoord> termination_masters = {worker_cores_link_1[0], worker_cores_link_2[0]};
+    uint32_t num_worker_cores_per_link_per_dir = 4;
+    std::vector<CoreCoord> termination_masters = {
+        worker_cores_link_1[0],
+        worker_cores_link_2[0],
+        worker_cores_link_1[num_worker_cores_per_link_per_dir],
+        worker_cores_link_2[num_worker_cores_per_link_per_dir]};
     CoreCoord termination_master = termination_masters[0];
 
     uint32_t mux_core_offset = 0;
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         // uint32_t start_idx = link_idx == 0 ? 0 : 2;
-        termination_master = termination_masters[link_idx];
         for (uint32_t dir = 0; dir < 2; dir++) {
             CoreCoord mux_logical_core = all_mux_cores[mux_core_offset++];
             if (mux_connection_valid(dir, is_leftmost, is_sender_device)) {
@@ -1602,7 +1606,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         }
 
         uint32_t worker_id = 0;
-        uint32_t num_worker_cores_per_link_per_dir = 4;
         uint32_t core_idx = 0;
         for (auto c : corerange_to_cores(worker_cores_per_link[link_idx], std::nullopt)) {
             std::vector<uint32_t> reader_runtime_args;
@@ -1616,6 +1619,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             auto current_core = mesh_device->worker_core_from_logical_core(c);
             auto current_core_x = current_core.x;
             auto current_core_y = current_core.y;
+
+            termination_master = termination_masters[link_idx + 2 * (core_idx / num_worker_cores_per_link_per_dir)];
 
             if ((is_sender_device && is_leftmost) || is_root2_device) {
                 if (core_idx < num_worker_cores_per_link_per_dir) {
