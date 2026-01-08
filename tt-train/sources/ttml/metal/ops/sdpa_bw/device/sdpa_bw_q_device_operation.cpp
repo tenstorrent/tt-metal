@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <ttnn/tensor/tensor_utils.hpp>
 
+#include "ttnn/device_operation.hpp"
+
 namespace ttml::metal::ops::sdpa_bw::device {
 
 using namespace tt::tt_metal;
@@ -168,8 +170,11 @@ ttsl::hash::hash_t SDPABackwardQDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<SDPABackwardQDeviceOperation::operation_attributes_t, SDPABackwardQDeviceOperation::tensor_args_t>
-SDPABackwardQDeviceOperation::invoke(
+}  // namespace ttml::metal::ops::sdpa_bw::device
+
+namespace ttnn::prim {
+
+ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_value_t ttml_sdpa_q_bw(
     const ttnn::Tensor& grad_output,
     const ttnn::Tensor& attn_output,
     const ttnn::Tensor& query_tensor,
@@ -180,10 +185,12 @@ SDPABackwardQDeviceOperation::invoke(
     const float dropout_probability,
     const bool fp32_dest_acc_en,
     const std::optional<ttnn::Tensor>& preallocated_grad_query) {
-    operation_attributes_t operation_attributes{
+    using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
         .fp32_dest_acc_en = fp32_dest_acc_en, .dropout_probability = dropout_probability};
 
-    tensor_args_t tensor_args{
+    auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
         .attn_output = attn_output,
         .query = query_tensor,
@@ -194,7 +201,7 @@ SDPABackwardQDeviceOperation::invoke(
         .preallocated_grad_query = preallocated_grad_query,
     };
 
-    return {operation_attributes, tensor_args};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttml::metal::ops::sdpa_bw::device
+}  // namespace ttnn::prim

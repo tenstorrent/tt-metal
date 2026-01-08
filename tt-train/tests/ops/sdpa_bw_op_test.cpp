@@ -611,8 +611,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         value,
         attn_mask,
         dropout_probability,
-        /*return_intermediates=*/true,
-        fp32_dest_acc_en);
+        /*return_intermediates=*/true);
 
     // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
     const auto kernel_attn_output = sdpa_fw_result[0].value();

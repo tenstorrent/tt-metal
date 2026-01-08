@@ -263,8 +263,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
         value->get_value(),
         mask_tensor,
         dropout_probability,
-        /*return_intermediates=*/true,  // Need intermediates for backward pass
-        fp32_dest_acc_en);
+        /*return_intermediates=*/true);  // Need intermediates for backward pass
 
     auto attn_output = fw_result[0].value();
     auto intermediates = fw_result[1].value();
