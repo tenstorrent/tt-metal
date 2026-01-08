@@ -57,13 +57,13 @@ def get_mesh_shape_from_textproto(textproto_path: str, mesh_id: int = 0) -> Opti
 
 
 def compute_split_mesh_shape(full_shape: ttnn.MeshShape) -> Optional[ttnn.MeshShape]:
-    if full_shape.x >= full_shape.y:
-        if full_shape.x % 2 == 0:
-            return ttnn.MeshShape(full_shape.x // 2, full_shape.y)
+    if full_shape[0] >= full_shape[1]:
+        if full_shape[0] % 2 == 0:
+            return ttnn.MeshShape(full_shape[0] // 2, full_shape[1])
         return None
     else:
-        if full_shape.y % 2 == 0:
-            return ttnn.MeshShape(full_shape.x, full_shape.y // 2)
+        if full_shape[1] % 2 == 0:
+            return ttnn.MeshShape(full_shape[0], full_shape[1] // 2)
         return None
 
 
@@ -76,6 +76,7 @@ def run_multiprocess_pipeline(mesh_shape=None):
         ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
         ttnn.cluster.ClusterType.P300,
         ttnn.cluster.ClusterType.P300_X2,
+        ttnn.cluster.ClusterType.CUSTOM,
     ]
 
     if cluster_type not in supported_cluster_types:
@@ -103,14 +104,14 @@ def run_multiprocess_pipeline(mesh_shape=None):
         if mesh_shape is None:
             # Fallback: get full mesh shape and split it (used when mesh_graph_path doesn't exist or file is missing)
             full_mesh_shape = ttnn.cluster.get_mesh_shape()
-            num_devices = full_mesh_shape.x * full_mesh_shape.y
+            num_devices = full_mesh_shape[0] * full_mesh_shape[1]
 
             if num_devices < 2:
                 raise ValueError(f"Not enough devices: have {num_devices}, need at least 2")
 
             mesh_shape = compute_split_mesh_shape(full_mesh_shape)
             if mesh_shape is None:
-                raise ValueError(f"Cannot evenly split {full_mesh_shape.x}x{full_mesh_shape.y} mesh into 2 parts")
+                raise ValueError(f"Cannot evenly split {full_mesh_shape[0]}x{full_mesh_shape[1]} mesh into 2 parts")
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
@@ -131,7 +132,7 @@ def run_multiprocess_pipeline(mesh_shape=None):
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config, 0, 1)
 
     torch_input = torch.randn(1, 1, 1024, 1024, dtype=torch.float32)
-    num_devices_in_mesh = mesh_shape.x * mesh_shape.y
+    num_devices_in_mesh = mesh_shape[0] * mesh_shape[1]
 
     if num_devices_in_mesh > 1:
         mesh_mapper = ttnn.ShardTensor2dMesh(device, dims=(2, 3), mesh_shape=mesh_shape)
