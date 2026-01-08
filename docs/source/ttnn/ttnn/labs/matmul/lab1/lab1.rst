@@ -1,13 +1,11 @@
 Lab 1: Single Core Matrix Multiplication
 ========================================
 
-**THIS DOCUMENT IS A DRAFT**
-
 Introduction
 ------------
 
-Matrix multiplication is a fundamental operation in linear algebra with widespread applications in scientific computing, machine learning, and computational graphics.
-The standard matrix multiplication algorithm transforms two input matrices into a third matrix using a simple computational procedure.
+Matrix multiplication is a fundamental linear-algebra operation used in scientific computing, machine learning, and graphics.
+The standard algorithm multiplies two input matrices to produce a third matrix.
 
 Basic Algorithm
 ---------------
@@ -42,7 +40,7 @@ Consider a ``3x4`` matrix ``A``:
 
 .. figure:: images/a_matrix_3x4.jpg
    :width: 250
-   :alt: A 3x4 matrix A
+   :alt: A 3x4 Matrix A
    :align: center
 
 
@@ -50,7 +48,7 @@ Using row-major layout, this matrix is stored in memory as:
 
 .. figure:: images/matrix_3x4_row_major.jpg
    :width: 750
-   :alt: A 3x4 matrix A in row-major layout
+   :alt: A 3x4 Matrix A in Row-Major Layout
    :align: center
 
 When accessing element ``A[i][j]`` in a matrix with ``N`` columns, the memory address is calculated as::
@@ -60,16 +58,13 @@ When accessing element ``A[i][j]`` in a matrix with ``N`` columns, the memory ad
 Cache-Friendly Access Patterns
 ------------------------------
 
-Modern CPUs use cache memory to reduce the latency of memory accesses.
-When a memory location is accessed, the CPU loads an entire **cache line**, consisting of multiple consecutive memory words,
-from main memory. Accessing nearby memory locations is therefore much faster than accessing scattered locations.
-
+Modern CPUs fetch data in cache lines of consecutive words, so accessing nearby addresses is much faster than scattered accesses.
 Accessing matrix elements in row-major order (left-to-right, top-to-bottom) is cache-friendly because consecutive elements in a row are already loaded in the cache.
 Conversely, accessing matrix elements column-by-column is cache-unfriendly because each access may involve a different cache line.
 
 **Implications for Matrix Multiplication**
 
-In the standard matrix multiplication algorithm ``C = A * B``, where C[i][j] = ∑ₖ A[i][k] * B[k][j], and assuming ``i``, ``j``, ``k`` loop order:
+In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``, and assuming ``i``, ``j``, ``k`` loop order:
 
 * Accessing matrix ``A`` is cache-friendly because consecutive elements in memory are accessed one after another for two consecutive values of inner loop iterator ``k``.
 * Accessing matrix ``B`` is not cache-friendly because memory accesses skip a whole matrix row for two consecutive values of ``k``.
@@ -87,13 +82,13 @@ This linearity allows significant computational flexibility, such as:
 3. Parallelization: Different matrix regions can be computed concurrently.
 
 Note that changing the operation order can affect the result because floating-point arithmetic is not associative.
-In this lab we ignore this issue, but be aware of it when matrix values differ greatly in magnitude.
+In this lab, we ignore this issue, but be aware of it when matrix values differ greatly in magnitude.
 
 Loop Tiling
 -----------
 
 Loop tiling (a.k.a. loop blocking) is a loop transformation technique that splits loops into smaller chunks.
-On architectures with caches this often improves performance by reducing cache misses, especially when combined with loop reordering.
+On architectures with caches, this often improves performance by reducing cache misses, especially when combined with loop reordering.
 Poor tile sizes, however, can make tiled loops slower instead of faster.
 
 Some architectures offer hardware support for vector or matrix operations of limited vector/matrix sizes.
@@ -121,7 +116,7 @@ Tiled Version
 
 .. code-block:: cpp
 
-   // Tiled version with M-N tiling
+   // Tiled version with MxN tiling
    constexpr int M_TILE_SIZE = 32;
    constexpr int N_TILE_SIZE = 32;
 
@@ -210,32 +205,32 @@ A high-level view of a Tenstorrent device in the system is shown in Figure 1:
 
 .. figure:: images/tensix_device_on_card.jpg
    :width: 900
-   :alt: High-level View of Tenstorrent device on PCIe card
+   :alt: High-level View of Tensix Device on PCIe Card
    :align: center
 
-   Figure 1: High-level View of Tenstorrent device on PCIe card
+   Figure 1: High-level View of Tensix Device on PCIe card
 
 A PCIe card contains one or more Tensix devices, each device consisting of a Tensix processor and a dedicated DRAM.
-Note that the device DRAM is separate from the system (host) DRAM and explicit communication is required to transfer data between them.
-The Tensix processor contains an array of Tensix cores with network on-chip (NoC) to pass data from DRAM to fast on-chip SRAM
+Note that the device DRAM is separate from the system (host) DRAM, and thus explicit communication is required to transfer data between them.
+The Tensix processor contains an array of Tensix cores with a network on-chip (NoC) to pass data from DRAM to fast on-chip SRAM
 and between Tensix cores.
-On-Chip SRAM is often referred to as L1 memory, but it does not operate as a cache; instead, it serves as a working memory
+On-chip SRAM is often referred to as L1 memory, but it does not operate as a cache; instead, it serves as a working memory
 for the Tensix cores.
 Each Tensix core has a dedicated compute unit specifically optimized for matrix and vector operations on tensors.
 
-The host program first transfers tensors from host DRAM memory into buffers in the device DRAM.
+The host program first transfers tensors from host DRAM into the device DRAM.
 Tensix cores then move data from device DRAM into on-chip SRAM, perform matrix and vector operations using dedicated hardware units
 and may store intermediate results in on-chip SRAM or device DRAM.
 Once all the required computation is done, the results are moved back to host memory for further processing, verification, or I/O.
 
-A key design principle of Tenstorrent architecture is that most computation steps occur entirely on the device,
-with explicit and carefully orchestrated data movements.
+A key design principle of the Tenstorrent architecture is that most computation steps occur entirely on the device,
+with explicit and carefully orchestrated data movement.
 Typical workloads move input data from the host to device DRAM once, perform many computation steps directly on Tensix cores,
 and transfer only final outputs back to the host.
 When used this way, host-device communication over PCIe represents a relatively small fraction of the total runtime,
 allowing the accelerator's on-device compute and data-movement engines to dominate performance.
 
-In this lab we will focus on programming a single Tensix core in TT-Metalium. Descriptions of the architectural features
+In this lab, we will focus on programming a single Tensix core in TT-Metalium. Descriptions of the architectural features
 will be limited to this context.
 We will extend the architectural and programming model description to multiple Tensix cores in subsequent labs.
 
@@ -252,30 +247,30 @@ Memory Layout and Tiling
 ========================
 
 Most applications deal with data that is larger than a single ``32x32`` tile, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
-In the previous exercise you performed loop tiling, which changed memory access pattern without changing the underlying data layout,
+In the previous exercise, you performed loop tiling, which changed the memory access pattern without changing the underlying data layout,
 which was still stored in row-major order.
 An alternative approach is to change the data layout itself by placing all elements of a tile in memory contiguously.
-This **tiled memory layout** is the main memory layout used by the Tenstorrent architecture.
+This **tiled layout** is the main memory layout used by the Tenstorrent architecture.
 
-Consider an example ``9x4`` matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
+Consider an example of a ``9x4`` matrix. In row-major layout, this matrix is stored in memory as shown in Figure 2:
 
 .. figure:: images/row_major_layout.png
    :width: 600
-   :alt: Row-major layout of a 9x4 matrix
+   :alt: Row-Major Layout of a 9x4 Matrix
    :align: center
 
-   Figure 2: Row-major layout of a 9x4 matrix
+   Figure 2: Row-Major Layout of a 9x4 Matrix
 
-Numbers in the matrix in Figure 2indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.
+Numbers in the matrix in Figure 2 indicate memory addresses that the corresponding element is stored at, not the actual values of the elements.
 
 In tiled memory layout with tile size ``3x2``, this matrix is stored in memory as shown in Figure 3:
 
 .. figure:: images/tiled_layout.png
    :width: 600
-   :alt: Tiled layout of a 9x4 matrix
+   :alt: Tiled Layout of a 9x4 Matrix
    :align: center
 
-   Figure 3: Tiled layout of a 9x4 matrix
+   Figure 3: Tiled Layout of a 9x4 Matrix
 
 
 Once again, numbers in the matrix in Figure 3 indicate memory addresses that the corresponding elements are stored at.
@@ -322,9 +317,8 @@ not for general-purpose tasks.
 
 Crucially, the **host and device live in different address spaces and have different execution models**.
 A pointer or object on the host (e.g., an array in system DRAM or a C++ object) is not directly visible to a Tensix core.
-To use data on the device, the host must explicitly allocate accelerator-side memory (e.g., DRAM pages or on-chip SRAM buffers),
-transfer data to that memory, and then pass information about data layout and addresses of memory allocated in
-device memory address space down to the kernels.
+To use data on the device, the host must allocate device memory, transfer data into it, and pass data layout information
+and device-side memory addresses down to the kernels.
 Conversely, when a kernel finishes, any results you want on the host must be explicitly copied back.
 
 There is also a two-stage notion of compile-time vs runtime. The host program is compiled ahead of time, but kernels are
@@ -334,8 +328,7 @@ DRAM base addresses and tile counts are passed as runtime arguments.
 
 Based on this, it may seem that we should specify as many parameters as possible at compile time.
 However, in some cases we may choose to pass some information known at compile time as runtime arguments instead.
-For example, we may want to reuse the same kernel code for different parameter values, rather than
-producing a new kernel binary for each combination of parameter values.
+For example, we may prefer to reuse one kernel binary for many parameter values instead of compiling a new binary for each combination.
 Choosing which values to pass at compile time and which to pass at runtime is a trade-off between performance
 (more specialization) and flexibility (more reuse).
 
@@ -346,7 +339,7 @@ launch is key to reasoning about performance, correctness, and why the APIs are 
 Example TT-Metalium Program
 ===========================
 
-We will now present a simple example TT-Metalium program that performs an elementwise addition of two tensors of shape ``MxN``.
+We now present a simple example TT-Metalium program that performs an elementwise addition of two tensors of shape ``MxN``.
 This program will be used to illustrate the TT-Metalium programming model, different types of kernels, and how they map to the underlying architecture.
 Key points will be highlighted in this text. Detailed comments are provided in the C++ code to help with code understanding.
 
@@ -371,7 +364,7 @@ The main program for the code example being discussed is located in the file ``t
 The first thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
 
 Looking at the main function, we see that the host program first initializes input data for the operation and performs a reference computation on the host CPU.
-This will be used to verify the correctness of the Metalium implementation. Note that the data type used is bfloat16 (brain floating-point), which is a
+This will be used to verify the correctness of the TT-Metalium implementation. Note that the data type used is bfloat16 (brain floating-point), which is a
 16-bit floating-point format commonly used in AI applications. Since the host CPU doesn't natively support bfloat16,
 we use the ``bfloat16`` class from the ``tt-metal`` library and cast data between this type and single-precision (32-bit) floating-point as needed.
 
@@ -400,10 +393,10 @@ Note that the circular buffers typically contain only a small number of tiles at
 
 .. figure:: images/cb_data_flow.jpg
    :width: 900
-   :alt: Kernel data flow through circular buffers
+   :alt: Kernel Data Flow Through Circular Buffers
    :align: center
 
-   Figure 4: Kernel data flow through circular buffers
+   Figure 4: Kernel Data Flow Through Circular Buffers
 
 Each kernel interacts with the buffers as follows:
 
@@ -417,21 +410,21 @@ pipelined execution across the hardware. Different kernel types are mapped to th
 
 .. figure:: images/tensix_core.png
    :width: 600
-   :alt: Top-level diagram of Tensix Core
+   :alt: Top-Level Diagram of Tensix Core
    :align: center
 
-   Figure 5: Top-level diagram of Tensix Core
+   Figure 5: Top-Level Diagram of Tensix Core
 
-The Tensix Core consists of four major parts:
+The Tensix core consists of four major parts:
 
 1. Internal SRAM (L1) memory - Stores input/output tiles in circular buffers for fast access by the Tensix engine.
    It also holds program code for all RISC-V processors within the core.
-2. Two routers - Manage data movement between device DRAM and internal SRAM (L1) memory.
+2. Two routers - Manage data movement between internal SRAM (L1) memory, device DRAM, and other Tensix cores.
 3. Tensix engine - Hardware accelerator that efficiently performs matrix and vector computations on tiles.
 4. Five RISC-V Processors that control the Tensix engine and routers:
 
    - RISC-V 0 and RISC-V 4 - These processors control routers to exchange data between the Internal SRAM and device DRAM (or other Tensix cores).
-     Either of these can be used for reader or writer kernel.
+     Either of these can be used for a reader or writer kernel.
    - RISC-V 1 through RISC-V 3 - These processors control the Tensix engine through specialized Tensix instructions.
      Note that these RISC-V processors don't perform actual tile computations.
      Instead, they serve as microcontrollers directing the operations of the Tensix engine. One RISC-V processor is responsible for issuing commands to
@@ -443,7 +436,7 @@ Kernel Creation and Configuration
 ---------------------------------
 
 The function ``eltwise_add_tensix`` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
-At a high-level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
+At a high level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
 one compute kernel, and three circular buffers to pass data between the kernels, and then triggers kernel execution on the device.
 
 The function creates three Tensor objects of shape ``MxN`` using the tile layout described earlier.
@@ -455,12 +448,12 @@ memory layout when stored on the device. This is desirable because the matrix en
 
 The function then creates three circular buffers to enable data movement between kernels.
 A circular buffer is a FIFO buffer with configurable size.
-Creating a circular buffer simply means allocating sufficient internal SRAM memory based on specified configuration, and associating
-specified circular buffer index with this SRAM memory and configuration.
+Creating a circular buffer simply means allocating sufficient device SRAM memory based on the specified configuration, and associating
+the specified circular buffer index with this SRAM memory and its configuration.
 In our example program, circular buffers are created with two tiles each to allow for double buffering. For example, reader kernel can be reading one tile
 while the compute kernel is processing the other tile, enabling pipelined execution.
 The number of tiles in a circular buffer can be adjusted to trade off memory for performance, but generally there are diminishing
-returns observed after several tiles.
+returns beyond a few tiles.
 
 The function creates the three types of kernels discussed earlier: reader, compute, and writer.
 Each kernel can take two types of arguments: compile-time and runtime kernel arguments, as mentioned earlier.
@@ -493,13 +486,13 @@ The two types of kernel arguments differ in *when* their values are determined a
 In summary, compile-time arguments specialize the kernel *code itself*, while runtime arguments specialize *what that code does on a particular launch*.
 
 In our example program, reader and writer kernels take information about tensor layout and data distribution as compile-time arguments.
-Compile-time arguments are passed as a vector of ``uint32_t`` values. TensorAccessorArgs utility is a clean way to append relevant tensor layout
-information into this ``uint32_t``vector, without programmer having to worry about internal details.
+Compile-time arguments are passed as a vector of ``uint32_t`` values. The ``TensorAccessorArgs`` utility is a clean way to append relevant tensor layout
+information into this ``uint32_t`` vector, without the programmer having to worry about internal details.
 
 Dataflow kernels take the base addresses of the input and output buffers in device DRAM, along with the number of tiles to process
 as runtime arguments.
 
-Compute kernel takes the number of tiles to process as a compile-time argument and doesn't take any runtime arguments.
+The compute kernel takes the number of tiles to process as a compile-time argument and doesn't take any runtime arguments.
 At first, it may seem like an odd choice to pass the number of tiles as a compile-time argument to the compute kernel,
 but as a runtime argument to dataflow kernels.
 Since using compile-time arguments enables various compiler optimizations, it is particularly suitable to use them for compute kernels, which are compute bound.
@@ -538,11 +531,9 @@ The kernel reads the base addresses of the two input tensors in DRAM and the tot
 The kernel uses two circular buffers (``c_0`` and ``c_1``) as destination buffers for the two input tensors.
 It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.
 
-Recall that the ``TensorAccessorArgs`` utility was used in the host program to pass information about tensor shape and layout through 
-the compile-time arguments ``uint32_t`` vector. On device-side this data from the vector is assembled
-into a convenient device-side data structure of the same name (``TensorAccessorArgs``). However, host-side and device-side ``TensorAccessorArgs``
-objects are different underlying types.
-This device-side ``TensorAccessorArgs`` object is then combined with the runtime base addresses to create an address generator object (``TensorAccessor``).
+Recall that the host uses ``TensorAccessorArgs`` to pack tensor shape and layout into a compile‑time ``uint32_t`` argument vector.
+On the device, this vector is unpacked into a device‑side ``TensorAccessorArgs`` (a different underlying type but same name),
+which is then combined with the runtime base addresses to create an address generator object (``TensorAccessor``).
 An address generator object abstracts away the complexity of physical memory layout, such as data distribution among DRAM banks,
 by automatically computing the physical DRAM address for any given tile index.
 
@@ -642,7 +633,7 @@ Example Program Summary
 
 It is useful to wrap up this example description by emphasizing one more time the nature of the Metalium programming model and
 division of tasks and data between host and device.
-At a high-level, all kernel code (``read_tiles.cpp``, ``write_tiles.cpp``, ``tiles_add.cpp``)
+At a high level, all kernel code (``read_tiles.cpp``, ``write_tiles.cpp``, ``tiles_add.cpp``)
 executes on the device, and all its C++ objects are created on the device.
 Specifically:
 
@@ -674,7 +665,7 @@ Kernel Compilation and Execution
 --------------------------------
 
 As mentioned earlier, kernels are JIT compiled and executed on the device. This presents both advantages and disadvantages during development.
-On the one hand, if one updates only kernel code, there is no need to rebuild before running the program to test that the changes had desired effect.
+On the one hand, if one updates only kernel code, there is no need to rebuild before running the program to test that the changes had the desired effect.
 On the other hand, it also means that errors in the kernel code will not be caught at host-code compile time, but only at time of host code execution,
 when JIT compilation is triggered.
 
@@ -685,7 +676,7 @@ Perform the following steps:
 
 #. Introduce a syntax error in the kernel code
 
-#. Rebuild the programming examples by runing ``./build_metal.sh --build-programming-examples`` and observe that no error is reported. 
+#. Rebuild the programming examples by running ``./build_metal.sh --build-programming-examples`` and observe that no error is reported. 
 
 #. Run the example program ``./build/programming_examples/metal_example_lab_eltwise_binary``.
    Observe how JIT compilation errors are reported.
@@ -696,7 +687,7 @@ Perform the following steps:
 Debug Facilities in TT-Metalium
 ===============================
 
-Host code can be debugged using usual debugger tools like ``gdb``.
+Host code can be debugged using the usual debugger tools like ``gdb``.
 To debug host code, build the program with debug symbols:
 
 .. code-block:: bash
@@ -716,10 +707,10 @@ These methods are useful for debugging hangs and other issues that may not be ap
 Debug Print API
 ---------------
 
-Since kernel code runs on the device, it is not possible to use the standard C++ functions to print debug information,
-since the device doesn't have a terminal.
+Because kernel code runs on the device, it can't use standard C++ functions to print debug information,
+as the device doesn't have a terminal.
 The Debug Print (DPRINT) API is a device-side debugging feature that lets a kernel print values back
-to the host while it runs.  You can think of it as a constrained, lightweight alternative to ``printf`` that works inside kernels.
+to the host while it runs. You can think of it as a constrained, lightweight alternative to ``printf`` that works inside kernels.
 It is mainly used to inspect scalar variables, addresses, and the contents of tiles stored in circular buffers, which helps when debugging
 numerical issues or hangs.
 
@@ -756,7 +747,7 @@ The following example shows a simple print of local kernel variables, including 
 Printing a tile in a writer (dataflow) kernel
 ---------------------------------------------
 
-TT-Metal kernels often share data between threads using circular buffers (CBs) of tiles.
+Data is passed between kernels using circular buffers (CBs), which often contain tiles of data.
 DPRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
 
 The key rules are:
@@ -767,9 +758,9 @@ The key rules are:
   - When writing to CBs (e.g. in reader kernels): between ``cb_reserve_back()`` and ``cb_push_back()``.
 
 - The math (compute) RISC cannot directly see CBs, so CB tile printing is most commonly done from
-reader or writer kernels.
+  the reader or writer kernels.
 
-Simplified example of printing a full tile from an output CB in a writer kernel is shown below.
+A simplified example of printing a full tile from an output CB in a writer kernel is shown below.
 
 .. code-block:: cpp
 
@@ -788,10 +779,6 @@ Simplified example of printing a full tile from an output CB in a writer kernel 
        for (uint32_t t = 0; t < n_tiles; ++t) {
            // Wait until one tile is available at the front of cb_out.
            cb_wait_front(cb_out, 1);
-
-           // Perform the actual operation of this kernel here, including the
-           // noc_async_write_barrier(); to ensure CB has the content we want to print.
-           // ...
 
            DPRINT << "Output tile " << t << " from cb_out = " << static_cast<uint32_t>(cb_out) << ENDL();
 
@@ -817,6 +804,8 @@ Simplified example of printing a full tile from an output CB in a writer kernel 
                          /* print_untilized = */ true)
                       << ENDL();
            }
+           
+           // Perform the actual work of this writer kernel
 
            // Mark this tile as consumed in the CB.
            cb_pop_front(cb_out, 1);
@@ -851,21 +840,21 @@ Exercise 4: Using DPRINT to Debug a Kernel
 
 Add DPRINT statements to the writer kernel in our example program to print:
 
-* Value of the iterator ``i`` in every iteteration of the ``for`` loop
+* Value of the iterator ``i`` in every iteration of the ``for`` loop
 * Contents of the resulting tile for the first three tiles processed by the kernel.
 
 For testing purposes, modify the program's input data to not use random numbers
 so you can verify that the results are as expected. Keep in mind that the input data vector is in row-major order,
 but it is then stored in tiled layout in the tensor.
 Since this will involve modifying the host-side code, you will need to rebuild the program before rerunning it.
-Easiest way to rebuild the program is to rerun ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
+The easiest way to rebuild the program is to rerun ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
 
 Debugging Hangs using Stack Traces
 ==================================
 
 TT-Metalium includes a Python tool called ``tt-triage``, which inspects a hung TT-Metalium run and prints per-core
 call stacks for the RISC-V processors on all cores. This is often the fastest way to see exactly where the device got stuck.
-When a program hangs, **leave it running**,  open another terminal and run the following command from the ``tt-metal`` directory:
+When a program hangs, **leave it running**, open another terminal and run the following command from the ``tt-metal`` directory:
 
 .. code-block:: bash
 
@@ -894,7 +883,7 @@ To help pinpoint the problem, you can dump stack traces.
    keep it running and open another terminal and run ``python tools/triage/dump_callstacks.py`` from the ``tt-metal`` directory.
 
 Observe the output in the terminal. The output will show the call stacks for all RISC-V processors on all cores, including cores
-that are running firmware reposible for dispatching kernel code. You should ingore the cores that are running firmware,
+that are running firmware responsible for dispatching kernel code. You should ignore the cores that are running firmware,
 and focus on the cores that are running kernel code. In our example, these will be in location ``(0,0)``, since that is
 the core we specified in ``init_program()`` in ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 Another way to recognize relevant RISC-V processors is to look under the **Kernel Name** column, and
@@ -956,9 +945,9 @@ Exercise 6: Using Device Profiling to Profile Kernels
 
 #. **Compute elapsed firmware time**
 
-   In the CSV log file, each RISC processor on each core has several rows of data, each indicating a unique timer event.
+   In the CSV log file, -V processor on each core has several rows of data, each indicating a unique timer event.
    Column ``time[cycles since reset]`` indicates the number of cycles since the reset of the device until the specific timer event.
-   For the purpose of this lab, it is sufficient to determine the overall firmware execution time, To compute it,
+   For this lab, it is sufficient to determine the overall firmware execution time. To compute it,
    simply subtract the maximum and minimum ``time[cycles since reset]`` values across all rows in the log file, and then multiply
    the difference by the clock cycle time, which can be calculated from the chip frequency in the header.
    The time computed this way is the total elapsed time in the firmware and does not include any host execution time,
@@ -982,7 +971,7 @@ While we will not present a formal proof of correctness, we will illustrate how 
 write correct kernel code to perform this operation.
 
 Consider multiplication of an ``MxK`` matrix ``A`` and a ``KxN`` matrix ``B``. The ``C[i, j]`` element of the resulting matrix is computed as
-the dot product of row ``i`` of ``A`` with column ``j`` of ``B``. Dot product is computed by multiplying corresponding pairs of elements
+the dot product of row ``i`` of ``A`` with column ``j`` of ``B``. The dot product is computed by multiplying corresponding pairs of elements
 and summing them. Extending this idea to two neighboring elements of ``C``, say ``C[i, j]`` and ``C[i + 1, j]``, we need rows ``i``
 and ``i + 1`` of ``A`` and the same column ``j`` of ``B``.
 More generally, if we want to compute a rectangular tile of height ``TILE_HEIGHT`` and width ``TILE_WIDTH`` starting at ``C[i, j]``,
@@ -1002,12 +991,13 @@ Consider the concrete example shown in Figure 6.
 
 Figure 6 shows an example where ``A`` is a ``9x4`` matrix, and ``B`` is a ``4x6`` matrix.
 If we choose ``3x3`` tiles for matrix ``C``, we need 3 rows of matrix ``A`` and 3 columns of matrix ``B`` to compute a single tile of matrix ``C``.
-This means that ``A`` tiles must have 3 rows, , and ``B`` tiles must have 3 columns, and 
-the number of columns in ``A`` tiles must match the number of rows in ``B`` tiles.
+This means that ``A`` tiles must have 3 rows, ``B`` tiles must have 3 columns, and 
+the inner tile dimensions must match (the number of columns in an ``A`` tile equals
+the number of rows in a ``B`` tile).
 If we choose ``3x2`` tiles for matrix ``A``, we can divide ``A`` into six tiles ``A0`` through ``A5``.
 The figure shows labeling of the tiles in row-major order, which is how tiled layout works on the Tenstorrent architecture, as described earlier.
 We can similarly divide ``B`` into four tiles ``B0`` through ``B3``, each of shape ``2x3``.
-Each ``C`` tile is computed by summing products of one tile row of ``A`` with one tile column of ``B``, exactly like scalar matrix multiplication,
+Each ``C`` tile is computed by summing products of the corresponding tile row of ``A`` and tile column of ``B``, exactly like scalar matrix multiplication,
 but with tiles instead of individual numbers. For instance, tile ``C0`` corresponds to tile row 0 of ``A`` and tile column 0 of ``B``, and therefore
 
 ``C0 = A0 * B0 + A1 * B2``
@@ -1062,9 +1052,9 @@ Further splitting each row so that only one multiplication is performed in each 
 +-----------+--------+--------+
 
 
-From this table we can observe that if we compute the ``C`` tiles in row-major order (``C0``, ``C1``, ``C2``, ..., ``C5``),
+From this table, we can observe that if we compute the ``C`` tiles in row-major order (``C0``, ``C1``, ``C2``, ..., ``C5``),
 we will visit tiles of ``A`` and ``B`` in a regular pattern, visiting one row of tiles of ``A`` with all columns of tiles of ``B``.
-For example, to compute ``C0`` and ``C1`` we start with row of tiles ``A0``, ``A1`` while cycling through columns of tiles ``B0``, ``B2`` followed by ``B1``, ``B3``.
+For example, to compute ``C0`` and ``C1`` we start with the row of tiles ``A0``, ``A1`` while cycling through columns of tiles ``B0``, ``B2`` followed by ``B1``, ``B3``.
 From this viewpoint, we can think of ``A0``, ``A1``, ..., ``A5`` as the "elements" of a ``3x2`` tile matrix, ``B0``, ..., ``B3`` as the "elements" of a ``2x2`` tile matrix,
 and ``C0``, ..., ``C5`` as the "elements" of a ``3x2`` tile matrix.
 The computation of ``C`` from ``A`` and ``B`` then follows the standard non-tiled matrix multiplication algorithm,
@@ -1083,10 +1073,10 @@ and rename the copied ``lab_eltwise_binary.cpp`` file to match the directory nam
 Similarly, rename ``tiles_add.cpp`` to e.g. ``tiles_matmul.cpp``.
 Then, adjust the code to perform matrix multiplication, by making the following changes:
 
-#. Update the host program to create input vectors to multiply matrix A of size 640x320 and matrix B of size 320x640 to produce matrix C of size 640x640.
+#. Update the host program to create input vectors to multiply matrix ``A`` of size ``640x320`` and matrix ``B`` of size ``320x640`` to produce matrix ``C`` of size ``640x640``.
    
-#. Copy reference (non-tiled) matrix multiplication code you created in Exercise 1.
-   Adapt it to the ``bfloat16`` data type, so it can be used to verify TT-Metalium results. Ad
+#. Copy the reference matrix multiplication code you created in Exercise 1.
+   Adapt it to the ``bfloat16`` data type, so it can be used to verify TT-Metalium results.
    
 #. Update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
    pass required parameters to kernels (you may need to complete some of the other steps below to determine the correct parameters).
@@ -1097,17 +1087,17 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    * All matrices will have dimensions that are divisible by the tile size.
      Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in the ``tt_metal/api/tt-metalium/constants.hpp`` header in the ``tt::constants`` namespace,
      and height is equal to width for all existing Tenstorrent devices.
-     You should add assertions (using ``TT_FATAL``) that check theese assumptions.
+     You should add assertions (using ``TT_FATAL``) that check these assumptions.
    
 
 #. Update kernel creation code to refer to kernel ``.cpp`` files in the new directory.
 
-#. Update the reader kernel to read the tiles of A and B in the correct order.
+#. Update the reader kernel to read the tiles of ``A`` and ``B`` in the correct order.
    The order of reading tiles from ``A`` and ``B`` should match the pattern of visiting one row of tiles of ``A``
-   with all columns of tiles of B, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
+   with all columns of tiles of ``B``, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
    not the actual memory address, so your code only needs to generate indices in the right order.
 
-#. Update the writer kernel to write the tiles of C in the correct order. The order should match the pattern of visiting tiles of C in row-major order.
+#. Update the writer kernel to write the tiles of ``C`` in the correct order. The order should match the pattern of visiting tiles of ``C`` in row-major order.
    Keep in mind that ``noc_async_write_tile`` function only requires the index of the tile to write, not the actual memory address,
    so your code only needs to generate indices in the right order.
 
@@ -1116,14 +1106,14 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    Do not use any other initialization functions for matrix multiplication (specifically do **not** use ``binary_op_init_common``, because that function is only
    applicable to elementwise operations, not to matrix multiplication).
    To multiply two tiles, you will need to use the ``matmul_tiles`` function provided in ``tt_metal/include/compute_kernel_api/matmul.h``.
-   This function accumulates the result into the destination register; i.e. it adds to the values to the register rather than overwriting existing content.
+   This function accumulates the result into the destination register; i.e. it adds to the existing values in the register rather than overwriting existing content.
    By judiciously choosing when to call ``tile_regs_acquire``, which initializes all tiles in the destination register array to zero, and when to call
    ``tile_regs_commit``, which signals that the compute core is done writing to the destination register,
    you can ensure that the result for each output tile is accumulated correctly.
-   don't forget to also pack each resulting tile and push it to the output circular buffer.
+   Don't forget to also pack each resulting tile and push it to the output circular buffer.
    Your compute kernel code should process the required number of tiles provided by reader kernels and
    produce the correct number of output tiles expected by the writer kernel.
-   Remember that JIT compiler can better optimize the kernel code if loop bounds are constant.
+   Remember that the JIT compiler can better optimize the kernel code if loop bounds are constant.
    Therefore, you should use compile-time arguments for the loop bounds whenever possible.
 
 #. Update ``CMakeLists.txt`` to specify the name of the new executable and the source files to compile, matching whatever file and directory names you chose.
@@ -1132,8 +1122,8 @@ Then, adjust the code to perform matrix multiplication, by making the following 
 
 #. Build all programming examples by running ``./build_metal.sh --build-programming-examples`` from the ``tt-metal`` directory.
 
-#. Run the program and verify the results by comparing the results with the golden reference matrix multiplication you created in Exercise 1.
-   Note that because of limited precision of bfloat16, the results may not be exactly the same as the golden reference, but they should be
+#. Run the program and verify the results by comparing the results with the reference matrix multiplication you created in Exercise 1.
+   Note that because of the limited precision of bfloat16, the results may not be exactly the same as the reference results, but they should be
    numerically close (relative differences on the order of a few percent for input data in the range of 0-1).
 
 #. Profile the performance of the implementation, taking note of the elapsed firmware time. This will be useful to compare
@@ -1147,7 +1137,7 @@ Troubleshooting and Additional Resources
 In rare cases, a Tensix device may enter an undefined operational state if a program performs actions outside the supported behavior.
 In such a case, the ``tt-smi -r`` command can be used to reset the device.
 This operation restores the device to a clean state, allowing normal operation to resume.
-If you encounter an unexplained behaviors, try resetting the device using this command.
+If you encounter unexplained behaviors, try resetting the device using this command.
 
 Additional information about TT-Metalium and the Tenstorrent architecture can be found in the following resources:
 
