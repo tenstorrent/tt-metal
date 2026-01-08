@@ -158,21 +158,22 @@ uint32_t configure_rta_offsets_for_kernel_groups(
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord core_coord(x, y);
-                        max_rtas[dispatch_class] =
-                            std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
+                        // Use watcher-aware accessor which includes count word when watcher enabled
+                        const uint32_t rta_size = watcher_assert_enabled
+                                                      ? kernel->get_watcher_runtime_args(core_coord).size()
+                                                      : kernel->runtime_args(core_coord).size();
+                        max_rtas[dispatch_class] = std::max(max_rtas[dispatch_class], rta_size);
                     }
                 }
             }
         }
-        // TODO: add comments
-        const uint32_t count_word_size = watcher_assert_enabled ? sizeof(uint32_t) : 0;
         uint32_t offset = 0;
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
             auto dispatch_class = kernel->dispatch_class();
-            kg->rta_sizes[dispatch_class] = count_word_size + max_rtas[dispatch_class] * sizeof(uint32_t);
+            kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             uint32_t rta_offset = base_offset + offset;
-            offset += count_word_size + max_rtas[dispatch_class] * sizeof(uint32_t);
+            offset += max_rtas[dispatch_class] * sizeof(uint32_t);
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
             // Per-kernel check: Only set actual offset if this kernel has RTAs
             if (max_rtas[dispatch_class] > 0) {
@@ -206,24 +207,26 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
+    // TODO: add comments
+    const bool watcher_assert_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+                                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
     std::vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX, 0);
 
     // Find the max # common RTAs across all kernels for each dispatch class
     for (auto& kernel_info : kernels) {
         auto kernel = kernel_info.second;
         uint32_t dispatch_class = kernel->dispatch_class();
-        max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
+        // Use watcher-aware accessor which includes count word when watcher enabled
+        uint32_t crta_size = watcher_assert_enabled ? kernel->get_watcher_common_runtime_args().size()
+                                                    : kernel->common_runtime_args().size();
+        max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], crta_size);
     }
-    // TODO: add comments
-    const bool watcher_assert_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-                                        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
-    const uint32_t count_word_size = watcher_assert_enabled ? sizeof(uint32_t) : 0;
 
     // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-        uint32_t size = count_word_size + max_crtas[dispatch_class] * sizeof(uint32_t);
+        uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
         crta_offsets[dispatch_class] = crta_base_offset + offset;
         crta_sizes[dispatch_class] = size;
         offset += size;
@@ -243,7 +246,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
             const auto& kernel = kernels.at(kernel_id);
             auto dispatch_class = kernel->dispatch_class();
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
-            if (kernel->common_runtime_args().size() > 0) {
+            if (max_crtas[dispatch_class] > 0) {
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
                     uint32_t processor_index = hal.get_processor_index(
                         kernel->get_kernel_programmable_core_type(),

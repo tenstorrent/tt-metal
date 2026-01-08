@@ -133,7 +133,9 @@ uint32_t firmware_config_init(
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
     extern uint32_t rta_count;
     extern uint32_t crta_count;
-    if (launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL) {
+    // Treat 0xBEEF#### pattern as 0 (indicates uninitialized/unset RTAs for this core)
+    if (launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+        ((rta_l1_base[0] & 0xFFFF0000) == 0xBEEF0000)) {
         rta_count = 0;
     } else {
         rta_count = rta_l1_base[0];
