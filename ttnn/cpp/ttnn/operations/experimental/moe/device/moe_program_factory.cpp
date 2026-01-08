@@ -60,11 +60,10 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Note: cb_s2c_in is handled separately as it's a sharded CB
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, uint32_t>> cb_specs = {
         {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, 1024, 2},
-        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 1024, 2},
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Bfp8_b, 1024, 1},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Bfp8_b, 1024, 1},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Bfp8_b, 1024, 1},
-        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 1024, 2},
+        {"cb_r2c_in2", tt::CBIndex::c_5, tt::DataFormat::Bfp8_b, 1024, 1},
         {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Bfp8_b, 1024, 1}};
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
@@ -121,7 +120,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
         cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = true,
