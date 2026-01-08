@@ -3,11 +3,10 @@
 
 
 import pandas as pd
-from conftest import skip_for_coverage
-from helpers.format_config import DataFormat
-from helpers.param_config import input_output_formats
+import pytest
+from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
 from helpers.profiler import ProfilerConfig
-from helpers.stimuli_config import StimuliConfig
+from helpers.test_config import TestConfig, TestMode
 
 
 def assert_marker(
@@ -29,15 +28,18 @@ def assert_marker(
 
 # TODO Skip for all until hash bug with new infra is resolved
 @skip_for_coverage
+@skip_for_blackhole
+@skip_for_wormhole
 def test_profiler_primitives(workers_tensix_coordinates):
 
-    configuration = ProfilerConfig(
-        "sources/profiler_primitives_test.cpp",
-        input_output_formats([DataFormat.Float16])[0],
-        variant_stimuli=StimuliConfig(
-            [], DataFormat.Float16, [], DataFormat.Float16, DataFormat.Float16, 1, 1
-        ),
-    )
+    # This is a test of the profiler itself and doesn't use configuration.run method at all,
+    # therefore it can't levarege default producer-consumer separation of compile and execute phases.
+    # In order to avoid compiling the test elf twice we run it in only one of two phases - the consumer/execute phase,
+    # where everything is done.
+    if TestConfig.MODE == TestMode.PRODUCE:
+        pytest.skip()
+
+    configuration = ProfilerConfig("sources/profiler_primitives_test.cpp")
 
     configuration.generate_variant_hash()
     configuration.build_elfs()

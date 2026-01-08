@@ -67,7 +67,6 @@ def test_reduce(formats, dest_acc, reduce_dim, pool_type, workers_tensix_coordin
         "sources/reduce_test.cpp",
         formats,
         templates=[MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type)],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

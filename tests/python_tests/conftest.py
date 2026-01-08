@@ -14,6 +14,7 @@ from helpers.profiler import ProfilerConfig
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from helpers.test_config import TestConfig, TestMode, process_coverage_run_artefacts
 from ttexalens import tt_exalens_init
+from ttexalens.util import TTException
 
 
 def init_llk_home():
@@ -138,8 +139,6 @@ def pytest_configure(config):
         if os.path.exists(log_file):
             os.remove(log_file)
 
-    # config.option.tbstyle = 'line'
-
     logging.basicConfig(
         filename=log_file,
         level=logging.ERROR,
@@ -154,6 +153,17 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens_remote(port=test_target.simulator_port)
         else:
             tt_exalens_init.init_ttexalens()
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Suppress the short test summary info section."""
+
+    # Override the method that writes the short test summary
+    def no_summary(*args, **kwargs):
+        pass
+
+    terminalreporter.short_test_summary = no_summary
+    terminalreporter.showfspath = False
 
 
 def _stringify_params(params):
@@ -203,13 +213,47 @@ def pytest_runtest_makereport(item, call):
 
                 test_file_and_func = report.nodeid.split("[")[0]
 
+                stack_trace = []
+                current_working_directory = Path.cwd()
+                for entry in call.excinfo.traceback:
+                    path_str = str(entry.path)
+                    # Skip pytest and pluggy internal frames
+                    if "_pytest" in path_str or "pluggy" in path_str:
+                        continue
+
+                    try:
+                        file_path = entry.path.relative_to(current_working_directory)
+                    except (ValueError, AttributeError):
+                        file_path = entry.path
+                    line_number = entry.lineno + 1
+
+                    stack_trace.append(f"  {file_path}:{line_number}")
+
+                stack_trace_str = "\n".join(stack_trace) if stack_trace else ""
+
                 if exc_type == AssertionError:
                     # Handle assertion failures
                     exc_msg = str(call.excinfo.value) if call.excinfo.value.args else ""
                     error_message = (
                         f"⨯ {test_file_and_func}{report.test_params} {exc_msg}"
                     )
-                    print(error_message, file=sys.stderr)
+                    report.longrepr = error_message
+                elif exc_type == TTException:
+                    # Handle Our custom TTExceptions
+                    exc_msg = str(call.excinfo.value) if call.excinfo.value.args else ""
+                    error_message = (
+                        f"⨯ {test_file_and_func}{report.test_params}\n"
+                        f"TTException: {exc_msg}\n"
+                        f"Call trace:\n{stack_trace_str}"
+                    )
+                    report.longrepr = error_message
+                elif exc_type == RuntimeError:
+                    exc_msg = str(call.excinfo.value) if call.excinfo.value.args else ""
+                    error_message = (
+                        f"⨯ {test_file_and_func}{report.test_params} RuntimeError\n"
+                        f"{exc_msg}\n"
+                        f"Python Call trace:\n{stack_trace_str}"
+                    )
                     report.longrepr = error_message
 
     return report

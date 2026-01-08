@@ -35,8 +35,6 @@ def test_risc_compute(workers_tensix_coordinates):
     configuration = TestConfig(
         "sources/risc_compute_test.cpp",
         formats,
-        templates=[],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

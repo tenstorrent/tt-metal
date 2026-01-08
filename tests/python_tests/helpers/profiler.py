@@ -489,10 +489,10 @@ class ProfilerConfig(TestConfig):
     def __init__(
         self,
         test_name: str,
-        formats: FormatConfig,
+        formats: FormatConfig = None,
         run_types: list[PerfRunType] = [],
-        templates: set[TemplateParameter] = [],
-        runtimes: set[RuntimeParameter] = [],
+        templates: list[TemplateParameter] = [],
+        runtimes: list[RuntimeParameter] = [],
         variant_stimuli: StimuliConfig = None,
         unpack_to_dest=False,
         disable_format_inference=False,
@@ -512,16 +512,22 @@ class ProfilerConfig(TestConfig):
             dest_acc,
         )
 
-        for run_type in run_types:
-            assert (
-                run_type in ProfilerConfig.SUPPORTED_RUNS
-            ), f"ERROR: run_type={run_type} not implemented"
-
         self.passed_templates = templates
         self.passed_runtimes = runtimes
         self.current_run_type = None
+
+        unsupported = set(run_types) - ProfilerConfig.SUPPORTED_RUNS
+        assert not unsupported, (
+            f"ERROR: run_types {unsupported} not implemented. "
+            f"Supported: {set(ProfilerConfig.SUPPORTED_RUNS)}"
+        )
+
         self.run_configs = [
-            (templates.copy() + [PERF_RUN_TYPE(run_type)], runtimes.copy(), run_type)
+            (
+                templates.copy() + [PERF_RUN_TYPE(run_type)],
+                runtimes.copy(),
+                run_type,
+            )
             for run_type in run_types
         ]
 

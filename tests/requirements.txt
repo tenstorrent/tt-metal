@@ -6,6 +6,7 @@ filelock==3.20.1
 fsspec==2025.7.0
 iniconfig==2.1.0
 jinja2==3.1.6
+junitparser==4.0.2
 loguru==0.7.3
 markupsafe==3.0.2
 ml_dtypes==0.5.4

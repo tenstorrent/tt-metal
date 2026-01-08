@@ -190,21 +190,12 @@ def test_unpack_matmul(math_fidelity, matmul_config, workers_tensix_coordinates)
             tile_count_res=matmul_config.tile_dimensions.tile_cnt,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
     )
     res_from_L1 = configuration.run(workers_tensix_coordinates)
 
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golder tensor are not of the same length"
-
-    # bfloat_in_dest = formats.input_format in [
-    #     DataFormat.Float16_b,
-    #     DataFormat.Float32,
-    # ] and formats.output_format in [
-    #     DataFormat.Float16_b,
-    #     DataFormat.Float32,
-    # ]  # according to data format inference model
 
     # Only compare the active faces in each tile since that's what the hardware processes
     num_elements_per_tile = num_faces * 256  # Each face is 16x16 = 256 elements

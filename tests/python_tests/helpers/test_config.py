@@ -133,7 +133,12 @@ class TestConfig:
     SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
     _BUILD_DIRS_CREATED: ClassVar[bool] = False
 
+    # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
+    # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
+    INFRA_TESTING: ClassVar[bool] = False
+
     # === Addresses ===
+    RUNTIME_ADDRESS: ClassVar[int] = 0x64000
     TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
 
@@ -281,13 +286,11 @@ class TestConfig:
     # === Instance fields and methods ===
     def __init__(
         self,
-        # Required arguments
         test_name: str,
-        formats: FormatConfig,
-        templates: set[TemplateParameter],
-        runtimes: set[RuntimeParameter],
+        formats: FormatConfig = None,
+        templates: list[TemplateParameter] = [],
+        runtimes: list[RuntimeParameter] = [],
         variant_stimuli: StimuliConfig = None,
-        # Optional compilation arguments with their default values
         boot_mode: BootMode = BootMode.DEFAULT,
         profiler_build: ProfilerBuild = ProfilerBuild.No,
         L1_to_L1_iterations: int = 1,
@@ -298,6 +301,12 @@ class TestConfig:
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
         )
+
+        if test_name is None:
+            raise RuntimeError(
+                "test_name argument needs to be passed in order to resolve which C++ file is compiled"
+            )
+
         self.test_name = test_name
         self.formats = formats
         self.templates = templates
@@ -316,11 +325,9 @@ class TestConfig:
             self.coverage_build == CoverageBuild.Yes
             and self.profiler_build == ProfilerBuild.Yes
         ):
-            raise ValueError(
+            raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
             )
-
-    RUNTIME_ADDRESS: ClassVar[int] = 0x64000
 
     def process_runtime_args(self):
 
@@ -331,15 +338,20 @@ class TestConfig:
         ]
 
         self.runtime_format = "@"
+
         for parameter in self.runtimes:
             field_str, param_field_types = parameter.convert_to_struct_fields()
             lines.append(field_str)
             self.runtime_format += param_field_types
+
         lines.append("};")
 
         self.runtime_params_struct = lines
 
     def write_runtimes_to_L1(self, location: str = "0,0"):
+        if len(self.runtimes) == 0:
+            return
+
         argument_data = []
         for param in self.runtimes:
             argument_data.extend(
@@ -535,6 +547,18 @@ class TestConfig:
         ]
 
         dest_acc = self.dest_acc
+
+        if self.formats is None:
+            header_content.extend(
+                [
+                    f"constexpr bool is_fp32_dest_acc_en = {dest_acc.value};",
+                    f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
+                    "",
+                ]
+            )
+
+            return header_content
+
         # Check if this is an outlier format combination that requires dest_acc to be enabled
         # Automatically enable dest_acc for outlier combinations
         if is_format_combination_outlier(
@@ -643,10 +667,9 @@ class TestConfig:
             '#include "operand.h"',
             '#include "llk_defs.h"',
             '#include "llk_sfpu_types.h"',
-            # Conditionally include perf.h based on architecture
             (
                 '#include "perf.h"'
-                if get_chip_architecture() != ChipArchitecture.QUASAR
+                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 else ""
             ),
             '#include "tensix_types.h"',
@@ -655,40 +678,45 @@ class TestConfig:
             "constexpr std::uint32_t TILE_SIZE_CNT = 0x1000;",
         ]
 
-        header_content.extend(
-            self.variant_stimuli.generate_stimuli_header_addresses(self.formats)
-        )
+        if self.variant_stimuli:
+            header_content.extend(
+                self.variant_stimuli.generate_stimuli_header_addresses(self.formats)
+            )
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
             DataFormat.Float32: 256,
         }
 
-        pack_size = TILE_SIZES.get(self.formats.output_format, 128)
-        unpack_size_a = TILE_SIZES.get(self.formats.input_format, 128)
-        unpack_size_b = TILE_SIZES.get(self.formats.input_format, 128)
+        if self.formats is None:
+            pack_size, unpack_size_a, unpack_size_b = 128, 128, 128
+        else:
+            pack_size = TILE_SIZES.get(self.formats.output_format, 128)
+            unpack_size_a = TILE_SIZES.get(self.formats.input_format, 128)
+            unpack_size_b = TILE_SIZES.get(self.formats.input_format, 128)
 
-        itd_param = next(
-            (param for param in self.runtimes if isinstance(param, IN_TILE_DIMS)), None
-        )
-        faces_param = next(
-            (param for param in self.runtimes if isinstance(param, NUM_FACES)), None
-        )
-        if itd_param and faces_param:
-            temp_num_faces_A = (
-                faces_param.num_faces_A
-                if faces_param.num_faces_A
-                else faces_param.num_faces
+        if len(self.runtimes) > 0:
+            itd_param = next(
+                (param for param in self.runtimes if isinstance(param, IN_TILE_DIMS)),
+                None,
             )
-            if itd_param.in0_r_dim <= 16:
-                pack_size = (pack_size // faces_param.num_faces) * (
-                    itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+            faces_param = next(
+                (param for param in self.runtimes if isinstance(param, NUM_FACES)), None
+            )
+            if itd_param and faces_param:
+                temp_num_faces_A = (
+                    faces_param.num_faces_A
+                    if faces_param.num_faces_A
+                    else faces_param.num_faces
                 )
-                unpack_size_a = (unpack_size_a // temp_num_faces_A) * (
-                    itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                )
+                if itd_param.in0_r_dim <= 16:
+                    pack_size = (pack_size // faces_param.num_faces) * (
+                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+                    )
+                    unpack_size_a = (unpack_size_a // temp_num_faces_A) * (
+                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+                    )
 
-        # All are RT, used in only few tests, but there wasn't any mechanism not to include them
         header_content.extend(
             [
                 f"constexpr std::uint32_t TILE_SIZE_PACK = {pack_size};",
@@ -706,10 +734,15 @@ class TestConfig:
         return "\n".join(header_content)
 
     def build_elfs(self):
-        self.build_shared_artefacts()
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        header_content = self.generate_build_header()
         done_marker = VARIANT_DIR / ".build_complete"
+
+        if TestConfig.INFRA_TESTING:
+            return
+
+        self.build_shared_artefacts()
 
         # Fast path: if build is already complete, skip entirely
         if done_marker.exists():
@@ -733,7 +766,6 @@ class TestConfig:
                 self.resolve_compile_options()
             )
 
-            header_content = self.generate_build_header()
             with open(VARIANT_DIR / "build.h", "w") as f:
                 f.write(header_content)
 
@@ -808,9 +840,13 @@ class TestConfig:
                 location, coverage_start + 4, num_bytes=length - 4
             )
 
+        if len(self.runtimes) == 0:
+            stream_name = "deafult_stream_name.stream"
+        else:
+            stream_name = f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream"
+
         with open(
-            VARIANT_DIR
-            / f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream",
+            VARIANT_DIR / stream_name,
             "wb",
         ) as fd:
             fd.write(coverage_stream)

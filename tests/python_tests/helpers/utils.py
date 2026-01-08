@@ -58,7 +58,7 @@ def run_shell_command(
     )
 
     if result.returncode != 0:
-        raise RuntimeError(f"Build failed: {command}\n{result.stderr}")
+        raise RuntimeError(f"Command:\n{command}\n\nCommand's stderr:\n{result.stderr}")
     return result
 
 
@@ -230,6 +230,26 @@ def passed_test(
                                 "\033[41m" if error_tile[row, col] else "\033[42m"
                             )
                             row_str += f"{res_tile[row, col]:7.2f}\033[0m"
+
+                            if col == 15:
+                                row_str += " "
+
+                        tile_str += f"{(row+1):02d}. {row_str}\n"
+
+                        if row == 15:
+                            tile_str += "\n"
+
+                    print(tile_str, file=sys.stderr)
+
+                    tile_str = f"Row\t === Golden tile Tile {tile_no+1} ===\n"
+
+                    for row in range(32):
+                        row_str = ""
+                        for col in range(32):
+                            row_str += (
+                                "\033[41m" if error_tile[row, col] else "\033[42m"
+                            )
+                            row_str += f"{golden_tensor[row, col]:7.2f}\033[0m"
 
                             if col == 15:
                                 row_str += " "
