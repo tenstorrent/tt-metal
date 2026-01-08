@@ -731,35 +731,43 @@ jobs:
             echo "✅ psycopg2 already available"
           fi
 
-          # Check if cloudflared is available
-          if command -v cloudflared &> /dev/null; then
-            echo "✅ cloudflared found, starting tunnel..."
-            # Start cloudflared tunnel in background
-            nohup cloudflared access tcp \
-              --hostname tt-sweeps.aswincloud.com \
-              --url localhost:15432 \
-              > /tmp/cloudflared.log 2>&1 &
-            CLOUDFLARED_PID=$!
-            echo "Cloudflared tunnel started (PID: $CLOUDFLARED_PID)"
-
-            # Wait for tunnel to be ready (max 60 seconds)
-            echo "Waiting for database tunnel to be ready..."
-            for i in {1..30}; do
-              if nc -z localhost 15432 2>/dev/null; then
-                echo "✅ Database tunnel ready on localhost:15432"
-                break
-              fi
-              if [ $i -eq 30 ]; then
-                echo "❌ Database tunnel failed to start after 60 seconds"
-                cat /tmp/cloudflared.log || true
-                exit 1
-              fi
-              sleep 2
-            done
+          # Try to install and setup cloudflared
+          echo "Setting up cloudflared tunnel..."
+          if ! command -v cloudflared &> /dev/null; then
+            echo "Installing cloudflared..."
+            # Download and install cloudflared
+            wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared
+            chmod +x /tmp/cloudflared
+            sudo mv /tmp/cloudflared /usr/local/bin/cloudflared
+            echo "✅ cloudflared installed"
           else
-            echo "⚠️  cloudflared not found, assuming direct database access"
-            echo "Checking if database is directly accessible..."
+            echo "✅ cloudflared already available"
           fi
+
+          # Start cloudflared tunnel in background
+          echo "Starting cloudflared tunnel to database..."
+          nohup cloudflared access tcp \
+            --hostname tt-sweeps.aswincloud.com \
+            --url localhost:15432 \
+            > /tmp/cloudflared.log 2>&1 &
+          CLOUDFLARED_PID=$!
+          echo "Cloudflared tunnel started (PID: $CLOUDFLARED_PID)"
+
+          # Wait for tunnel to be ready (max 60 seconds)
+          echo "Waiting for database tunnel to be ready..."
+          for i in {1..30}; do
+            if nc -z localhost 15432 2>/dev/null; then
+              echo "✅ Database tunnel ready on localhost:15432"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ Database tunnel failed to start after 60 seconds"
+              echo "Cloudflared logs:"
+              cat /tmp/cloudflared.log || true
+              exit 1
+            fi
+            sleep 2
+          done
 
           # Verify database connection
           echo "Verifying database connection and schema..."
