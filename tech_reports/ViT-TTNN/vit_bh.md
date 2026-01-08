@@ -41,6 +41,12 @@ Authors: Vishal Shenoy, Mohamed Bahnas (Original), Updated for Blackhole Archite
     - [6.1 Sharding Across the Sequence Length Dimension](#61-sharding-across-the-sequence-length-dimension)
     - [6.2 Width Shard and Block Sharding Mix](#62-width-shard-and-block-sharding-mix)
     - [6.3 Scaled Dot-Product Attention (SDPA)](#63-scaled-dot-product-attention-sdpa)
+      - [6.3.1 SDPA Overview](#631-sdpa-overview)
+      - [6.3.2 QKV Projection and Head Splitting](#632-qkv-projection-and-head-splitting)
+      - [6.3.3 DRAM Staging for Memory Management](#633-dram-staging-for-memory-management)
+      - [6.3.4 SDPA Kernel Execution](#634-sdpa-kernel-execution)
+      - [6.3.5 Post-Attention Processing](#635-post-attention-processing)
+      - [6.3.6 Memory Benefits](#636-memory-benefits)
   - [7. Conclusion](#7-conclusion)
   - [8. References](#8-references)
 
@@ -1007,6 +1013,10 @@ context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cor
 
 For high-resolution ViT, the implementation uses `ttnn.transformer.scaled_dot_product_attention` (SDPA), which fuses the attention computation into a single optimized kernel. This is critical for high-resolution inputs where the O(seqL²) attention matrix would otherwise exceed L1 memory limits.
 
+#### 6.3.1 SDPA Overview
+
+SDPA replaces the traditional multi-step attention computation with a single fused kernel that implements Flash Attention-style chunking internally.
+
 **SDPA vs. Manual Attention:**
 
 | Aspect | Manual Attention | SDPA |
@@ -1016,21 +1026,57 @@ For high-resolution ViT, the implementation uses `ttnn.transformer.scaled_dot_pr
 | Precision | Configurable per-op | HiFi4 with FP32 accumulation |
 | High-res scaling | O(seqL²) memory | O(seqL) memory with chunking |
 
-**High-Resolution Attention Implementation:**
+**Attention Flow with SDPA:**
 
-The actual implementation uses `ttnn.experimental.nlp_create_qkv_heads` for head splitting and moves Q, K, V to DRAM before SDPA to manage L1 pressure:
+```
+Input: hidden_states [b, seqL, dim]
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  QKV Linear (Block Sharded)         │
+│  Output: [b, seqL, 3×dim]           │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  nlp_create_qkv_heads               │
+│  Output: Q, K, V each [b, heads, seqL, head_size] │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Move to DRAM (L1 pressure relief)  │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  SDPA Kernel (Fused Attention)      │
+│  - Chunked Q×K^T computation        │
+│  - In-chunk softmax                 │
+│  - Chunked P×V accumulation         │
+│  Output: [b, heads, seqL, head_size]│
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Concatenate Heads + Self-Output    │
+│  Output: [b, seqL, dim]             │
+└─────────────────────────────────────┘
+```
+
+#### 6.3.2 QKV Projection and Head Splitting
+
+The attention block begins with a fused QKV projection followed by head splitting using the optimized `nlp_create_qkv_heads` operation.
+
+**Fused QKV Projection:**
 
 ```python
-def vit_attention(
-    config,
-    hidden_states,
-    parameters,
-):
+def vit_attention(config, hidden_states, parameters):
     num_heads = config.num_attention_heads  # num_heads = 16
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
-    # Fused QKV projection
+    # Fused QKV projection - produces [b, seqL, 3×dim]
     query_key_value = ttnn.linear(
         hidden_states,
         parameters.attention.query_key_value.weight,
@@ -1039,42 +1085,94 @@ def vit_attention(
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
+    # Convert to interleaved L1 for head splitting
     query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
+```
 
-    # Use nlp_create_qkv_heads for efficient head splitting
+**Head Splitting with `nlp_create_qkv_heads`:**
+
+Unlike the standard 224×224 implementation which uses `ttnn.transformer.split_query_key_value_and_split_heads`, the high-resolution version uses `ttnn.experimental.nlp_create_qkv_heads` for more efficient head creation:
+
+```python
+    # Efficient head splitting - outputs directly to DRAM
     query, key, value = ttnn.experimental.nlp_create_qkv_heads(
         query_key_value,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Direct to DRAM
         num_heads=num_heads,
-        num_kv_heads=num_heads,
-        transpose_k_heads=False,
+        num_kv_heads=num_heads,  # Same as num_heads for ViT (no GQA)
+        transpose_k_heads=False,  # SDPA handles K transpose internally
     )
+```
 
+**Key differences from `split_query_key_value_and_split_heads`:**
+- Outputs directly to DRAM, avoiding L1 pressure
+- `transpose_k_heads=False` because SDPA handles the K transpose internally
+- Supports grouped-query attention (GQA) via `num_kv_heads` parameter (not used in ViT)
+
+**Memory Cleanup:**
+
+```python
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
+    
+    # Optional reallocation for memory defragmentation
     if config.should_reallocate_in_attention:
         value = ttnn.reallocate(value)
+```
 
-    # Move Q, K, V to DRAM for SDPA (manages L1 pressure for large sequences)
+#### 6.3.3 DRAM Staging for Memory Management
+
+For high-resolution sequences, the Q, K, V tensors are explicitly staged in DRAM before SDPA execution. This is a critical optimization that frees L1 memory for the SDPA kernel's internal working buffers.
+
+```python
+    # Ensure Q, K, V are in DRAM for SDPA
     query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
     key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
     value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+```
 
-    # SDPA with 256-tile chunks for high-resolution sequences
+**Why DRAM staging?**
+
+| Without DRAM Staging | With DRAM Staging |
+|---------------------|-------------------|
+| Q, K, V compete with SDPA working memory in L1 | L1 fully available for SDPA chunks |
+| Smaller chunk sizes possible | Larger chunk sizes (256) for efficiency |
+| Risk of L1 OOM for large seqL | Scales to very long sequences |
+| SDPA streams from L1 (limited bandwidth utilization) | SDPA streams from DRAM (full NoC bandwidth) |
+
+For a 768×768 image with seqL=2304 and 16 heads:
+- Q, K, V each: `1 × 16 × 2304 × 64 × 2 bytes = 4.7 MB`
+- Total Q+K+V: `~14 MB` — too large to keep in L1 alongside SDPA working memory
+
+#### 6.3.4 SDPA Kernel Execution
+
+The SDPA kernel is configured with specific parameters optimized for high-resolution attention.
+
+**Program Configuration:**
+
+```python
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(config.core_grid_12x10.x, config.core_grid_12x10.y),
-        q_chunk_size=256,
-        k_chunk_size=256,
-        exp_approx_mode=False,  # More accurate exponential computation
+        q_chunk_size=256,       # Process 256 Q tokens per chunk
+        k_chunk_size=256,       # Process 256 K tokens per chunk
+        exp_approx_mode=False,  # Accurate exponential (no Taylor approximation)
     )
+```
 
+**Compute Kernel Configuration:**
+
+```python
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity for attention
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,   # FP32 accumulation for numerical stability
-        packer_l1_acc=True,
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest precision
+        math_approx_mode=False,                  # No approximations
+        fp32_dest_acc_en=True,                   # FP32 accumulation
+        packer_l1_acc=True,                      # L1 accumulation in packer
     )
+```
 
+**SDPA Execution:**
+
+```python
     context_layer = ttnn.transformer.scaled_dot_product_attention(
         query,
         key,
@@ -1084,21 +1182,54 @@ def vit_attention(
         compute_kernel_config=compute_kernel_config,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+```
 
-    # Concatenate heads
+**Configuration Parameter Details:**
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `q_chunk_size` | 256 | Larger chunks reduce kernel launch overhead; 256 balances memory and efficiency |
+| `k_chunk_size` | 256 | Matched to Q for symmetric chunking |
+| `exp_approx_mode` | False | Accurate softmax exponential; critical for attention score precision |
+| `is_causal` | False | ViT processes all patches simultaneously—no autoregressive masking |
+| `math_fidelity` | HiFi4 | Maximum precision prevents attention score drift in deep networks |
+| `fp32_dest_acc_en` | True | FP32 accumulation prevents overflow when summing over long sequences |
+
+#### 6.3.5 Post-Attention Processing
+
+After SDPA, the multi-head outputs are concatenated and projected back to the hidden dimension.
+
+**Head Concatenation:**
+
+```python
+    # Concatenate heads: [b, heads, seqL, head_size] → [b, seqL, dim]
     context_layer = ttnn.transformer.concatenate_heads(context_layer)
+```
 
-    # Reshard back to block sharded for self-output projection
+**Resharding for Self-Output:**
+
+The context tensor must be resharded to the block-sharded configuration used by the self-output linear layer. This involves a two-step memory transition via DRAM:
+
+```python
+    # Create block-sharded config for self-output
     block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
         context_layer.padded_shape,
-        core_grid=config.core_grid_BLOCK_SHARDED,
+        core_grid=config.core_grid_BLOCK_SHARDED,  # 8×8 = 64 cores
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
+    
+    # Two-step resharding: interleaved → DRAM → block sharded
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
+```
 
-    # Self-output projection
+> **Note:** The two-step transition (L1 → DRAM → L1 block sharded) is required because direct resharding between different sharding strategies may not be supported. DRAM acts as an intermediate staging area.
+
+**Self-Output Projection:**
+
+```python
+    # Project back to hidden dimension
     self_output = ttnn.linear(
         context_layer,
         parameters.output.dense.weight,
@@ -1108,32 +1239,37 @@ def vit_attention(
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
+    
+    # Optional defragmentation
+    if config.should_reallocate_in_attention:
+        self_output = ttnn.reallocate(self_output)
 
     return self_output
 ```
 
-**SDPA Configuration Details:**
+#### 6.3.6 Memory Benefits
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `q_chunk_size` | 256 | Larger chunks for high-res sequences |
-| `k_chunk_size` | 256 | Matches Q chunking for efficiency |
-| `exp_approx_mode` | False | Accurate exponential for softmax precision |
-| `math_fidelity` | HiFi4 | Maximum precision for attention scores |
-| `fp32_dest_acc_en` | True | FP32 accumulation prevents overflow in long sequences |
+SDPA's chunked computation provides dramatic memory savings for high-resolution inputs.
 
-**Memory Comparison for High-Resolution:**
+**Memory Comparison for High-Resolution (768×768 image, seqL=2304, 16 heads):**
 
-For a 768×768 image (seqL = 2304, 16 heads):
+| Approach | Peak Attention Memory (per batch) | Calculation |
+|----------|-----------------------------------|-------------|
+| Manual (full matrix) | 169.9 MB | 16 × 2304 × 2304 × 2 bytes |
+| SDPA (chunk=256) | 18.9 MB | 16 × 256 × 2304 × 2 bytes |
 
-| Approach | Peak Attention Memory (per batch) |
-|----------|-----------------------------------|
-| Manual (full matrix) | 16 × 2304 × 2304 × 2 = 169.9 MB |
-| SDPA (chunk=256) | 16 × 256 × 2304 × 2 = 18.9 MB |
+**Memory Reduction by Resolution:**
 
-This ~9× memory reduction is essential for processing high-resolution images on Blackhole.
+| Resolution | seqL | Manual Attention | SDPA (chunk=256) | Reduction |
+|------------|------|------------------|------------------|-----------|
+| 384×384    | 576  | 10.6 MB          | 4.7 MB           | 2.3× |
+| 512×512    | 1024 | 33.6 MB          | 8.4 MB           | 4× |
+| 768×768    | 2304 | 169.9 MB         | 18.9 MB          | 9× |
+| 1024×1024  | 4096 | 537.9 MB         | 33.6 MB          | 16× |
 
-> **Note:** The use of DRAM for Q, K, V storage before SDPA (`ttnn.DRAM_MEMORY_CONFIG`) is intentional—it frees L1 for the SDPA kernel's internal working memory, enabling larger chunk sizes and better throughput.
+The memory reduction scales with sequence length—making SDPA essential for high-resolution processing where manual attention would exceed available memory.
+
+> **Key Insight:** The combination of DRAM staging for Q, K, V and chunked SDPA execution allows Blackhole to process images up to 1024×1024 and beyond, which would be impossible with traditional attention implementations.
 
 ## 7. Conclusion
 
