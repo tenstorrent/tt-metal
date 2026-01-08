@@ -1,26 +1,27 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Rank Binding for Disaggregated Prefill-Decode on 2x N150 devices
+# Rank Binding for 2x N300 devices on t3k
 #
-# Process 0 (rank=0): Prefill node on mesh_id=0 (first N150)
-# Process 1 (rank=1): Decode node on mesh_id=1 (second N150)
+# Process 0 (rank=0): mesh_id=0 (first N300 board)
+# Process 1 (rank=1): mesh_id=1 (second N300 board)
+# Each N300 has 2 chips (1x2 mesh topology)
 #
 # Usage:
-#   tt-run --rank-binding tests/ttnn/distributed/disaggregated_pd_rank_binding.yaml \
-#          python3 tests/ttnn/distributed/test_disaggregated_prefill_decode.py
+#   t3k --rank-binding tests/ttnn/distributed/disaggregated_pd_rank_binding.yaml \
+#       python3 tests/ttnn/distributed/test_n150_dual_mesh.py
 
 rank_bindings:
   - rank: 0
     mesh_id: 0
     mesh_host_rank: 0
     env_overrides:
-      TT_VISIBLE_DEVICES: "0"  # First N150 device
+      TT_VISIBLE_DEVICES: "0"  # First N300 device
 
   - rank: 1
     mesh_id: 1
     mesh_host_rank: 0
     env_overrides:
-      TT_VISIBLE_DEVICES: "1"  # Second N150 device
+      TT_VISIBLE_DEVICES: "1"  # Second N300 device
 
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/n150_dual_mesh_graph_descriptor.textproto"
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/n300_dual_mesh_graph_descriptor.textproto"
