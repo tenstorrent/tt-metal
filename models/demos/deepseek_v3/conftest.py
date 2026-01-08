@@ -216,30 +216,6 @@ def get_current_device_type():
         else:
             raise ValueError(f"N300 cluster type detected but unexpected device count: {num_devices} (expected 1 or 2)")
 
-    # Fallback: try to determine from device count and architecture
-    if arch_name == "wormhole_b0":
-        if num_devices == 1:
-            raise ValueError(
-                f"Unable to determine device type: 1 device on {arch_name} could be N150 or N300. "
-                f"Cluster type is {cluster_type}"
-            )
-        elif num_devices == 2:
-            return "N300"
-        elif num_devices == 8:
-            return "T3K"
-        elif num_devices == 32:
-            return "TG"
-        elif num_devices == 64:
-            return "DUAL"
-        elif num_devices == 128:
-            return "QUAD"
-        else:
-            raise ValueError(
-                f"Unable to determine device type: unexpected device count {num_devices} "
-                f"on {arch_name} with cluster type {cluster_type}"
-            )
-
-    # Unknown configuration
     raise ValueError(
         f"Unable to determine device type: cluster_type={cluster_type}, "
         f"num_devices={num_devices}, arch_name={arch_name}"
