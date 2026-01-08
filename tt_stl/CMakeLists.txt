@@ -70,25 +70,20 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Install using FILES instead of TARGETS to work around CI issue where
-# install(TARGETS) can't find the library when LIBRARY_OUTPUT_DIRECTORY is set
-# The generator expression $<TARGET_FILE:tt_stl> resolves to the actual file location
-# at build time, which should be ${CMAKE_BINARY_DIR}/lib/libtt_stl.so
-# This ensures the library is installed even if install(TARGETS) would fail
-install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
-
-# Still install the EXPORT and FILE_SET using TARGETS for proper CMake package support
-# The FILE_SET (headers) doesn't have the same issue as the library file
+# Install library, EXPORT, and FILE_SET using TARGETS
+# The symlink lib64 -> lib in the build directory ensures install(TARGETS) can find
+# the library even when LIBRARY_OUTPUT_DIRECTORY forces it to build/lib
 install(
     TARGETS
         tt_stl
     EXPORT Metalium
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT metalium-runtime
     FILE_SET
     api
         DESTINATION COMPONENT
         metalium-dev
-    # Don't install LIBRARY here since we handle it with FILES above
-    # This avoids the "file not found" error in CI
 )
 
 if(TT_METAL_BUILD_TESTS)
