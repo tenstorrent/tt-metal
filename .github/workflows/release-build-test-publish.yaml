@@ -89,6 +89,57 @@ jobs:
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       extra-tag: "in-release"
 
+  blackhole-demo-tests:
+    needs: build-artifact
+    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ["P100", "P150", "p150b"]
+    with:
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      regenerate-ttnn-cache: false
+
+  blackhole-multi-card-demo-tests:
+    needs: build-artifact
+    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox Demo tests
+            runner-label: BH-LLMBox
+            extra-tag: pipeline-perf
+            num_devices: 4
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: pipeline-perf
+            num_devices: 8
+          - name: P300 Demo tests
+            runner-label: P300-viommu
+            extra-tag: pipeline-yyz2-lfc
+            num_devices: 2
+          - name: QuietBox Global Edition tests
+            runner-label: BH-QB-GE
+            extra-tag: pipeline-perf
+            num_devices: 4
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
+      regenerate-ttnn-cache: false
+      model: "all"
+
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:
     needs: build-artifact
