@@ -117,3 +117,49 @@ class TTNNLinearLLamaBFloat16(TTNNLinear):
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
         return super().forward(input_tensor)
+
+
+class PytorchLinearGelu(nn.Module):
+    def __init__(self, dense) -> None:
+        super().__init__()
+        self.dense = dense
+        self.intermediate_act_fn = nn.GELU()
+
+    def forward(self, hidden_states):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.intermediate_act_fn(hidden_states)
+
+        return hidden_states
+
+
+class TTNNLinearGelu(TTNNModule):
+    """ViT Intermediate module with TTNN acceleration."""
+
+    @classmethod
+    def from_torch(cls, linear: nn.Linear):
+        new_intermediate = TTNNViTIntermediate()
+        new_intermediate._fallback_torch_layer = PytorchLinearGelu(
+            hidden_size=linear.in_features,
+            intermediate_size=linear.out_features,
+        )
+        new_intermediate.dense = TTNNLinear.from_torch(linear)
+        return new_intermediate
+
+    def forward(self, hidden_states):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = ttnn.gelu(hidden_states.to_ttnn)
+        return hidden_states
+
+
+class TTNNViTIntermediate(TTNNLinearGelu):
+    """ViT Intermediate module with TTNN acceleration."""
+
+    @classmethod
+    def from_torch(cls, torch_vit_intermediate: "ViTIntermediate"):
+        assert (
+            torch_vit_intermediate.intermediate_act_fn.__class__.__name__ == "GELUActivation"
+        ), "Only GELU activation is supported."
+        new_intermediate = TTNNViTIntermediate()
+        new_intermediate._fallback_torch_layer = torch_vit_intermediate
+        new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
+        return new_intermediate

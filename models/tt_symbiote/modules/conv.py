@@ -357,3 +357,163 @@ class TTNNBottleneck(TTNNModule):
         out = self.relu(out)
         out = self.permute(out, perm=[0, 3, 1, 2])
         return out
+
+
+class TorchPatchEmbeddings(nn.Module):
+    """A wrapper around nn.Conv2d to handle ViT Patch Embeddings."""
+
+    def __init__(
+        self,
+        patch_embeddings,
+    ) -> None:
+        super().__init__()
+        self.patch_embeddings = patch_embeddings
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Forward pass through Conv2d with NHWC input/output."""
+        x = x.permute(0, 3, 1, 2)  # NHWC to NCHW
+        x = self.patch_embeddings(x[:, :3, :, :], **kwargs)  # Use only first 3 channels
+        return x
+
+
+class TTNNPatchEmbedding(TTNNModule):
+    """TTNN-accelerated Patch Embedding layer for ViT."""
+
+    def __init__(
+        self,
+        img_size,
+        patch_size,
+        in_channels,
+        embed_dim,
+    ) -> None:
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.permute = TTNNPermute()
+
+    @classmethod
+    def from_torch(cls, patch_embedding: "ViTPatchEmbeddings") -> "TTNNPatchEmbedding":
+        """Create TTNNPatchEmbedding from PyTorch Conv2d layer."""
+        new_patch_embedding = TTNNPatchEmbedding(
+            img_size=patch_embedding.projection.kernel_size[0] * patch_embedding.projection.stride[0],
+            patch_size=patch_embedding.projection.kernel_size[0],
+            in_channels=patch_embedding.projection.in_channels,
+            embed_dim=patch_embedding.projection.out_channels,
+        )
+        new_patch_embedding.projection = patch_embedding.projection
+        new_patch_embedding._fallback_torch_layer = TorchPatchEmbeddings(patch_embedding)
+        return new_patch_embedding
+
+    def preprocess_weights_impl(self):
+        weight = self.projection.weight
+        bias = self.projection.bias
+
+        three_times_hidden_size, c, _, _ = weight.shape
+        pad_value = 4 - c
+        preprocessed_weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, pad_value))
+        preprocessed_weight = torch.permute(preprocessed_weight, (2, 3, 1, 0))
+        preprocessed_weight = torch.reshape(
+            preprocessed_weight, (int(three_times_hidden_size * (4 / c)), three_times_hidden_size)
+        )
+
+        self.ttnn_weight = ttnn.from_torch(preprocessed_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self.ttnn_bias = ttnn.from_torch(bias.unsqueeze(0), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        super().preprocess_weights_impl()
+
+    def move_weights_to_device_impl(self):
+        """Move weights to TTNN device."""
+        self.ttnn_weight = ttnn.to_device(self.ttnn_weight, self.device)
+        self.ttnn_bias = ttnn.to_device(self.ttnn_bias, self.device)
+        super().move_weights_to_device_impl()
+
+    def forward(self, pixel_values, interpolate_pos_encoding: bool = False):
+        batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
+        patch_size = self.patch_size
+        patch_count = img_h // patch_size  # 14
+        patch_size_sq_trpl = int(patch_size * patch_size * 3)  # 768
+        patch_count_all = int(patch_count * patch_count)  # 196
+        stride_h = patch_size
+        stride_w = 1
+        pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
+        folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+        ttnn.deallocate(pixel_values)
+        folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Convert back to interleaved or otherwise to_layout will fail
+        folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        patch_embedding_output = ttnn.linear(
+            folded_pixel_values,
+            self.ttnn_weight,
+            bias=self.ttnn_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+
+        patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
+        patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
+
+        return patch_embedding_output
+
+
+class TorchVitEmbeddings(nn.Module):
+    """A wrapper around nn.Conv2d to handle ViT Patch Embeddings."""
+
+    def __init__(
+        self,
+        patch_embeddings,
+        cls_token,
+        position_embeddings,
+    ) -> None:
+        super().__init__()
+        self.patch_embeddings = TorchPatchEmbeddings(patch_embeddings)
+        self.cls_token = cls_token
+        self.position_embeddings = position_embeddings
+
+    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """Forward pass through Conv2d with NHWC input/output."""
+        batch_size, height, width, _ = x.shape
+        embeddings = self.patch_embeddings(x, **kwargs)
+        # add the [CLS] token to the embedded patch tokens
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
+        embeddings = torch.cat((cls_tokens, embeddings), dim=1)
+
+        # add positional encoding to each token
+        embeddings = embeddings + self.position_embeddings
+        return embeddings
+
+
+class TTNNViTEmbeddings(TTNNModule):
+    """TTNN-accelerated ViT Embeddings layer."""
+
+    @classmethod
+    def from_torch(cls, patch_embeddings: "ViTPatchEmbeddings", cls_token, position_embeddings) -> "TTNNViTEmbeddings":
+        """Create TTNNViTEmbeddings from PyTorch ViTEmbeddings layer."""
+        new_embeddings = TTNNViTEmbeddings()
+        new_embeddings.patch_embeddings = TTNNPatchEmbedding.from_torch(patch_embeddings)
+        new_embeddings.cls_token = ttnn.from_torch(cls_token, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        new_embeddings.position_embeddings = ttnn.from_torch(
+            position_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        new_embeddings._fallback_torch_layer = TorchVitEmbeddings(patch_embeddings, cls_token, position_embeddings)
+        return new_embeddings
+
+    def preprocess_weights_impl(self):
+        """Preprocess weights for TTNN."""
+        self.patch_embeddings.preprocess_weights()
+        self.cls_token = ttnn.to_device(self.cls_token, self.device)
+        self.position_embeddings = ttnn.to_device(self.position_embeddings, self.device)
+        super().preprocess_weights_impl()
+
+    def forward(self, pixel_values, **kwargs):
+        patch_embedding_output = self.patch_embeddings(pixel_values, **kwargs)
+        patch_embedding_output = patch_embedding_output.to_ttnn
+        if patch_embedding_output.layout != ttnn.TILE_LAYOUT:
+            patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.TILE_LAYOUT)
+        # add the [CLS] token to the embedded patch tokens
+        embedding_output = ttnn.concat([self.cls_token, patch_embedding_output], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
+        embedding_output = ttnn.add(
+            embedding_output, self.position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
+        )
+        return embedding_output
