@@ -38,6 +38,7 @@ jobs:
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        GIT_DISCOVERY_ACROSS_FILESYSTEM: 1
       volumes:
         - ${{ github.workspace }}:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -51,6 +52,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Fetch all history so we can checkout main later
+
+      - name: Debug git setup
+        run: |
+          echo "PWD: $(pwd)"
+          echo "Checking for .git:"
+          ls -la /work/.git 2>&1 || echo ".git directory not found"
+          echo "Listing /work:"
+          ls -la /work | head -20
 
       # Python is already installed in the container image
       # - name: Set up Python
