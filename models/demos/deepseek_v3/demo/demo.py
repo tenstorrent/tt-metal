@@ -13,7 +13,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -97,9 +96,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--generator",
-        choices=["pp", "bp"],
+        choices=["bp"],
         default="bp",
-        help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
+        help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
         "--enable-trace",
@@ -256,7 +255,7 @@ def run_demo(
 
     fabric_config = ttnn.FabricConfig.FABRIC_1D
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
-    ttnn.set_fabric_config(fabric_config)
+    ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
@@ -312,28 +311,17 @@ def run_demo(
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
             )
-        else:  # generator == "pp"
-            if enable_trace:
-                assert False, "Tracing is not supported for pp generator."
-            gen = DeepseekGeneratorPP(
-                mesh_device=mesh_device,
-                model_path=model_path,
-                cache_dir=cache_dir,
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(
-                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
-                ),
-                single_layer=(single_layer if random_weights else None),
-            )
         # Build the prompt list
+        pre_tokenized_prompts = None
         if random_weights:
             prompt_list = [""]
         else:
             if token_acc is not None:
-                # Prepare prompt text from reference tokens to align with teacher forcing
-                prompt_list = [token_acc.prepare_ref_tokens(gen.tokenizer)]
+                # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
+                # This ensures the TT model uses the exact same token sequence as the reference.
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids()]
+                # Still need a placeholder prompt for the generator API
+                prompt_list = [""]
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
@@ -348,6 +336,7 @@ def run_demo(
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
             repeat_batches=repeat_batches,
+            pre_tokenized=pre_tokenized_prompts,
         )
 
         # Process all generations
@@ -358,7 +347,13 @@ def run_demo(
                 result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
             if token_acc is not None and i == 0:  # Only compute accuracy for first generation
                 acc = token_acc.compute_accuracy()
-                result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
+                result.update(
+                    {
+                        "accuracy_top1": acc.get("top1"),
+                        "accuracy_top5": acc.get("top5"),
+                        "predicted_tokens": token_acc._pred_tokens,
+                    }
+                )
             results.append(result)
 
         return {"generations": results, "statistics": statistics}
