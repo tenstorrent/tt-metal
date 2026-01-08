@@ -101,7 +101,7 @@ jobs:
           # Sanitize ref/SHA by replacing invalid characters with hyphens
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          ARTIFACT_NAME="eager-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-any-${SANITIZED_REF}-${{ github.run_id }}"
+          ARTIFACT_NAME="ttnn-dist-cp${{ steps.format_python_version.outputs.python_version_nodot }}-${{ inputs.build-type }}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
