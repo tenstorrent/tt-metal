@@ -132,7 +132,7 @@ void kernel_main() {
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
                     if (is_injector_core) {
-                        k_block = k_block;
+                        k_block = compute_actual_k_block(k_block);
                     }
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
