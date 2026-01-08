@@ -476,6 +476,27 @@ tests:
   157:
     name: "One from All Custom"
 
+  158:
+    name: "One to One Packet Sizes 2.0"
+
+  159:
+    name: "One from One Packet Sizes 2.0"
+
+  160:
+    name: "One to One Packet Sizes Same Axis"
+
+  161:
+    name: "One to One Packet Sizes Same Axis 2.0"
+
+  162:
+    name: "One from One Packet Sizes Same Axis"
+
+  163:
+    name: "One Packet Read Sizes Same Axis"
+
+  164:
+    name: "One Packet Write Sizes Same Axis"
+
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
 
