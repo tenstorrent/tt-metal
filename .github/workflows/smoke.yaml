@@ -41,7 +41,7 @@ jobs:
         - /work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
-      options: --device /dev/tenstorrent ${{ contains(['N300-llmbox', 'in-service-dedicated-merge-gate'], inputs.runner) && '--memory 256g' || '' }}
+      options: --device /dev/tenstorrent ${{ contains(fromJSON('["N300-llmbox", "in-service-dedicated-merge-gate"]', inputs.runner) && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
