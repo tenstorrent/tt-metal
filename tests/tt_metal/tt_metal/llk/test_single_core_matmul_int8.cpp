@@ -5,10 +5,9 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <unistd.h>
 #include <functional>
 #include <random>
 #include <map>
@@ -25,6 +24,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -50,7 +50,7 @@ std::vector<int8_t> generate_uniform_int8(size_t num_elements, int8_t min, int8_
     std::mt19937 gen(seed);
     std::uniform_int_distribution<int16_t> distrib(min, max);
 
-    for (int i = 0; i < num_elements; i++) {
+    for (size_t i = 0; i < num_elements; i++) {
         random_array[i] = static_cast<int8_t>(distrib(gen));
     }
 
@@ -58,25 +58,25 @@ std::vector<int8_t> generate_uniform_int8(size_t num_elements, int8_t min, int8_
 }
 
 void convert_to_sign_mag(std::vector<int8_t>& vec) {
-    for (int i = 0; i < vec.size(); i++) {
-        int8_t temp = vec[i];
+    for (signed char & i : vec) {
+        int8_t temp = i;
         if (temp < 0) {
             if (temp == -128) {
                 temp = -127;
             }
             temp = (~temp) + 1;
             temp = temp | 0x80;
-            vec[i] = temp;
+            i = temp;
         }
     }
 }
 
 int get_output_coordinate(int x, int y) {
     int offset = ((x < 16) ? 0 : 256) + ((y < 16) ? 0 : 512);
-    return offset + (y % 16) * 16 + (x % 16);
+    return offset + ((y % 16) * 16) + (x % 16);
 }
 
-bool single_tile_matmul_int8(tt_metal::IDevice* device) {
+bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
 
     CoreCoord core(0, 0);
@@ -88,31 +88,43 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-    auto input0_dram_buffer = CreateBuffer(dram_config);
+    auto local_buffer_config =
+        distributed::DeviceLocalBufferConfig{.page_size = tile_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto distributed_buffer_config = distributed::ShardedBufferConfig{
+        .global_size = tile_size,
+        .global_buffer_shape = {32, 32},
+        .shard_shape = {32, 32},
+        .shard_orientation = ShardOrientation::ROW_MAJOR};
+
+    workload.add_program(device_range, tt_metal::CreateProgram());
+    auto& program = workload.get_programs().at(device_range);
+
+    auto input0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input1_dram_buffer = CreateBuffer(dram_config);
+    auto input1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
     const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto output_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in0_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in0_cb_index, byte_size);
-    auto l1_input0_cb = tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in1_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in1_cb_index, byte_size);
-    auto l1_input1_cb = tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
 
     tt_metal::CircularBufferConfig l1_output_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{out_cb_index, tt::DataFormat::Int8}})
             .set_page_size(out_cb_index, byte_size);
-    auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -132,7 +144,7 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {out_cb_index}});
 
-    auto simple_matmul_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute.cpp",
         core,
@@ -175,9 +187,9 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
     ////////////////////////////////////////////////////////////////////////////
 
     convert_to_sign_mag(input_0);
-    tt_metal::detail::WriteToBuffer(input0_dram_buffer, input_0);
+    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, input_0);
     convert_to_sign_mag(input_1);
-    tt_metal::detail::WriteToBuffer(input1_dram_buffer, input_1);
+    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, input_1);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -200,13 +212,13 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
             (uint32_t)1,  // num_tiles
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<int8_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer);
     pass = dest_buffer_data == golden_output;
 
     for (int i = 0; i < 1024; i++) {
@@ -221,10 +233,8 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
 
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(id)));
-    }
+TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
 
 }  // namespace tt::tt_metal
