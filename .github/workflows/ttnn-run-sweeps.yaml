@@ -727,6 +727,8 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Install PostgreSQL Client
+        run: sudo apt-get install postgresql-
       - name: 🔌 Setup Local Database
         timeout-minutes: 5
         run: |
