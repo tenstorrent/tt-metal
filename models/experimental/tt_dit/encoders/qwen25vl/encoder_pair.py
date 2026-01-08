@@ -104,6 +104,9 @@ class Qwen25VlTokenizerEncoderPair:
 
         return model
 
+    def encoder_loaded(self) -> bool:
+        return self._use_torch or self._encoder.is_loaded()
+
     def reload_encoder_weights(self) -> None:
         """Reload encoder weights to device after deallocation."""
         if self._use_torch or self._encoder_loaded:
@@ -208,10 +211,3 @@ def _get_qwen_prompt_embeds(
     attention_mask = attention_mask.repeat_interleave(num_images_per_prompt, dim=0)
 
     return prompt_embeds, attention_mask
-
-
-def _extract_masked_hidden(hidden_states: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, ...]:
-    bool_mask = mask.bool()
-    valid_lengths = bool_mask.sum(dim=1)
-    selected = hidden_states[bool_mask]
-    return torch.split(selected, valid_lengths.tolist(), dim=0)

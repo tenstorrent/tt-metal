@@ -29,7 +29,7 @@ def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf
     model_path = os.path.join(os.path.abspath(cache_dir), model_name)
     model_path = os.path.join(model_path, subfolder)
     parallel_name = f"{config_id(parallel_config)}mesh{mesh_shape[0]}x{mesh_shape[1]}_{dtype}" + (
-        "_fsdp" if is_fsdp else ""
+        "_FSDP" if is_fsdp else ""
     )
     cache_path = os.path.join(model_path, parallel_name) + os.sep
 

@@ -20,10 +20,19 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s
+        [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s FSDP
         [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # OOM with all configs
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 78 s. Less than 1s to load vae.
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s
+        [
+            (2, 4),
+            (2, 0),
+            (1, 0),
+            (4, 1),
+            (4, 1),
+            (4, 1),
+            ttnn.Topology.Linear,
+            1,
+        ],  # 78 s. Less than 1s to load vae. NO FSDP
+        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s NO FSDP
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
