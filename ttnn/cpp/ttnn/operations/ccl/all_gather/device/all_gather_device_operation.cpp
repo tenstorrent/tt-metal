@@ -161,6 +161,9 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         operation_attributes.memory_config,
         subdevice_core_range_set,
         operation_attributes.topology,
+        operation_attributes.chunks_per_sync,
+        operation_attributes.num_workers_per_link,
+        operation_attributes.num_buffers_per_channel,
         input_tensor);
 }
 
@@ -176,6 +179,9 @@ ttnn::Tensor all_gather(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     using OperationType = ttnn::operations::ccl::AllGatherDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -186,6 +192,9 @@ ttnn::Tensor all_gather(
             .subdevice_id = subdevice_id,
             .topology = topology,
             .num_links = num_links,
+            .chunks_per_sync = chunks_per_sync,
+            .num_workers_per_link = num_workers_per_link,
+            .num_buffers_per_channel = num_buffers_per_channel,
             .sub_core_grid = sub_core_grid},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }

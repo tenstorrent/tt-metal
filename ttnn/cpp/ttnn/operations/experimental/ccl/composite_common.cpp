@@ -66,7 +66,10 @@ ttnn::Tensor composite_reduce_scatter(
     tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
     bool is_row_major = input_tensor.layout() == ttnn::Layout::ROW_MAJOR;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -137,9 +140,13 @@ ttnn::Tensor composite_reduce_scatter(
                                                       cluster_axis,
                                                       subdevice_id,
                                                       native_rs_output_memory_config,
+                                                      std::nullopt,  // optional intermediate memory config
                                                       std::nullopt,  // optional output tensor
                                                       num_links,
-                                                      topology_)
+                                                      topology_,
+                                                      chunks_per_sync,
+                                                      num_workers_per_link,
+                                                      num_buffers_per_channel)
                                                       .at(1);  // first is the intermediate tensor
     // remove the padding we previously inserted
     ttnn::Tensor rs_output_tensor;

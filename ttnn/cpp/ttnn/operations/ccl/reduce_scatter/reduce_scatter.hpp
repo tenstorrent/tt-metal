@@ -18,9 +18,13 @@ struct ExecuteReduceScatter {
         std::optional<uint32_t> cluster_axis = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& intermediate_memory_config = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
         std::optional<uint32_t> num_links = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
+        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+        std::optional<uint32_t> chunks_per_sync = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace operations::ccl
