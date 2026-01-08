@@ -30,6 +30,8 @@ void kernel_main() {
     const uint32_t src_addr_m = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t current_core_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
     constexpr uint32_t onetile = 1;
 
     DPRINT << "start of reader 1 kernel\n";
@@ -130,7 +132,7 @@ void kernel_main() {
     const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    const uint64_t sender_sem_noc_addr_2 = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr);
+    const uint64_t sender_sem_noc_addr_2 = get_noc_addr(current_core_x, current_core_y, sender_semaphore_addr);
     auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
     sem_header_ptr_2->to_noc_unicast_atomic_inc(
@@ -166,7 +168,7 @@ void kernel_main() {
 
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
+    uint64_t packet_noc_addr = get_noc_addr(current_core_x, current_core_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
     tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);

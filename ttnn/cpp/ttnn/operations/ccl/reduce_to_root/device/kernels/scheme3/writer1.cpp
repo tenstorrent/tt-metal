@@ -88,6 +88,8 @@ void kernel_main() {
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t current_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t current_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
     // for round 2
     uint32_t final_dst_addr_l = get_arg_val<uint32_t>(arg_idx++);
     uint32_t final_dst_addr_s = get_arg_val<uint32_t>(arg_idx++);
@@ -163,8 +165,8 @@ void kernel_main() {
     DPRINT << "after reserving packet buffer\n";
     uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
 
-    const uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address);
-    const uint64_t receive_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receive_semaphore_addr);
+    const uint64_t dst_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, receiver_base_address);
+    const uint64_t receive_sem_noc_addr = get_noc_addr(current_core_noc_x, current_core_noc_y, receive_semaphore_addr);
 
     // Use fused packet API to send data + semaphore increment in a single packet
     packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
