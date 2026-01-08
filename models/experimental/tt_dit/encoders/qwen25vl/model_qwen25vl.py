@@ -140,10 +140,10 @@ class Qwen25VlTextEncoder(Module):
             input_embeds = ttnn.clone(input_embeds)
 
         hidden_states = input_embeds
-        hidden_states_list = []
+        # hidden_states_list = []
 
         for decoder_layer in self.layers:
-            hidden_states_list.append(hidden_states)
+            # hidden_states_list.append(hidden_states)
 
             hidden_states = decoder_layer.forward(
                 hidden_states,
@@ -152,10 +152,11 @@ class Qwen25VlTextEncoder(Module):
             )
 
         hidden_states = self.norm.forward(hidden_states)
-        hidden_states_list.append(hidden_states)
+        # hidden_states_list.append(hidden_states)
 
         if padded_seq_len != seq_len:
-            hidden_states_list = [x[:, :seq_len, :] for x in hidden_states_list]
+            # hidden_states_list = [x[:, :seq_len, :] for x in hidden_states_list]
+            hidden_states_list = [x[:, :seq_len, :] for x in [hidden_states]]
 
         return hidden_states_list
 

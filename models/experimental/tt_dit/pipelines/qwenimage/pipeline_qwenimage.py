@@ -28,7 +28,7 @@ from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    pass
 
     from PIL import Image
 
@@ -101,6 +101,7 @@ class QwenImagePipeline:
         logger.info(f"Parallel config: {parallel_config}")
         logger.info(f"Original mesh shape: {mesh_device.shape}")
         logger.info(f"Creating submeshes with shape {submesh_shape}")
+
         self._submesh_devices = self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))[
             0 : parallel_config.cfg_parallel.factor
         ]
@@ -109,12 +110,14 @@ class QwenImagePipeline:
             for submesh_device in self._submesh_devices
         ]
 
-        self.encoder_device = self._submesh_devices[0] if not use_torch_text_encoder else None
-        # Store original submesh shape for encoder operations (following Flux pattern - no reshape needed)
-        self.original_submesh_shape = tuple(self._submesh_devices[0].shape)
-        self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
-        self.vae_submesh_idx = 0  # Use submesh 0 for VAE
+        self.vae_submesh_idx = len(self._submesh_devices) - self.encoder_submesh_idx - 1  # Use other submesh for VAE. 0
+
+        self.encoder_device = self._submesh_devices[self.encoder_submesh_idx] if not use_torch_text_encoder else None
+        self.vae_device = self._submesh_devices[self.vae_submesh_idx]
+
+        self.encoder_mesh_shape = self.encoder_device.shape if not use_torch_text_encoder else None
+        self.vae_mesh_shape = self.vae_device.shape if not use_torch_vae_decoder else None
 
         logger.info("loading models...")
 
@@ -166,58 +169,26 @@ class QwenImagePipeline:
         self._use_torch_text_encoder = use_torch_text_encoder
         self._transformers_loaded = False
 
+        # initialize text encoder
+        with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape, synchronize=True):
+            logger.info("creating TT-NN text encoder (loading before transformers for memory efficiency)...")
+            self._text_encoder = Qwen25VlTokenizerEncoderPair(
+                text_encoder_checkpoint_name,
+                device=self._submesh_devices[self.encoder_submesh_idx],
+                ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
+                parallel_config=self._encoder_parallel_config,
+                use_torch=use_torch_text_encoder,
+                is_fsdp=is_fsdp,
+            )
+
         # With FSDP enabled, weights are sharded so all models can fit in memory simultaneously
         # Without FSDP, we need to load/unload models to avoid OOM
-        if is_fsdp:
+        self.transformers = []
+        if is_fsdp or use_torch_text_encoder:
             # FSDP path: load all models upfront - they can coexist in memory
             logger.info("FSDP enabled: loading all models (encoder, transformer, VAE) simultaneously...")
-            with self.encoder_reshape(self.encoder_device):
-                logger.info("creating TT-NN text encoder...")
-                self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                    text_encoder_checkpoint_name,
-                    device=self._submesh_devices[self.encoder_submesh_idx],
-                    ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
-                    parallel_config=self._encoder_parallel_config,
-                    use_torch=use_torch_text_encoder,
-                    is_fsdp=is_fsdp,
-                )
-                if self.encoder_device is not None:
-                    ttnn.synchronize_device(self.encoder_device)
-
             # Load transformers immediately with FSDP
             self._load_transformers()
-        elif not use_torch_text_encoder:
-            # Non-FSDP path: load encoder first (before transformers) to avoid OOM
-            # The encoder will be deallocated after encoding to make room for transformers
-            with self.encoder_reshape(self.encoder_device):
-                logger.info("creating TT-NN text encoder (loading before transformers for memory efficiency)...")
-                self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                    text_encoder_checkpoint_name,
-                    device=self._submesh_devices[self.encoder_submesh_idx],
-                    ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
-                    parallel_config=self._encoder_parallel_config,
-                    use_torch=use_torch_text_encoder,
-                    is_fsdp=is_fsdp,
-                )
-                if self.encoder_device is not None:
-                    ttnn.synchronize_device(self.encoder_device)
-
-            # For device encoder without FSDP, defer transformer loading until after encoding
-            self.transformers = []
-        else:
-            # For torch encoder, load transformers now (no memory conflict)
-            self._load_transformers()
-
-            with self.encoder_reshape(self.encoder_device):
-                logger.info("creating TT-NN text encoder...")
-                self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                    text_encoder_checkpoint_name,
-                    device=self._submesh_devices[self.encoder_submesh_idx],
-                    ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
-                    parallel_config=self._encoder_parallel_config,
-                    use_torch=use_torch_text_encoder,
-                    is_fsdp=is_fsdp,
-                )
 
         # Delete the torch model to free up CPU memory
         del torch_transformer
@@ -241,9 +212,9 @@ class QwenImagePipeline:
         if use_torch_vae_decoder:
             self._vae_decoder = None
             self._vae_loaded = False
-        elif is_fsdp or use_torch_text_encoder:
+        else:
             # With FSDP or torch encoder: load VAE now (no memory conflict)
-            with self.encoder_reshape(self.encoder_device):
+            with self.mesh_reshape(self.vae_device, self.vae_mesh_shape, synchronize=True):
                 logger.info("creating TT-NN VAE decoder...")
                 self._vae_decoder = QwenImageVaeDecoder(
                     base_dim=self._vae_config["base_dim"],
@@ -255,31 +226,11 @@ class QwenImagePipeline:
                     parallel_config=self._vae_parallel_config,
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
-                self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
-                self._vae_loaded = True
-
-                if self.encoder_device is not None:
-                    ttnn.synchronize_device(self.encoder_device)
-        else:
-            # Device encoder path without FSDP: defer VAE loading until needed
-            # This avoids VAE competing with transformer for device memory
-            with self.encoder_reshape(self.encoder_device):
-                logger.info("creating TT-NN VAE decoder (deferring weight loading)...")
-                self._vae_decoder = QwenImageVaeDecoder(
-                    base_dim=self._vae_config["base_dim"],
-                    z_dim=self._vae_config["z_dim"],
-                    dim_mult=self._vae_config["dim_mult"],
-                    num_res_blocks=self._vae_config["num_res_blocks"],
-                    temperal_downsample=self._vae_config["temperal_downsample"],
-                    device=self.vae_device,
-                    parallel_config=self._vae_parallel_config,
-                    ccl_manager=self._ccl_managers[self.vae_submesh_idx],
-                )
-                # Don't load weights - will be loaded lazily when needed
                 self._vae_loaded = False
 
-                if self.encoder_device is not None:
-                    ttnn.synchronize_device(self.encoder_device)
+            if is_fsdp:
+                self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
+                self._vae_loaded = True
 
         self._traces = None
 
@@ -314,6 +265,7 @@ class QwenImagePipeline:
                 parallel_config=self._parallel_config,
                 mesh_shape=tuple(submesh_device.shape),
                 dtype="bf16",
+                is_fsdp=self._is_fsdp,
             ):
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_torch_state_dict(self._transformer_state_dict)
@@ -350,16 +302,29 @@ class QwenImagePipeline:
         if self._use_torch_vae_decoder or self._vae_loaded:
             return
 
-        with self.encoder_reshape(self.vae_device):
+        with self.mesh_reshape(self.vae_device, self.vae_mesh_shape, synchronize=True):
             logger.info("loading VAE decoder weights to device...")
             self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
-            ttnn.synchronize_device(self.vae_device)
         self._vae_loaded = True
 
     @contextmanager
-    def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
-        # Following Flux pattern: no reshaping needed, encoder works on full submesh
-        yield
+    def mesh_reshape(
+        self, device: ttnn.MeshDevice | None, mesh_shape: ttnn.MeshShape | None, synchronize: bool = False
+    ):
+        if device is None:
+            yield
+        else:
+            original_mesh_shape = ttnn.MeshShape(tuple(device.shape))
+            assert (
+                original_mesh_shape.mesh_size() == mesh_shape.mesh_size()
+            ), f"Device cannot be reshaped device shape: {device.shape} mesh shape: {mesh_shape}"
+            if original_mesh_shape != mesh_shape:
+                device.reshape(mesh_shape)
+            yield
+            if original_mesh_shape != device.shape:
+                device.reshape(original_mesh_shape)
+            if synchronize:
+                ttnn.synchronize_device(device)
 
     def run_single_prompt(
         self,
@@ -504,7 +469,7 @@ class QwenImagePipeline:
                 self._text_encoder.reload_encoder_weights()
 
             with profiler("encoder", profiler_iteration) if profiler else nullcontext():
-                with self.encoder_reshape(self.encoder_device):
+                with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape):
                     prompt_embeds, prompt_mask = self._encode_prompts(
                         prompts=prompts,
                         negative_prompts=negative_prompts,
@@ -704,7 +669,7 @@ class QwenImagePipeline:
                         self._deallocate_transformers()
                         self._reload_vae()
 
-                    with self.encoder_reshape(self.encoder_device):
+                    with self.mesh_reshape(self.encoder_device, self.encoder_mesh_shape):
                         tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
                         tt_decoded_output = self._vae_decoder(tt_latents)
                         decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(

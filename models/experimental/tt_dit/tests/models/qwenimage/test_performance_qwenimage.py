@@ -20,12 +20,18 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         # 2x4 config with sp enabled - sp on axis 0 enables fsdp weight sharding (no cfg parallel)
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(1, 8), (1, 0), (1, 0), (8, 1), (8, 1), (8, 1), ttnn.Topology.Linear, 1],  # 109 s
+        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # OOM with all configs
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 78 s. Less than 1s to load vae.
+        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],  # 112 s
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4sp2tp4",
-        "4x8sp4tp4",
+        "1x8cfg1sp1tp8",
+        "2x4cfg2sp2tp2",
+        "2x4cfg2sp1tp4",
+        "2x4cfg1sp2tp4",
+        "4x8cfg2sp4tp4",
     ],
     indirect=["mesh_device"],
 )
@@ -37,8 +43,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 @pytest.mark.parametrize(
     "is_fsdp",
     [
-        pytest.param(True, id="fsdp_enabled"),
-        # pytest.param(False, id="fsdp_disabled"),  # uncomment to compare with/without fsdp
+        # pytest.param(True, id="fsdp_enabled"),
+        pytest.param(False, id="fsdp_disabled"),  # uncomment to compare with/without fsdp
     ],
 )
 def test_qwenimage_pipeline_performance(

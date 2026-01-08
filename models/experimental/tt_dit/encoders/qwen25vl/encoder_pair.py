@@ -97,6 +97,7 @@ class Qwen25VlTokenizerEncoderPair:
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
             dtype="bf16",
+            is_fsdp=self._is_fsdp,
         ):
             logger.info("loading encoder from torch state...")
             model.load_torch_state_dict(torch_state_dict)
@@ -117,6 +118,7 @@ class Qwen25VlTokenizerEncoderPair:
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
             dtype="bf16",
+            is_fsdp=self._is_fsdp,
         ):
             self._encoder.load_torch_state_dict(self._encoder_state_dict)
 
