@@ -18,8 +18,8 @@ struct TransposeCNSharedVariables {
     CoreRangeSet core_group_2;
     uint32_t num_cores_total{};
     uint32_t num_cores_y{};
-    uint32_t num_tiles_per_core_group_1{};
-    uint32_t num_tiles_per_core_group_2{};
+    uint32_t num_pages_per_core_group_1{};
+    uint32_t num_pages_per_core_group_2{};
 };
 
 struct TransposeCNProgramFactory {

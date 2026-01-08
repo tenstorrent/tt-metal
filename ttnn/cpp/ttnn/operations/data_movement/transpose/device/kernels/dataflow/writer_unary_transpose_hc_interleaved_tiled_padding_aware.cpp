@@ -128,7 +128,7 @@ void kernel_main() {
                     uint32_t linear_idx = base_linear_idx + output_h_face_line * C_t * W_t;
 
                     // Compute the write address
-                    uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+                    uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
 
                     // Perform asynchronous write
                     noc_async_write(l1_read_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
@@ -186,7 +186,7 @@ void kernel_main() {
                         uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line * FACE_WIDTH) * element_size;
 
                         // Compute the write address
-                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+                        uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
 
                         // Perform asynchronous write
                         noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -34,8 +35,8 @@ void kernel_main() {
             uint32_t l1_read_addr = get_read_ptr(cb_out0);
             uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
             for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
-                uint64_t write_noc_addr = get_noc_addr(i_stick, s);
-                noc_async_write(l1_read_addr, write_noc_addr, stick_size_bytes);
+                tt::data_movement::common::noc_async_write_sharded(l1_read_addr, s, i_stick, 0, stick_size_bytes);
+
                 l1_read_addr += l1_read_offset_bytes;
                 i_stick += 1;
             }
