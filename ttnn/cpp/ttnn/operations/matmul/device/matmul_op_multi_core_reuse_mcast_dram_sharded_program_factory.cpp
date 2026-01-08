@@ -12,6 +12,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 
@@ -785,7 +786,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                 mm_in1_sender_writer_args.push_back(
                     per_core_N_storage_curr_stride * output_single_tile_size);  // reshard_tensor_start_offset
                 mm_in1_sender_writer_args.push_back(
-                    per_core_N_reshard_1 * output_single_tile_size);  // per_core_N_reshard_bytes_1
+                    per_core_N_reshard_1 * output_single_tile_size);                       // per_core_N_reshard_bytes_1
                 mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx]);  // output_noc_x
                 mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx]);  // output_noc_y
 
@@ -831,7 +832,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                 mm_in1_sender_writer_args.push_back(
                     storage_core_stride * output_single_tile_size);  // reshard_tensor_start_offset
                 mm_in1_sender_writer_args.push_back(
-                    worker_core_stride * output_single_tile_size);  // per_core_N_reshard
+                    worker_core_stride * output_single_tile_size);                     // per_core_N_reshard
                 mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core]);  // output_noc_x
                 mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core]);  // output_noc_y
 
@@ -865,7 +866,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                     }
 
                     mm_in1_sender_writer_args.push_back(
-                        current_worker_write_back_tiles * output_single_tile_size);  // per_core_N_reshard
+                        current_worker_write_back_tiles * output_single_tile_size);        // per_core_N_reshard
                     mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core]);  // output_noc_x
                     mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core]);  // output_noc_y
 

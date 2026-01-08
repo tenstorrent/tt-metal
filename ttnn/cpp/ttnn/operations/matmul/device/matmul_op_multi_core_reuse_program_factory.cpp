@@ -8,6 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt::constants;
 using namespace tt;

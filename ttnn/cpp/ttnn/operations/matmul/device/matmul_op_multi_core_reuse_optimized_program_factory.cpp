@@ -9,6 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 
