@@ -279,8 +279,7 @@ public:
 
     FORCE_INLINE void advance_remote_receiver_buffer_index_impl() {
         next_packet_buffer_index = wrap_increment<NUM_BUFFERS>(next_packet_buffer_index);
-        this->cached_next_buffer_slot_addr = reinterpret_cast<size_t>(channel_base_address) + 
-            next_packet_buffer_index * this->max_eth_payload_size_in_bytes;
+        this->cached_next_buffer_slot_addr = reinterpret_cast<size_t>(channel_base_address) + next_packet_buffer_index * this->max_eth_payload_size_in_bytes;
     }
 
     volatile uint32_t* channel_base_address;
