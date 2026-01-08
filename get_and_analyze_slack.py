@@ -276,27 +276,95 @@ def extract_nd_failure_from_reply(reply: dict) -> dict:
     """Extract ND failure information from a reply. Returns None if not an ND failure."""
     reply_text = reply.get("text", "")
 
-    # Check if this reply contains the ND failure message
-    if "the failure is clearly non-deterministic/infra noise" not in reply_text.lower():
+    # Reconstruct full text from blocks if available (for scenario extraction)
+    full_text_for_extraction = reply_text
+    if "blocks" in reply:
+        full_text = ""
+        for block in reply.get("blocks", []):
+            if block.get("type") == "rich_text":
+                elements = block.get("elements", [])
+                for element in elements:
+                    if element.get("type") == "rich_text_section":
+                        sub_elements = element.get("elements", [])
+                        for sub_elem in sub_elements:
+                            if sub_elem.get("type") == "text":
+                                full_text += sub_elem.get("text", "")
+                            elif sub_elem.get("type") == "link":
+                                url = sub_elem.get("url", "")
+                                text = sub_elem.get("text", url)
+                                full_text += f"<{url}|{text}>"
+        if full_text:
+            full_text_for_extraction = full_text
+
+    # Extract scenario field to check for "Failure likely outside tt-metal"
+    def extract_field(field_name: str, text: str) -> str:
+        next_fields = r"(?:FULL REPORT|FAILING WORKFLOW|FAILING JOB|FAILING TEST|FAILING RUN|SCENARIO|FAILURE MESSAGE|RELEVANT DEVELOPERS|RELEVANT FILES|NOTES):"
+        pattern = rf"{re.escape(field_name)}:\s*(.+?)(?=\n{next_fields}|$)"
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        if match:
+            value = match.group(1).strip()
+            value = re.sub(r"<([^|>]+)\|([^>]+)>", r"\2 (\1)", value)
+            value = re.sub(r"<([^>]+)>", r"\1", value)
+            return value
+        return ""
+
+    scenario = extract_field("SCENARIO", full_text_for_extraction)
+    is_scenario_nd = "failure likely outside tt-metal" in scenario.lower() if scenario else False
+
+    # Check if this reply contains the ND failure message (old type)
+    is_text_nd = "the failure is clearly non-deterministic/infra noise" in reply_text.lower()
+
+    # Must be one of the two ND failure types
+    if not is_text_nd and not is_scenario_nd:
         return None
 
-    # Extract job name
-    job_name = extract_job_name_from_reply(reply_text)
-
-    # Extract failure reason
-    reason_from_text = extract_failure_reason(reply_text)
-    reason_from_blocks = "Unknown reason"
-
-    if "blocks" in reply:
-        reason_from_blocks = extract_reason_from_blocks(reply.get("blocks", []))
-
-    # Prefer the longer reason (more likely to be complete)
-    if reason_from_blocks != "Unknown reason" and len(reason_from_blocks) > len(reason_from_text):
-        reason = reason_from_blocks
-    elif reason_from_text != "Unknown reason":
-        reason = reason_from_text
+    # Extract job name - different logic for each type
+    if is_scenario_nd:
+        # For scenario-based ND failures, extract from FAILING JOB field
+        failing_job = extract_field("FAILING JOB", full_text_for_extraction)
+        if failing_job:
+            # Extract job name from "workflow / job" format if present
+            if "/" in failing_job:
+                parts = failing_job.split("/", 1)
+                if len(parts) == 2:
+                    job_name = parts[1].strip()
+                else:
+                    job_name = failing_job.strip()
+            else:
+                job_name = failing_job.strip()
+        else:
+            job_name = "Unknown Job"
     else:
-        reason = reason_from_blocks
+        # For text-based ND failures, use existing extraction
+        job_name = extract_job_name_from_reply(reply_text)
+
+    # Extract failure reason - different logic for each type
+    if is_scenario_nd:
+        # For scenario-based ND failures, use failure_message or notes
+        failure_message = extract_field("FAILURE MESSAGE", full_text_for_extraction)
+        notes = extract_field("NOTES", full_text_for_extraction)
+
+        if failure_message:
+            reason = failure_message
+        elif notes:
+            reason = notes
+        else:
+            reason = "Failure likely outside tt-metal"
+    else:
+        # For text-based ND failures, use existing extraction
+        reason_from_text = extract_failure_reason(reply_text)
+        reason_from_blocks = "Unknown reason"
+
+        if "blocks" in reply:
+            reason_from_blocks = extract_reason_from_blocks(reply.get("blocks", []))
+
+        # Prefer the longer reason (more likely to be complete)
+        if reason_from_blocks != "Unknown reason" and len(reason_from_blocks) > len(reason_from_text):
+            reason = reason_from_blocks
+        elif reason_from_text != "Unknown reason":
+            reason = reason_from_text
+        else:
+            reason = reason_from_blocks
 
     # Extract timestamp and format date
     timestamp = reply.get("ts", "")
