@@ -72,19 +72,18 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(gamma_tensor.storage_type() == StorageType::DEVICE, "Gamma must be on device.");
         TT_FATAL(gamma_tensor.buffer() != nullptr, "Gamma must be allocated on device.");
         TT_FATAL(gamma_tensor.dtype() == DataType::BFLOAT16, "Gamma must be BF16.");
-        TT_FATAL(gamma_tensor.padded_shape()[-1] == a.padded_shape()[-1], "Gamma hidden dimension must match input.");
         TT_FATAL(a.device() == gamma_tensor.device(), "Input and gamma tensors must be on same device");
 
         const auto& beta_tensor = beta.value();
         TT_FATAL(beta_tensor.storage_type() == StorageType::DEVICE, "Beta must be on device.");
         TT_FATAL(beta_tensor.buffer() != nullptr, "Beta must be allocated on device.");
         TT_FATAL(beta_tensor.dtype() == DataType::BFLOAT16, "Beta must be BF16.");
-        TT_FATAL(beta_tensor.padded_shape()[-1] == a.padded_shape()[-1], "Beta hidden dimension must match input.");
         TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
 
         auto check_layout = [&](const Tensor& t, const std::string& name) {
             if (t.layout() == Layout::TILE) {
                 TT_FATAL(t.padded_shape()[-2] == TILE_HEIGHT, "{} height must be TILE_HEIGHT (32)", name);
+                TT_FATAL(t.padded_shape()[-1] == a.padded_shape()[-1], "{} hidden dimension must match input.", name);
             } else {
                 TT_FATAL(t.layout() == Layout::ROW_MAJOR, "{} must be TILE or ROW_MAJOR", name);
                 TT_FATAL(
