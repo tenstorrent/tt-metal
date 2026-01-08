@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -51,6 +52,8 @@ def test_layer_norm_sharded_single_stage(
 def test_layer_norm_sharded_two_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_welford, two_stage, tensor_type, dtype
 ):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_layer_norm_sharded_two_stage due to watcher being enabled, github issue #29024")
     layernorm_test_main(
         device,
         h,

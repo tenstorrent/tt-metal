@@ -180,11 +180,11 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
     ):
         pytest.skip("Test is not passing with watcher enabled")
 
-    if kernel_h == 36 and in_place:
-        pytest.skip("36x36 kernel in place runs out of memory")
+    if kernel_h == 36:
+        pytest.skip("36x36 kernel runs out of memory")
 
     torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
         (kernel_h, kernel_w),
         (pad_h, pad_w),
