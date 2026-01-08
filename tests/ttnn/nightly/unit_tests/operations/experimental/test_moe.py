@@ -33,9 +33,9 @@ def run_test_moe(device, M, K, N, check_accuracy):
 
     if check_accuracy:
         torch_input = torch.randn((M, K), dtype=torch.float32)
-        torch_w0 = torch.randn((K, 12 * 5 * 32), dtype=torch.float32)
-        torch_w1 = torch.randn((K, 12 * 5 * 32), dtype=torch.float32)
-        torch_w2 = torch.randn((N, 12 * 18 * 32), dtype=torch.float32)
+        torch_w0 = torch.randn((K, N), dtype=torch.float32)
+        torch_w1 = torch.randn((K, N), dtype=torch.float32)
+        torch_w2 = torch.randn((N, K), dtype=torch.float32)
 
     # Generate shard specs for weights
     shard_grid_all_12_dram = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})
@@ -50,16 +50,6 @@ def run_test_moe(device, M, K, N, check_accuracy):
     weight2_shard_spec = ttnn.ShardSpec(shard_grid_all_12_dram, [N, 18 * 32], ttnn.ShardOrientation.ROW_MAJOR)
     weight2_shard_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, weight2_shard_spec
-    )
-
-    # Create HEIGHT_SHARDED memory config for input
-    # Each core (expert) gets a copy of the original (M, K) input
-    input_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M, K),  # Shard shape - each core gets (M, K)
-        core_grid=ttnn.CoreGrid(x=8, y=8),  # 64 cores
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
     )
 
     # Prepare TT tensors
@@ -87,6 +77,10 @@ def run_test_moe(device, M, K, N, check_accuracy):
             memory_config=weight2_shard_memory_config,
         )
         tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.from_torch(torch_w0, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight1 = ttnn.from_torch(torch_w1, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight2 = ttnn.from_torch(torch_w2, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
     else:
         tt_input = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight0 = ttnn.empty(
@@ -110,6 +104,10 @@ def run_test_moe(device, M, K, N, check_accuracy):
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight2_shard_memory_config,
         )
+        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.empty((K, N), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight1 = ttnn.empty((K, N), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight2 = ttnn.empty((N, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
         tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
 
     if check_accuracy:
