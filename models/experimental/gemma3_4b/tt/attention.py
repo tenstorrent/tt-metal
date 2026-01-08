@@ -819,7 +819,7 @@ class Attention(LightweightModule):
                 page_table,
                 chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
             )
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
