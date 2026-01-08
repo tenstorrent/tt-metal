@@ -13,7 +13,7 @@
 namespace ttnn::operations::data_movement::repeat {
 
 RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     bool is_last_dim = operation_attributes.m_is_last_dim;
     if (is_last_dim) {
         return program::RepeatProgramFactoryLastDim{};
@@ -74,7 +74,7 @@ RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_outpu
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 RepeatDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input;

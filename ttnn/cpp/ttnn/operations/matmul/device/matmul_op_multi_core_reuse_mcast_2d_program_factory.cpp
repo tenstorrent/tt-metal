@@ -1358,7 +1358,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
          start_core_y,
          transpose_mcast,
          cores](
-            const void* operation,
+            const void* /*operation*/,
             tt::tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,

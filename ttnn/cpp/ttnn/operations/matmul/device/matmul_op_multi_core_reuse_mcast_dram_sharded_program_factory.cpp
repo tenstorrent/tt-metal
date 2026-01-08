@@ -892,7 +892,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
-            const void* operation,
+            const void* /*operation*/,
             tt::tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,

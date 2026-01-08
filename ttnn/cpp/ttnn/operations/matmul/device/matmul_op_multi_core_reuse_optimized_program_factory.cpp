@@ -506,10 +506,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     auto override_runtime_arguments_callback =
         [mm_kernel_in0_reader_id, mm_kernel_in1_reader_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores](
-            const void* operation,
+            const void* /*operation*/,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             auto* src_buffer_a = input_tensors.at(0).buffer();
             auto* src_buffer_b = input_tensors.at(1).buffer();

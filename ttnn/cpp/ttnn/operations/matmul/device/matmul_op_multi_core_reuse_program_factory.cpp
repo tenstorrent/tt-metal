@@ -203,7 +203,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                            num_cores_x,
                                            num_blocks_y,
                                            num_blocks_x](
-                                              const void* operation,
+                                              const void* /*operation*/,
                                               const tt::tt_metal::Program& program,
                                               const std::vector<ttnn::Tensor>& input_tensors,
                                               const std::vector<std::optional<const ttnn::Tensor>>&,

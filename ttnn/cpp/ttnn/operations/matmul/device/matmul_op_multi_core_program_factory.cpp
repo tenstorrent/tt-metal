@@ -171,7 +171,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
-            const void* operation,
+            const void* /*operation*/,
             const Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,

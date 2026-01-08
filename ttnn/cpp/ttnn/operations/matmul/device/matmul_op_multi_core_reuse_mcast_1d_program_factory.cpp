@@ -1786,14 +1786,14 @@ process_gather_in0_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     bool dst_full_sync_en,
-    CoreCoord compute_with_storage_grid_size,
+    CoreCoord /*compute_with_storage_grid_size*/,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t base_cb_index,
-    uint32_t B,
-    uint32_t M,
-    uint32_t N,
+    uint32_t /*B*/,
+    uint32_t /*M*/,
+    uint32_t /*N*/,
     uint32_t K,
-    bool bcast_batch,
+    bool /*bcast_batch*/,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -2409,7 +2409,7 @@ process_gather_in0_program_and_create_override_variables(
 
 inline void override_mcast_in1_program_parameters(
     const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const void* operation,
+    const void* /*operation*/,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
@@ -2486,7 +2486,7 @@ inline void override_mcast_in1_program_parameters(
 
 inline void override_mcast_in0_program_parameters(
     const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const void* operation,
+    const void* /*operation*/,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
@@ -2558,7 +2558,7 @@ inline void override_gather_in0_program_parameters(
     const void* operation,
     tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& /*optional_input_tensors*/,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
     const auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
@@ -3105,10 +3105,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool mcast_in0,
-    bool gather_in0,
-    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    uint32_t num_global_cb_receivers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    bool /*gather_in0*/,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& /*global_cb*/,
+    uint32_t /*num_global_cb_receivers*/,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
@@ -3809,10 +3809,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     auto override_runtime_arguments_callback =
         [shared_vars](
-            const void* operation,
+            const void* /*operation*/,
             tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& /*optional_input_tensors*/,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
             auto* src_buffer_a = input_tensors.at(0).buffer();
             auto* src_buffer_b = input_tensors.at(1).buffer();

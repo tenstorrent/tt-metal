@@ -231,10 +231,10 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
 
     auto override_runtime_arguments_callback =
         [reader_kernel_id = reader_kernels_id, writer_kernel_id = writer_kernels_id, cores](
-            const void* operation,
+            const void* /*operation*/,
             Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             const auto& input_tensor = input_tensors.at(0);
 

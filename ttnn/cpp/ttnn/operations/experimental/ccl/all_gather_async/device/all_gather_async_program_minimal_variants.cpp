@@ -830,7 +830,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
@@ -863,7 +863,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
-    const uint32_t dim,
+    const uint32_t /*dim*/,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -1135,7 +1135,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];

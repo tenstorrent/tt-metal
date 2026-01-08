@@ -22,7 +22,7 @@
 
 using namespace tt;
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** /*argv*/) {
     bool pass = true;
 
     try {

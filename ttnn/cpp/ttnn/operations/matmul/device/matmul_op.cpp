@@ -137,7 +137,6 @@ bool get_broadcast_batch(
 
 operation::OpPerformanceModel create_op_performance_model_for_matmul(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<Tensor>& output_tensors,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& in_a_shape = input_tensors.at(0).logical_shape();
@@ -213,7 +212,6 @@ inline uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const bool transpose_a,
-    const bool transpose_b,
     uint32_t interm_single_tile_size,
     uint32_t bias_single_tile_size) {
     // Circular Buffer sizes:
@@ -278,7 +276,6 @@ inline bool can_cbs_fit_in_l1(
         input_tensor_a,
         input_tensor_b,
         transpose_a,
-        transpose_b,
         estimate_interm_tile_size(compute_kernel_config, output_dtype),
         bias_single_tile_size);
     return size < max_l1_space;
@@ -302,7 +299,6 @@ inline uint32_t get_per_core_factor(
             input_tensor_a,
             input_tensor_b,
             transpose_a,
-            transpose_b,
             estimate_interm_tile_size(compute_kernel_config, output_dtype),
             bias_single_tile_size);
         if (size < max_l1_space) {
@@ -331,7 +327,6 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
         input_tensor_a,
         input_tensor_b,
         transpose_a,
-        transpose_b,
         interm_cb_size,
         bias_single_tile_size);
     if (size < max_l1_space) {
@@ -392,7 +387,6 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
                 input_tensor_a,
                 input_tensor_b,
                 transpose_a,
-                transpose_b,
                 interm_cb_size,
                 bias_single_tile_size);
             if (size < max_l1_space) {
@@ -504,8 +498,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const bool out_sharded,
     const std::optional<const CoreCoord> compute_with_storage_grid_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const tt::tt_metal::DataType output_dtype,
-    const bool all_dram_interleaved) {
+    const tt::tt_metal::DataType output_dtype) {
     auto* device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
 
@@ -660,8 +653,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config,
-                output_dtype,
-                all_dram_interleaved);
+                output_dtype);
         }
         if (core_range.x == 1 or use_mcast_1d_in1_config) {
             return get_mcast_1d_config(
@@ -676,8 +668,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config,
-                output_dtype,
-                all_dram_interleaved);
+                output_dtype);
         }
         if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
             bool transpose_mcast =
@@ -1691,7 +1682,7 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 SparseMatmul create_sparse_matmul_struct(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const Tensor& sparsity,
+    const Tensor& /*sparsity*/,
     const struct SparseMatmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
     auto matmul_parameters = Matmul{
@@ -2920,12 +2911,12 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    return ::create_op_performance_model_for_matmul(
-        input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config.value());
+    return ::create_op_performance_model_for_matmul(input_tensors, output_tensors, this->compute_kernel_config.value());
 }
 
 void SparseMatmul::validate(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<Tensor>>& /*optional_output_tensors*/) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& sparsity = input_tensors.at(2);

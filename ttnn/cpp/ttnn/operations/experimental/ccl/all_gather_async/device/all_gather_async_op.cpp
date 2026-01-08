@@ -151,7 +151,7 @@ std::vector<Tensor> AllGatherAsync::create_output_tensors(
     return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
 }
 
-AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor) const {
+AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& /*input_tensor*/) const {
     // Check for minimal sharded case
     if (this->use_all_gather_async_llama_sharded) {
         TT_FATAL(
