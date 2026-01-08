@@ -87,15 +87,15 @@ struct {OperationName}DeviceOperation {
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            const {OperationName}Params& operation_attributes,
+            const {OperationName}Inputs& tensor_args,
+            Tensor& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            const {OperationName}Params& operation_attributes,
+            const {OperationName}Inputs& tensor_args,
+            Tensor& output);
     };
     using program_factory_t = std::variant<ProgramFactory>;
 };
@@ -225,22 +225,22 @@ The scaffolder creates these implementations in `device/{operation_name}_op.cpp`
 // select_program_factory (already created by scaffolder)
 {OperationName}DeviceOperation::program_factory_t
 {OperationName}DeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const {OperationName}Params& operation_attributes,
+    const {OperationName}Inputs& tensor_args) {
     return ProgramFactory{};
 }
 
 // validate_on_program_cache_miss (already created by scaffolder)
 void {OperationName}DeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args) {
+    const {OperationName}Params& attributes,
+    const {OperationName}Inputs& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
 // validate_on_program_cache_hit (already created by scaffolder)
 void {OperationName}DeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args) {
+    const {OperationName}Params& attributes,
+    const {OperationName}Inputs& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 ```
@@ -250,9 +250,9 @@ The scaffolder also creates `ProgramFactory::create` stub that calls the program
 // ProgramFactory::create (already created by scaffolder - calls detail::{operation_name}_single_core)
 {OperationName}DeviceOperation::ProgramFactory::cached_program_t
 {OperationName}DeviceOperation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const {OperationName}Params& operation_attributes,
+    const {OperationName}Inputs& tensor_args,
+    Tensor& output) {
     return detail::{operation_name}_single_core(
         tensor_args.input,
         output,
@@ -262,9 +262,9 @@ The scaffolder also creates `ProgramFactory::create` stub that calls the program
 // override_runtime_arguments (already created by scaffolder)
 void {OperationName}DeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const {OperationName}Params& operation_attributes,
+    const {OperationName}Inputs& tensor_args,
+    Tensor& output) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
