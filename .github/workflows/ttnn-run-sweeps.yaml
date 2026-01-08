@@ -727,79 +727,54 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Install PostgreSQL 18 Client
-        run: |
-         apt-get update
-         apt-get install -y wget gnupg lsb-release
-
-         echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-         > /etc/apt/sources.list.d/pgdg.list
-
-         wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-
-         apt-get update
-         apt-get install -y postgresql-client-18
       - name: 🔌 Setup Local Database
         timeout-minutes: 5
+        env:
+         PGPASSWORD: tt.sweeps
         run: |
-          echo "::group::🔧 Database Setup"
-          echo "Setting up local PostgreSQL database for sweep parameter generation..."
+         echo "::group::🔧 Database Setup"
+         echo "Setting up local PostgreSQL database for sweep parameter generation..."
 
-          # Install psycopg2 if not present
-          echo "Checking for psycopg2..."
-          if ! python3 -c "import psycopg2" 2>/dev/null; then
-            echo "Installing psycopg2-binary..."
-            pip install -q psycopg2-binary
-            echo "✅ psycopg2 installed"
-          else
-            echo "✅ psycopg2 already available"
+         # psycopg2
+         if ! python3 -c "import psycopg2" 2>/dev/null; then
+          pip install -q psycopg2-binary
+         fi
+
+         echo "⏳ Waiting for postgres service..."
+         for i in {1..20}; do
+          if docker exec postgres pg_isready -U tt-sweeps >/dev/null 2>&1; then
+          echo "✅ Postgres ready"
+          break
           fi
+          sleep 2
+         done
 
-          # PostgreSQL service is already running, restore the custom format dump
-          echo "Restoring database from custom format dump (963KB)..."
-          PGPASSWORD=tt.sweeps pg_restore -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
-            --clean --if-exists --no-owner --no-privileges \
-            model_tracer/ttnn_operations_db.sql 2>&1 | grep -v "^WARNING:" | grep -v "^ERROR:.*does not exist" || true
-          echo "✅ Database restored"
+         echo "♻ Restoring database from dump..."
+         docker exec -e PGPASSWORD=tt.sweeps postgres \
+         pg_restore -U tt-sweeps -d tt-model-traces \
+         --clean --if-exists --no-owner --no-privileges \
+         /work/model_tracer/ttnn_operations_db.sql
 
-          # Verify database
-          echo "Verifying database..."
-          python3 -c "
-          import sys
-          import psycopg2
-          from psycopg2.extras import RealDictCursor
+         echo "🔍 Verifying schema..."
+         docker exec -e PGPASSWORD=tt.sweeps postgres \
+         psql -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM operations;"
+         docker exec -e PGPASSWORD=tt.sweeps postgres \
+         psql -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM configurations;"
 
-          try:
-              # Connect to database service (hostname 'postgres' in GitHub Actions services)
-              conn = psycopg2.connect(
-                  'postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces',
-                  cursor_factory=RealDictCursor,
-                  connect_timeout=10
-              )
-              cursor = conn.cursor()
-
-              # Verify schema and data
-              cursor.execute('SELECT COUNT(*) as count FROM operations')
-              op_count = cursor.fetchone()['count']
-
-              cursor.execute('SELECT COUNT(*) as count FROM configurations')
-              config_count = cursor.fetchone()['count']
-
-              cursor.close()
-              conn.close()
-
-              print(f'✅ Database restored and verified successfully')
-              print(f'   - Operations: {op_count}')
-              print(f'   - Configurations: {config_count}')
-              print(f'   - Ready for sweep parameter generation')
-
-          except Exception as e:
-              print(f'❌ Database setup failed: {e}', file=sys.stderr)
-              import traceback
-              traceback.print_exc(file=sys.stderr)
-              sys.exit(1)
-          "
-          echo "::endgroup::"
+         echo "✅ Database ready"
+         echo "::endgroup::"
+      - name: Verify Database from Python
+        run: |
+         python3 - << 'EOF'
+         import psycopg2
+         conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
+         cur = conn.cursor()
+         cur.execute("SELECT COUNT(*) FROM operations")
+         print("Operations:", cur.fetchone()[0])
+         cur.execute("SELECT COUNT(*) FROM configurations")
+         print("Configurations:", cur.fetchone()[0])
+         conn.close()
+         EOF
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&
