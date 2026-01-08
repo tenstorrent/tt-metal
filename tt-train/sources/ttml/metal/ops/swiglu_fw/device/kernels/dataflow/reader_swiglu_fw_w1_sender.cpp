@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <hw/inc/dataflow_api.h>
-
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with input data
@@ -64,6 +62,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_sender_semaphore_addr);
     volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_receiver_semaphore_addr);
+
     // DPRINT << "[sender]: Sender reader start" << "\n";
 
 #ifdef ROW_OF_M_FITS_IN_L1

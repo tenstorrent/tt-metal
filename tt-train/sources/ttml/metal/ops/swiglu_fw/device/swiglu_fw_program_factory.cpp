@@ -28,11 +28,15 @@ constexpr auto kComputeKernelPath =
 constexpr auto kComputeKernelMfitsL1Path =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel_m_fits_l1.cpp";
 
-// Reader buffer indices
+// Reader buffer indices (sender kernel has W1, receiver doesn't)
 constexpr uint32_t kInputBufferIdx = 0;
 constexpr uint32_t kW1BufferIdx = 1U;
 constexpr uint32_t kW2BufferIdx = 2U;
 constexpr uint32_t kW3BufferIdx = 3U;
+
+// Receiver kernel buffer indices (no W1 - it comes via multicast)
+constexpr uint32_t kReceiverW2BufferIdx = 1U;  // w2 is at index 1 for receiver (no w1)
+constexpr uint32_t kReceiverW3BufferIdx = 2U;  // w3 is at index 2 for receiver
 
 // Writer buffer indices
 constexpr uint32_t kSwigluBufferIdx = 0;
@@ -89,7 +93,8 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_2,
     ttnn::IDevice* device,
     uint32_t mcast_sender_semaphore_id,
-    uint32_t mcast_receiver_semaphore_id) {
+    uint32_t mcast_receiver_semaphore_id,
+    bool use_multicast) {
     uint32_t num_senders = 0;
     uint32_t num_receivers = 0;
 
@@ -107,25 +112,29 @@ void assign_per_core_runtime_args(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        // Determine if this core is a W1 sender (left column) or receiver
-        bool is_w1_sender = (core.x == 0);
+        // Determine kernel assignment based on multicast flag:
+        // - When multicast enabled: x==0 cores use sender kernel, x>0 use receiver kernel
+        // - When multicast disabled: all cores use sender kernel with mcast_num_dests=0
+        bool is_w1_sender = use_multicast ? (core.x == 0) : true;
 
         if (is_w1_sender) {
-            // Sender core: reads from DRAM and multicasts W1 to receivers in same row
-            // Count how many receiver cores actually exist in this sender's row
+            // Sender core: reads from DRAM and (optionally) multicasts W1 to receivers in same row
             uint32_t mcast_num_dests = 0;
             uint32_t mcast_start_x = 0;
             uint32_t mcast_end_x = 0;
 
-            // Count actual receivers in this row (cores with x > 0 in same row y)
-            for (uint32_t x = 1; x < num_cores_x; ++x) {
-                tt::tt_metal::CoreCoord receiver_core = {x, core.y};
-                if (core_group_1.contains(receiver_core) || core_group_2.contains(receiver_core)) {
-                    if (mcast_num_dests == 0) {
-                        mcast_start_x = x;  // First receiver
+            // Only count receivers when multicast is enabled
+            if (use_multicast) {
+                // Count actual receivers in this row (cores with x > 0 in same row y)
+                for (uint32_t x = 1; x < num_cores_x; ++x) {
+                    tt::tt_metal::CoreCoord receiver_core = {x, core.y};
+                    if (core_group_1.contains(receiver_core) || core_group_2.contains(receiver_core)) {
+                        if (mcast_num_dests == 0) {
+                            mcast_start_x = x;  // First receiver
+                        }
+                        mcast_end_x = x;  // Last receiver (keeps updating)
+                        mcast_num_dests++;
                     }
-                    mcast_end_x = x;  // Last receiver (keeps updating)
-                    mcast_num_dests++;
                 }
             }
 
@@ -167,8 +176,9 @@ void assign_per_core_runtime_args(
                  mcast_num_dests,
                  mcast_sender_semaphore_id,
                  mcast_receiver_semaphore_id});
-        } else if (num_cores > 1) {
-            // Receiver core: receives W1 via multicast, still reads X, W2, W3 from DRAM
+        } else if (use_multicast && core.x > 0) {
+            // Receiver core: only used when multicast is enabled
+            // Receives W1 via multicast, still reads X, W2, W3 from DRAM
             num_receivers++;
             tt::tt_metal::CoreCoord sender_core = {0, core.y};  // Sender is in left column
             auto sender_physical = device->worker_core_from_logical_core(sender_core);
@@ -296,6 +306,52 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process, /*row_wise=*/true);
 
     // -------------------------------------------------------------------------
+    // 1.5) Check if multicast should be enabled
+    // -------------------------------------------------------------------------
+    // Multicast requires all cores in each logical row to process the same number of rows.
+    // If split_work_to_cores assigns different row counts within a row, disable multicast.
+    bool use_multicast = true;
+    if (num_cores_x > 1) {
+        // Build a map of row_index -> set of row counts
+        std::map<uint32_t, std::set<uint32_t>> row_workloads;
+        // std::cerr << "SwiGLU: Checking workload distribution:\n";
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
+            uint32_t num_rows_per_core =
+                core_group_1.contains(core) ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
+            row_workloads[core.y].insert(num_rows_per_core);
+            // if (i < 24) {  // Debug first 3 rows
+            //     std::cerr << "  Core (" << core.x << "," << core.y
+            //               << "): " << (core_group_1.contains(core) ? "group_1" : "group_2") << " = "
+            //               << num_rows_per_core << " rows\n";
+            // }
+        }
+
+        // Check if any row has mixed workloads
+        for (const auto& [row_index, workload_set] : row_workloads) {
+            // std::cerr << "  Row y=" << row_index << " has workloads: ";
+            // for (auto w : workload_set) std::cerr << w << " ";
+            // std::cerr << (workload_set.size() > 1 ? " [IMBALANCE]" : " [OK]") << "\n";
+            if (workload_set.size() > 1) {
+                use_multicast = false;
+                // std::cerr << "SwiGLU: Disabling multicast due to workload imbalance in row " << row_index <<
+                // std::endl;
+                break;
+            }
+        }
+    } else {
+        // Single column: no multicast needed
+        use_multicast = false;
+    }
+
+    // std::cerr << "SwiGLU CREATE: use_multicast=" << use_multicast << ", num_cores=" << num_cores << " (" <<
+    // num_cores_x
+    //           << "x" << num_cores_y << ")"
+    //           << ", total_rows=" << total_rows_to_process << ", group_1=" << num_rows_per_core_group_1 << " rows"
+    //           << ", group_2=" << num_rows_per_core_group_2 << " rows"
+    //           << ", Wt=" << Wt << ", hidden_Wt=" << hidden_Wt << std::endl;
+
+    // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
@@ -402,10 +458,17 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
             for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                 tt::tt_metal::CoreCoord core = {x, y};
-                if (core.x == 0) {
-                    sender_ranges.push_back(tt::tt_metal::CoreRange(core, core));
+                // When multicast is enabled: senders are x==0, receivers are x>0
+                // When multicast is disabled: all cores are senders
+                if (use_multicast) {
+                    if (core.x == 0) {
+                        sender_ranges.push_back(tt::tt_metal::CoreRange(core, core));
+                    } else {
+                        receiver_ranges.push_back(tt::tt_metal::CoreRange(core, core));
+                    }
                 } else {
-                    receiver_ranges.push_back(tt::tt_metal::CoreRange(core, core));
+                    // No multicast: all cores use sender kernel
+                    sender_ranges.push_back(tt::tt_metal::CoreRange(core, core));
                 }
             }
         }
@@ -422,8 +485,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // NOTE: W1, W3, W2 execute sequentially (W1→W3 in Phase A, W2 in Phase C)
     // and share the same multicast topology, so they can reuse the same semaphores.
     // -------------------------------------------------------------------------
-    uint32_t mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    uint32_t mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    uint32_t mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     // -------------------------------------------------------------------------
     // 3.3) Create sender and receiver reader kernels for W1 multicast
@@ -439,8 +502,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     kernels.reader_w1_sender =
         create_reader_kernel(program, left_column_set, sender_compile_time_args, defines, kReaderW1SenderKernelPath);
 
-    // Only create receiver kernel if we actually have receiver cores
-    if (!receiver_ranges.empty()) {
+    // Only create receiver kernel if multicast is enabled and we have receiver cores
+    if (use_multicast && !receiver_ranges.empty()) {
         // Receiver kernel compile-time args (NO W1 buffer access - comes via multicast)
         std::vector<uint32_t> receiver_compile_time_args{block_size, Wt, hidden_Wt};
         tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(receiver_compile_time_args);
@@ -508,7 +571,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         core_group_2,
         device,
         mcast_sender_semaphore_id,
-        mcast_receiver_semaphore_id);
+        mcast_receiver_semaphore_id,
+        use_multicast);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -524,7 +588,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
          /* core_group_2                           = */ core_group_2,
          /* num_cores                              = */ num_cores,
          /* num_cores_x                            = */ num_cores_x,
-         /* num_cores_y                            = */ num_cores_y}};
+         /* num_cores_y                            = */ num_cores_y,
+         /* use_multicast                          = */ use_multicast}};
 }
 
 void SwiGLUForwardProgramFactory::override_runtime_arguments(
@@ -553,33 +618,31 @@ void SwiGLUForwardProgramFactory::override_runtime_arguments(
     auto& sender_runtime_args = GetRuntimeArgs(program, swiglu_fw_reader_w1_sender_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, swiglu_fw_writer_kernel_id);
 
-    // Check if we have any receiver cores
-    bool has_receiver_cores = false;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        if (core.x > 0) {
-            has_receiver_cores = true;
-            break;
-        }
-    }
+    // Check if multicast was enabled during kernel creation
+    bool use_multicast = shared_variables.use_multicast;
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        // With row_wise=true, split_work_to_cores allocates horizontally: (0,0), (1,0), (2,0), ...
+        tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
-        // Update input buffers for sender cores (leftmost column)
-        if (core.x == 0) {
-            auto& runtime_args = sender_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-            runtime_args[kW1BufferIdx] = w1_buffer->address();
-            runtime_args[kW2BufferIdx] = w2_buffer->address();
-            runtime_args[kW3BufferIdx] = w3_buffer->address();
-        } else if (has_receiver_cores) {
-            // Update input buffers for receiver cores (all other columns)
-            // Only access receiver args if receiver kernel was created
+        // When multicast is enabled:
+        //   - Sender cores (x==0) use sender kernel
+        //   - Receiver cores (x>0) use receiver kernel
+        // When multicast is disabled:
+        //   - All cores use sender kernel (with mcast_num_dests=0)
+        if (use_multicast && core.x > 0) {
+            // Update input buffers for receiver cores (when multicast enabled)
             auto& receiver_runtime_args = GetRuntimeArgs(program, swiglu_fw_reader_w1_receiver_kernel_id);
             auto& runtime_args = receiver_runtime_args[core.x][core.y];
             runtime_args[kInputBufferIdx] = input_buffer->address();
-            // NOTE: No W1 buffer for receivers - they get W1 via multicast
+            // NOTE: Receiver has different arg layout - no W1 (comes via multicast)
+            runtime_args[kReceiverW2BufferIdx] = w2_buffer->address();
+            runtime_args[kReceiverW3BufferIdx] = w3_buffer->address();
+        } else {
+            // Update input buffers for sender cores (all cores when multicast disabled, or x==0 when multicast enabled)
+            auto& runtime_args = sender_runtime_args[core.x][core.y];
+            runtime_args[kInputBufferIdx] = input_buffer->address();
+            runtime_args[kW1BufferIdx] = w1_buffer->address();
             runtime_args[kW2BufferIdx] = w2_buffer->address();
             runtime_args[kW3BufferIdx] = w3_buffer->address();
         }
