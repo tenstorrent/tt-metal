@@ -46,7 +46,7 @@ void override_program_parameters(
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
-        } else if (in1_idx == 7) {
+        } else if (in1_idx == override_variables.in0_backward_core) {
             auto& in0_sender_args = in0_sender_forward_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
@@ -795,7 +795,8 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_receiver_kernels_id,
             in1_sender_kernels_id,
             in1_receiver_kernels_id,
-            transpose_core_grid};
+            transpose_core_grid,
+            (in0_noc == tt::tt_metal::NOC::NOC_0) ? 1 : (grid_size.x - 1)};
 }
 
 }  // namespace detail
