@@ -167,10 +167,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          echo "eltwise test count"
-          pytest --collect-only -q tests/ttnn/unit_tests/operations/eltwise
-          echo "conv test count"
-          pytest --collect-only -q tests/ttnn/unit_tests/operations/conv
           ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
