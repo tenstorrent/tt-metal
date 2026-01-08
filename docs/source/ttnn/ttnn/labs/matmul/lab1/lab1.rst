@@ -145,13 +145,16 @@ The triply-nested loop version is simply a reference implementation provided at 
 
 The tiled version should be implemented as follows:
 
-1. Input to the matrix multiplication should be a vector to ensure data is contiguous in memory.
-2. Create a function ``tile_matmul`` that multiplies a single tile
-3. Implement a main matrix multiplication function using tiling and then calling ``tile_matmul`` for each tile.
-4. Allow parameterization of tile size
-5. Verify the correctness of the implementation by comparing the result with the reference implementation.
-6. Profile the performance of the implementation and compare it with the reference implementation.
-   Make sure to compile with -O3 optimization level when comparing performance.
+#. Input to the matrix multiplication should be a one-dimensional vector to ensure data is contiguous in memory.
+#. Create a function ``tile_matmul`` that multiplies a single tile.
+   Write your code so that the function can be called with different tile sizes.
+#. Implement a main matrix multiplication function using tiling and then calling ``tile_matmul`` for each tile.
+#. Use the tiled implementation to multiply matrix ``A`` of size ``640x320`` with
+   matrix ``B`` of size ``320x640`` to produce matrix ``C`` of size ``640x640``. Use tile size ``32x32``.
+#. Verify correctness of the tiled implementation by comparing the result with the reference implementation.
+#. Measure wall-clock time of the tiled implementation and compare it with the reference implementation.
+   Make sure to compile your code with -O3 optimization level when comparing performance.
+#. Try a few different tile sizes and compare the performance.
 
 
 
