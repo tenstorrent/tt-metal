@@ -84,7 +84,7 @@ jobs:
       version: ${{ needs.parse-platform.outputs.version }}
       toolchain: ${{ needs.parse-platform.outputs.toolchain }}
       build-type: "Release"
-      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
+      enable-lto: true
       publish-artifact: false
       publish-package: false
       skip-tt-train: true
@@ -134,7 +134,8 @@ jobs:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
-      enable-lto: ${{ matrix.config.enable-lto || false }}
+      # Enable LTO for Release builds
+      enable-lto: ${{ matrix.config.build-type == 'Release' || matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
       skip-tt-train: true
