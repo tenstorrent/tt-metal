@@ -147,7 +147,7 @@ jobs:
             echo "Collecting from: $dir" >&2
             output=$(pytest --collect-only -q "$dir" --noconftest 2>&1)
             echo "Pytest output:" >&2
-            echo "$output" >&2
+            # echo "$output" >&2
             count=$(echo "$output" | tail -1 | grep -oE '[0-9]+' | head -1)
             if [ -z "$count" ]; then
               echo "0"
