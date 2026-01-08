@@ -76,8 +76,9 @@ int get_output_coordinate(int x, int y) {
     return offset + (y % 16) * 16 + (x % 16);
 }
 
-bool single_tile_matmul_int8(tt_metal::IDevice* device) {
+bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
+    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core(0, 0);
     const uint32_t in0_cb_index = 0;
@@ -102,17 +103,18 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in0_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in0_cb_index, byte_size);
-    auto l1_input0_cb = tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
+
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in1_cb_index, tt::DataFormat::Int8}})
             .set_page_size(in1_cb_index, byte_size);
-    auto l1_input1_cb = tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
 
     tt_metal::CircularBufferConfig l1_output_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{out_cb_index, tt::DataFormat::Int8}})
             .set_page_size(out_cb_index, byte_size);
-    auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -132,7 +134,7 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {out_cb_index}});
 
-    auto simple_matmul_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute.cpp",
         core,
@@ -221,10 +223,8 @@ bool single_tile_matmul_int8(tt_metal::IDevice* device) {
 
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(id)));
-    }
+TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
 
 }  // namespace tt::tt_metal
