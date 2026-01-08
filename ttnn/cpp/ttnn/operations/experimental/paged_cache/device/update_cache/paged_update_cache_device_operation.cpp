@@ -16,9 +16,8 @@ PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperati
     // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
     if (operation_attributes.mesh_coords.has_value()) {
         return program::PagedUpdateCacheMeshWorkloadFactory{};
-    } else {
-        return program::PagedUpdateCacheProgramFactory{};
     }
+    return program::PagedUpdateCacheProgramFactory{};
 }
 
 void PagedUpdateCacheDeviceOperation::validate_on_program_cache_hit(

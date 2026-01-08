@@ -167,7 +167,7 @@ Tensor convert_tensor_to_tiled_layout_common(
 template <typename T>
 Tensor create_tensor_from_owned_buffer(
     tt::tt_metal::HostBuffer buf, DataType& output_dtype, ttnn::Shape& output_shape) {
-    if constexpr (std::is_same<T, float>::value) {
+    if constexpr (std::is_same_v<T, float>) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
                 Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);

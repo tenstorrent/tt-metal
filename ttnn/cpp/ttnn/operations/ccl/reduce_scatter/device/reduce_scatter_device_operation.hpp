@@ -26,11 +26,15 @@ using ReduceScatterProgramArtifacts =
 struct ReduceScatterDeviceOperation {
     struct operation_attributes_t {
         const MemoryConfig memory_config;
+        const std::optional<MemoryConfig> optional_intermediate_mem_config;
         uint32_t dim;
         const std::optional<uint32_t> cluster_axis;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
         const uint32_t num_links;
+        const std::optional<uint32_t> chunks_per_sync;
+        const std::optional<uint32_t> num_workers_per_link;
+        const std::optional<uint32_t> num_buffers_per_channel;
     };
 
     struct tensor_args_t {
@@ -91,7 +95,11 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::MemoryConfig>& optional_intermediate_mem_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel);
 }  // namespace ttnn::prim

@@ -212,6 +212,11 @@ void DeviceManager::init_profiler() const {
         }
     }
     detail::ProfilerSync(ProfilerSyncState::INIT);
+
+    if (tt::tt_metal::MetalContext::instance().profiler_state_manager() &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled()) {
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(this->get_all_active_devices());
+    }
 #endif
 }
 
@@ -342,7 +347,7 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
 
     if (has_flag(
             tt::tt_metal::MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-        this->wait_for_fabric_router_sync(this->get_fabric_router_sync_timeout_ms());
+        this->wait_for_fabric_router_sync(DeviceManager::get_fabric_router_sync_timeout_ms());
     }
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
@@ -368,11 +373,9 @@ void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_de
         events.emplace_back(detail::async([dev]() {
             if (dev->compile_fabric()) {
                 return dev;
-            } else {
-                // compile failure mostly come from Nebula (TG)
-                log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-                return (tt_metal::IDevice*)nullptr;
-            }
+            }  // compile failure mostly come from Nebula         (TG)
+            log_trace(tt::LogMetal, "Did not build fabric on         Device {}", dev->id());
+            return (tt_metal::IDevice*)nullptr;
         }));
     }
 
@@ -530,7 +533,12 @@ void DeviceManager::activate_device(ChipId id) {
     } else {
         log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
         if (not device->is_initialized()) {
-            device->initialize(this->num_hw_cqs_, this->l1_small_size_, this->trace_region_size_, this->worker_l1_size_, this->l1_bank_remap_);
+            device->initialize(
+                this->num_hw_cqs_,
+                this->l1_small_size_,
+                this->trace_region_size_,
+                this->worker_l1_size_,
+                this->l1_bank_remap_);
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
@@ -879,12 +887,6 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         }
         devices_to_close.push_back(mmio_device_id);
         mmio_devices_to_close.insert(mmio_device_id);
-    }
-
-    // TODO(MO): Remove when legacy non-mesh device is removed
-    for (const ChipId device_id : devices_to_close) {
-        IDevice* device = get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
     }
 
     dispatch_firmware_active_ = false;
