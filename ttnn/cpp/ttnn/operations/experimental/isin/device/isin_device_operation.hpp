@@ -7,8 +7,6 @@
 #include "isin_device_operation_types.hpp"
 #include "isin_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-
 namespace ttnn::operations::experimental::isin {
 
 struct IsInDeviceOperation {
@@ -25,15 +23,6 @@ struct IsInDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
-    static invocation_result_t invoke(
-        const Tensor& elements,
-        const Tensor& test_elements,
-        uint32_t single_fetch_subchunk_size,
-        bool assume_unique,
-        bool invert,
-        const std::optional<Tensor>& optional_out);
 };
 
 }  // namespace ttnn::operations::experimental::isin

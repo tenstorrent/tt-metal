@@ -4,18 +4,12 @@
 
 #include "isin_device_operation.hpp"
 
+#include "../isin_common.hpp"
+
 #include <enchantum/enchantum.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::isin {
-// constexpr int32_t FIRST_DIMENSION = 0;
-constexpr auto OUTPUT_TENSOR_DATA_TYPE = DataType::UINT32;
-constexpr auto OUTPUT_TENSOR_LAYOUT = Layout::ROW_MAJOR;
-// constexpr uint32_t OUTPUT_TENSOR_RANK = 1;
-// using namespace common;
-using namespace tt;
-using namespace tt::tt_metal;
-
 IsInDeviceOperation::program_factory_t IsInDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return IsInProgramFactory{};
@@ -53,7 +47,7 @@ IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_spe
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return {
         Shape{tensor_args.elements_tensor.logical_volume()},
-        {OUTPUT_TENSOR_DATA_TYPE, {OUTPUT_TENSOR_LAYOUT}, tensor_args.elements_tensor.memory_config()},
+        {common::OUTPUT_TENSOR_DATA_TYPE, {common::OUTPUT_TENSOR_LAYOUT}, tensor_args.elements_tensor.memory_config()},
     };
 }
 
@@ -61,7 +55,7 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out) {
         TT_FATAL(
-            tensor_args.optional_out->dtype() == OUTPUT_TENSOR_DATA_TYPE,
+            tensor_args.optional_out->dtype() == common::OUTPUT_TENSOR_DATA_TYPE,
             "Preallocated output should be of uint32 dtype");
         return *tensor_args.optional_out;
     }

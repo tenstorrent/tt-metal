@@ -69,7 +69,7 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
     torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
     assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert_equal(torch_isin_result, torch_result_from_ttnn)
+    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
 
 
 @pytest.mark.parametrize(
@@ -87,6 +87,7 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
 def test_isin_random_data(elements_shape, test_elements_shape, invert, device):
     torch.manual_seed(0)
 
+    # Arrange - Prepare data
     elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
     test_elements_torch = torch.randint(0, 10000, test_elements_shape, dtype=torch.int64)
 
@@ -94,9 +95,11 @@ def test_isin_random_data(elements_shape, test_elements_shape, invert, device):
     test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
     ttnn.set_printoptions(profile="full")
 
+    # Act - Compute results
     torch_isin_result = torch.isin(elements_torch, test_elements_torch, invert=invert)
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, invert=invert)
 
+    # Assert - Compare results
     torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
     assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
@@ -134,5 +137,5 @@ def test_isin_program_cache_and_random_data(
     torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
     assert torch_isin_result.shape == torch_result_from_ttnn.shape
     assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
-    assert_equal(torch_isin_result, torch_result_from_ttnn)
+    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
     assert device.num_program_cache_entries() == expected_num_program_cache_entries

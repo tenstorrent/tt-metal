@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "isin_device_operation_types.hpp"
+#include "../isin_cbs.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -29,19 +30,19 @@ struct IsInProgramFactory {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 
-    // static CBHandle create_cb(
-    //     Program& program,
-    //     const DataType& dtype,
-    //     const IsInCB& is_in_cb,
-    //     const CoreRangeSet& core_range_set,
-    //     const uint32_t& page_size_bytes);
+    static CBHandle create_cb(
+        Program& program,
+        const DataType& dtype,
+        const IsInCB& is_in_cb,
+        const CoreRangeSet& core_range_set,
+        const uint32_t& page_size_bytes);
 
-    // static KernelHandle create_kernel(
-    //     Program& program,
-    //     const char* kernel_path,
-    //     const CoreRangeSet& core_range_set,
-    //     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-    //     const std::vector<uint32_t>& runtime_args = {});
+    static KernelHandle create_kernel(
+        Program& program,
+        const char* kernel_path,
+        const CoreRangeSet& core_range_set,
+        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+        const std::vector<uint32_t>& runtime_args = {});
 };
 
 }  // namespace ttnn::operations::experimental::isin

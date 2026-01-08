@@ -4,23 +4,17 @@
 
 #include "isin.hpp"
 
+#include "isin_common.hpp"
 #include "device/isin_device_operation.hpp"
-#include "device/isin_device_operation_types.hpp"
 
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/types.hpp"
 
 #include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::experimental {
-// Constants
-constexpr auto OUTPUT_TENSOR_LAYOUT = Layout::ROW_MAJOR;
-constexpr uint32_t OUTPUT_TENSOR_RANK = 1;
-
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-
 struct IsInPreprocessingResult {
     Tensor preprocessed_elements_tensor;
     Tensor preprocessed_test_elements_tensor;
@@ -78,9 +72,9 @@ IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor&
         is_in_preprocessing_result.preprocessed_test_elements_tensor);
 
     // Convert elements tensor to row-major layout if needed for efficient processing
-    if (is_in_preprocessing_result.preprocessed_elements_tensor.layout() != OUTPUT_TENSOR_LAYOUT) {
-        is_in_preprocessing_result.preprocessed_elements_tensor =
-            ttnn::to_layout(is_in_preprocessing_result.preprocessed_elements_tensor, OUTPUT_TENSOR_LAYOUT);
+    if (is_in_preprocessing_result.preprocessed_elements_tensor.layout() != isin::common::OUTPUT_TENSOR_LAYOUT) {
+        is_in_preprocessing_result.preprocessed_elements_tensor = ttnn::to_layout(
+            is_in_preprocessing_result.preprocessed_elements_tensor, isin::common::OUTPUT_TENSOR_LAYOUT);
     }
     // Convert test_elements tensor to row-major layout if needed
     if (is_in_preprocessing_result.preprocessed_test_elements_tensor.layout() != Layout::ROW_MAJOR) {
@@ -89,12 +83,12 @@ IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor&
     }
 
     // Flatten elements tensor to 1D if it has multiple dimensions
-    if (elements.logical_shape().rank() > OUTPUT_TENSOR_RANK) {
+    if (elements.logical_shape().rank() > isin::common::OUTPUT_TENSOR_RANK) {
         is_in_preprocessing_result.preprocessed_elements_tensor = ttnn::reshape(
             is_in_preprocessing_result.preprocessed_elements_tensor, Shape{is_in_preprocessing_result.elements_size});
     }
     // Flatten test_elements tensor to 1D if needed
-    if (test_elements.logical_shape().rank() > 1) {
+    if (test_elements.logical_shape().rank() > isin::common::OUTPUT_TENSOR_RANK) {
         is_in_preprocessing_result.preprocessed_test_elements_tensor = ttnn::reshape(
             is_in_preprocessing_result.preprocessed_test_elements_tensor,
             Shape{is_in_preprocessing_result.test_elements_size});
@@ -105,11 +99,11 @@ IsInPreprocessingResult isin_preprocessing(const Tensor& elements, const Tensor&
 
 Tensor isin_postprocessing(Tensor& output_tensor, const IsInPreprocessingResult& is_in_preprocessing_result) {
     // Restore original shape if it was flattened during preprocessing
-    if (is_in_preprocessing_result.original_elements_shape.rank() != OUTPUT_TENSOR_RANK) {
+    if (is_in_preprocessing_result.original_elements_shape.rank() != isin::common::OUTPUT_TENSOR_RANK) {
         output_tensor = ttnn::reshape(output_tensor, is_in_preprocessing_result.original_elements_shape);
     }
     // Restore original layout if it was changed during preprocessing
-    if (is_in_preprocessing_result.original_elements_layout != OUTPUT_TENSOR_LAYOUT) {
+    if (is_in_preprocessing_result.original_elements_layout != isin::common::OUTPUT_TENSOR_LAYOUT) {
         output_tensor = ttnn::to_layout(output_tensor, is_in_preprocessing_result.original_elements_layout);
     }
 

@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "isin_nanobind.hpp"
+
 #include "isin.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-
-#include <cstdint>
-#include <optional>
-
 #include "ttnn-nanobind/decorators.hpp"
+
+#include <optional>
 
 namespace ttnn::operations::experimental::isin::detail {
 void bind_isin_operation(nb::module_& mod) {
