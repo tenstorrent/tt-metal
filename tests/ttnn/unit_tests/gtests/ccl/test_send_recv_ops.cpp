@@ -62,7 +62,7 @@ void test_send_recv_async_(
             *ttnn::distributed::replicate_tensor_to_mesh_mapper(*md0),
             std::nullopt)
             .to_device(md0.get(), memory_config);
-    auto md1_input_tensor = tt::tt_metal::allocate_tensor_on_device(
+    auto md1_input_tensor = tt::tt_metal::create_device_tensor(
         TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
         md1.get());
     ttnn::experimental::send_async(md0_input_tensor, forward_send_socket);
@@ -75,7 +75,7 @@ void test_send_recv_async_(
     auto md1_input_data = ttnn::distributed::aggregate_tensor(md1_input_tensor, *md1_composer).to_vector<T>();
     EXPECT_EQ(md0_input_data, md1_input_data);
     auto md1_inc_output_tensor = ttnn::add(md1_input_tensor, 1);
-    auto md0_inc_output_tensor = tt::tt_metal::allocate_tensor_on_device(
+    auto md0_inc_output_tensor = tt::tt_metal::create_device_tensor(
         TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
         md0.get());
     ttnn::experimental::send_async(md1_inc_output_tensor, backward_send_socket);

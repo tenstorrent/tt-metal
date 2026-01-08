@@ -223,7 +223,8 @@ Tensor ExecuteDiv::invoke(
                 rhs_activations,
                 std::nullopt,
                 sub_core_grids);
-        } else if (round_mode == "trunc") {
+        }
+        if (round_mode == "trunc") {
             return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
                 input,
                 value,
@@ -235,25 +236,24 @@ Tensor ExecuteDiv::invoke(
                 rhs_activations,
                 std::nullopt,
                 sub_core_grids);
-        } else {
-            // round_mode = None
-            TT_FATAL(
-                (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
-                "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
-                "ttnn.float32");
-            return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
-                input,
-                value,
-                std::nullopt,
-                output_mem_config,
-                output_tensor,
-                post_activations,
-                lhs_activations,
-                rhs_activations,
-                std::nullopt,  // use_legacy
-                std::nullopt,  // fast_and_approximate_mode
-                sub_core_grids);
         }
+        // round_mode = None
+        TT_FATAL(
+            (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
+            "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+            "ttnn.float32");
+        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+            input,
+            value,
+            std::nullopt,
+            output_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            std::nullopt,  // use_legacy
+            std::nullopt,  // fast_and_approximate_mode
+            sub_core_grids);
     }
 
     if (!(use_legacy ? *use_legacy
@@ -354,7 +354,8 @@ Tensor ExecuteDiv::invoke(
                 rhs_activations,
                 std::nullopt,
                 sub_core_grids);
-        } else if (round_mode == "trunc") {
+        }
+        if (round_mode == "trunc") {
             return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
                 input_a,
                 input_b,
@@ -366,25 +367,24 @@ Tensor ExecuteDiv::invoke(
                 rhs_activations,
                 std::nullopt,
                 sub_core_grids);
-        } else {
-            // round_mode = None
-            TT_FATAL(
-                (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
-                "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
-                "ttnn.float32");
-            return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
-                input_a,
-                input_b,
-                std::nullopt,
-                output_mem_config,
-                output_tensor,
-                post_activations,
-                lhs_activations,
-                rhs_activations,
-                std::nullopt,  // use_legacy
-                std::nullopt,  // fast_and_approximate_mode
-                sub_core_grids);
         }
+        // round_mode = None
+        TT_FATAL(
+            (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
+            "Incorrect output_dtype value for Integer Division(round_mode=None) ; valid input values are None or "
+            "ttnn.float32");
+        return BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
+            input_a,
+            input_b,
+            std::nullopt,
+            output_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            std::nullopt,  // use_legacy
+            std::nullopt,  // fast_and_approximate_mode
+            sub_core_grids);
     }
 
     if (!(use_legacy ? *use_legacy
@@ -459,9 +459,8 @@ Tensor ExecuteDiv::invoke(
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
     if (value == 0) {
         return ttnn::zeros_like(input_a);
-    } else {
-        return ttnn::multiply(input_a, (1.0f / value));
     }
+    return ttnn::multiply(input_a, (1.0f / value));
 }
 
 Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -469,10 +468,9 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
         // Not using SFPU div op here since inf/nan handling is not required
         Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
         return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
-    } else {
-        Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-        return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
     }
+    Tensor div_result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
+    return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
 Tensor ExecutePrelu::invoke(const Tensor& input, float weight, const std::optional<MemoryConfig>& output_mem_config) {

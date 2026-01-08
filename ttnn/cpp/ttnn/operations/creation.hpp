@@ -89,11 +89,11 @@ Tensor full_impl(
     if (optional_output_tensor.has_value()) {
         tt::tt_metal::tensor_impl::copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
-    } else if (device != nullptr) {
-        return host_tensor.to_device(device, output_mem_config);
-    } else {
-        return host_tensor;
     }
+    if (device != nullptr) {
+        return host_tensor.to_device(device, output_mem_config);
+    }
+    return host_tensor;
 }
 
 }  // namespace detail
@@ -199,26 +199,24 @@ Tensor full_like_impl(
              (arch != tt::ARCH::GRAYSKULL && dtype_value == DataType::FLOAT32)) &&
             tensor.storage_type() == StorageType::DEVICE) {
             return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
-        } else {
-            return full_impl(
-                tensor.logical_shape(),
-                fill_value,
-                dtype_value,
-                layout_value,
-                device ? device : tensor.device(),
-                memory_config.value_or(tensor.memory_config()),
-                optional_output_tensor);
         }
-    } else {
         return full_impl(
             tensor.logical_shape(),
             fill_value,
             dtype_value,
             layout_value,
             device ? device : tensor.device(),
-            memory_config,
+            memory_config.value_or(tensor.memory_config()),
             optional_output_tensor);
     }
+    return full_impl(
+        tensor.logical_shape(),
+        fill_value,
+        dtype_value,
+        layout_value,
+        device ? device : tensor.device(),
+        memory_config,
+        optional_output_tensor);
 }
 
 template <detail::boxed FillValue>
@@ -250,8 +248,7 @@ struct Empty {
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(
-            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+        return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
     }
 };
 
@@ -302,7 +299,7 @@ struct EmptyLike {
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
         MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
-        return allocate_tensor_on_device(
+        return create_device_tensor(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device_ptr);
     }

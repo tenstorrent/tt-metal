@@ -85,7 +85,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
     api/tt-metalium/metal_soc_descriptor.h
-    api/tt-metalium/persistent_kernel_cache.hpp
     api/tt-metalium/profiler_optional_metadata.hpp
     api/tt-metalium/profiler_types.hpp
     api/tt-metalium/program.hpp
@@ -303,6 +302,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
+add_subdirectory(experimental/udm)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()
