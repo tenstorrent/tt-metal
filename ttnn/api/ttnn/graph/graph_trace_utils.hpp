@@ -23,6 +23,15 @@ struct PeakMemoryUsagePerCore {
     size_t peak_total = 0;
 };
 
+struct DRAMUsage {
+    /** peak memory usage in bytes between begin_graph_capture and end_graph_capture */
+    long long peak = 0;
+    /** total memory allocated in bytes between begin_graph_capture and end_graph_capture */
+    long long total_allocations = 0;
+    /** total memory deallocated in bytes between begin_graph_capture and end_graph_capture */
+    long long total_deallocations = 0;
+};
+
 enum class ExecutionStatus { Success, Error };
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
@@ -44,6 +53,8 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores);
 
 PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
+
+DRAMUsage extract_dram_usage(const nlohmann::json& trace);
 
 // Returns count of intermediate and output tensors
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace);

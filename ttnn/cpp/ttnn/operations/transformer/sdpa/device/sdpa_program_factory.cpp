@@ -130,6 +130,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
@@ -756,6 +757,7 @@ void SDPAProgramFactory::override_runtime_arguments(
     uint32_t chunked_q_chunk_offset = 0;
     if (is_chunked) {
         page_table_addr = tensor_args.page_table.value().buffer()->address();
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
     }
 
