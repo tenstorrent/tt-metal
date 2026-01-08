@@ -423,6 +423,10 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    if batch_size > 1 and mesh_shape[0] == 1:
+        pytest.skip(
+            f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
+        )
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
