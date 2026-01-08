@@ -1,6 +1,6 @@
-project(tt_stl)
-
-include(GNUInstallDirs)
+# Note: Don't call project() or include(GNUInstallDirs) here - tt_stl is always built
+# as part of the main TT-Metal project, and calling these again can cause CMAKE_INSTALL_LIBDIR
+# to be set differently than the parent project, leading to install path mismatches.
 
 add_library(tt_stl SHARED)
 add_library(TT::STL ALIAS tt_stl)
@@ -59,22 +59,37 @@ target_link_libraries(metal_common_pch PRIVATE tt_stl)
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
 tt_set_library_rpath(tt_stl)
 
-# Output library to build/${CMAKE_INSTALL_LIBDIR} (lib on Ubuntu, lib64 on Fedora/AlmaLinux).
-# On Fedora/AlmaLinux, the top-level symlink (lib64 -> lib) ensures the file actually ends up
-# in build/lib/ for tar artifact compatibility, while CMake's internal tracking uses the
-# lib64 path that it expects. This approach:
-# - Avoids install(TARGETS) path resolution issues (CMake's tracked path matches the setting)
-# - Ensures a single canonical .so file (no copies, no ODR violations)
-# - Works with both lib and lib64 systems via the symlink
+# Output library directly to build/lib (not build/lib64) for CI tar artifacts.
+# This matches the pattern used by tt_metal and other core libraries.
+# On Fedora/AlmaLinux (where CMAKE_INSTALL_LIBDIR=lib64), the top-level symlink
+# lib64 -> lib ensures CMake's install(TARGETS) can find the file via the lib64 path.
+# This approach:
+# - Uses a single canonical location (build/lib/) to avoid ODR violations
+# - Works with install(TARGETS) via the lib64 -> lib symlink on Fedora/AlmaLinux
+# - Matches tar artifact layout expectations (build/lib/)
 set_target_properties(
     tt_stl
     PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY
-            "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
+            "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Standard install with LIBRARY - this works because LIBRARY_OUTPUT_DIRECTORY matches
-# CMake's expected path pattern (build/${CMAKE_INSTALL_LIBDIR})
+# Debug diagnostic - runs at install time to show what CMake thinks the target file is
+install(
+    CODE
+        "
+        message(STATUS \"tt_stl install diagnostic:\")
+        message(STATUS \"  CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}\")
+        message(STATUS \"  CMAKE_INSTALL_LIBDIR: ${CMAKE_INSTALL_LIBDIR}\")
+        message(STATUS \"  Expected library path: ${CMAKE_BINARY_DIR}/lib/libtt_stl.so\")
+        execute_process(COMMAND ls -la \"${CMAKE_BINARY_DIR}/lib/\" RESULT_VARIABLE ls_result)
+        if(NOT ls_result EQUAL 0)
+            message(STATUS \"  Directory ${CMAKE_BINARY_DIR}/lib/ does not exist or is not accessible\")
+        endif()
+        "
+)
+
+# Standard install - matches tt_metal's pattern which works on both Ubuntu and Fedora
 install(
     TARGETS
         tt_stl
