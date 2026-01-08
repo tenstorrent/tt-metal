@@ -2,9 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-
-#include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include <cstdint>
+#include <utility>
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
     constexpr uint32_t num_tiles_l = get_compile_time_arg_val(0);
@@ -63,6 +76,7 @@ void kernel_main() {
     uint32_t device_semaphore = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     const uint8_t sender_num_hops = 1;
+    const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
@@ -119,7 +133,8 @@ void kernel_main() {
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr_2, packet_header_size_bytes);
 
     // read again l, s and m from device 2
-    local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* local_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
@@ -136,13 +151,11 @@ void kernel_main() {
     }
 
     cb_reserve_back(packet_cb_id, 1);
-    packet_l1_addr = get_write_ptr(packet_cb_id);
-
-    packet_idx = 0;
+    uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
-    dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
+    uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
+    uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
     tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
@@ -150,8 +163,8 @@ void kernel_main() {
 
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);
-    dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
-    dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
+    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
 
     tt_memmove<true, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);

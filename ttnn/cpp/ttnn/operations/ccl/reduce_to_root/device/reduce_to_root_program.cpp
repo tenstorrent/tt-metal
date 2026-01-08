@@ -1594,6 +1594,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         uint32_t num_worker_cores_per_link_per_dir = 4;
         uint32_t core_idx = 0;
         for (auto c : corerange_to_cores(worker_cores_per_link[link_idx], std::nullopt)) {
+            printf("worker core: %zu %zu \n", c.x, c.y);
+            printf("worker id: %u \n", worker_id);
             std::vector<uint32_t> reader_runtime_args;
             std::vector<uint32_t> writer_runtime_args;
 
@@ -1657,6 +1659,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     cores1.push_back(c);
                 } else {
                     // second 4 cores: bw: reader/writer 2
+                    worker_id = 0;
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
@@ -1756,6 +1759,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     cores2.push_back(c);
                 } else {
                     // second 4 cores: bw: reader/writer 1
+                    worker_id = 0;
                     CoreCoord mux_virtual_core_bwd =
                         mesh_device->worker_core_from_logical_core(all_mux_cores[link_idx * 2 + 1]);
 
