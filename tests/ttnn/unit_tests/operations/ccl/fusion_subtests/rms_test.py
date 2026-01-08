@@ -99,10 +99,8 @@ def run_rms_trace_deepseek(
         ),
     )
 
-    output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
         output_shard_grid = input_shard_grid
-    padded_out_w = math.ceil(input_shape[3] / num_devices / output_shard_grid.num_cores() / 32) * 32
     output_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
@@ -227,7 +225,6 @@ def run_rms_trace_deepseek(
     ttnn.release_trace(mesh_device, trace_id)
     profiler.end("rms-trace")
     signpost("stop")
-    time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
     mesh_device.reset_sub_device_stall_group()
 
 

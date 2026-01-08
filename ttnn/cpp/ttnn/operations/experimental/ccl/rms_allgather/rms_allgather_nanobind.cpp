@@ -22,7 +22,7 @@ void bind_fused_rms_minimal(nb::module_& mod) {
             This fuses pre RMS, all gather, post rms, residual add, gamma operations, and output resharding into one.
             Requires a pre-allocated persistent tensor for the intermediate all gather that is tiled,
                 shape per device (32,32) and sharded with a shard shape (32,32) on core (0,0)
-            Requires that the tensor be of shape (1,1,32,32*N) for some integer N
+            Requires that input the tensor be of shape (1,1,32,M) where M is a multiple of 32
         )doc",
         // Stats is internally computed
         ttnn::nanobind_arguments_t{// Used by all
