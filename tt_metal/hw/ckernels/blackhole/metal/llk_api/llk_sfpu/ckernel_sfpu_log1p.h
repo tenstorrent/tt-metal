@@ -11,6 +11,65 @@
 namespace ckernel {
 namespace sfpu {
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
+    const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
+    const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
+
+    sfpi::vFloat u;
+    sfpi::vFloat s;
+    sfpi::vFloat m;
+    sfpi::vFloat r;
+    sfpi::vFloat t;
+
+    u = a + sfpi::vConst1;
+    r = std::numeric_limits<float>::quiet_NaN();
+
+    v_if(u >= 0.0f) {
+        sfpi::vFloat three_quarters = 0.75f;
+        sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(three_quarters);
+
+        e = sfpi::reinterpret<sfpi::vInt>(u) - e;
+        e = sfpi::reinterpret<sfpi::vInt>(sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(e), 0));
+
+        m = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - e);
+        sfpi::vFloat four = 4.0f;
+        s = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(four) - e);  // s' in [2**-126,2**26]
+
+        // t = 0.25f * s + sfpi::vConstNeg1;
+        sfpi::vFloat quarter = 0.25f;
+        sfpi::vFloat neg1 = sfpi::vConstNeg1;
+        t = __builtin_rvtt_sfpmad(quarter.get(), s.get(), neg1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        r = -0.04541015625f;  //-4.54559326e-2f;          // -0x1.746000p-5
+
+        m = m + t;
+        t = 0.10546875;  // 1.05529785e-1f;           //  0x1.b04000p-4
+
+        // approximate log(1+m) on [-0.25, 0.5]
+        s = m * m;
+        r = r * s + -1.32279143e-1f;  // -0x1.0ee85ep-3
+        t = t * s + 1.44911006e-1f;   //  0x1.28c71ap-3
+        r = r * s + -1.66416913e-1f;  // -0x1.54d264p-3
+        t = t * s + 1.99886635e-1f;   //  0x1.995e2ap-3
+        r = r * s + -2.50001878e-1f;  // -0x1.00007ep-2
+        sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+        r = t * m + r;
+        r = r * m + 3.33335280e-1f;   //  0x1.5555d8p-2
+        r = r * m + -5.00000000e-1f;  // -0x1.000000p-1
+        sfpi::vFloat e_float = sfpi::int32_to_float(__builtin_rvtt_sfpcast(e.get(), sfpi::SFPCAST_MOD1_INT32_TO_SM32));
+        // sfpi::vFloat e_float = sfpi::setsgn(sfpi::int32_to_float(sfpi::abs(e)), sfpi::reinterpret<sfpi::vFloat>(e));
+        r = r * s + m;
+        r = e_float * (LOG_TWO * TWO_TO_M23) + r;
+
+        // since u>=0, safely checks for u == NaN or u == inf
+        v_if(sfpi::reinterpret<sfpi::vInt>(u) >= sfpi::reinterpret<sfpi::vInt>(infinity)) { r = u; }
+        v_endif;
+    }
+    v_endif;
+
+    return r;
+}
+
 /*
  * This function implements ln(1+x) using Chebyshev approximation for bfloat16.
  * Uses 3rd order Chebyshev polynomial approximation with range reduction.
@@ -54,7 +113,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_bf16(sfpi::vFloat val) {
  * @return sfpi::vFloat Result of ln(1+val)
  */
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
+sfpi_inline sfpi::vFloat calculate_log1p_fp32_old(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
     // Check for special cases
