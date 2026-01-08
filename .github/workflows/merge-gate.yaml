@@ -141,14 +141,14 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "test-in-service-dedicated-merge-gate-1",
-          "test-in-service-dedicated-merge-gate-2",
-          "test-in-service-dedicated-merge-gate-3",
-          "test-in-service-dedicated-merge-gate-4",
-          "test-in-service-dedicated-merge-gate-5",
-          "test-in-service-dedicated-merge-gate-6",
-          "test-in-service-dedicated-merge-gate-7",
-          "test-in-service-dedicated-merge-gate-8",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-1",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-2",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-3",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-4",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-5",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-6",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-7",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-8",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -170,14 +170,14 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "test-in-service-dedicated-merge-gate-1",
-          "test-in-service-dedicated-merge-gate-2",
-          "test-in-service-dedicated-merge-gate-3",
-          "test-in-service-dedicated-merge-gate-4",
-          "test-in-service-dedicated-merge-gate-5",
-          "test-in-service-dedicated-merge-gate-6",
-          "test-in-service-dedicated-merge-gate-7",
-          "test-in-service-dedicated-merge-gate-8",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-1",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-2",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-3",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-4",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-5",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-6",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-7",
+          "tt-ubuntu-2204-test-in-service-dedicated-merge-gate-stable-8",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
