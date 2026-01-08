@@ -116,36 +116,7 @@ jobs:
           model_paths["deepseek-r1-distill-llama-70b"]="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 
           # Define test configurations
-          tests='[
-            {
-              "name": "Batch-1 Performance",
-              "test_key": "performance and batch-1",
-              "extra_args": "",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719"
-            },
-            {
-              "name": "Batch-32 Performance",
-              "test_key": "performance and batch-32",
-              "extra_args": "",
-              "timeout": 30,
-              "owner_id": "U03PUAKE719"
-            },
-            {
-              "name": "Long Context 16K",
-              "test_key": "long-context",
-              "extra_args": "--max_seq_len=16384",
-              "timeout": 45,
-              "owner_id": "U03PUAKE719"
-            },
-            {
-              "name": "Long Context Performance",
-              "test_key": "performance and long",
-              "extra_args": "",
-              "timeout": 45,
-              "owner_id": "U03PUAKE719"
-            }
-          ]'
+          tests='[{"name":"Batch-1 Performance","test_key":"performance and batch-1","extra_args":"","timeout":30,"owner_id":"U03PUAKE719"},{"name":"Batch-32 Performance","test_key":"performance and batch-32","extra_args":"","timeout":30,"owner_id":"U03PUAKE719"},{"name":"Long Context 16K","test_key":"long-context","extra_args":"--max_seq_len=16384","timeout":45,"owner_id":"U03PUAKE719"},{"name":"Long Context Performance","test_key":"performance and long","extra_args":"","timeout":45,"owner_id":"U03PUAKE719"}]'
 
           # Generate matrix combining models and tests
           matrix='[]'
