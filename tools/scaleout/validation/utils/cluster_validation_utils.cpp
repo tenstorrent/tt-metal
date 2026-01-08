@@ -29,9 +29,9 @@
 
 namespace tt::scaleout_tools {
 
-// Timeout is based on the assumption that WORKLOAD_TIMEOUT_DURATION (30s) should be enough for an iteration to run.
+// Timeout is based on the assumption that WORKLOAD_TIMEOUT_DURATION (45s) should be enough for an iteration to run.
 // Any longer and we assume that a hang has been encountered. We may need to tune this in future.
-static constexpr std::chrono::seconds WORKLOAD_TIMEOUT_DURATION{30};
+static constexpr std::chrono::seconds WORKLOAD_TIMEOUT_DURATION{45};
 
 // ============================================================================
 // Data Structures

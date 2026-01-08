@@ -37,6 +37,7 @@ for i in {1..50}; do
 
         echo "Running tt-smi -glx_reset..."
         mpirun --host $HOSTS --mca btl_tcp_if_include ens5f0np0 tt-smi -glx_reset
+        sleep 5
 
         echo ""
         echo "Running cluster validation..."
