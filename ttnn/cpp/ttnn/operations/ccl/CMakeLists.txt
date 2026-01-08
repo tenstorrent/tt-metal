@@ -98,8 +98,8 @@ target_sources(
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
         broadcast/broadcast.cpp
-        broadcast/device/broadcast_op.cpp
-        broadcast/device/broadcast_program.cpp
+        broadcast/device/broadcast_device_operation.cpp
+        broadcast/device/broadcast_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})

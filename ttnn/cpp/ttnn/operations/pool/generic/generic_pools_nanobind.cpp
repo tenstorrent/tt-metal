@@ -67,6 +67,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                std::array<uint32_t, 2> dilation,
                bool ceil_mode,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<Op2DSliceConfig>& dram_slice_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool deallocate_input,
                bool reallocate_halo_output,
@@ -85,6 +86,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                     dilation,
                     ceil_mode,
                     memory_config,
+                    dram_slice_config,
                     applied_shard_scheme,
                     deallocate_input,
                     reallocate_halo_output,
@@ -95,9 +97,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                 // Return single tensor or tuple based on vector size
                 if (result.size() == 1) {
                     return nb::cast(std::move(result[0]));
-                } else {
-                    return nb::cast(std::move(result));
                 }
+                return nb::cast(std::move(result));
             },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),
@@ -111,6 +112,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             nb::arg("ceil_mode") = false,
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_halo_output") = true,
@@ -167,6 +169,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                bool count_include_pad,
                std::optional<int32_t> divisor_override,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<Op2DSliceConfig>& dram_slice_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
                bool deallocate_input,
@@ -186,6 +189,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                     count_include_pad,
                     divisor_override,
                     memory_config,
+                    dram_slice_config,
                     applied_shard_scheme,
                     compute_kernel_config,
                     deallocate_input,
@@ -206,6 +210,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("divisor_override") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("deallocate_input") = false,

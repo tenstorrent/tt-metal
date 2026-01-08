@@ -16,6 +16,10 @@ from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
 
+# Shared test parametrization constants
+# Prefill sequence lengths: powers of 2 from 128 to 128K
+PREFILL_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -89,6 +93,16 @@ def hf_config(model_path):
 @pytest.fixture(scope="session")
 def state_dict(model_path):
     yield load_state_dict(model_path, "")
+
+
+@pytest.fixture(scope="function", autouse=True)
+def clear_state_dict_cache(state_dict):
+    """
+    Clear the LazyStateDict cache after each test to prevent memory accumulation.
+    This preserves file handles (mmap benefits) while freeing tensor memory.
+    """
+    yield
+    state_dict.clear_cache()
 
 
 @pytest.fixture(scope="session")

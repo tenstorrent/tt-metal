@@ -50,8 +50,6 @@ struct UntilizeDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         tt::tt_metal::MemoryConfig output_mem_config,
@@ -69,6 +67,14 @@ struct UntilizeDeviceOperation {
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto untilize =
-    ttnn::register_operation<"ttnn::prim::untilize", ttnn::operations::data_movement::UntilizeDeviceOperation>();
+ttnn::operations::data_movement::UntilizeDeviceOperation::tensor_return_value_t untilize(
+    const Tensor& input,
+    tt::tt_metal::MemoryConfig output_mem_config,
+    bool use_multicore,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    std::optional<CoreRangeSet> sub_core_grids,
+    bool enough_space_width,
+    bool enough_space_height,
+    uint32_t pf_type);
 }  // namespace ttnn::prim
