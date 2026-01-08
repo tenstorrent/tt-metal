@@ -270,6 +270,18 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  APC-test-count-check:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true'
+      }}
+    uses: ./.github/workflows/validate-test-count.yaml
+    with:
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+
   ttsim-integration-tests:
     needs: [ build ]
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -417,6 +429,6 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build, build-tt-train"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs, APC-test-count-check"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
