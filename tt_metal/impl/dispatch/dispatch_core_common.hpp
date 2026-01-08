@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <umd/device/types/core_coordinates.hpp>  // CoreType
 
 namespace tt::tt_metal {
 
@@ -24,6 +25,8 @@ enum DispatchWorkerType : uint32_t {
     RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
     COUNT,
 };
+
+CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 
 // Helper functions to get the dispatch core config/type
 DispatchCoreConfig get_dispatch_core_config();

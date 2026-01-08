@@ -20,6 +20,14 @@ DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
     return DispatchCoreAxis::ROW;
 }
 
+CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
+    switch (config.get_dispatch_core_type()) {
+        case DispatchCoreType::WORKER: return CoreType::WORKER;
+        case DispatchCoreType::ETH: return CoreType::ETH;
+        default: TT_THROW("invalid dispatch core type");
+    }
+}
+
 DispatchCoreConfig get_dispatch_core_config() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
 }

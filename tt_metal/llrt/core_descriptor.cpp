@@ -21,6 +21,7 @@
 #include "metal_soc_descriptor.h"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
@@ -73,12 +74,13 @@ inline std::string get_core_descriptor_file(
             tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
         bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
 
+        auto core_type = get_core_type_from_config(dispatch_core_config);
         switch (arch) {
             default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0:
-                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                if (core_type == CoreType::ETH) {
                     return core_desc_dir + "wormhole_b0_80_arch_eth_dispatch.yaml";
                 } else if (use_fabric_tensix) {
                     return core_desc_dir + "wormhole_b0_80_arch_fabric_mux.yaml";
@@ -86,7 +88,7 @@ inline std::string get_core_descriptor_file(
                     return core_desc_dir + "wormhole_b0_80_arch.yaml";
                 }
             case tt::ARCH::BLACKHOLE:
-                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                if (core_type == CoreType::ETH) {
                     return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
                 } else if (use_fabric_tensix) {
                     return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
@@ -220,7 +222,7 @@ const core_descriptor_t& get_core_descriptor_config(
         if (core_node.IsSequence()) {
             // Logical coord
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
-            if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+            if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
                 auto logical_coord = get_core_coord_from_relative(coord, grid_size);
                 if (logical_active_eth_cores.contains(logical_coord)) {
                     continue;
