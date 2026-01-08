@@ -693,7 +693,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         eff_kernel_w,                   // 29
         pad_l,                          // 30
         weight_cb_id,                   // 31
-        mul_cb_id};                     // 32
+        mul_cb_id,                      // 32
+        // Depthwise-specific args (placeholders for pool, actual values for depthwise)
+        0,   // 33 - has_bias (false for pool)
+        0,   // 34 - bias_cb_id (unused for pool)
+        0,   // 35 - bias_ntiles (unused for pool)
+        0};  // 36 - clear_value_cb_id (unused for pool)
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();

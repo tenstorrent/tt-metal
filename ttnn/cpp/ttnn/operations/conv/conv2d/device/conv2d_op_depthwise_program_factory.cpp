@@ -230,25 +230,6 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
             bias_cb_id, program, parallel_config.grid, bias_cb_pagesize, bias_cb_npages, bias_data_format);
     }
 
-    // Bias temp CB - intermediate buffer for tilized data before bias addition
-    // This is needed to avoid CB ordering issues when there are multiple tile rows
-    // Without this, the second tilization would read stale data from out_cb's front
-    // CRITICAL: Use params.data_format (bfloat16) NOT output_data_format (bfloat8_b)
-    // because add_tiles_bcast_rows cannot unpack block float formats like bfloat8_b
-    uint32_t bias_temp_cb_id = 32;  // Invalid CB ID by default
-    if (has_bias && bias.has_value() && is_output_tiled) {
-        bias_temp_cb_id = next_cb_index++;
-        const uint32_t bias_temp_cb_pagesize = tt::tile_size(params.data_format);
-        const uint32_t bias_temp_cb_npages = params.in_ntiles_c;  // Same as output tiles per row
-        tt::tt_metal::create_cb(
-            bias_temp_cb_id,
-            program,
-            parallel_config.grid,
-            bias_temp_cb_pagesize,
-            bias_temp_cb_npages,
-            params.data_format);
-    }
-
     // Reader indices will be created after out_nhw_per_core is calculated
 
     // Now create the actual pool kernels by referencing their paths directly
@@ -469,7 +450,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
-    // Set up compute arguments following exact pool factory pattern (33 args)
+    // Set up compute arguments following exact pool factory pattern (37 args)
     std::vector<uint32_t> compute_ct_args = {
         params.in_ntiles_c,             // 0 - in_ntiles_c (FIXED: use calculated value)
         kernel_h * kernel_w,            // 1
@@ -507,7 +488,7 @@ static tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise
         has_bias,                       // 33 - has_bias flag for bias addition
         bias_cb_id,                     // 34 - bias_cb_id
         params.in_ntiles_c,             // 35 - bias_ntiles (same as out channel tiles for depthwise)
-        bias_temp_cb_id                 // 36 - bias_temp_cb_id (intermediate buffer for tilization before bias)
+        clear_value_cb_id               // 36 - clear_value_cb_id (zero CB for add_tiles acc_to_dest)
     };
 
     // Create reader kernels using pool reader kernel path (same pattern as pool factory)
