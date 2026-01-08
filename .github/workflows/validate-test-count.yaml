@@ -9,6 +9,9 @@ on:
       package-artifact-name:
         required: true
         type: string
+      docker-image:
+        required: true
+        type: string
   pull_request:
     paths:
       - 'tests/ttnn/unit_tests/operations/eltwise/**'
@@ -26,6 +29,19 @@ jobs:
   check-test-count:
     runs-on: ubuntu-latest
     name: "Ensure no new tests added to locked directories"
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -37,20 +53,20 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Download built wheel
-        if: ${{ inputs.wheel-artifact-name != '' }}
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-          path: ./wheels
-          run_id: 20788440471
-          github_token: ${{ secrets.GITHUB_TOKEN }}
       # - name: Download built wheel
       #   if: ${{ inputs.wheel-artifact-name != '' }}
-      #   uses: actions/download-artifact@v4
+      #   uses: dawidd6/action-download-artifact@v6
       #   with:
       #     name: ${{ inputs.wheel-artifact-name }}
       #     path: ./wheels
+      #     run_id: 20788440471
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download built wheel
+        if: ${{ inputs.wheel-artifact-name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: ./wheels
 
       # - name: Install tt-metal wheel and dependencies
       #   if: ${{ inputs.wheel-artifact-name != '' }}
@@ -58,20 +74,20 @@ jobs:
       #     pip install pytest torch loguru transformers
       #     pip install ./wheels/*.whl
 
-      # - name: Download build packages
-      #   if: ${{ inputs.package-artifact-name != '' }}
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: ${{ inputs.package-artifact-name }}
-      #     path: ./packages
-      - name: Download built packages
+      - name: Download build packages
         if: ${{ inputs.package-artifact-name != '' }}
-        uses: dawidd6/action-download-artifact@v6
+        uses: actions/download-artifact@v4
         with:
-          name: packages-ubuntu-22.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-no-distributed-7f5ee7b1d03e6570a27680cabb2f0e662aa87be3-20796940884
+          name: ${{ inputs.package-artifact-name }}
           path: ./packages
-          run_id: 20796940884
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Download built packages
+      #   if: ${{ inputs.package-artifact-name != '' }}
+      #   uses: dawidd6/action-download-artifact@v6
+      #   with:
+      #     name: packages-ubuntu-22.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-no-distributed-7f5ee7b1d03e6570a27680cabb2f0e662aa87be3-20796940884
+      #     path: ./packages
+      #     run_id: 20796940884
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # - name: Download built wheel
       #   if: ${{ inputs.wheel-artifact-name != '' }}
