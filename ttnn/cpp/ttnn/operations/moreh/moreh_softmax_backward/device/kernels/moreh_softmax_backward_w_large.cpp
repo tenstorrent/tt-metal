@@ -4,9 +4,7 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
@@ -51,7 +49,8 @@ void MAIN {
             }
         }
 
-        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // exp(y)
@@ -83,7 +82,8 @@ void MAIN {
         }
 
         // step 2, compute sum(y * dy)
-        reduce_tile_to_cb<REDUCE_OP, REDUCE_DIM>(cb_add, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop1=*/0);
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::TileShape::single());
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {

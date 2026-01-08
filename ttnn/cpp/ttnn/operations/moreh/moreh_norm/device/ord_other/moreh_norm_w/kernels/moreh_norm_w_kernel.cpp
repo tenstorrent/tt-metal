@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
@@ -130,21 +132,8 @@ void MAIN {
             }
         }
         // reduce f(x)
-        tile_regs_acquire();
-        cb_wait_front(cb_cal, onetile);
-        cb_reserve_back(cb_reduce, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_reduce, cb_cal, cb_one);
-        reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_cal, cb_one, 0, 0, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_reduce);
-        tile_regs_release();
-
-        cb_pop_front(cb_cal, onetile);
-        cb_push_back(cb_reduce, onetile);
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_cal, cb_one, cb_reduce, compute_kernel_lib::TileShape::single());
 
         tile_regs_acquire();
 
