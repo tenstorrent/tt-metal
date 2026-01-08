@@ -159,7 +159,7 @@ class TTSampling(LightweightModule):
 
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
         """Flexible all-gather that works with both CCL implementations."""
-        if self.cluster_shape[0] * self.cluster_shape[1] == 32:
+        if self.cluster_shape[0] * self.cluster_shape[1] == 32 and self.tt_ccl is not None:
             # Use line_all_gather with persistent buffer support
             return self.tt_ccl.line_all_gather(
                 tensor,
@@ -171,7 +171,7 @@ class TTSampling(LightweightModule):
             )
         else:
             # Use tt_all_gather
-            cluster_axis = None
+            cluster_axis = 1
             num_links = 1
             tt_logits = ttnn.all_gather(
                 tensor,

@@ -563,20 +563,15 @@ def test_gpt_oss_demo(
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
         out_tok = prefilled_token
 
-        # Determine if device sampling is available (all models must support it)
-        supports_device_sampling = all(getattr(m, "sampling", None) is not None for m in model)
-
         # Generation loop (matching tt_transformers structure)
         logger.info(f"Starting decode loop...")
         iteration = 0
         users_decoding = True
-        sampling_params_device = None
-        if supports_device_sampling:
-            sampling_params_device = SamplingParams(
-                temperature=sampling_params.get("temperature", 0.0),
-                top_p=sampling_params.get("top_p", 1.0),
-                top_k=sampling_params.get("top_k", 1),
-            )
+        sampling_params_device = SamplingParams(
+            temperature=sampling_params.get("temperature", 0.0),
+            top_p=sampling_params.get("top_p", 1.0),
+            top_k=sampling_params.get("top_k", 1),
+        )
 
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding and iteration < max_generated_tokens:
@@ -585,7 +580,7 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            if supports_device_sampling:
+            if sampling_params_device is not None:
                 # Decode forward with on-device sampling
                 print("input", out_tok.shape)
                 out_tok, _ = generator.decode_forward_text(
@@ -595,7 +590,7 @@ def test_gpt_oss_demo(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=sampling_params_device,
-                    reset_batch=True,  # iteration == 0,
+                    reset_batch=iteration == 0,
                 )
                 # breakpoint()
             else:

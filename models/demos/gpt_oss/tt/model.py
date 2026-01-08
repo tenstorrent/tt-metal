@@ -137,10 +137,6 @@ class Model:
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
-        # Sampling will be initialized once args are attached (see create_transformer_compatible)
-        self.sampling = None
-        self._supports_on_device_sampling = False
-
     @classmethod
     def create_transformer_compatible(
         cls,
@@ -185,17 +181,12 @@ class Model:
         instance.n_layers = args.n_layers
         instance.dtype = dtype
 
-        # On-device sampling support (mirrors tt_transformers behavior)
-        sampling_splits = mesh_device.get_num_devices() if list(mesh_device.shape) != [1, 1] else 2
-        instance._supports_on_device_sampling = instance.vocab_size // sampling_splits <= 64 * 1024
-        if instance._supports_on_device_sampling:
-            instance.sampling = SamplingGenerator(
-                args=args,
-                mesh_device=mesh_device,
-                tt_ccl=None,
-            )
-        else:
-            instance.sampling = None
+        self._supports_on_device_sampling = True
+        instance.sampling = SamplingGenerator(
+            args=args,
+            mesh_device=mesh_device,
+            tt_ccl=None,
+        )
 
         return instance
 
@@ -280,8 +271,14 @@ class Model:
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
         # Embed tokens
-        # breakpoint()
-        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        print("tokens", tokens.shape)
+        if not self.users_row_sharded:
+            tokens_sliced = tokens[:, :, :, :1]
+        else:
+            tokens_sliced = tokens
+        input_embeds = ttnn.embedding(
+            tokens_sliced, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+        )
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
 
         # Ensure proper shape for decoder layers
@@ -303,13 +300,15 @@ class Model:
             is_decode=True,
         )
         if sampling_on_device and self.sampling is not None:
-            # out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+            if out.shape[-2] == 1:
+                out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
                 return out
             return self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
 
         # Return logits and None for log-probs for compatibility with generator interface
+        out = ttnn.all_gather(out, dim=-1, cluster_axis=1)
         return out, None
 
     def ttnn_prefill_forward(
@@ -400,7 +399,8 @@ class Model:
 
         # Convert tokens to TTNN format
         # batch_tiles = math.ceil(len(tokens) / 32)
-        # tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 * batch_tiles - len(tokens)), "constant", 0)
+        if not self.users_row_sharded and tokens.view(-1).shape[-1] == 1:
+            tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         if self.users_row_sharded:
             mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
         else:
@@ -497,7 +497,6 @@ class Model:
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Process decode output and convert to torch tensors"""
         concat_out = self.concat_device_output(tt_out)
-        print("concat_out", concat_out.shape)
         if is_tokens:
             return concat_out.reshape(-1)  # [batch_size]
 
