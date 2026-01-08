@@ -10,11 +10,12 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_hiRes_bh as ttnn_optimized_sharded_vit
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("sequence_size", [1024, 2048, 3072])  # , 2048, 3072])
+@pytest.mark.parametrize("sequence_size", [1024, 2048, 3072])
 @pytest.mark.parametrize("hidden_size", [512, 1024, 1536, 2304])
 @pytest.mark.parametrize(
     "device_params",
@@ -42,7 +43,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     config.num_hidden_layers = 12
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size)
 
-    # model = load_torch_model(model_location_generator, embedding=True).vit.encoder.layer[0]
     model = transformers.models.vit.modeling_vit.ViTLayer(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
@@ -83,4 +83,4 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     output = ttnn.to_torch(output)
 
     output = output.squeeze(1)
-    # assert_with_pcc(torch_output, output, 0.985)
+    assert_with_pcc(torch_output, output, 0.985)

@@ -16,23 +16,11 @@ try:
     use_signpost = True
 except ModuleNotFoundError:
     use_signpost = False
-use_signpost = True
 
 
 def update_model_config(config, batch_size, sequence_size):
-    wh_core_grid_y = 10
-
     # In case of < 6 cores per batch, we need to do move in attention to remove defragmentation
     should_reallocate_in_attention = True
-    # if batch_size <= wh_core_grid_y:
-    #     grid_y = batch_size
-    #     grid_x = 12  ## it can be 4 or 3, for higher core utilization but less latency
-    # else:
-    #     grid_y = 10
-    #     batch_per_y_core = batch_size // wh_core_grid_y
-    #     batch_size = grid_y * batch_per_y_core
-    #     grid_x = 8
-    #     should_reallocate_in_attention = True
 
     if batch_size == 1:
         grid_y = 8
@@ -74,17 +62,10 @@ def update_model_config(config, batch_size, sequence_size):
     H_x = 8
     H_y = min(batch_size * head_num // H_x, 8)
     core_grid_HEIGHT_SHARDED = ttnn.CoreGrid(y=H_y, x=H_x)
-    # core_grid_HEIGHT_SHARDED = ttnn.CoreRangeSet(
-    #     {
-    #         ttnn.CoreRange(ttnn.CoreCoord(0, 0), (12, 8)),
-    #         ttnn.CoreRange(ttnn.CoreCoord(0, 9), (10,9)),
-    #     }
-    # )
 
     seqL_t = seqL // TILE_HEIGHT  # 32, 64, 96
     seqL_t__y = (batch_size * seqL_t) // core_grid_BLOCK_SHARDED.y  # 4, 8, 12
     dim_t__x = dim_t // core_grid_BLOCK_SHARDED.x  # 2, 3, 4, 6
-    dim_t__x_full_grid = dim_t // core_grid_12x10.x  # 3
 
     head_seqL_t__x = (batch_size * head_num * seqL_t) // (
         core_grid_HEIGHT_SHARDED.x * core_grid_HEIGHT_SHARDED.y
@@ -287,8 +268,6 @@ def vit_attention(
     parameters,
 ):
     num_heads = config.num_attention_heads  # num_heads = 16
-    *_, hidden_size = hidden_states.shape
-    head_size = hidden_size // num_heads
 
     query_key_value = ttnn.linear(
         hidden_states,
