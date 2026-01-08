@@ -168,7 +168,7 @@ void configure_local_kernels(
                         fwd ? sender_kernel_path : receiver_kernel_path,
                         curr_coord,
                         tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .noc = tt::tt_metal::NOC::NOC_1,
                             .compile_args = fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words}
                                                 : std::vector<uint32_t>{}});
 
@@ -177,7 +177,7 @@ void configure_local_kernels(
                         fwd ? receiver_kernel_path : sender_kernel_path,
                         neighbor_coord,
                         tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .noc = tt::tt_metal::NOC::NOC_1,
                             .compile_args = fwd ? std::vector<uint32_t>{}
                                                 : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
                     tt::tt_metal::SetRuntimeArgs(
