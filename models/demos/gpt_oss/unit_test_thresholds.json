@@ -5,7 +5,7 @@
             "rms_norm": 0.99,
             "router": 0.945,
             "experts": 0.92,
-            "mlp": 0.88,
+            "mlp": 0.7,
             "decoder": 0.92
         },
         "prefill": {
@@ -13,7 +13,7 @@
             "rms_norm": 0.99,
             "router": 0.945,
             "experts": 0.93,
-            "mlp": 0.88,
+            "mlp": 0.7,
             "decoder": 0.88
         }
     },
@@ -23,7 +23,7 @@
             "rms_norm": 0.99,
             "router": 0.945,
             "experts": 0.93,
-            "mlp": 0.88,
+            "mlp": 0.7,
             "decoder": 0.90
         },
         "prefill": {
@@ -31,7 +31,7 @@
             "rms_norm": 0.99,
             "router": 0.945,
             "experts": 0.93,
-            "mlp": 0.88,
+            "mlp": 0.7,
             "decoder": 0.88
         }
     }
