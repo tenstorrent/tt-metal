@@ -96,7 +96,7 @@ jobs:
         test-group: [
             { model: panoptic-deeplab, owner_id: U09LK84G4TF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
           ]
-    name: Nightly P150 130 cores ${{ matrix.test-group.model }}
+    name: Nightly P150 110 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
@@ -106,6 +106,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
+        TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

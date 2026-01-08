@@ -216,7 +216,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
 }
 
 CoreCoord dispatch_core_manager::get_next_available_dispatch_core(ChipId device_id) {
-    if (this->available_dispatch_cores_by_device.find(device_id) == this->available_dispatch_cores_by_device.end()) {
+    if (!this->available_dispatch_cores_by_device.contains(device_id)) {
         TT_THROW("Invalid device ID to assign dispatch cores {}", device_id);
     }
     if (this->available_dispatch_cores_by_device.at(device_id).empty()) {

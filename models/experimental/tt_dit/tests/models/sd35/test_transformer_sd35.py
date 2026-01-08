@@ -283,7 +283,7 @@ def test_sd35_transformer2d_model(
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
         start = time.time()
-        tt_model.load_state_dict(torch_model.state_dict())
+        tt_model.load_torch_state_dict(torch_model.state_dict())
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -459,7 +459,7 @@ def test_sd35_transformer_model_caching(
         padding_config=padding_config,
     )
     start = time.time()
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

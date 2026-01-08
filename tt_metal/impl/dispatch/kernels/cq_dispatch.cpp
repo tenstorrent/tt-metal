@@ -10,10 +10,10 @@
 //  - # blocks must evenly divide the dispatch buffer size
 //  - dispatch buffer base must be page size aligned
 
-#include "dataflow_api.h"
-#include "dataflow_api_addrgen.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"

@@ -4,7 +4,7 @@
 
 #include "rmsnorm_post_all_gather.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
@@ -19,7 +19,6 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
-    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<const DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -40,20 +39,19 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
             LayerNormType::RMSNORM,
             DistributedLayerNormStage::POST_ALL_GATHER,
             stats);
-    } else {
-        return tt::tt_metal::operation::run(
-                   LayerNormPostAllGather{
-                       .norm_type = LayerNormDistributedType::RMSNORM,
-                       .eps = epsilon,
-                       .memory_config = memory_config.value_or(input_tensor.memory_config()),
-                       .compute_kernel_config = kernel_config_val,
-                       .dtype = dtype,
-                       .use_2d_core_grid = use_2d_core_grid,
-                       .program_config = distributed_program_config},
-                   {input_tensor, stats},
-                   {weight, bias})
-            .at(0);
     }
+    return ttnn::prim::layer_norm_post_all_gather(
+        input_tensor,
+        stats,
+        LayerNormDistributedType::RMSNORM,
+        epsilon,
+        weight,
+        bias,
+        memory_config.value_or(input_tensor.memory_config()),
+        kernel_config_val,
+        dtype,
+        use_2d_core_grid,
+        program_config.value_or(LayerNormDefaultProgramConfig{}));
 }
 
 }  // namespace ttnn::operations::normalization

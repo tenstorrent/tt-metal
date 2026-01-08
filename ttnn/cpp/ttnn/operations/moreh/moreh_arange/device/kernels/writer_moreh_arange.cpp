@@ -4,7 +4,7 @@
 
 #include <cstdlib>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define TILE_WIDTH 32
 

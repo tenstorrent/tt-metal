@@ -54,15 +54,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5.0.0
-        with:
-          cache: 'pip'
-          cache-dependency-path: infra/requirements-infra.txt
-          python-version: '3.10'
-      - name: Install infra deps
-        run: python -m pip install -r infra/requirements-infra.txt
       - name: Check SPDX licenses
-        run: python -m check_copyright --verbose --dry-run --config ./check_copyright_config.yaml .
+        uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
+        with:
+          ignore_config_file: '.github/spdx_ignore.yaml'
+          verbose: 'true'
   check-metal-kernel-count:
     runs-on: ubuntu-latest
     steps:

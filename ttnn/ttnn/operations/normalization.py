@@ -121,7 +121,6 @@ ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
-LayerNormDistributedDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDistributedDefaultProgramConfig
 
 
 # group norm helper function
@@ -139,7 +138,7 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     Returns: (MemoryConfig, CoreGrid)
     """
     assert num_channels % num_groups == 0
-    assert num_channels % 32 == 0  # TODO: remove this later
+    assert num_channels % 32 == 0
     group_size = num_channels // num_groups
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
     device_grid_size = [compute_with_storage_grid_size.x, compute_with_storage_grid_size.y]

@@ -50,6 +50,13 @@ endif()
 
 # Our current fork of tracy does not have CMake support for these subdirectories
 # Once we update, we can change this
+
+# Tracy tools use Makefiles that depend on pkg-config
+find_program(PKG_CONFIG_EXECUTABLE NAMES pkg-config)
+if(NOT PKG_CONFIG_EXECUTABLE)
+    message(FATAL_ERROR "pkg-config not found. It is required for building Tracy tools.")
+endif()
+
 include(ProcessorCount)
 processorcount(numProcs)
 if(numProcs EQUAL 0)

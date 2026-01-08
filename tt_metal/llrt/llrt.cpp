@@ -66,29 +66,29 @@ const ll_api::memory& get_risc_binary(
     ll_api::memory::Loading loading,
     const std::function<void(ll_api::memory&)>& update_callback) {
     static struct {
-      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
-      std::mutex mutex;
-      std::condition_variable cvar;
+        std::unordered_map<std::string, std::unique_ptr<const ll_api::memory>> map;
+        std::mutex mutex;
+        std::condition_variable cvar;
     } cache;
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
     const ll_api::memory* ptr = nullptr;
     if (inserted) {
-      // We're the first with PATH. Create and insert.
-      lock.unlock();
-      ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
-      if (update_callback) {
-          update_callback(*mutable_ptr);
-      }
+        // We're the first with PATH. Create and insert.
+        lock.unlock();
+        ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
+        if (update_callback) {
+            update_callback(*mutable_ptr);
+        }
 
-      lock.lock();
-      // maps have iterator stability, so SLOT is still valid.
-      slot->second = decltype(slot->second)(mutable_ptr);
-      ptr = mutable_ptr;
-      // We can't wake just those waiting on this slot, so wake them
-      // all. Should be a rare event anyway.
-      cache.cvar.notify_all();
+        lock.lock();
+        // maps have iterator stability, so SLOT is still valid.
+        slot->second = decltype(slot->second)(mutable_ptr);
+        ptr = mutable_ptr;
+        // We can't wake just those waiting on this slot, so wake them
+        // all. Should be a rare event anyway.
+        cache.cvar.notify_all();
     } else {
         if (!slot->second) {
             // Someone else is creating the initial entry, wait for them.
@@ -120,17 +120,19 @@ tt_metal::HalProgrammableCoreType get_core_type(tt::ChipId chip_id, const CoreCo
             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
-        is_active_eth_core =
-            active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
-        is_inactive_eth_core =
-            inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != inactive_eth_cores.end();
+        is_active_eth_core = active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
+        is_inactive_eth_core = inactive_eth_cores.contains(logical_core_from_ethernet_core(chip_id, virtual_core));
         // we should not be operating on any reserved cores here.
         TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
     }
 
-    return is_active_eth_core     ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-           : is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH
-                                  : tt_metal::HalProgrammableCoreType::TENSIX;
+    if (is_active_eth_core) {
+        return tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    }
+    if (is_inactive_eth_core) {
+        return tt_metal::HalProgrammableCoreType::IDLE_ETH;
+    }
+    return tt_metal::HalProgrammableCoreType::TENSIX;
 }
 
 void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
@@ -204,7 +206,7 @@ bool test_load_write_read_risc_binary(
     // Primary risc is shared
     // TODO: Move this query into the HAL
     bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
+    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr =
             tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
@@ -238,7 +240,7 @@ namespace internal_ {
 bool is_active_eth_core(tt::ChipId chip_id, const CoreCoord& core) {
     auto active_eth_cores =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
-    return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
+    return active_eth_cores.contains(logical_core_from_ethernet_core(chip_id, core));
 }
 
 namespace {
@@ -282,8 +284,14 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
+    // For simulators, always disable timeout (infinite wait). For non-simulators, a 0
+    // timeout means: use the configured timeout for operations.
     if (is_simulator) {
         timeout_ms = 0;
+    } else if (timeout_ms == 0) {
+        timeout_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
+                .count();
     }
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -296,6 +304,9 @@ void wait_until_cores_done(
                     }
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+
+                tt::tt_metal::MetalContext::instance().on_dispatch_timeout_detected();
+
                 TT_THROW(
                     "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
                     device_id,
@@ -313,11 +324,10 @@ void wait_until_cores_done(
         }
 #endif
 
-        for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
-            const auto &phys_core = *it;
+        for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end();) {
+            const auto& phys_core = *it;
 
             bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
-
             if (is_done) {
                 log_debug(tt::LogMetal, "Device {}: Phys cores just done: {}", device_id, phys_core.str());
                 it = not_done_phys_cores.erase(it);

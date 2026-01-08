@@ -787,8 +787,7 @@ TEST_P(T3kTopologyMapperWithCustomMappingFixture, T3kMeshGraphWithCustomMapping)
             FabricNodeId fabric_node_id(mesh_id, chip_id);
 
             // Skip if this fabric node is not in the provided mapping (for multi-mesh cases)
-            if (logical_mesh_chip_id_to_physical_chip_id_mapping.find(fabric_node_id) ==
-                logical_mesh_chip_id_to_physical_chip_id_mapping.end()) {
+            if (!logical_mesh_chip_id_to_physical_chip_id_mapping.contains(fabric_node_id)) {
                 continue;
             }
 
