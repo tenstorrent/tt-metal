@@ -34,7 +34,9 @@ struct ReduceToRootOp {
         const std::optional<Tensor> optional_output_tensor_l;
         const std::optional<Tensor> optional_output_tensor_s;
         const std::optional<Tensor> optional_output_tensor_m;
-        const std::optional<Tensor> optional_intermediate_tensor;
+        const std::optional<Tensor> optional_fw_intermediate_tensor;
+        const std::optional<Tensor> optional_bw_intermediate_tensor;
+        const std::optional<Tensor> optional_coord_intermediate_tensor;
     };
 
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
@@ -42,19 +44,16 @@ struct ReduceToRootOp {
 
     struct ReduceToRoot {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle send_unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle send_unary_writer_kernel_id;
-            std::vector<CoreCoord> cores;
+            tt::tt_metal::KernelHandle reader_kernel1;
+            tt::tt_metal::KernelHandle reader_kernel2;
+            std::vector<CoreCoord> cores1;
+            std::vector<CoreCoord> cores2;
 
-            tt::tt_metal::KernelHandle root1_reader_kernel_id;
-            tt::tt_metal::KernelHandle root1_writer_kernel_id;
-
-            tt::tt_metal::KernelHandle root2_reader_kernel_id;
-            tt::tt_metal::KernelHandle root2_writer_kernel_id;
-
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel1;
+            tt::tt_metal::KernelHandle writer_kernel2;
 
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+            bool is_device_0_2;
         };
 
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -128,7 +127,9 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
     const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
-    const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_fw_intermediate_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
+    const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

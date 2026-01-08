@@ -19,7 +19,9 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor_l,
     const std::optional<ttnn::Tensor>& optional_output_tensor_s,
     const std::optional<ttnn::Tensor>& optional_output_tensor_m,
-    const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
+    const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor,
+    const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor,
+    const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     // first output tensor in list is intermediate and is discarded
     return ttnn::prim::reduce_to_root(
@@ -32,7 +34,9 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
                optional_output_tensor_l,
                optional_output_tensor_s,
                optional_output_tensor_m,
-               optional_intermediate_tensor,
+               optional_fw_intermediate_tensor,
+               optional_bw_intermediate_tensor,
+               optional_coord_intermediate_tensor,
                input_mux_cores)
         .at(1);
 }

@@ -85,6 +85,10 @@ void kernel_main() {
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // for round 2
+    uint32_t final_dst_addr_l = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t final_dst_addr_s = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t final_dst_addr_m = get_arg_val<uint32_t>(arg_idx++);
 
     const uint8_t dst_num_hops = 1;
 
@@ -178,9 +182,7 @@ void kernel_main() {
     }
 
     // ROUND 2: wait for compute and write output
-    uint32_t final_dst_addr_l = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t final_dst_addr_s = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t final_dst_addr_m = get_arg_val<uint32_t>(arg_idx++);
+
     /*
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(0);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(1);

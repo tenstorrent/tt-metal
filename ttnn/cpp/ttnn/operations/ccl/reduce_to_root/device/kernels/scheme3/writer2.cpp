@@ -50,6 +50,10 @@ void kernel_main() {
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t round1_interm_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t device_semaphore = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t remote_noc_x = core_noc_x;  // get_arg_val<uint32_t>(arg_idx++);
+    uint32_t remote_noc_y = core_noc_y;  // get_arg_val<uint32_t>(arg_idx++);
     const uint8_t dst_num_hops = 1;
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
@@ -71,10 +75,6 @@ void kernel_main() {
 
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t round1_interm_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t device_semaphore = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t remote_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t remote_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     // device 2 writer receives data from compute kernel and sends it to device 1
 
