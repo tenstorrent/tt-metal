@@ -1653,7 +1653,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
             // If there are no downstream channels, then we don't need to check if we can forward the packet to
-            // downstream EDM interfaces
+            // downstream EDM interfaces. This is currently only used by the Neighbor Exchange topology.
             if constexpr (NUM_DOWNSTREAM_CHANNELS == 0) {
                 can_send_to_all_local_chip_receivers = true;
             } else {
@@ -1664,7 +1664,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         } else {
 #ifndef FABRIC_2D
             // If there are no downstream channels, then we don't need to check if we can forward the packet to
-            // downstream EDM interfaces
+            // downstream EDM interfaces. This is currently only used by the Neighbor Exchange topology.
             if constexpr (NUM_DOWNSTREAM_CHANNELS == 0) {
                 can_send_to_all_local_chip_receivers = true;
             } else {

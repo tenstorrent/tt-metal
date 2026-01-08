@@ -1527,8 +1527,10 @@ void TestConfigBuilder::expand_neighbor_exchange(
     log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
     if (!neighbor_pairs.empty()) {
-        // add_senders_from_pairs(test, neighbor_pairs, base_pattern);
-        // Instead of grouping pairs by sender, we're going to keep them as separate test patterns
+        // Instead of grouping pairs by sender (by calling add_senders_from_pairs), we're going to keep them as separate
+        // test patterns This causes the test infra to place assign a separate sender core for each pair (eg. packets
+        // from device 0 to devices 1 and 4 will be sent by 2 separate cores on device 0) This reduces bottlenecking on
+        // sender cores, removing artificial bandwidth throttling during a test.
         for (const auto& pair : neighbor_pairs) {
             const auto& src_node = pair.first;
             const auto& dst_node = pair.second;
