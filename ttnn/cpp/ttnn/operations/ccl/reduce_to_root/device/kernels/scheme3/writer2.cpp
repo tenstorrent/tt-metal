@@ -115,7 +115,6 @@ void kernel_main() {
     cb_reserve_back(packet_cb_id, 1);
     const uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
 
-    uint32_t packet_idx = 0;
     //  wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait_min(local_semaphore_ptr, 1);
@@ -138,10 +137,9 @@ void kernel_main() {
     cb_pop_front(cb_id_m, 1);
 
     // add a single noc write to second intermediate tensor
-    noc_async_write(packet_base_addr, round1_interm_tensor_addr, new_payload_size_bytes)
-        // set the device semaphore at reader 1
-        const uint64_t receiver_core_semaphore_noc_addr =
-            safe_get_noc_addr(remote_noc_x, remote_noc_y, device_semaphore, 0);
+    noc_async_write(packet_base_addr, round1_interm_tensor_addr, new_payload_size_bytes);
+    // set the device semaphore at reader 1
+    uint64_t receiver_core_semaphore_noc_addr = safe_get_noc_addr(remote_noc_x, remote_noc_y, device_semaphore, 0);
     noc_semaphore_inc(receiver_core_semaphore_noc_addr, 1);
     noc_async_atomic_barrier();
     cb_push_back(packet_cb_id, 1);

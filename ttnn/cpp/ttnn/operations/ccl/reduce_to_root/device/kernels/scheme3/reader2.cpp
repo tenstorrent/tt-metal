@@ -178,7 +178,6 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
-    uint32_t packet_idx = 0;
 
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);

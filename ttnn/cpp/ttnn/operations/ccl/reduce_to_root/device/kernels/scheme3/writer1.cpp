@@ -66,7 +66,6 @@ void kernel_main() {
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(7);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(9);
-    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t page_bytes = page_size_bytes;
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
@@ -145,8 +144,6 @@ void kernel_main() {
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
-
-    uint32_t packet_idx = 0;
 
     //  wait for receiver to signal it is ready
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
