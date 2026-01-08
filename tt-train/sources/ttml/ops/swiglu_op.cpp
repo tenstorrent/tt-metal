@@ -27,7 +27,6 @@ autograd::TensorPtr swiglu(
 
     ttnn::Tensor swiglu_fw_result =
         ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
-    // std::cerr << "Done swiglu fw metal op HERE\n";
     auto out = autograd::create_tensor(swiglu_fw_result);
 
     autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {

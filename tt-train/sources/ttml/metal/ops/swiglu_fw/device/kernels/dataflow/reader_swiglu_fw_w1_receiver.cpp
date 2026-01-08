@@ -27,10 +27,9 @@ constexpr uint32_t hidden_Wt = get_compile_time_arg_val(2);  // inner dimension 
 void kernel_main() {
     uint32_t ra = 0U;
     const uint32_t input_address = get_arg_val<uint32_t>(ra++);  // DRAM base for X
-    // NOTE: w1_address is NOT passed to receiver - W1 comes via multicast!
-    const uint32_t w2_address = get_arg_val<uint32_t>(ra++);  // DRAM base for W2
-    const uint32_t w3_address = get_arg_val<uint32_t>(ra++);  // DRAM base for W3
-    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);
+    // NOTE: W1/W2/W3 all come via multicast - no DRAM addresses needed!
+    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(ra++);  // Actual data rows
+    const uint32_t max_rows_for_sync = get_arg_val<uint32_t>(ra++);    // Sync iterations
     const uint32_t start_row = get_arg_val<uint32_t>(ra++);
 
     // Shared multicast runtime args (same sender and semaphores for W1/W2/W3)
@@ -41,15 +40,16 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
 
-    // Address generators - NOTE: No W1 address generator needed!
+    // Address generator - only need X, all weights come via multicast
     constexpr auto x_args = TensorAccessorArgs<3>();
-    constexpr auto w2_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-    constexpr auto w3_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
     const auto x_address_generator = TensorAccessor(x_args, input_address, tile_bytes);
-    const auto w2_address_generator = TensorAccessor(w2_args, w2_address, tile_bytes);
-    const auto w3_address_generator = TensorAccessor(w3_args, w3_address, tile_bytes);
 
     const uint32_t end_row = start_row + num_rows_to_process;
+    const uint32_t end_row_for_sync = start_row + max_rows_for_sync;
+
+    // Uniform padding: loop for max_rows_for_sync to maintain multicast sync.
+    // For padding rows (r >= end_row), we read the last valid row to keep all
+    // cores synchronized without producing extra output.
 
     // Shared semaphore pointers for synchronization (reused by W1/W2/W3)
     volatile tt_l1_ptr uint32_t* mcast_receiver_sem_ptr =
@@ -57,10 +57,7 @@ void kernel_main() {
     const uint64_t sender_semaphore_noc_addr =
         get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, mcast_sender_semaphore_addr);
 
-    // DPRINT << "[receiver]: Receiver reader start" << "\n";
-
 #ifdef ROW_OF_M_FITS_IN_L1
-    // DPRINT << "[receiver]: ROW_OF_M_FITS_IN_L1 defined" << "\n";
     // ================== Loop structure with W1 multicast receive ==================
     // Flash-attention optimization: for r in rows:
     //     # Phase A: Compute XW1[r, :] and XW3[r, :] - read X[r, p_block] only once!
@@ -83,13 +80,15 @@ void kernel_main() {
     //        for k_block in k_blocks:
     //           read W2[k_block, c_block] (no multicast yet - Phase 1)
     // ============================================================================
-    for (uint32_t r = start_row; r < end_row; ++r) {
+    for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
         // ---- Phase A: Compute XW1[r,:] and XW3[r,:] with flash-attention optimization ----
         for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
             const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
 
             // --- Read p_block_size tiles of X[r, p_block] ONCE per p_block
-            const uint32_t x_tile_start = r * Wt + p_block_start;
+            // For padding rows (r >= end_row), read last valid row to keep sync
+            const uint32_t x_row = (r < end_row) ? r : (end_row - 1);
+            const uint32_t x_tile_start = x_row * Wt + p_block_start;
             read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
 
             // Receive W1 and read W3 data organized by k_blocks to match compute kernel expectations
@@ -128,12 +127,10 @@ void kernel_main() {
             }
         }
     }
-    // DPRINT << "[receiver]: End of ROW_OF_M_FITS_IN_L1 path" << "\n";
 
 #else
-    // DPRINT << "[receiver]: Non-flash-attention path" << "\n";
     // ================== Loop structure with W1 multicast receive (non-flash-attention) ==================
-    for (uint32_t r = start_row; r < end_row; ++r) {
+    for (uint32_t r = start_row; r < end_row_for_sync; ++r) {
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
 
@@ -147,8 +144,9 @@ void kernel_main() {
                         const uint32_t p_block_size =
                             (p_block_start + block_size <= Wt) ? block_size : (Wt - p_block_start);
 
-                        // Read X[r, p_block]
-                        const uint32_t x_tile_start = r * Wt + p_block_start;
+                        // Read X[r, p_block] - for padding rows, read last valid row
+                        const uint32_t x_row = (r < end_row) ? r : (end_row - 1);
+                        const uint32_t x_tile_start = x_row * Wt + p_block_start;
                         read_tiles_by_row(
                             cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
 
@@ -170,6 +168,5 @@ void kernel_main() {
             }
         }
     }
-    // DPRINT << "[receiver]: End of Non-flash-attention path" << "\n";
 #endif  // ROW_OF_M_FITS_IN_L1
 }
