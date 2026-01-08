@@ -176,10 +176,12 @@ void kernel_main() {
     DPRINT << "after waiting for fabric semaphore\n";
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
+    DPRINT << "after fabric client disconnect\n";
 
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        noc_semaphore_wait(termination_sync_ptr, 3);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
@@ -213,5 +215,6 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);
+    DPRINT << "end of round 1\n";
     DPRINT << "end of reader 2 kernel\n";
 }

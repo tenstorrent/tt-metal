@@ -47,7 +47,6 @@ void kernel_main() {
     cb_push_back(packet_cb_id0, 1);
 
     DPRINT << "end of round 1\n";
-    /*
 
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(3);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(4);
@@ -151,7 +150,8 @@ void kernel_main() {
 
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        noc_semaphore_wait(termination_sync_ptr, 3);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
@@ -215,5 +215,4 @@ void kernel_main() {
 
     noc_async_read_barrier();
     DPRINT << "end of reader 1 kernel\n";
-    */
 }

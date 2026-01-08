@@ -184,7 +184,8 @@ void kernel_main() {
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        // noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+        noc_semaphore_wait(termination_sync_ptr, 3);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
@@ -192,6 +193,7 @@ void kernel_main() {
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
+    DPRINT << "end of round 1\n";
 
     DPRINT << "round2\n";
     // ROUND 2: wait for compute and write output
