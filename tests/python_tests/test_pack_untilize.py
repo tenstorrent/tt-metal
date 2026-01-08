@@ -3,11 +3,12 @@
 
 import pytest
 import torch
+from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
-    generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -17,6 +18,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     INPUT_DIMENSIONS,
+    NUM_FACES,
     TILE_COUNT,
 )
 from helpers.utils import passed_test
@@ -32,8 +34,8 @@ from helpers.utils import passed_test
             DataFormat.Bfp8_b,
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    input_dimensions=[[32, 128], [128, 32], [64, 64], [32, 64], [64, 32]],
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=[[96, 288], [64, 64], [32, 128], [128, 128], [32, 64]],
     dest_sync=[DestSync.Half, DestSync.Full],
 )
 def test_pack_untilize(
@@ -47,18 +49,23 @@ def test_pack_untilize(
     ):
         pytest.skip("Pack Untilize does not support mixing Int32 with other formats")
 
+    data_formats = infer_data_formats(
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        False,
+    )
+
+    # Handling a hardware limitation: cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register.
+    # For wormhole architecture, gasket cannot perform this conversion and packer takes input Float32 (from dest register) converting to Float16_A.
+    # For blackhole architecture, gasket is able to convert Float32 to Float16_A before packing (reduces work on packer).`
     if (
-        formats.input_format == DataFormat.Int32
-        and formats.output_format == DataFormat.Int32
+        formats.input_format == DataFormat.Float16
+        and data_formats.pack_src.is_32_bit()
         and dest_acc == DestAccumulation.No
     ):
-        pytest.skip("Dest must be in 32bit mode when input and output are Int32")
-
-    if input_dimensions not in generate_unary_input_dimensions(
-        dest_acc, DestSync.Full if dest_sync == DestSync.Full else DestSync.Half
-    ):
         pytest.skip(
-            "Input dimensions not supported for the given dest_acc and dest_sync configuration"
+            "Due to hardware limitation, cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register. Therefore using dest_acc=No is not supported in this case."
         )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -70,16 +77,33 @@ def test_pack_untilize(
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)
+
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
+    # _llk_pack_untilize_init_ has a static_assert that checks if block_ct_dim is less or equal to 8.
+    # TODO: Update this logic to accept more than 8 tiles per block if the static_assert changes in the future.
+    max_bct_dim = 8 if dest_acc == DestAccumulation.No else 4
+    full_ct_dim = input_dimensions[1] // 32
+    block_ct_dim = next(
+        (bct for bct in range(max_bct_dim, 0, -1) if full_ct_dim % bct == 0), 1
+    )
 
     configuration = TestConfig(
         "sources/pack_untilize_test.cpp",
         formats,
         templates=[
-            INPUT_DIMENSIONS(input_dimensions, input_dimensions),
+            INPUT_DIMENSIONS(
+                input_dimensions,
+                input_dimensions,
+                block_ct_dim,
+            ),
             DEST_SYNC(dest_sync),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -92,8 +116,7 @@ def test_pack_untilize(
             sfpu=False,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit()
-        and dest_acc == DestAccumulation.Yes,
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run(workers_tensix_coordinates)
