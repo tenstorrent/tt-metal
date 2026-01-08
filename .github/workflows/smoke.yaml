@@ -40,7 +40,8 @@ jobs:
       volumes:
         - /work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-      options: --device /dev/tenstorrent
+      # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
+      options: --device /dev/tenstorrent ${{ contains(['N300-llmbox', 'in-service-dedicated-merge-gate'], inputs.runner) && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
@@ -57,6 +58,9 @@ jobs:
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
+
+      - name: Check available memory in container
+        run: cat /sys/fs/cgroup/memory.max
 
       - name: Install packages
         run: |

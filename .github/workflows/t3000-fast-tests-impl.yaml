@@ -63,7 +63,8 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
+      options: --device /dev/tenstorrent --memory 256g
     defaults:
       run:
         shell: bash
@@ -82,6 +83,8 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      - name: Check available memory in container
+        run: cat /sys/fs/cgroup/memory.max
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
         timeout-minutes: 20
