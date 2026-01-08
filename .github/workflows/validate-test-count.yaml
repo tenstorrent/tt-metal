@@ -53,10 +53,11 @@ jobs:
           path: docker-job
           fetch-depth: 0  # Fetch all history so we can checkout main later
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      # Python is already installed in the container image
+      # - name: Set up Python
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.10'
 
       - name: Download built wheel
         if: ${{ inputs.wheel-artifact-name != '' }}
