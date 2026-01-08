@@ -73,7 +73,8 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
                 dim=-2,  # Batch dimension
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=0,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
+                num_links=4,
             ),
         }
 
@@ -98,8 +99,8 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
                 dim=-2,  # Batch dimension
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=0,
-                topology=ttnn.Topology.Linear,
-                num_links=3,
+                topology=ttnn.Topology.Ring,
+                num_links=4,
             ),
         }
 

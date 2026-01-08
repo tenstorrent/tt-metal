@@ -189,7 +189,8 @@ class MLP(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                topology=ttnn.Topology.Ring,
+                num_links=4,
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP.ProgramConfigData(
@@ -206,7 +207,8 @@ class MLP(AbstractModule):
                 dim=3,  # We are scattering across the feature dimension (last one)
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                topology=ttnn.Topology.Ring,
+                num_links=4,
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -273,7 +275,8 @@ class MLP(AbstractModule):
                 cluster_axis=1,
                 dim=-1,
                 memory_config=input_memory_config,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                topology=ttnn.Topology.Ring,
+                num_links=4,
             ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -310,7 +313,8 @@ class MLP(AbstractModule):
             "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 dim=3,  # We are scattering across the feature dimension (last one)
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                topology=ttnn.Topology.Ring,
+                num_links=4,
                 memory_config=output_memory_config,
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
