@@ -59,7 +59,53 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
 
                     fixed_json_str = element_info
 
-                    # STEP 1: Fix improperly escaped nested JSON strings
+                    # STEP 1: Fix C++ brace notation for tile_shape and face_shape
+                    # This is the most common issue: C++ outputs "{32, 32}" but JSON needs [32, 32]
+                    # We need to do this BEFORE attempting any JSON parsing
+
+                    # Fix all variations of tile_shape and face_shape
+                    fixed_json_str = re.sub(
+                        r'"tile_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"tile_shape":[\1, \2]', fixed_json_str
+                    )
+                    fixed_json_str = re.sub(
+                        r'"face_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"face_shape":[\1, \2]', fixed_json_str
+                    )
+
+                    # Also fix escaped versions (if the JSON was already escaped)
+                    fixed_json_str = re.sub(
+                        r'\\"tile_shape\\":\s*\\"\{(\d+),\s*(\d+)\}\\"', r'\\"tile_shape\\":[\1, \2]', fixed_json_str
+                    )
+                    fixed_json_str = re.sub(
+                        r'\\"face_shape\\":\s*\\"\{(\d+),\s*(\d+)\}\\"', r'\\"face_shape\\":[\1, \2]', fixed_json_str
+                    )
+
+                    # STEP 1B: Fix missing closing brace in grid arrays (C++ serialization bug)
+                    # Pattern: [{"start":{...},"end":{...}], should be [{"start":{...},"end":{...}}],
+                    # This happens in shard_spec and nd_shard_spec grid fields
+                    fixed_json_str = re.sub(
+                        r'\[\{"start":\{"x":(\d+),"y":(\d+)\},"end":\{"x":(\d+),"y":(\d+)\}\]',
+                        r'[{"start":{"x":\1,"y":\2},"end":{"x":\3,"y":\4}}]',
+                        fixed_json_str,
+                    )
+
+                    # STEP 1C: Fix ttnn.CoreGrid serialization issues
+                    # Pattern: "ttnn.{"x":8, "y":7}" should be "ttnn.CoreGrid(x=8, y=7)" or just the dict
+                    # The issue is that the string contains unescaped braces
+                    # We'll convert it to a proper JSON object representation
+                    fixed_json_str = re.sub(
+                        r'"ttnn\.\{"x":(\d+),\s*"y":(\d+)\}"', r'{"CoreGrid":{"x":\1,"y":\2}}', fixed_json_str
+                    )
+
+                    # Try to parse directly first (covers the case where only tile/face_shape need fixing)
+                    try:
+                        parsed = json_module.loads(fixed_json_str)
+                        # Success! Return the parsed object, recursing to handle nested unparsed elements
+                        return fix_unparsed_elements_standalone(parsed, depth + 1, max_depth)
+                    except (json_module.JSONDecodeError, ValueError, TypeError):
+                        # If direct parsing fails, continue to more complex fixing strategies
+                        pass
+
+                    # STEP 2: Fix improperly escaped nested JSON strings
                     # Pattern: {"arg0": "[{\"key\":...}" should be {"arg0": "[{\\\"key\":...}"}
                     # This happens when the value is a JSON-stringified array/object
                     # The problem: after "arg0": ", the quotes in the nested JSON are not escaped
@@ -68,7 +114,7 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                     # Solution: Find the string value and properly escape all internal quotes
 
                     # Use non-greedy quantifier to avoid over-matching with nested quotes
-                    match = re.match(r'\{"(arg\d+)"\s*:\s*"(.+?)"\}$', fixed_json_str)
+                    match = re.match(r'\{"(arg\d+)"\s*:\s*"(.+)"\}$', fixed_json_str, re.DOTALL)
                     if match:
                         # Extract the key and problematic value
                         arg_key = match.group(1)
@@ -77,19 +123,31 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                         # Check if it looks like unescaped JSON (starts with [ or {)
                         if inner_value.startswith("[") or inner_value.startswith("{"):
                             # This is the problematic case - the inner JSON is not properly escaped
-                            # We need to:
-                            # 1. Fix any C++ formatting issues (like "{32, 32}" -> [32, 32])
-                            # 2. Then parse it as JSON
-
-                            # Apply C++ formatting fixes first
+                            # Apply all C++ formatting fixes to the inner value
                             inner_fixed = inner_value
-                            # Fix tile_shape and face_shape patterns: "{32, 32}" -> [32, 32]
+
+                            # Fix escaped tile/face_shape patterns
+                            inner_fixed = re.sub(
+                                r'\\"tile_shape\\":\s*\\"\{(\d+),\s*(\d+)\}\\"',
+                                r'\\"tile_shape\\":[\1, \2]',
+                                inner_fixed,
+                            )
+                            inner_fixed = re.sub(
+                                r'\\"face_shape\\":\s*\\"\{(\d+),\s*(\d+)\}\\"',
+                                r'\\"face_shape\\":[\1, \2]',
+                                inner_fixed,
+                            )
+
+                            # Fix unescaped patterns
                             inner_fixed = re.sub(
                                 r'"tile_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"tile_shape":[\1, \2]', inner_fixed
                             )
                             inner_fixed = re.sub(
                                 r'"face_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"face_shape":[\1, \2]', inner_fixed
                             )
+
+                            # Fix any remaining C++ brace patterns
+                            inner_fixed = re.sub(r':\s*"\{(\d+),\s*(\d+)\}"', r":[\1, \2]", inner_fixed)
 
                             # Now try to parse it
                             try:
@@ -118,9 +176,18 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                                 # Reconstruct the outer dict with parsed inner value (using captured key)
                                 result = {arg_key: parsed_inner}
                                 return fix_unparsed_elements_standalone(result, depth + 1, max_depth)
-                            except (json_module.JSONDecodeError, ValueError, TypeError):
-                                # If parsing fails, continue to other fixing strategies
-                                pass
+                            except (json_module.JSONDecodeError, ValueError, TypeError) as e:
+                                # If parsing fails, try one more strategy: unescape the inner JSON
+                                try:
+                                    # Sometimes the inner JSON has escaped quotes that need unescaping
+                                    inner_unescaped = inner_fixed.replace('\\"', '"')
+                                    parsed_inner = json_module.loads(inner_unescaped)
+                                    parsed_inner = fix_string_arrays(parsed_inner)
+                                    result = {arg_key: parsed_inner}
+                                    return fix_unparsed_elements_standalone(result, depth + 1, max_depth)
+                                except:
+                                    # If that also fails, continue to other fixing strategies
+                                    pass
 
                     # STEP 2: Try normal JSON parsing (in case it's already valid)
                     try:
@@ -157,18 +224,41 @@ def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
                         pass
 
                     # STEP 3: Apply regex fixes for common C++ formatting issues
-                    # Fix patterns like "tile_shape":"{32, 32}" -> "tile_shape":[32, 32]
+                    # CRITICAL FIX: Handle escaped braces in JSON strings like \"tile_shape\":\"{32, 32}\"
+                    # These appear in nested JSON that's been stringified
+                    # Pattern 1: Fix escaped brace patterns \"tile_shape\":\"{32, 32}\" -> \"tile_shape\":[32, 32]
+                    fixed_json_str = re.sub(
+                        r'\\"tile_shape\\":\\"\{(\d+),\s*(\d+)\}\\"', r'\\"tile_shape\\":[\1, \2]', fixed_json_str
+                    )
+                    fixed_json_str = re.sub(
+                        r'\\"face_shape\\":\\"\{(\d+),\s*(\d+)\}\\"', r'\\"face_shape\\":[\1, \2]', fixed_json_str
+                    )
+
+                    # Pattern 2: Fix unescaped brace patterns "tile_shape":"{32, 32}" -> "tile_shape":[32, 32]
+                    fixed_json_str = re.sub(
+                        r'"tile_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"tile_shape":[\1, \2]', fixed_json_str
+                    )
+                    fixed_json_str = re.sub(
+                        r'"face_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"face_shape":[\1, \2]', fixed_json_str
+                    )
+
+                    # Pattern 3: Generic brace-to-bracket conversion for other numeric pairs
                     fixed_json_str = re.sub(r':\s*"\{(\d+),\s*(\d+)\}"', r":[\1, \2]", fixed_json_str)
+
                     # Fix patterns like "compute_grid":8,8 -> "compute_grid":[8,8]
                     fixed_json_str = re.sub(r'"(\w+)":(\d+),(\d+)', r'"\1":[\2,\3]', fixed_json_str)
-                    # Fix remaining ":{...}" patterns
+
+                    # Fix remaining ":{...}" patterns (but be careful not to break valid data)
                     fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
+
                     # Fix grid patterns like "grid":{[...],[...]} -> "grid":[[...],[...]]
                     fixed_json_str = re.sub(
                         r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
                     )
+
                     # Fix range patterns like {8, 8} - {0, 0} -> [8, 8], [0, 0]
                     fixed_json_str = re.sub(r"(\{[^}]+\})\s*-\s*(\{[^}]+\})", r"\1, \2", fixed_json_str)
+
                     # Fix placeholder {...} to null
                     fixed_json_str = re.sub(r":\{\.\.\.}", r":null", fixed_json_str)
 
