@@ -39,7 +39,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       #options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -50,7 +50,6 @@ jobs:
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
-          path: docker-job
           fetch-depth: 0  # Fetch all history so we can checkout main later
 
       # Python is already installed in the container image
@@ -64,7 +63,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v6
         with:
           name: ${{ inputs.wheel-artifact-name }}
-          path: docker-job/wheels
+          path: wheels
           run_id: 20788440471
           github_token: ${{ secrets.GITHUB_TOKEN }}
       # - name: Download built wheel
@@ -166,18 +165,7 @@ jobs:
           done
           
           # Configure git and checkout base branch
-          echo "Current directory: $(pwd)"
-          echo "GitHub workspace: ${{ github.workspace }}"
-          echo "Searching for .git:"
-          find ${{ github.workspace }} -name .git -type d 2>/dev/null || echo "No .git directory found"
-          find ${{ github.workspace }} -name .git -type f 2>/dev/null || echo "No .git file found"
-          echo "Listing github.workspace:"
-          ls -la ${{ github.workspace }} 2>&1 | head -20
-          echo "Listing /work:"
-          ls -la /work | head -20
-          git config --global --add safe.directory ${{ github.workspace }}/docker-job
           git config --global --add safe.directory /work
-          cd ${{ github.workspace }}/docker-job && git status
           git fetch origin main
           git checkout origin/main
           
