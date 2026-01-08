@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Check Test Count"
     container:
-      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
+      image: ${{ inputs.docker-image }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
