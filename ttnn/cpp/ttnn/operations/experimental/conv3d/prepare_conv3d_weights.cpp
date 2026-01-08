@@ -100,42 +100,94 @@ Helper function to aid in converting grouped weight tensor to ungrouped weight t
 //     return rm_tensor;
 // }
 
+// template <typename T>
+// static Tensor conv3d_group_weight_zero_pad_helper(
+//     const Tensor& weight,                  // Python 传来的 [H_total, oC_pg]
+//     const ttnn::Shape& original_2d_shape,  // [H_total, oC_pg]
+//     const ttnn::Shape& output_2d_shape,    // [H_total, oC_total]
+//     uint32_t num_groups,
+//     DataType output_dtype) {
+
+//     auto pad_weight = [&original_2d_shape, &output_2d_shape, num_groups](
+//                           const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
+//         auto src_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
+//         // 创建目标全 0 矩阵 [H_total, oC_total]
+//         auto output_buffer = std::vector<T>(output_2d_shape.volume(), 0);
+
+//         uint32_t h_total = original_2d_shape[0];
+//         uint32_t w_per_group = original_2d_shape[1]; // oC_pg
+//         uint32_t w_total = output_2d_shape[1];       // oC_total (w_per_group * num_groups)
+
+//         // 每一组在垂直方向占据的高度
+//         uint32_t h_per_group = h_total / num_groups;
+
+//         for (uint32_t g = 0; g < num_groups; g++) {
+//             // 源定位：每一组在原矩阵中是纵向堆叠的
+//             uint32_t src_row_start = g * h_per_group;
+
+//             // 目标定位：每一组在目标矩阵中也是从自己的纵向区间开始，
+//             // 但横向要偏移到对应的 oC 块，实现对角化
+//             uint32_t dest_row_start = g * h_per_group;
+//             uint32_t dest_col_start = g * w_per_group;
+
+//             for (uint32_t i = 0; i < h_per_group; i++) {
+//                 for (uint32_t j = 0; j < w_per_group; j++) {
+//                     // 源索引：行宽是 w_per_group
+//                     uint32_t src_idx = (src_row_start + i) * w_per_group + j;
+
+//                     // 目标索引：行宽是 w_total
+//                     uint32_t dest_idx = (dest_row_start + i) * w_total + (dest_col_start + j);
+
+//                     if (src_idx < src_buffer.size()) {
+//                         output_buffer[dest_idx] = src_buffer[src_idx];
+//                     }
+//                 }
+//             }
+//         }
+//         return tt::tt_metal::HostBuffer(std::move(output_buffer));
+//     };
+
+//     const TensorSpec rm_spec(output_2d_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR),
+//     MemoryConfig{})); Tensor rm_tensor = convert_tensor<T>(weight, pad_weight, rm_spec);
+
+//     // 转换 TILE 布局
+//     return rm_tensor;
+// }
+
 template <typename T>
 static Tensor conv3d_group_weight_zero_pad_helper(
-    const Tensor& weight,
-    const ttnn::Shape& original_weight_shape,  // Python 传来的形状 [H_per_group, oC_total]
-    const ttnn::Shape& output_weight_shape,    // 目标形状 [H_per_group * groups, oC_total]
+    const Tensor& weight,                  // Python 传来的窄矩阵
+    const ttnn::Shape& original_2d_shape,  // [H_total, oC_pg]
+    const ttnn::Shape& output_2d_shape,    // [H_total, oC_total]
     uint32_t num_groups,
+    // uint32_t iC_per_group_block,           // 必须等于 Python 中的 C_in_block (如 32)
     DataType output_dtype) {
-    auto pad_weight = [&original_weight_shape, &output_weight_shape, num_groups](
+    uint32_t iC_per_group_block = 32;
+
+    auto pad_weight = [&original_2d_shape, &output_2d_shape, num_groups, iC_per_group_block](
                           const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
         auto src_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
-        auto output_buffer = std::vector<T>(output_weight_shape.volume(), 0);
+        // 初始化全 0 的目标宽矩阵
+        auto output_buffer = std::vector<T>(output_2d_shape.volume(), 0);
 
-        uint32_t w_total = output_weight_shape[1];        // 总输出通道 (oC_total)
-        uint32_t h_per_group = original_weight_shape[0];  // 单组高度 (kD*kH*kW*iC_pg_aligned)
-        uint32_t w_per_group = w_total / num_groups;      // 每组输出通道 (oC_pg)
+        uint32_t h_total = original_2d_shape[0];
+        uint32_t w_per_group = original_2d_shape[1];  // oC_pg
+        uint32_t w_total = output_2d_shape[1];        // oC_total
 
-        for (uint32_t g = 0; g < num_groups; g++) {
-            // 源定位：每一组的数据在每一行中是横向并列的
-            uint32_t src_col_start = g * w_per_group;
+        for (uint32_t i = 0; i < h_total; ++i) {
+            // 根据行索引 i 判定当前行属于哪个 group
+            // 逻辑：每经过 iC_per_group_block 行就切换到下一个 Group
+            uint32_t group_id = (i / iC_per_group_block) % num_groups;
 
-            // 目标定位：纵向平移 h_per_group，横向平移 w_per_group 实现对角化
-            uint32_t dest_row_start = g * h_per_group;
-            uint32_t dest_col_start = g * w_per_group;
+            // 计算在宽矩阵中的横向偏移
+            uint32_t dest_col_start = group_id * w_per_group;
 
-            for (uint32_t i = 0; i < h_per_group; i++) {
-                for (uint32_t j = 0; j < w_per_group; j++) {
-                    // 读取：在原始 H_per_group 宽度的矩阵里按组的宽度 Stride 读取
-                    // 行宽使用 w_total，因为 Python 传过来的是 [H_per_group, w_total]
-                    uint32_t src_idx = i * w_total + (src_col_start + j);
+            for (uint32_t j = 0; j < w_per_group; j++) {
+                uint64_t src_idx = (uint64_t)i * w_per_group + j;
+                uint64_t dest_idx = (uint64_t)i * w_total + (dest_col_start + j);
 
-                    // 写入：在目标大矩阵中，起始行增加 dest_row_start
-                    uint32_t dest_idx = (dest_row_start + i) * w_total + (dest_col_start + j);
-
-                    if (src_idx < src_buffer.size()) {
-                        output_buffer[dest_idx] = src_buffer[src_idx];
-                    }
+                if (src_idx < src_buffer.size()) {
+                    output_buffer[dest_idx] = src_buffer[src_idx];
                 }
             }
         }
@@ -143,12 +195,8 @@ static Tensor conv3d_group_weight_zero_pad_helper(
     };
 
     const TensorSpec rm_spec(
-        output_weight_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
-    Tensor rm_tensor = convert_tensor<T>(weight, pad_weight, rm_spec);
-
-    // 转换 TILE 布局。
-    // 此时高度和宽度都已对齐，转换是安全的。
-    return rm_tensor;
+        output_2d_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    return convert_tensor<T>(weight, pad_weight, rm_spec);
 }
 
 /*
@@ -170,8 +218,8 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
     // 2. 计算目标形状：高度需要乘以组数，宽度保持不变
     // 这样才能在矩阵乘法中通过高度方向的 0 来隔离不同组的输入通道
-    uint32_t h_out = h_in * num_groups;
-    uint32_t w_out = w_in;
+    uint32_t h_out = h_in;
+    uint32_t w_out = w_in * num_groups;
 
     ttnn::Shape output_shape({h_out, w_out});
 
@@ -191,14 +239,17 @@ static ttnn::Tensor prepare_conv_weights_internal(
     const ttnn::Tensor& weight_tensor, const Conv3dWeightsBiasPrepConfig& params, MeshDevice* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;
 
-    if (params.groups > 1) {
+    if (params.groups > 0) {
         weight_tensor_ = weight_tensor_.cpu();
         log_info(tt::LogTest, "is_cpu_tensor(weight_tensor_): {}", is_cpu_tensor(weight_tensor_));
+        log_info(tt::LogTest, "weight_tensor.logical_shape(): {}", weight_tensor_.logical_shape());
+        log_info(tt::LogTest, "weight_tensor.padded_shape (): {}", weight_tensor_.padded_shape());
         weight_tensor_ =
             convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
+        log_info(tt::LogTest, "weight_tensor.logical_shape(): {}", weight_tensor_.logical_shape());
+        log_info(tt::LogTest, "weight_tensor.padded_shape(): {}", weight_tensor_.padded_shape());
         weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     }
-
     // 在python端传入了row-major，在这要变成TILE
     weight_tensor_ = ttnn::to_layout(weight_tensor_, Layout::TILE);
 

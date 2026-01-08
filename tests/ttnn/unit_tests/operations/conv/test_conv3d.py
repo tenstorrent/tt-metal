@@ -25,100 +25,161 @@ ALIGNMENT = 32  # Valid L1 alignment for Wormhole and Blackhole
 #     if C % alignment != 0:
 #         tt_input = torch.nn.functional.pad(tt_input, (0, ALIGN_PAD))
 #     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
-def prepare_input_tensor(input_tensor, groups, device, alignment=ALIGNMENT):
-    """Prepare input tensor with per-group alignment for grouped convolution."""
-    # input_tensor shape: [N, C_total, D, H, W]
+# def prepare_input_tensor(input_tensor, groups, device, alignment=ALIGNMENT):
+#     """Prepare input tensor with per-group alignment for grouped convolution."""
+#     # input_tensor shape: [N, C_total, D, H, W]
+#     N, C_total, D, H, W = input_tensor.shape
+#     C_per_group = C_total // groups
+
+#     # 1. 转换维度到 [N, D, H, W, C_total]
+#     tt_input = input_tensor.permute(0, 2, 3, 4, 1)
+
+#     # 2. 计算每组需要补多少
+#     ALIGN_PAD = (alignment - C_per_group % alignment) % alignment
+
+#     if ALIGN_PAD != 0:
+#         # 核心修改：将 C_total 拆成 [..., groups, C_per_group]
+#         tt_input = tt_input.reshape(N, D, H, W, groups, C_per_group)
+
+#         # 在最后一个维度 (C_per_group) 补 0
+#         # pad 参数是从最后一个维度往前算的：(左, 右, 前, 后...)
+#         tt_input = torch.nn.functional.pad(tt_input, (0, ALIGN_PAD))
+
+#         # 3. 重新合并成一个大通道维度
+#         # 现在的形状是 [N, D, H, W, groups * (C_per_group + ALIGN_PAD)]
+#         tt_input = tt_input.reshape(N, D, H, W, -1)
+
+#     print(f"Final Input shape after per-group padding: {tt_input.shape}")
+
+#     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+def prepare_input_tensor(input_tensor, groups, device, alignment=32):
+    """
+    准备输入张量以适配对角线补0的3D卷积。
+
+    逻辑：
+    1. 将 groups 拆分出来。
+    2. 对每个 group 的通道数 (C_per_group) 进行对齐补0。
+    3. 【关键】通过 permute 将 groups 挪到最后 C 维度的紧邻位置。
+    4. 确保物理内存顺序为：[N, D, H, W, (G0_C_aligned + G1_C_aligned + ...)]
+    """
+    # 原始输入形状: [N, C_total, D, H, W] (PyTorch 默认 NCDHW)
     N, C_total, D, H, W = input_tensor.shape
     C_per_group = C_total // groups
 
-    # 1. 转换维度到 [N, D, H, W, C_total]
-    tt_input = input_tensor.permute(0, 2, 3, 4, 1)
+    # 1. 逻辑拆分：[N, groups, C_per_group, D, H, W]
+    tt_input = input_tensor.view(N, groups, C_per_group, D, H, W)
 
-    # 2. 计算每组需要补多少
+    # 2. 计算每组通道的对齐补齐量
+    # 硬件内核 reader_vol2col.cpp 每次读取 C_in_block_bytes
+    # 必须保证每组的起始和长度都满足对齐要求
     ALIGN_PAD = (alignment - C_per_group % alignment) % alignment
 
     if ALIGN_PAD != 0:
-        # 核心修改：将 C_total 拆成 [..., groups, C_per_group]
-        tt_input = tt_input.reshape(N, D, H, W, groups, C_per_group)
+        # 在 C_per_group 维度（dim=2）后面补 0
+        # pad 参数是从最后一个维度往前算的：(W_L, W_R, H_L, H_R, D_L, D_R, C_L, C_R)
+        tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, 0, 0, 0, 0, ALIGN_PAD))
+        # 补齐后形状: [N, groups, C_per_group + ALIGN_PAD, D, H, W]
 
-        # 在最后一个维度 (C_per_group) 补 0
-        # pad 参数是从最后一个维度往前算的：(左, 右, 前, 后...)
-        tt_input = torch.nn.functional.pad(tt_input, (0, ALIGN_PAD))
+    # 3. 物理重排 (Permute)
+    # 目标：[N, D, H, W, groups, C_aligned]
+    # 这样在内存中，同一个空间位置 (d,h,w) 下，先排 G0 的所有通道，再排 G1 的所有通道
+    tt_input = tt_input.permute(0, 3, 4, 5, 1, 2)
 
-        # 3. 重新合并成一个大通道维度
-        # 现在的形状是 [N, D, H, W, groups * (C_per_group + ALIGN_PAD)]
-        tt_input = tt_input.reshape(N, D, H, W, -1)
+    # 4. 展平为 5 维 (NDHWC 风格)
+    # 最终形状: [N, D, H, W, groups * (C_per_group + ALIGN_PAD)]
+    # 注意：这个 reshape 配合上面的 permute，真正改变了内存中的数据排布
+    tt_input = tt_input.reshape(N, D, H, W, -1)
 
-    print(f"Final Input shape after per-group padding: {tt_input.shape}")
+    # print(f"Input Tensor Prepared:")
+    # print(f"  - Original Shape: [{N}, {C_total}, {D}, {H}, {W}]")
+    # print(f"  - Groups: {groups}, C_per_group: {C_per_group}, Pad_per_group: {ALIGN_PAD}")
+    # print(f"  - Final Physical Shape: {tt_input.shape}")
+    # torch.set_printoptions(threshold=2000, linewidth=200, edgeitems=20)
+    # print(f"preare_input:{tt_input}")
 
+    # 将处理好的 Torch 张量转为 TTNN 张量
+    # 使用 ROW_MAJOR_LAYOUT 确保物理内存顺序与我们刚才 permute 的一致
     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-# def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
-#     """Prepare weights and bias for TTNN."""
-#     w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
-#     w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-#     print(f"w.shape: {w.shape}")
-#     ALIGN_PAD = alignment - w.shape[3] % alignment
-#     if C % alignment != 0:
-#         w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
+def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
+    """Prepare weights and bias for TTNN."""
+    w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
+    w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
+    ALIGN_PAD = alignment - C % alignment
+    if C % alignment != 0:
+        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
 
-#     # Reshape weights so that num_C_in_blocks is the first dimension
-#     kD, kH, kW, C_in_aligned, out_channels = w.shape
-#     print(f"kD, kH, kW, C_in_aligned, out_channels: {kD, kH, kW, C_in_aligned, out_channels}")
-#     C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-#     num_C_in_blocks = C_in_aligned // C_in_block
-#     assert num_C_in_blocks * C_in_block == C_in_aligned
-#     w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-#     w = w.permute(3, 0, 1, 2, 4, 5)
-#     w = w.reshape(-1, out_channels)
+    # Reshape weights so that num_C_in_blocks is the first dimension
+    kD, kH, kW, C_in_aligned, out_channels = w.shape
+    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
+    num_C_in_blocks = C_in_aligned // C_in_block
+    assert num_C_in_blocks * C_in_block == C_in_aligned
+    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
+    w = w.permute(3, 0, 1, 2, 4, 5)
+    w = w.reshape(-1, out_channels)
 
-#     print(f"Final Weights shape after per-group padding: {w.shape}")
+    # print(f"C_in_block: {C_in_block}")
+    # print(f"Corrected Shape for w: {w.shape}")
 
-#     tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16)
-#     tt_bias = ttnn.from_torch(
-#         conv3d_module.bias.data.reshape(1, -1),
-#         device=device,
-#         dtype=ttnn.DataType.BFLOAT16,
-#         layout=ttnn.TILE_LAYOUT,
-#         pad_value=0,
-#     )
-#     return tt_weight, tt_bias
+    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+    return tt_weight, tt_bias
 
 
-def prepare_weights(conv3d_module, groups, device, alignment=ALIGNMENT):
-    # w: [oC_total, iC_pg, kD, kH, kW]
+def prepare_weights(conv3d_module, C, out_channels, groups, device, C_in_block=0, alignment=ALIGNMENT):
+    """
+    针对 Grouped Conv3D 的权重预处理。
+    实现 [num_blocks, kD, kH, kW, groups, C_in_block, out_per_group] 排列。
+    """
+    # 1. 获取原始权重数据 [out_chan, C_per_group, kD, kH, kW]
     w = conv3d_module.weight.data
-    oC_total, iC_pg, kD, kH, kW = w.shape
-    oC_pg = oC_total // groups  # 每一组真正的输出通道数
+    out_chan_total, C_per_group, kD, kH, kW = w.shape
+    out_per_group = out_chan_total // groups
 
-    # 1. 【必须引用 groups】
-    # 将输出通道拆分为 groups 和 oC_pg
-    # 形状变为: [groups, oC_pg, iC_pg, kD, kH, kW]
-    w = w.reshape(groups, oC_pg, iC_pg, kD, kH, kW)
+    # print(f"weight!!!!!!!!!!!!!!!!: {w}")
 
-    # 2. 变换维度：把空间维度 (kD, kH, kW) 和输入通道 (iC_pg) 放在一起构成高度
-    # 目标顺序: [groups, kD, kH, kW, iC_pg, oC_pg]
+    # 2. 维度初步重塑: [groups, out_per_group, C_per_group, kD, kH, kW]
+    w = w.view(groups, out_per_group, C_per_group, kD, kH, kW)
+
+    # 3. 对组内的输入通道进行对齐 (Alignment)
+    # 将 [groups, out_per_group, C_per_group, kD, kH, kW]
+    # 调整为 [groups, kD, kH, kW, C_per_group, out_per_group] 方便 pad
     w = w.permute(0, 3, 4, 5, 2, 1)
 
-    # 3. 对每组内的 iC_pg 进行 32 对齐
-    c_pad = (alignment - iC_pg % alignment) % alignment
-    if c_pad != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, c_pad))  # 在 iC_pg 维度补齐
+    ALIGN_PAD = (alignment - C_per_group % alignment) % alignment
+    if ALIGN_PAD != 0:
+        # 在 C_per_group 这一维进行 padding (倒数第二维)
+        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
 
-    # 4. 拉平成你想要的“横向拼接”矩阵
-    # 我们先拉平单组的高度和宽度: [groups, H_per_group, oC_pg]
-    # H_per_group = kD * kH * kW * iC_pg_aligned
-    w = w.reshape(groups, -1, oC_pg)
+    # 4. 分块处理 (Blocking)
+    groups_dim, kD, kH, kW, C_in_aligned, out_per_group = w.shape
+    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
+    num_C_in_blocks = C_in_aligned // C_in_block
 
-    # 5. 【关键】：转置并拉平成横向拼接 [H_per_group, groups * oC_pg]
-    # 也就是 [H_per_group, oC_total]
-    w = w.permute(1, 0, 2).reshape(-1, oC_total)
+    # 将对齐后的通道维度拆分为 [num_blocks, C_in_block]
+    # 当前 w: [groups, kD, kH, kW, num_blocks, C_in_block, out_per_group]
+    w = w.reshape(groups_dim, kD, kH, kW, num_C_in_blocks, C_in_block, out_per_group)
 
-    print(f"Final Weights shape (G={groups}): {w.shape}")
-    # 3x3x3, G=2, oC=32, iC_pg=32(aligned) 时，形状应为 [864, 32]
+    # 5. 【核心修正】：重排维度以适配“拉链式”矩阵
+    # 原始索引: groups(0), kD(1), kH(2), kW(3), num_blocks(4), C_in_block(5), out_per_group(6)
+    # 目标物理顺序: [num_blocks, kD, kH, kW, groups, C_in_block, out_per_group]
+    w = w.permute(4, 1, 2, 3, 0, 5, 6).contiguous()
 
-    tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16)
+    # 6. 展平为窄矩阵 [H_total, out_per_group]
+    # 这里的内存分布已经是: P0_G0_data, P0_G1_data, P1_G0_data...
+    w_narrow = w.reshape(-1, out_per_group)
+
+    # 7. 转换为 tt 张量并返回
+    tt_weight = ttnn.from_torch(w_narrow, device=device, dtype=ttnn.DataType.BFLOAT16)
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
         device=device,
@@ -182,6 +243,27 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, groups, pa
         padding_mode=padding_mode,
     )
 
+    # with torch.no_grad():
+    #     # --- 2. 填充权重 (Weight) ---
+    #     # Weight 形状: [out_channels, C_in//groups, kD, kH, kW]
+    #     oc_per_group = out_channels // groups
+    #     for g in range(groups):
+    #         val = float(g + 111)  # Group 0 填 3.0, Group 1 填 4.0
+    #         # 选出该 group 对应的输出通道范围
+    #         conv3d_module.weight[g * oc_per_group : (g + 1) * oc_per_group].fill_(val)
+
+    # # --- 3. 填充输入 (Input) ---
+    # # Input 形状: [N, C, D, H, W]
+    # input_tensor = torch.zeros(input_shape)
+    # c_per_group = C // groups
+    # for g in range(groups):
+    #     val = float(g + 1)  # Group 0 填 1.0, Group 1 填 2.0
+    #     # 选出该 group 对应的输入通道范围
+    #     input_tensor[:, g * c_per_group : (g + 1) * c_per_group].fill_(val)
+
+    # print(f"input_tensor.shape: {input_tensor.shape}")
+    # print(f"input_tensor: {input_tensor}")
+
     gt_output = conv3d_module(input_tensor)
 
     # Prepare input for TTNN
@@ -208,8 +290,8 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    # tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
-    tt_weight, tt_bias = prepare_weights(conv3d_module, groups, device)
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, groups, device, C_in_block=0)
+    # tt_weight = prepare_weights(conv3d_module, C, out_channels, groups, device, C_in_block=0)
 
     # Create config and run TTNN conv3d
     config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
@@ -232,8 +314,8 @@ def run_conv3d_test(
     # Reshape output and verify results
     tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
-    print(f"gt output shape = {gt_output.shape}")
-    print(f"tt output shape = {tt_output.shape}")
+    # print(f"gt output shape = {gt_output.shape}")
+    # print(f"tt output shape = {tt_output.shape}")
     assert tt_output.shape == gt_output.shape
 
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
