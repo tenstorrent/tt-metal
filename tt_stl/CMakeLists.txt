@@ -59,53 +59,34 @@ target_link_libraries(metal_common_pch PRIVATE tt_stl)
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
 tt_set_library_rpath(tt_stl)
 
-# Output library directly to build/lib (not build/lib64) for CI tar artifacts.
-# This avoids creating a second physical copy of the .so (which can cause ODR
-# violations if different processes dlopen different copies of the same library).
-# Fedora installs to lib64 and Ubuntu installs to lib; the top-level symlink logic
-# (lib64 -> lib when needed) keeps build-time lookups consistent.
+# Output library to build/${CMAKE_INSTALL_LIBDIR} (lib on Ubuntu, lib64 on Fedora/AlmaLinux).
+# On Fedora/AlmaLinux, the top-level symlink (lib64 -> lib) ensures the file actually ends up
+# in build/lib/ for tar artifact compatibility, while CMake's internal tracking uses the
+# lib64 path that it expects. This approach:
+# - Avoids install(TARGETS) path resolution issues (CMake's tracked path matches the setting)
+# - Ensures a single canonical .so file (no copies, no ODR violations)
+# - Works with both lib and lib64 systems via the symlink
 set_target_properties(
     tt_stl
     PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY
-            "${CMAKE_BINARY_DIR}/lib"
+            "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}"
 )
 
-# Install library, EXPORT, and FILE_SET using TARGETS
-# When LIBRARY_OUTPUT_DIRECTORY is set to a custom location, install(TARGETS) LIBRARY
-# may fail to resolve the file path correctly on some systems. We use install(FILES)
-# with a generator expression for the library file, while keeping install(TARGETS)
-# for the EXPORT and FILE_SET to maintain proper CMake package configuration.
+# Standard install with LIBRARY - this works because LIBRARY_OUTPUT_DIRECTORY matches
+# CMake's expected path pattern (build/${CMAKE_INSTALL_LIBDIR})
 install(
     TARGETS
         tt_stl
     EXPORT Metalium
-    # Note: We install the library file separately using install(FILES) below
-    # because install(TARGETS) LIBRARY may fail to find the file when
-    # LIBRARY_OUTPUT_DIRECTORY is set to a custom location
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT metalium-runtime
     FILE_SET
     api
         DESTINATION COMPONENT
         metalium-dev
 )
-
-# Install the library file using install(CODE) to resolve the path at install time
-# This avoids path resolution issues that can occur with install(FILES) when
-# LIBRARY_OUTPUT_DIRECTORY is overridden and CMake hardcodes paths at configure time
-install(
-    CODE
-        "
-        file(INSTALL $<TARGET_FILE:tt_stl> DESTINATION \${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
-        "
-    COMPONENT metalium-runtime
-)
-
-# Ensure the generated install target builds tt_stl first.
-# This avoids intermittent "file INSTALL cannot find ..." failures in generators
-# where the install target does not strictly depend on all library targets.
-if(TT_INSTALL AND TARGET install)
-    add_dependencies(install tt_stl)
-endif()
 
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(tests)
