@@ -55,6 +55,7 @@ inline void write_data(
 }
 
 void kernel_main() {
+    DPRINT << " start of writer 1 kernel\n";
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -66,6 +67,8 @@ void kernel_main() {
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(7);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(9);
+    constexpr uint32_t device_idx = get_compile_time_arg_val(10);
+    DPRINT << "device_idx: " << (uint32_t)device_idx << "\n";
     constexpr uint32_t page_bytes = page_size_bytes;
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
@@ -77,6 +80,7 @@ void kernel_main() {
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
     // ROUND 1: send data to neighbor
+    DPRINT << "round1\n";
     uint32_t chunk_size = input_num_tiles;
 
     size_t arg_idx = 0;
@@ -135,21 +139,28 @@ void kernel_main() {
 
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+    DPRINT << "after wait for fabric endpoint ready\n";
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
+    DPRINT << "after fabric client connect\n";
 
     cb_reserve_back(packet_header_cb_id, 1);
     uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
+    DPRINT << "after reserving packet header buffer\n";
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
+    DPRINT << "AFTER fabric_set_unicast_route\n";
     //  wait for receiver to signal it is ready
+    DPRINT << "waiting for semaphore at address: " << (uint32_t)receive_semaphore_addr << "\n";
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
+    DPRINT << "after receiving ready signal from receiver\n";
 
     cb_wait_front(packet_cb_id, 1);
+    DPRINT << "after reserving packet buffer\n";
     uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
 
     const uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address);
@@ -160,9 +171,13 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
         align(new_payload_size_bytes, alignment));
 
+    DPRINT << "sending packet to receiver at noc address: " << (uint32_t)dst_noc_addr << "\n";
     mux_connection.wait_for_empty_write_slot();
+    DPRINT << "after wait for empty write slot\n";
     mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
+    DPRINT << "after sending payload to receiver\n";
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
+    DPRINT << "after sending data to receiver\n";
 
     cb_pop_front(packet_cb_id, 1);
 
@@ -178,6 +193,7 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 
+    DPRINT << "round2\n";
     // ROUND 2: wait for compute and write output
 
     /*
@@ -202,4 +218,5 @@ void kernel_main() {
         cb_int_cb_m,
         onetile,
         input_num_tiles);
+    DPRINT << "end of writer 1 kernel\n";
 }
