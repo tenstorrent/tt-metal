@@ -58,21 +58,21 @@ jobs:
           apt-get update
           apt-get install -y python3-pip git
 
-      - name: Debug git setup
-        run: |
-          echo "PWD: $(pwd)"
-          echo "Checking for .git:"
-          ls -la /work/.git 2>&1 || echo ".git directory not found"
-          echo "Listing /work:"
-          ls -la /work | head -20
+      # - name: Debug git setup
+      #   run: |
+      #     echo "PWD: $(pwd)"
+      #     echo "Checking for .git:"
+      #     ls -la /work/.git 2>&1 || echo ".git directory not found"
+      #     echo "Listing /work:"
+      #     ls -la /work | head -20
           
-      - name: Initialize git repository
-        run: |
-          git init
-          git config --global --add safe.directory /work
-          git remote add origin https://github.com/${{ github.repository }}.git
-          git fetch --all
-          git checkout ${{ github.ref_name }}
+      # - name: Initialize git repository
+      #   run: |
+      #     git init
+      #     git config --global --add safe.directory /work
+      #     git remote add origin https://github.com/${{ github.repository }}.git
+      #     git fetch --all
+      #     git checkout ${{ github.ref_name }}
 
       # Python is already installed in the container image
       # - name: Set up Python
@@ -142,6 +142,9 @@ jobs:
 
       - name: Count and compare tests
         run: |
+          # Define repository URL
+          REPO_URL="https://github.com/tenstorrent/tt-metal.git"
+          
           # Define the paths to check for test counts
           declare -a PATHS=(
             "tests/ttnn/unit_tests/operations/eltwise"
@@ -181,16 +184,17 @@ jobs:
             echo "  $path: $count"
           done
           
-          # Configure git and checkout base branch
-          git config --global --add safe.directory /work
-          git fetch origin main
-          git checkout origin/main
+          # Clone main branch into separate directory
+          echo "=== Cloning main branch ==="
+          cd /tmp
+          git clone --depth 1 --branch main "$REPO_URL" main-branch
+          cd /work
           
           # Count tests in base branch
           echo "=== Base branch test counts ==="
           declare -A base_counts
           for path in "${PATHS[@]}"; do
-            count=$(count_tests "$path")
+            count=$(count_tests "/tmp/main-branch/$path")
             base_counts[$path]=$count
             echo "  $path: $count"
           done
