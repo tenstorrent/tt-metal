@@ -270,7 +270,7 @@ install(
         "
         message(STATUS \"=== Listing all shared libraries in build directory ===\")
         execute_process(
-            COMMAND bash -c \"find -name '*.so' | sort -h | xargs ls -lh\"
+            COMMAND bash -c \"pwd ; find -name '*.so' | sort -h | xargs ls -lh\"
             WORKING_DIRECTORY \"${CMAKE_BINARY_DIR}\"
             RESULT_VARIABLE _find_result
         )
