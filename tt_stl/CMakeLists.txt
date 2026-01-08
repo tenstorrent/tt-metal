@@ -59,10 +59,11 @@ target_link_libraries(metal_common_pch PRIVATE tt_stl)
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
 tt_set_library_rpath(tt_stl)
 
-# Output library directly to build/lib (not build/lib64) for CI tar artifacts
-# This prevents ODR violations in multiprocess tests where different processes
-# might load the library from different locations (original vs copied)
-# CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
+# Output library directly to build/lib (not build/lib64) for CI tar artifacts.
+# This avoids creating a second physical copy of the .so (which can cause ODR
+# violations if different processes dlopen different copies of the same library).
+# Fedora installs to lib64 and Ubuntu installs to lib; the top-level symlink logic
+# (lib64 -> lib when needed) keeps build-time lookups consistent.
 set_target_properties(
     tt_stl
     PROPERTIES
@@ -70,34 +71,25 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Install library, EXPORT, and FILE_SET using TARGETS
-# When LIBRARY_OUTPUT_DIRECTORY is set to a custom location (build/lib instead of
-# build/lib64), CMake's install(TARGETS) LIBRARY may fail to resolve the library file
-# path correctly on some platforms (e.g., Ubuntu 22 where CMAKE_INSTALL_LIBDIR is "lib").
-# On Fedora (where CMAKE_INSTALL_LIBDIR is "lib64"), the symlink lib64 -> lib helps, but
-# on Ubuntu no symlink is created, causing install(TARGETS) to fail.
-# We use install(FILES) with a generator expression as a workaround to ensure the library
-# file is correctly located and installed on both Ubuntu and Fedora.
 install(
     TARGETS
         tt_stl
     EXPORT Metalium
-    # Note: We install the library file separately using install(FILES) below
-    # because install(TARGETS) LIBRARY may fail to find the file when
-    # LIBRARY_OUTPUT_DIRECTORY is set to a custom location (especially on Ubuntu)
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT metalium-runtime
     FILE_SET
     api
         DESTINATION COMPONENT
         metalium-dev
 )
 
-# Explicitly install the library file using generator expression
-# This works around CMake's install(TARGETS) LIBRARY path resolution issue
-# when LIBRARY_OUTPUT_DIRECTORY is set to a custom location.
-# $<TARGET_FILE:tt_stl> resolves at install time to the actual file location
-# (${CMAKE_BINARY_DIR}/lib/libtt_stl.so), and DESTINATION ${CMAKE_INSTALL_LIBDIR}
-# correctly installs to "lib" on Ubuntu and "lib64" on Fedora.
-install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
+# Ensure the generated install target builds tt_stl first.
+# This avoids intermittent "file INSTALL cannot find ..." failures in generators
+# where the install target does not strictly depend on all library targets.
+if(TT_INSTALL AND TARGET install)
+    add_dependencies(install tt_stl)
+endif()
 
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(tests)
