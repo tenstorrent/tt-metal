@@ -122,12 +122,12 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         barrier_semaphore,
         false,  // using_persistent_buffers - false since we always barrier in this version
         operation_attributes.subdevice_id,
-        no_fuse,       // never fusing with this
-        std::nullopt,  // use chunks per sync decision making tree
-        std::nullopt,  // use num workers per link decision making tree
-        std::nullopt,  // use num buffers per channel decision making tree
-        first_coord,   // first core in the subdevice is our offset as we don't use this version for fusions
-        false,         // reverse_order = false
+        no_fuse,  // never fusing with this
+        operation_attributes.chunks_per_sync,
+        operation_attributes.num_workers_per_link,
+        operation_attributes.num_buffers_per_channel,
+        first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+        false,        // reverse_order = false
         operation_attributes.sub_core_grid);
 
     return {

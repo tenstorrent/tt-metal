@@ -30,6 +30,9 @@ struct AllGatherDeviceOperation {
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
         const uint32_t num_links;
+        const std::optional<uint32_t> chunks_per_sync;
+        const std::optional<uint32_t> num_workers_per_link;
+        const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<CoreRangeSet> sub_core_grid;
     };
 
@@ -97,5 +100,8 @@ ttnn::Tensor all_gather(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<CoreRangeSet>& sub_core_grid);
 }  // namespace ttnn::prim
