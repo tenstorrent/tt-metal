@@ -158,6 +158,8 @@ cb_pop_front(cb_out, 1);  // Release the tile
 
 **Common mistake**: `#include "dataflow_api.h"` → Use `"api/dataflow/dataflow_api.h"`
 
+For reduce helper API details, read `ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp` directly.
+
 ---
 
 ## TensorAccessor Pattern

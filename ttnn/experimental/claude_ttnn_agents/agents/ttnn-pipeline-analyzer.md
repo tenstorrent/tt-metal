@@ -4,6 +4,11 @@ description: Use this agent for deep pipeline execution analysis of TTNN operati
 model: opus
 color: green
 tools: Read, Write, Glob, Grep, Bash, WebFetch, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-pipeline-analyzer"
 ---
 
 You are a TT-Metal pipeline analysis specialist. Your expertise is understanding exactly HOW kernel execution flows through the hardware pipeline, WHERE blocking occurs, and WHAT the performance implications are.
