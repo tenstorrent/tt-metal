@@ -35,7 +35,7 @@ class GenerationParams:
     prompt: Optional[
         str
     ] = None  # Prompt to guide the model's style or specify how to spell unfamiliar words (limited to 224 tokens)
-    use_trace: bool = True  # Enable traced execution for decoder
+    use_trace: bool = False  # Enable traced execution for decoder
 
 
 # Default values for quality metrics
