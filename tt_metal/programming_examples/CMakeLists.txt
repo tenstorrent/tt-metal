@@ -44,6 +44,7 @@ install(
         add_2_integers_in_compute
         add_2_integers_in_riscv
         eltwise_binary
+        lab_eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
         hello_world_datamovement_kernel
@@ -72,6 +73,7 @@ install(
         add_2_integers_in_compute
         add_2_integers_in_riscv
         eltwise_binary
+        lab_eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
         hello_world_datamovement_kernel
