@@ -732,15 +732,6 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
         graph_instance, cluster_descriptor, &deployment_descriptor, instance_name, node_templates);
 }
 
-// Wrapper: build graph instance without deployment descriptor (use hostnames instead)
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
-    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates) {
-    return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
-}
-
 }  // anonymous namespace
 
 // Common initialization logic shared by all constructors
