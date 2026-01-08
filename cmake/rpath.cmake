@@ -260,3 +260,20 @@ function(tt_set_installable_library_rpath TARGET)
         "tt_set_installable_library_rpath(${TARGET}): BUILD_RPATH=${_build_rpath_string}, INSTALL_RPATH=$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN"
     )
 endfunction()
+
+# =============================================================================
+# Install-time diagnostic: List all shared libraries in the build directory
+# =============================================================================
+# This runs at the very start of the install step to show where all .so files are
+install(
+    CODE
+        "
+        message(STATUS \"=== Listing all shared libraries in build directory ===\")
+        execute_process(
+            COMMAND bash -c \"find -name '*.so' | sort -h | xargs ls -lh\"
+            WORKING_DIRECTORY \"${CMAKE_BINARY_DIR}\"
+            RESULT_VARIABLE _find_result
+        )
+        message(STATUS \"=== End of shared library listing ===\")
+    "
+)
