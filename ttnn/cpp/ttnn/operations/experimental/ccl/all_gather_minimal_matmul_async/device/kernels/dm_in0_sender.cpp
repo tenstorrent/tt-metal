@@ -22,11 +22,14 @@ void kernel_main() {
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
     constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
+    uint32_t in0_sender_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    uint32_t in0_sender_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+    uint32_t in0_receiver_backward_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    uint32_t in0_receiver_forward_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
+    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(18));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(19);
+    constexpr uint32_t is_injector_core_backward = get_compile_time_arg_val(20);
+    constexpr uint32_t is_injector_core_forward = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -34,10 +37,14 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_dest_backward_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_dest_backward_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_dest_forward_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_dest_forward_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_sender_backward_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_sender_backward_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_sender_forward_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_sender_forward_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -45,7 +52,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<19>();
+    constexpr auto in0_args = TensorAccessorArgs<22>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -70,16 +77,23 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
     *(in0_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in0_receiver_backward_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_backward_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in0_receiver_forward_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_forward_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in0_sender_backward_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_backward_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in0_sender_forward_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_forward_semaphore_addr);
+    const uint64_t in0_sender_backward_semaphore_noc_addr =
+        get_noc_addr(in0_sender_backward_noc_x, in0_sender_backward_noc_y, in0_sender_backward_semaphore_addr);
+    const uint64_t in0_sender_forward_semaphore_noc_addr =
+        get_noc_addr(in0_sender_forward_noc_x, in0_sender_forward_noc_y, in0_sender_forward_semaphore_addr);
 
-    volatile tt_l1_ptr uint32_t* in0_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
-
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
+    const uint64_t in0_receiver_backward_semaphore_noc_addr =
+        get_noc_addr(in0_dest_backward_noc_x, in0_dest_backward_noc_y, in0_receiver_backward_semaphore_addr);
+    const uint64_t in0_receiver_forward_semaphore_noc_addr =
+        get_noc_addr(in0_dest_forward_noc_x, in0_dest_forward_noc_y, in0_receiver_forward_semaphore_addr);
 
     /**
      * This is a Serpentine (Boustrophedon) output block ordering.
@@ -129,7 +143,6 @@ void kernel_main() {
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
-
                 if (reuse_block && k_block_iter == 0) {
                     // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
                     reuse_block = false;
@@ -138,10 +151,13 @@ void kernel_main() {
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
+                bool use_backward_injector_core = is_backward_k_block_iter(k_block_iter);
+                bool is_injector_core =
+                    is_injector(use_backward_injector_core, is_injector_core_backward, is_injector_core_forward);
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
-                if constexpr (is_injector_core) {
+                if (is_injector_core) {
                     if (is_injector_core) {
-                        k_block = k_block;
+                        k_block = compute_actual_k_block(k_block);
                     }
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
@@ -154,9 +170,18 @@ void kernel_main() {
                         (k_block + 1) * K_block_tiles);
                 } else {
                     // Get from previous device
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(
+                        use_backward_injector_core ? in0_receiver_backward_semaphore_addr_ptr
+                                                   : in0_receiver_forward_semaphore_addr_ptr,
+                        INVALID);
+                    noc_semaphore_inc(
+                        use_backward_injector_core ? in0_sender_backward_semaphore_noc_addr
+                                                   : in0_sender_forward_semaphore_noc_addr,
+                        1);
+                    noc_semaphore_wait(
+                        use_backward_injector_core ? in0_receiver_backward_semaphore_addr_ptr
+                                                   : in0_receiver_forward_semaphore_addr_ptr,
+                        VALID);
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
@@ -164,10 +189,19 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    noc_semaphore_wait(
+                        use_backward_injector_core ? in0_sender_backward_semaphore_addr_ptr
+                                                   : in0_sender_forward_semaphore_addr_ptr,
+                        1);
+                    noc_semaphore_set(
+                        use_backward_injector_core ? in0_sender_backward_semaphore_addr_ptr
+                                                   : in0_sender_forward_semaphore_addr_ptr,
+                        0);
 
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    uint64_t in0_unicast_data_addr =
+                        use_backward_injector_core
+                            ? get_noc_addr(in0_dest_backward_noc_x, in0_dest_backward_noc_y, in0_start_address)
+                            : get_noc_addr(in0_dest_forward_noc_x, in0_dest_forward_noc_y, in0_start_address);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
@@ -179,7 +213,10 @@ void kernel_main() {
                     noc_async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    noc_semaphore_set_remote(
+                        in0_valid_semaphore_addr,
+                        use_backward_injector_core ? in0_receiver_backward_semaphore_noc_addr
+                                                   : in0_receiver_forward_semaphore_noc_addr);
                 }
             }
 #ifdef FUSE_BIAS
@@ -210,7 +247,7 @@ void kernel_main() {
              * of the next output block.
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
-            defer_write = defer_write && !is_injector_core;
+            defer_write = defer_write && !(is_injector_core_backward || is_injector_core_forward);
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {

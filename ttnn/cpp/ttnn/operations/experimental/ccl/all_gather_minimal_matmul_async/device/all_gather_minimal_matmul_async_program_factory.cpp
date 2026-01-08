@@ -31,7 +31,8 @@ void override_program_parameters(
     auto output_addr = output_tensors.at(0).buffer()->address();
     auto in2_addr =
         optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-    auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
+    auto& in0_sender_backward_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_backward_kernels_id);
+    auto& in0_sender_forward_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_forward_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
@@ -41,7 +42,12 @@ void override_program_parameters(
         uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
         if (in1_idx == 0) {
-            auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
+            auto& in0_sender_args = in0_sender_backward_runtime_args[core.x][core.y];
+            in0_sender_args[0] = in0_addr;
+            in0_sender_args[1] = output_addr;
+            in0_sender_args[2] = in2_addr;
+        } else if (in1_idx == 7) {
+            auto& in0_sender_args = in0_sender_forward_runtime_args[core.x][core.y];
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
@@ -127,9 +133,29 @@ static inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32
     return order.at(index == 0 ? 0 : index - 1);
 }
 
+static inline CoreCoord clamped_swapped_prev(const std::vector<CoreCoord>& order, uint32_t index) {
+    switch (index) {
+        case 0: return order.at(1); break;
+        case 1: return order.at(1); break;
+        case 2: return order.at(0); break;
+        default: return order.at(index - 1); break;
+    }
+}
+
 static inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
     const uint32_t last = static_cast<uint32_t>(order.size() - 1);
     return order.at(index >= last ? last : index + 1);
+}
+
+static inline CoreCoord clamped_swapped_next(const std::vector<CoreCoord>& order, uint32_t index) {
+    switch (index) {
+        case 0: return order.at(2); break;
+        case 1: return order.at(0); break;
+        default:
+            const uint32_t last = static_cast<uint32_t>(order.size() - 1);
+            return order.at(index >= last ? last : index + 1);
+            break;
+    }
 }
 
 // Append tensor accessors in a consistent order
@@ -198,8 +224,6 @@ all_gather_minimal_matmul_async_factory_helper(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler) {
     auto* device = input_tensor.device();
-
-    bool fuse_op = fused_op_signaler.has_value();
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
@@ -345,17 +369,25 @@ all_gather_minimal_matmul_async_factory_helper(
     auto core_0_0 = CoreCoord{0, 0};
     auto core_0_1 = CoreCoord{0, 1};
     auto core_1_0 = CoreCoord{1, 0};
+    auto core_0_2 = CoreCoord{0, 2};
     auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
+    auto core_endx_1 = CoreCoord{grid_size.x - 1, 1};
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
+    auto core_endxminus1_endy = CoreCoord{grid_size.x - 2, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
 
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
+    auto in0_sender_backward_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
+    auto in0_sender_forward_cores =
+        CoreRange(transpose_core_grid ? core_0_1 : core_endx_0, transpose_core_grid ? core_endx_1 : core_endx_endy);
+    auto in0_receiver_cores = CoreRange(
+        transpose_core_grid ? core_0_2 : core_1_0, transpose_core_grid ? core_endx_endy : core_endxminus1_endy);
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_sender_backward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_sender_forward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_receiver_backward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_receiver_forward_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
     auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -406,19 +438,8 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
-    std::map<std::string, std::string> in0_injector_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
-    }
-
-    if (fuse_op) {
-        // Create semaphores
-        fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
-        defines["FUSE_AG"] = "1";
-        if (fused_op_signaler->read_local_slice_from_input) {
-            in0_injector_defines = defines;
-            in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
-        }
     }
 
     uint32_t in0_addr = input_tensor.buffer()->address();
@@ -432,7 +453,7 @@ all_gather_minimal_matmul_async_factory_helper(
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
-    std::vector<uint32_t> in0_sender_compile_time_args = {
+    std::vector<uint32_t> in0_sender_backward_compile_time_args = {
         M_tiles,
         padded_M_tiles,
         K_tiles,
@@ -447,27 +468,60 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
-        in0_sender_semaphore_id,
-        in0_receiver_semaphore_id,
+        in0_sender_backward_semaphore_id,
+        in0_sender_forward_semaphore_id,
+        in0_receiver_backward_semaphore_id,
+        in0_receiver_forward_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true,  // is_injector_core
+        true,   // is_injector_core_backward
+        false,  // is_injector_core_forward
     };
-    append_accessors(
-        in0_sender_compile_time_args,
-        input_tensor,
-        output_tensor,
-        bias_tensor,
-        (fuse_op && fused_op_signaler->read_local_slice_from_input) ? fused_op_signaler->ag_input : std::nullopt);
-    auto in0_sender_kernels_id = CreateKernel(
+    append_accessors(in0_sender_backward_compile_time_args, input_tensor, output_tensor, bias_tensor);
+    auto in0_sender_backward_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
-        in0_sender_cores,
+        in0_sender_backward_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc,
             .noc = in0_noc,
-            .compile_args = in0_sender_compile_time_args,
-            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
+            .compile_args = in0_sender_backward_compile_time_args,
+            .defines = defines});
+
+    std::vector<uint32_t> in0_sender_forward_compile_time_args = {
+        M_tiles,
+        padded_M_tiles,
+        K_tiles,
+        padded_K_tiles,
+        N_tiles,
+        padded_N_tiles,
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        M_blocks_per_core,
+        N_blocks_per_core,
+        in0_tile_size,
+        out_tile_size,
+        in2_tile_size,
+        in0_sender_backward_semaphore_id,
+        in0_sender_forward_semaphore_id,
+        in0_receiver_backward_semaphore_id,
+        in0_receiver_forward_semaphore_id,
+        in0_valid_semaphore_id,
+        in0_is_output_writer,
+        false,  // is_injector_core_backward
+        true,   // is_injector_core_forward
+    };
+    append_accessors(in0_sender_forward_compile_time_args, input_tensor, output_tensor, bias_tensor);
+    auto in0_sender_forward_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
+        in0_sender_forward_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in0_risc,
+            .noc = in0_noc,
+            .compile_args = in0_sender_forward_compile_time_args,
+            .defines = defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -484,10 +538,13 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
-        in0_sender_semaphore_id,
-        in0_receiver_semaphore_id,
+        in0_sender_backward_semaphore_id,
+        in0_sender_forward_semaphore_id,
+        in0_receiver_backward_semaphore_id,
+        in0_receiver_forward_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
+        false,  // is_injector_core
         false,  // is_injector_core
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor, bias_tensor);
@@ -631,13 +688,17 @@ all_gather_minimal_matmul_async_factory_helper(
             /*axis_is_x_when_not_transposed=*/false,
             /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
 
-        auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
-        auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
+        auto in0_backward_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
+        auto in0_forward_prev_core = clamped_swapped_prev(in0_core_order, in0_core_order_index);
+        auto in0_backward_next_core = clamped_next(in0_core_order, in0_core_order_index);
+        auto in0_forward_next_core = clamped_swapped_next(in0_core_order, in0_core_order_index);
         auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
         auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
-        auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
-        auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
+        auto in0_backward_prev_core_physical = device->worker_core_from_logical_core(in0_backward_prev_core);
+        auto in0_forward_prev_core_physical = device->worker_core_from_logical_core(in0_forward_prev_core);
+        auto in0_backward_next_core_physical = device->worker_core_from_logical_core(in0_backward_next_core);
+        auto in0_forward_next_core_physical = device->worker_core_from_logical_core(in0_forward_next_core);
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
         auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
 
@@ -668,22 +729,26 @@ all_gather_minimal_matmul_async_factory_helper(
             out_addr,
             in2_addr,
             is_in0_sink,
-            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
-            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
+            (std::uint32_t)in0_backward_next_core_physical.x,  // in0_dest_noc_x
+            (std::uint32_t)in0_backward_next_core_physical.y,  // in0_dest_noc_y
+            (std::uint32_t)in0_forward_next_core_physical.x,   // in0_dest_noc_x
+            (std::uint32_t)in0_forward_next_core_physical.y,   // in0_dest_noc_y
+            (std::uint32_t)in0_backward_prev_core_physical.x,  // in0_sender_noc_x
+            (std::uint32_t)in0_backward_prev_core_physical.y,  // in0_sender_noc_y
+            (std::uint32_t)in0_forward_prev_core_physical.x,   // in0_sender_noc_x
+            (std::uint32_t)in0_forward_prev_core_physical.y,   // in0_sender_noc_y
             M_start_tile,
             M_end_tile,
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
         };
-        if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
-        }
-        if (in1_idx == 0) {
-            // in0 sender
-            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
+        if (in0_core_order_index == 0) {
+            // in0 backward sender
+            SetRuntimeArgs(program, in0_sender_backward_kernels_id, core, in0_args);
+        } else if (in0_core_order_index == 1) {
+            // in0 forward sender
+            SetRuntimeArgs(program, in0_sender_forward_kernels_id, core, in0_args);
         } else {
             // in0 receiver
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
@@ -704,10 +769,7 @@ all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
             defer_write_k_block,
         };
-        if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
-        }
-        if (in0_idx == 0) {
+        if (in1_core_order_index == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -728,12 +790,12 @@ all_gather_minimal_matmul_async_factory_helper(
         all_gather_minimal_matmul_async_override_variables_t{
             num_cores,
             cores,
-            in0_sender_kernels_id,
+            in0_sender_backward_kernels_id,
+            in0_sender_forward_kernels_id,
             in0_receiver_kernels_id,
             in1_sender_kernels_id,
             in1_receiver_kernels_id,
-            transpose_core_grid,
-            fuse_op && fused_op_signaler->read_local_slice_from_input};
+            transpose_core_grid};
 }
 
 }  // namespace detail
