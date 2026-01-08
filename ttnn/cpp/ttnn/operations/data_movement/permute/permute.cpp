@@ -47,17 +47,13 @@ ttnn::Tensor permute_impl(
         typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
     auto output = formatted_input_tensor;
-    auto transpose_wh = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::transpose(input, -2, -1, output_mem_config, 0.0f);
+    auto transpose_wh = [&](const ttnn::Tensor& input,
+                            const std::optional<MemoryConfig>& mem_config = std::nullopt) -> ttnn::Tensor {
+        return ttnn::transpose(input, -2, -1, mem_config, 0.0f);
     };
 
-    auto transpose_hc = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        // some permute tests assume transpose hc uses the input shard spec
-        // avoid the intermediate memory configuration mismatch
-        auto mem_config = output_mem_config;
-        if (input.memory_config().is_sharded() && output_mem_config.is_sharded()) {
-            mem_config = input.memory_config();
-        }
+    auto transpose_hc = [&](const ttnn::Tensor& input,
+                            const std::optional<MemoryConfig>& mem_config = std::nullopt) -> ttnn::Tensor {
         return ttnn::transpose(input, 1, -2, mem_config, pad_value);
     };
 
@@ -70,15 +66,15 @@ ttnn::Tensor permute_impl(
         if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
         } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-            output = transpose_wh(formatted_input_tensor);
+            output = transpose_wh(formatted_input_tensor, output_mem_config);
         } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-            output = transpose_hc(formatted_input_tensor);
+            output = transpose_hc(formatted_input_tensor, output_mem_config);
         } else if (N == 0 && C == 2 && H == 3 && W == 1) {
-            output = transpose_wh(transpose_hc(formatted_input_tensor));
+            output = transpose_wh(transpose_hc(formatted_input_tensor), output_mem_config);
         } else if (N == 0 && C == 3 && H == 1 && W == 2) {
-            output = transpose_hc(transpose_wh(formatted_input_tensor));
+            output = transpose_hc(transpose_wh(formatted_input_tensor), output_mem_config);
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
-            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)), output_mem_config);
         } else {
             output = prim_permute(formatted_input_tensor);
         }
@@ -86,9 +82,9 @@ ttnn::Tensor permute_impl(
         if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
         } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-            output = transpose_wh(formatted_input_tensor);
+            output = transpose_wh(formatted_input_tensor, output_mem_config);
         } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-            output = transpose_hc(formatted_input_tensor);
+            output = transpose_hc(formatted_input_tensor, output_mem_config);
         } else if (N == 1 && C == 0 && H == 2 && W == 3) {
             output = transpose_cn(formatted_input_tensor);
         } else {

@@ -1423,12 +1423,7 @@ def test_transpose_sharded(device, dim0, dim1, layout, input_sharding, output_sh
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is only supported for TILE layout")
 
-    if (
-        dtype == ttnn.bfloat8_b
-        and dim0 == 2
-        and dim1 == 1
-        and (input_sharding is not None or output_sharding is not None)
-    ):
+    if dtype == ttnn.bfloat8_b and dim0 == 2 and dim1 == 1:
         pytest.skip("sharded bfloat8_b is not supported for HC transpose")
 
     N = 2
@@ -1569,3 +1564,76 @@ def test_transpose_sharded_mda(device, dim0, dim1, layout, input_sharding, outpu
         layout=layout,
         input_dtype=dtype,
     )
+
+
+def test_hc_transpose(device):
+    B, C, H, W = 1, 32, 1, 32
+    input_tensor = torch.range(0, B * C * H * C - 1).reshape([B, C, H, W])
+    memory_config = ttnn.create_sharded_memory_config(
+        [B, C, 32, W],
+        ttnn.CoreGrid(x=1, y=1),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    x = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    x = ttnn.to_memory_config(x, memory_config)
+    x = ttnn.transpose(x, 1, 2)
+    actual = ttnn.to_torch(x)
+    expected = torch.transpose(input_tensor, 1, 2)
+    assert_with_pcc(expected, actual, 0.99999)
+
+
+def test_permute_sharded_tilized(device):
+    """
+    Test permute operation with sharded tilized tensors.
+
+    Input: L1 height sharded, tile layout, [1, 4, 128, 512]
+    Output: L1 height sharded, tile layout, [1, 128, 4, 512]
+    """
+    torch.manual_seed(0)
+
+    # Original tensor shape
+    orig_torch_input = torch.randn([1, 4, 128, 512], dtype=torch.bfloat16)
+
+    # Torch reference: permute [1, 4, 128, 512] -> [1, 128, 4, 512]
+    permute_spec = (0, 2, 1, 3)
+    torch_output = torch.permute(orig_torch_input, permute_spec)
+
+    # TTNN Version with sharded memory
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+
+    input_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        (64, 512),  # (shard_height, shard_width)
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
+
+    tt_input = ttnn.from_torch(
+        orig_torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+
+    output_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        (64, 512),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+
+    # Try the HC permute: [1, 4, 128, 512] -> [1, 128, 4, 512]
+    tt_output = ttnn.permute(tt_input, permute_spec, memory_config=output_memory_config)
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+    passing, pcc_msg = comp_pcc(torch_output, tt_output_torch)
+    logger.info(pcc_msg)
+
+    assert passing
