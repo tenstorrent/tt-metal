@@ -1838,8 +1838,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto outbound_to_receiver_channel_pointers =
         ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
     // Workaround the perf regression in RingAsLinear test.
-    //auto outbound_to_receiver_channel_pointer_ch0 =
-    //    outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
+    //
     uint32_t& outbound_to_receiver_channel_pointers_num_free_slots =
         outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>().num_free_slots;
 
