@@ -182,10 +182,9 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.persistent_output_buffer.has_value() && args.using_persistent_buffers) {
         return tensor_args.persistent_output_buffer.value();
-    } else {
-        auto output_spec = compute_output_specs(args, tensor_args);
-        return create_device_tensor(output_spec, tensor_args.input_tensor.device());
     }
+    auto output_spec = compute_output_specs(args, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
 tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
