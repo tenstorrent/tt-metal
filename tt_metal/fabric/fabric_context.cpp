@@ -202,11 +202,13 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
     if (udm_enabled) {
         TT_FATAL(is_2D_routing_enabled_, "UDM mode only supports 2D routing");
         return get_udm_header_size(routing_2d_buffer_size_);
-    } else if (is_2D_routing_enabled_) {
-        return get_2d_header_size(routing_2d_buffer_size_);
-    } else {
-        return get_1d_header_size(routing_1d_extension_words_);
     }
+
+    if (is_2D_routing_enabled_) {
+        return get_2d_header_size(routing_2d_buffer_size_);
+    }
+
+    return get_1d_header_size(routing_1d_extension_words_);
 }
 
 size_t FabricContext::compute_max_payload_size_bytes() const {
