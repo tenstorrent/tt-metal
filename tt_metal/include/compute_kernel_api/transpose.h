@@ -20,6 +20,7 @@ namespace ckernel {
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose op to be executed
  * correctly.
+ * TODO NC: Delete this comment
  */
 ALWI void transpose_init(uint32_t icb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
