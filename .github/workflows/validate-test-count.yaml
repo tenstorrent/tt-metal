@@ -6,15 +6,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-        default: "wheel-artifact-unresolved!"
-      package-artifact-name:
-        required: true
-        type: string
-        default: "package-artifact-unresolved!"
       docker-image:
         required: true
         type: string
-        default: "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-basic-dev-amd64:7c703d657df3754df3882f93fa908fedab02fa15"
   pull_request:
     paths:
       - 'tests/ttnn/unit_tests/operations/eltwise/**'
@@ -31,18 +25,16 @@ on:
 jobs:
   check-test-count:
     runs-on: ubuntu-latest
-    name: "Ensure no new tests added to locked directories"
+    name: "Check Test Count"
     container:
-      #image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-basic-dev-amd64:7c703d657df3754df3882f93fa908fedab02fa15
+      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         GIT_DISCOVERY_ACROSS_FILESYSTEM: 1
       volumes:
-        - ${{ github.workspace }}:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-      #options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -51,100 +43,34 @@ jobs:
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history so we can checkout main later
+          fetch-depth: 0
 
       - name: Install git and pip
         run: |
           apt-get update
           apt-get install -y python3-pip git
 
-      # - name: Debug git setup
-      #   run: |
-      #     echo "PWD: $(pwd)"
-      #     echo "Checking for .git:"
-      #     ls -la /work/.git 2>&1 || echo ".git directory not found"
-      #     echo "Listing /work:"
-      #     ls -la /work | head -20
-          
-      # - name: Initialize git repository
-      #   run: |
-      #     git init
-      #     git config --global --add safe.directory /work
-      #     git remote add origin https://github.com/${{ github.repository }}.git
-      #     git fetch --all
-      #     git checkout ${{ github.ref_name }}
-
-      # Python is already installed in the container image
-      # - name: Set up Python
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version: '3.10'
-
       - name: Download built wheel
         if: ${{ inputs.wheel-artifact-name != '' }}
-        uses: dawidd6/action-download-artifact@v6
+        uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.wheel-artifact-name }}
-          path: wheels
-          run_id: 20788440471
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      # - name: Download built wheel
-      #   if: ${{ inputs.wheel-artifact-name != '' }}
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: ${{ inputs.wheel-artifact-name }}
-      #     path: ./wheels
-
-      # - name: Install tt-metal wheel and dependencies
-      #   if: ${{ inputs.wheel-artifact-name != '' }}
-      #   run: |
-      #     pip install pytest torch loguru transformers
-      #     pip install ./wheels/*.whl
-
-      # - name: Download build packages
-      #   if: ${{ inputs.package-artifact-name != '' }}
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: ${{ inputs.package-artifact-name }}
-      #     path: ./packages
-      # - name: Download built packages
-      #   if: ${{ inputs.package-artifact-name != '' }}
-      #   uses: dawidd6/action-download-artifact@v6
-      #   with:
-      #     name: packages-ubuntu-22.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-no-distributed-7f5ee7b1d03e6570a27680cabb2f0e662aa87be3-20796940884
-      #     path: ./packages
-      #     run_id: 20796940884
-      #     github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      # - name: Download built wheel
-      #   if: ${{ inputs.wheel-artifact-name != '' }}
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: ${{ inputs.wheel-artifact-name }}
-      #     path: ./wheels
-
-      # - name: Install tt-metal packages (for models source code)
-      #   if: ${{ inputs.package-artifact-name != '' }}
-      #   run: |
-      #     sudo apt update
-      #     sudo apt install -y ./packages/*.deb
+          path: ./wheels
 
       - name: Install Python dependencies
         run: |
           python3 -m pip install pytest torch loguru transformers
-          # pip install pytest torch loguru transformers
 
       - name: Install tt-metal wheel (for ttnn Python module)
         if: ${{ inputs.wheel-artifact-name != '' }}
         run: |
           python3 -m pip install ./wheels/*.whl
-          # pip install ./wheels/*.whl
 
       - name: Count and compare tests
         run: |
           # Define repository URL
           REPO_URL="https://github.com/tenstorrent/tt-metal.git"
-          
+
           # Define the paths to check for test counts
           declare -a PATHS=(
             "tests/ttnn/unit_tests/operations/eltwise"
@@ -159,7 +85,7 @@ jobs:
             "tests/ttnn/unit_tests/base_functionality"
             "tests/ttnn/unit_tests/benchmarks"
           )
-          
+
           # Function to count test functions using pytest collect-only
           count_tests() {
             local dir=$1
@@ -174,7 +100,7 @@ jobs:
               echo "$count"
             fi
           }
-          
+
           # Count tests in PR branch
           echo "=== PR branch test counts ==="
           declare -A pr_counts
@@ -183,13 +109,13 @@ jobs:
             pr_counts[$path]=$count
             echo "  $path: $count"
           done
-          
+
           # Clone main branch into separate directory
           echo "=== Cloning main branch ==="
           cd /tmp
           git clone --depth 1 --branch main "$REPO_URL" main-branch
           cd /work
-          
+
           # Count tests in base branch
           echo "=== Base branch test counts ==="
           declare -A base_counts
@@ -198,19 +124,19 @@ jobs:
             base_counts[$path]=$count
             echo "  $path: $count"
           done
-          
+
           # Compare and generate report
           FAILED=0
-          
+
           echo "## Test Count Validation Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Directory | Base | PR | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          
+
           for path in "${PATHS[@]}"; do
             pr_count=${pr_counts[$path]}
             base_count=${base_counts[$path]}
-            
+
             if [ "$pr_count" -gt "$base_count" ]; then
               echo "| $path | $base_count | $pr_count | ❌ New tests added (+$((pr_count - base_count))) |" >> $GITHUB_STEP_SUMMARY
               echo "::error::New tests detected in $path/ ($base_count → $pr_count)"
@@ -219,15 +145,15 @@ jobs:
               echo "| $path | $base_count | $pr_count | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
             fi
           done
-          
+
           if [ "$FAILED" -eq 1 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ **This PR adds new tests to APC.**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "These test directories are locked to maintain stable APC runtime." >> $GITHUB_STEP_SUMMARY
+            echo "These test directories have a locked test count to maintain stable APC runtime." >> $GITHUB_STEP_SUMMARY
             echo "Please look into removing existing lower priority tests to add new tests." >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ **No new tests added - validation passed**" >> $GITHUB_STEP_SUMMARY
