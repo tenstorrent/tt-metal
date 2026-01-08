@@ -1100,4 +1100,106 @@ TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
     }
 }
 
+TEST_F(DescriptorMergerTest, MergeExistingBHTorusDescriptors) {
+    // Test merging existing bh_galaxy_x_torus.textproto and bh_galaxy_y_torus.textproto
+    // This demonstrates using actual existing descriptor files from the cabling_descriptors directory
+    const std::string test_dir = create_test_dir("merge_existing_bh_torus");
+
+    // Read the actual existing files
+    std::ifstream x_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_x_torus.textproto");
+    std::ifstream y_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_y_torus.textproto");
+    ASSERT_TRUE(x_file.is_open()) << "Failed to open existing bh_galaxy_x_torus.textproto";
+    ASSERT_TRUE(y_file.is_open()) << "Failed to open existing bh_galaxy_y_torus.textproto";
+
+    std::string x_content((std::istreambuf_iterator<char>(x_file)), std::istreambuf_iterator<char>());
+    std::string y_content((std::istreambuf_iterator<char>(y_file)), std::istreambuf_iterator<char>());
+    x_file.close();
+    y_file.close();
+
+    // Modify template names to be the same so they can merge
+    // These files only have the template name in quoted strings, so simple replacement is sufficient
+    size_t pos = 0;
+    while ((pos = x_content.find("\"bh_galaxy_x_torus\"", pos)) != std::string::npos) {
+        x_content.replace(pos, 19, "\"bh_galaxy_torus\"");
+        pos += 18;
+    }
+    pos = 0;
+    while ((pos = y_content.find("\"bh_galaxy_y_torus\"", pos)) != std::string::npos) {
+        y_content.replace(pos, 19, "\"bh_galaxy_torus\"");
+        pos += 18;
+    }
+
+    // Write modified files to test directory (using the actual existing file content)
+    write_textproto(test_dir + "x_torus.textproto", x_content);
+    write_textproto(test_dir + "y_torus.textproto", y_content);
+
+    // Merge the existing X + Y torus files
+    CablingGenerator merged_gen(test_dir, create_host_vector(1));
+
+    // Read and modify the existing XY torus file for comparison (unify template name)
+    std::ifstream xy_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto");
+    ASSERT_TRUE(xy_file.is_open()) << "Failed to open existing bh_galaxy_xy_torus.textproto";
+    std::string xy_content((std::istreambuf_iterator<char>(xy_file)), std::istreambuf_iterator<char>());
+    xy_file.close();
+
+    // Replace "bh_galaxy_xy_torus" with "bh_galaxy_torus" for comparison
+    pos = 0;
+    while ((pos = xy_content.find("\"bh_galaxy_xy_torus\"", pos)) != std::string::npos) {
+        xy_content.replace(pos, 21, "\"bh_galaxy_torus\"");
+        pos += 18;
+    }
+
+    // Write modified XY file for comparison
+    const std::string ref_dir = test_dir + "reference/";
+    std::filesystem::create_directories(ref_dir);
+    write_textproto(ref_dir + "xy_torus.textproto", xy_content);
+
+    // Compare with the existing XY torus file (with unified template name)
+    CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
+
+    // Validate that merging the existing X and Y torus files produces the same result as the existing XY torus file
+    EXPECT_EQ(merged_gen, xy_gen) << "Merging existing bh_galaxy_x_torus.textproto + bh_galaxy_y_torus.textproto "
+                                     "should equal bh_galaxy_xy_torus.textproto";
+}
+
+TEST_F(DescriptorMergerTest, MergeExistingMeshDescriptors) {
+    // Test merging existing mesh descriptors to demonstrate merging any existing files
+    // This shows the pattern: copy existing files, unify template names, merge, and compare
+    const std::string test_dir = create_test_dir("merge_existing_mesh");
+
+    // Read the actual existing mesh files
+    std::ifstream wh_file("tools/tests/scaleout/cabling_descriptors/wh_galaxy_mesh.textproto");
+    std::ifstream bh_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_mesh.textproto");
+    ASSERT_TRUE(wh_file.is_open()) << "Failed to open existing wh_galaxy_mesh.textproto";
+    ASSERT_TRUE(bh_file.is_open()) << "Failed to open existing bh_galaxy_mesh.textproto";
+
+    std::string wh_content((std::istreambuf_iterator<char>(wh_file)), std::istreambuf_iterator<char>());
+    std::string bh_content((std::istreambuf_iterator<char>(bh_file)), std::istreambuf_iterator<char>());
+    wh_file.close();
+    bh_file.close();
+
+    // Modify template names to be the same so they can merge
+    // Replace template names with a unified name
+    size_t pos = 0;
+    while ((pos = wh_content.find("wh_galaxy", pos)) != std::string::npos) {
+        wh_content.replace(pos, 9, "mesh_cluster");
+        pos += 12;
+    }
+    pos = 0;
+    while ((pos = bh_content.find("bh_galaxy", pos)) != std::string::npos) {
+        bh_content.replace(pos, 9, "mesh_cluster");
+        pos += 12;
+    }
+
+    // Write modified files to test directory (using the actual existing file content)
+    write_textproto(test_dir + "wh_mesh.textproto", wh_content);
+    write_textproto(test_dir + "bh_mesh.textproto", bh_content);
+
+    // This should fail because WH and BH have different architectures
+    // WH_GALAXY and BH_GALAXY are incompatible node types and cannot be merged
+    EXPECT_THROW(
+        { CablingGenerator merged_gen(test_dir, create_host_vector(1)); }, std::runtime_error)
+        << "Merging existing WH and BH mesh descriptors should fail due to different architectures";
+}
+
 }  // namespace tt::scaleout_tools
