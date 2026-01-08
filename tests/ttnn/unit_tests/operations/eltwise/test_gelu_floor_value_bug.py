@@ -111,8 +111,11 @@ class TestGeluDeepNegativeTailBug:
 
         expected = gelu_exact(input_value)
         ulp_error = ulp_distance_bf16(actual, expected)
+        atol = abs(actual - expected)
 
-        logger.info(f"x={input_value}: expected={expected:.2e}, actual={actual:.2e}, ULP={ulp_error:,}")
+        logger.info(
+            f"x={input_value}: expected={expected:.2e}, actual={actual:.2e}, ULP={ulp_error:,}, atol={atol:.2e}"
+        )
 
         # Verify the bug exists
         assert actual == 0.0, f"Expected 0.0 for x={input_value}, got {actual}"
@@ -148,8 +151,11 @@ class TestGeluNearZeroFloorValueBug:
 
         expected = 0.5 * input_value
         ulp_error = ulp_distance_bf16(actual, expected)
+        atol = abs(actual - expected)
 
-        logger.info(f"x={input_value:.0e}: expected={expected:.2e}, actual={actual:.2e}, ULP={ulp_error:,}")
+        logger.info(
+            f"x={input_value:.0e}: expected={expected:.2e}, actual={actual:.2e}, ULP={ulp_error:,}, atol={atol:.2e}"
+        )
 
         # Verify the bug: actual should be floor value, not expected
         assert (
@@ -186,8 +192,11 @@ class TestGeluTransitionRegionBug:
 
         expected = gelu_exact(input_value)
         ulp_error = ulp_distance_bf16(actual, expected)
+        atol = abs(actual - expected)
 
-        logger.info(f"x={input_value}: expected={expected:.2e}, actual={actual:.2e}, ULP={ulp_error:,}")
+        logger.info(
+            f"x={input_value}: expected={expected:.2e}, actual={actual:.2e}, ULP={ulp_error:,}, atol={atol:.2e}"
+        )
 
         # Log for analysis - actual assertion depends on expected behavior
         if ulp_error > 100:
@@ -214,8 +223,8 @@ def test_gelu_ulp_summary(device):
     logger.info("-" * 80)
     logger.info("Cause: Hardware returns 0.0 for x < -5.5, but exact GELU has tiny negative values")
     logger.info("")
-    logger.info(f"{'Value':>10} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12}")
-    logger.info("-" * 60)
+    logger.info(f"{'Value':>10} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12} | {'Atol':>12}")
+    logger.info("-" * 75)
 
     deep_neg_values = [-13.5, -12.0, -10.0, -8.0, -6.0, -5.5625]
     max_ulp_region1 = 0
@@ -227,8 +236,9 @@ def test_gelu_ulp_summary(device):
         actual = ttnn.to_torch(tt_result).item()
         expected = gelu_exact(val)
         ulp = ulp_distance_bf16(actual, expected)
+        atol = abs(actual - expected)
         max_ulp_region1 = max(max_ulp_region1, ulp)
-        logger.info(f"{val:10.4f} | {expected:14.2e} | {actual:14.2e} | {ulp:12,}")
+        logger.info(f"{val:10.4f} | {expected:14.2e} | {actual:14.2e} | {ulp:12,} | {atol:12.2e}")
 
     logger.info(f"\nMax ULP in Region 1: {max_ulp_region1:,}")
 
@@ -238,8 +248,8 @@ def test_gelu_ulp_summary(device):
     logger.info("-" * 80)
     logger.info(f"Cause: Chebyshev c0 = {CHEBYSHEV_C0:.11e} dominates for tiny inputs")
     logger.info("")
-    logger.info(f"{'Value':>12} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12}")
-    logger.info("-" * 60)
+    logger.info(f"{'Value':>12} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12} | {'Atol':>12}")
+    logger.info("-" * 75)
 
     near_zero_values = [1e-38, 1e-30, 1e-20, 1e-10, 1e-8]
     max_ulp_region2 = 0
@@ -251,8 +261,9 @@ def test_gelu_ulp_summary(device):
         actual = ttnn.to_torch(tt_result).item()
         expected = 0.5 * val
         ulp = ulp_distance_bf16(actual, expected)
+        atol = abs(actual - expected)
         max_ulp_region2 = max(max_ulp_region2, ulp)
-        logger.info(f"{val:12.2e} | {expected:14.2e} | {actual:14.2e} | {ulp:12,}")
+        logger.info(f"{val:12.2e} | {expected:14.2e} | {actual:14.2e} | {ulp:12,} | {atol:12.2e}")
 
     logger.info(f"\nMax ULP in Region 2: {max_ulp_region2:,}")
 
@@ -262,8 +273,8 @@ def test_gelu_ulp_summary(device):
     logger.info("-" * 80)
     logger.info("Cause: Polynomial poorly fitted near the -5.5 threshold boundary")
     logger.info("")
-    logger.info(f"{'Value':>10} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12}")
-    logger.info("-" * 60)
+    logger.info(f"{'Value':>10} | {'Expected':>14} | {'Actual':>14} | {'ULP Error':>12} | {'Atol':>12}")
+    logger.info("-" * 75)
 
     transition_values = [-5.5, -5.375, -5.25, -5.0, -4.5, -4.0]
     max_ulp_region3 = 0
@@ -275,8 +286,9 @@ def test_gelu_ulp_summary(device):
         actual = ttnn.to_torch(tt_result).item()
         expected = gelu_exact(val)
         ulp = ulp_distance_bf16(actual, expected)
+        atol = abs(actual - expected)
         max_ulp_region3 = max(max_ulp_region3, ulp)
-        logger.info(f"{val:10.4f} | {expected:14.2e} | {actual:14.2e} | {ulp:12,}")
+        logger.info(f"{val:10.4f} | {expected:14.2e} | {actual:14.2e} | {ulp:12,} | {atol:12.2e}")
 
     logger.info(f"\nMax ULP in Region 3: {max_ulp_region3:,}")
 
