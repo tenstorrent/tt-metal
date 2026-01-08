@@ -28,15 +28,6 @@ bool is_cpu_tensor(const Tensor& tensor);
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
 
-template <class T>
-uint32_t get_batch_size(const T& shape) {
-    uint32_t result = 1;
-    for (int i = 0; i < (int)shape.rank() - 2; i++) {
-        result *= shape[i];
-    }
-    return result;
-}
-
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.
  *

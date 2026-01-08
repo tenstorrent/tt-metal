@@ -341,8 +341,12 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             worker_subdevice_id_opt,
             out_memory_config,
             std::nullopt,
+            std::nullopt,
             num_preferred_links,
-            topology_);
+            topology_,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt);
     }
     interleaved_tensor.deallocate();
     ttnn::Tensor gathered;

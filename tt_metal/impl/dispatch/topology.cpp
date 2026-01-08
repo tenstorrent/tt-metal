@@ -392,6 +392,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
 };
 // clang-format on
 
+// TODO: Move into MetalContext or DeviceManager.
 std::vector<FDKernel*> node_id_to_kernel;
 detail::ProgramCompileGroup command_queue_compile_group;
 std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores;
