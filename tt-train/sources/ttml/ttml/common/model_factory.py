@@ -89,7 +89,6 @@ class TransformerModelFactory:
             Llama model instance
         """
         lcfg = ttml.models.llama.LlamaConfig()
-        tc = self.transformer_config
 
         # Core fields with sensible defaults
         lcfg.num_heads = self.transformer_config.num_heads

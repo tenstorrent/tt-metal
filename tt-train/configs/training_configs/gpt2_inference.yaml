@@ -1,6 +1,5 @@
 training_config:
-  project_name: "tt_train_nano_gpt"
-  #model_path: "data/gpt2s_exported"
+  #model_path: "data/gpt2s_exported.msgpack"
   seed: 5489
   model_save_interval: 500
   batch_size: 4
