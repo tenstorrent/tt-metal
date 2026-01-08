@@ -725,7 +725,7 @@ def reset_default_device(request):
 
     try:
         device = ttnn.GetDefaultDevice()
-    except:
+    except Exception:
         logger.warning("Device handle is stale/crashed - setting saved device to None")
         device = None
 
