@@ -731,32 +731,35 @@ jobs:
             echo "✅ psycopg2 already available"
           fi
 
-          # Install PostgreSQL client tools if not present
-          if ! command -v psql &> /dev/null; then
-            echo "Installing PostgreSQL client..."
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq postgresql-client
-            echo "✅ PostgreSQL client installed"
-          else
-            echo "✅ PostgreSQL client already available"
-          fi
+          # Start PostgreSQL in Docker container
+          echo "Starting PostgreSQL container..."
+          docker run -d --name sweep-db \
+            -e POSTGRES_USER=tt-sweeps \
+            -e POSTGRES_PASSWORD=tt.sweeps \
+            -e POSTGRES_DB=tt-model-traces \
+            -p 5432:5432 \
+            postgres:18
 
-          # Start local PostgreSQL instance
-          echo "Starting local PostgreSQL instance..."
-          sudo service postgresql start
-          sleep 3
-
-          # Create database and user
-          echo "Setting up database..."
-          sudo -u postgres psql -c "CREATE USER \"tt-sweeps\" WITH PASSWORD 'tt.sweeps';" || echo "User already exists"
-          sudo -u postgres psql -c "CREATE DATABASE \"tt-model-traces\" OWNER \"tt-sweeps\";" || echo "Database already exists"
-          sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"tt-model-traces\" TO \"tt-sweeps\";" || true
+          # Wait for PostgreSQL to be ready
+          echo "Waiting for PostgreSQL to be ready..."
+          for i in {1..30}; do
+            if docker exec sweep-db pg_isready -U tt-sweeps 2>/dev/null; then
+              echo "✅ PostgreSQL is ready"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ PostgreSQL failed to start after 60 seconds"
+              docker logs sweep-db
+              exit 1
+            fi
+            sleep 2
+          done
 
           # Restore database from compressed SQL dump
           echo "Restoring database from SQL dump (963KB)..."
-          PGPASSWORD=tt.sweeps psql -h localhost -p 5432 -U tt-sweeps -d tt-model-traces \
-            -f model_tracer/ttnn_operations_db.sql \
-            -q 2>&1 | grep -v "^NOTICE:" || true
+          docker exec -i sweep-db psql -U tt-sweeps -d tt-model-traces \
+            < model_tracer/ttnn_operations_db.sql 2>&1 | grep -v "^NOTICE:" || true
+          echo "✅ Database restored"
 
           # Verify database
           echo "Verifying database..."
