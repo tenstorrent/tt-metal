@@ -1,0 +1,82 @@
+{
+  "operation_name": "reduce_avg_w_rm",
+  "operation_name_pascal": "ReduceAvgWRm",
+  "category": "reduction",
+  "namespace": "ttnn::operations::reduction::reduce_avg_w_rm",
+  "operation_path": "ttnn/cpp/ttnn/operations/reduction/reduce_avg_w_rm",
+  "parameters": [
+    {
+      "name": "output_mem_config",
+      "cpp_type": "std::optional<MemoryConfig>",
+      "py_type": "Optional[MemoryConfig]",
+      "default": "std::nullopt",
+      "description": "Output memory configuration"
+    },
+    {
+      "name": "compute_kernel_config",
+      "cpp_type": "std::optional<DeviceComputeKernelConfig>",
+      "py_type": "Optional[DeviceComputeKernelConfig]",
+      "default": "std::nullopt",
+      "description": "Compute kernel configuration"
+    }
+  ],
+  "input_tensors": [
+    {
+      "name": "input_tensor",
+      "cpp_name": "input",
+      "required_rank": 4,
+      "required_dtypes": ["DataType::BFLOAT16"],
+      "required_layout": "Layout::ROW_MAJOR"
+    }
+  ],
+  "validations": [
+    {
+      "condition": "input.logical_shape().rank() == 4",
+      "error_message": "Input tensor must have rank 4, got rank {}",
+      "error_args": ["input.logical_shape().rank()"]
+    },
+    {
+      "condition": "input.layout() == Layout::ROW_MAJOR",
+      "error_message": "Input tensor must be in ROW_MAJOR layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED",
+      "error_message": "Input tensor must have INTERLEAVED memory layout",
+      "error_args": []
+    },
+    {
+      "condition": "input.dtype() == DataType::BFLOAT16",
+      "error_message": "Input tensor must be BFLOAT16",
+      "error_args": []
+    },
+    {
+      "condition": "input.logical_shape()[-1] > 0",
+      "error_message": "Input width must be positive",
+      "error_args": []
+    },
+    {
+      "condition": "input.logical_shape()[-2] % 32 == 0",
+      "error_message": "Input height must be multiple of TILE_HEIGHT (32), got {}",
+      "error_args": ["input.logical_shape()[-2]"]
+    },
+    {
+      "condition": "input.logical_shape()[-1] % 32 == 0",
+      "error_message": "Input width must be multiple of TILE_WIDTH (32), got {}",
+      "error_args": ["input.logical_shape()[-1]"]
+    },
+    {
+      "condition": "input.is_allocated()",
+      "error_message": "Input must be allocated on device",
+      "error_args": []
+    }
+  ],
+  "output_shape": {
+    "formula": "input_shape[:-1] + [32]",
+    "cpp_code": "ttnn::SmallVector<uint32_t> dims(input.logical_shape().cbegin(), input.logical_shape().cend());\n    dims.back() = 32;\n    ttnn::Shape output_shape(dims);",
+    "cpp_code_padded": "ttnn::SmallVector<uint32_t> pdims(input.logical_shape().cbegin(), input.logical_shape().cend());\n    pdims.back() = 32;\n    ttnn::Shape output_padded(pdims);"
+  },
+  "output_dtype": "same_as_input",
+  "output_layout": "Layout::ROW_MAJOR",
+  "docstring": "Computes the average of elements along the width dimension for a ROW_MAJOR tensor.\n\nThis operation performs a fused tilize-reduce-untilize pipeline that:\n1. Converts ROW_MAJOR input to TILE_LAYOUT\n2. Computes the sum along width with scaler (1/W)\n3. Converts back to ROW_MAJOR\n\nThe output shape is [N, C, H, 32] where only the first element (index 0) in each width row contains the valid average value.\n\nArgs:\n    input_tensor: Input tensor with shape [N, C, H, W], must be ROW_MAJOR, INTERLEAVED, BFLOAT16, and tile-aligned (H and W multiples of 32).\n    output_mem_config: Optional output memory configuration. Defaults to input's memory config.\n    compute_kernel_config: Optional compute kernel configuration.\n\nReturns:\n    Tensor with shape [N, C, H, 32] containing row-wise width averages in ROW_MAJOR layout."
+}
