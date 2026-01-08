@@ -119,45 +119,76 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Create optional weight and bias tensors if provided in traced config
-    # IMPORTANT: Validate that weight/bias shapes are compatible with input channels
-    # Weight and bias last dimension must match input's last dimension
+    # ========================================================================================================
+    # TENSOR FORMAT CONVERSION - TTNN vs PyTorch
+    # ========================================================================================================
+    # TTNN group_norm format: [N, 1, H*W, C]
+    #   - N: batch size
+    #   - 1: fixed dimension (always 1 for TTNN)
+    #   - H*W: spatial dimensions (height × width) flattened into single dimension
+    #   - C: number of channels (must be divisible by num_groups)
+    #
+    # PyTorch group_norm format: [N, C, H, W]
+    #   - N: batch size
+    #   - C: number of channels
+    #   - H: height
+    #   - W: width
+    #
+    # Conversion Strategy:
+    #   1. Input tensors from traced configs are in TTNN format [N, 1, H*W, C]
+    #   2. Convert to PyTorch format [N, C, H, W] to compute golden reference with torch.nn.functional.group_norm
+    #   3. Convert PyTorch output back to TTNN format [N, 1, H*W, C] for PCC comparison
+    # ========================================================================================================
+
+    # Extract number of channels from input shape (last dimension in both formats)
     C = shape[-1]
+
+    # Create optional weight and bias tensors if provided in traced config
+    # IMPORTANT: Weight/bias must have total elements equal to C (number of channels)
+    # They will be reshaped to [C] for PyTorch group_norm
     torch_weight = None
     torch_bias = None
     if weight_shape:
-        # Check if weight shape is compatible
+        # Validate weight shape: total elements must equal number of channels
         weight_elements = 1
         for dim in weight_shape:
             weight_elements *= dim
-        # Weight must have total elements == C (will be reshaped to [C])
         if weight_elements == C:
             torch_weight = torch.ones(weight_shape, dtype=torch.float32)
+        # If weight_elements != C, skip weight (incompatible shape)
     if bias_shape:
-        # Check if bias shape is compatible
+        # Validate bias shape: total elements must equal number of channels
         bias_elements = 1
         for dim in bias_shape:
             bias_elements *= dim
-        # Bias must have total elements == C (will be reshaped to [C])
         if bias_elements == C:
             torch_bias = torch.zeros(bias_shape, dtype=torch.float32)
+        # If bias_elements != C, skip bias (incompatible shape)
 
-    # ttnn group_norm expects shape [N, 1, H*W, C] where C is divisible by num_groups
-    # torch group_norm expects shape (N, C, *)
+    # ========================================================================================================
+    # STEP 1: Convert TTNN format to PyTorch format for golden reference computation
+    # ========================================================================================================
     if len(shape) == 4 and shape[1] == 1:
-        # ttnn format: [N, 1, H*W, C] -> torch format: [N, C, H, W]
+        # Input is in TTNN format: [N, 1, H*W, C]
+        # Need to convert to PyTorch format: [N, C, H, W]
         N, _, HW, C = shape
-        # Calculate H and W
+
+        # Reconstruct spatial dimensions (H, W) from flattened dimension (H*W)
         import math
 
         H = W = int(math.sqrt(HW))
         if H * W != HW:
-            # If not a perfect square, use H*W and W=1
+            # HW is not a perfect square (e.g., HW=1024 but sqrt(1024)=32 and 32*32=1024 ✓)
+            # If not perfect square, use H=HW and W=1 (e.g., HW=1000 -> H=1000, W=1)
             H = HW
             W = 1
+
+        # Convert TTNN [N, 1, H*W, C] -> PyTorch [N, C, H, W]
+        # Step 1: Reshape [N, H*W, C] to [N, H, W, C] (unflatten spatial dimensions)
+        # Step 2: Permute [N, H, W, C] to [N, C, H, W] (channels-first for PyTorch)
         torch_input_reshaped = torch_input_tensor_a.reshape(N, H, W, C).permute(0, 3, 1, 2)
 
-        # Reshape weight and bias for torch
+        # Reshape weight and bias to [C] for PyTorch group_norm
         if torch_weight is not None:
             torch_weight_reshaped = torch_weight.reshape(C)
         else:
@@ -167,16 +198,27 @@ def run(
         else:
             torch_bias_reshaped = None
     else:
+        # Input is NOT in TTNN format (may be standard PyTorch format or other)
+        # Use as-is without conversion
         torch_input_reshaped = torch_input_tensor_a
         torch_weight_reshaped = torch_weight
         torch_bias_reshaped = torch_bias
 
+    # ========================================================================================================
+    # STEP 2: Compute golden reference using PyTorch group_norm (expects [N, C, H, W] format)
+    # ========================================================================================================
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_reshaped, num_groups, weight=torch_weight_reshaped, bias=torch_bias_reshaped, eps=epsilon
     )
 
-    # Reshape back to ttnn format
+    # ========================================================================================================
+    # STEP 3: Convert PyTorch output back to TTNN format for comparison
+    # ========================================================================================================
     if len(shape) == 4 and shape[1] == 1:
+        # PyTorch output is in [N, C, H, W] format
+        # Convert back to TTNN format [N, 1, H*W, C]
+        # Step 1: Permute [N, C, H, W] to [N, H, W, C] (channels-last)
+        # Step 2: Reshape [N, H, W, C] to [N, 1, H*W, C] (flatten spatial dimensions)
         torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).reshape(shape)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
