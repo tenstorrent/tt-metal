@@ -19,6 +19,7 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
@@ -207,6 +208,22 @@ private:
         const CoreCoord& physical_core,
         tracy::RiscType risc_type,
         uint64_t data,
+        uint32_t timer_id,
+        uint64_t timestamp);
+
+    // Read NOC_DEBUG marker data with trailer data as a single entry
+    // The main data and all trailer data are combined into one marker with trailer data in meta_data
+    void readNocDebugMarkerData(
+        std::set<tracy::TTDeviceMarker>& device_markers,
+        uint32_t run_host_id,
+        uint32_t device_trace_counter,
+        const std::string& op_name,
+        ChipId device_id,
+        const CoreCoord& physical_core,
+        tracy::RiscType risc_type,
+        uint64_t data,
+        const std::vector<uint64_t>& trailer_data,
+        kernel_profiler::NocDebugType debug_type,
         uint32_t timer_id,
         uint64_t timestamp);
 

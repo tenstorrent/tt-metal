@@ -48,8 +48,9 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> decode_noc_id_into_coord(uint32_t id,
         interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc) >> NOC_COORD_REG_OFFSET);
 }
 
-FORCE_INLINE void recordNocEventTrailer(
-    KernelProfilerNocEventMetadata::NocEventType noc_event_type, uint32_t dst_addr) {
+// Create a trailer with the appropriate type based on the original event type
+FORCE_INLINE KernelProfilerNocEventMetadata
+createNocEventTrailer(KernelProfilerNocEventMetadata::NocEventType noc_event_type, uint32_t dst_addr) {
     static_assert(
         KernelProfilerNocEventMetadata::NocEventType::WRITE_ >
             KernelProfilerNocEventMetadata::NocEventType::READ_DRAM_SHARDED_WITH_STATE,
@@ -65,14 +66,7 @@ FORCE_INLINE void recordNocEventTrailer(
     auto& local_noc_event_trailer = ev_md.data.local_event_trailer;
     local_noc_event_trailer.noc_xfer_type = trailer_type;
     local_noc_event_trailer.dst_addr = dst_addr;
-
-    // Write trailer data directly after the NOC event (no new timestamp marker)
-    // Space was already checked in recordNocEvent, so we can write directly
-    uint64_t trailer_data = ev_md.asU64();
-    kernel_profiler::profiler_data_buffer[kernel_profiler::myRiscID].data[kernel_profiler::wIndex++] =
-        trailer_data >> 32;
-    kernel_profiler::profiler_data_buffer[kernel_profiler::myRiscID].data[kernel_profiler::wIndex++] =
-        (trailer_data << 32) >> 32;
+    return ev_md;
 }
 
 template <uint32_t STATIC_ID = 12345>
@@ -95,19 +89,21 @@ FORCE_INLINE void recordNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    // Calculate total slots needed: TS_DATA (timestamp marker + data = 4 uint32s) + trailer (2 uint32s) = 6 uint32s
-    uint32_t slots_needed =
-        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2;  // TS_DATA: timestamp + data (4 uint32s)
     if constexpr (kernel_profiler::NON_DROPPING) {
-        slots_needed += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;  // Trailer: raw data (2 uint32s)
-    }
-    // Ensure we have enough contiguous space for both event and trailer before writing either
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(slots_needed);
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+        constexpr kernel_profiler::NocDebugType debug_type = kernel_profiler::NOC_TX;
+        constexpr uint8_t trailer_count = kernel_profiler::getNocDebugTrailerCount(debug_type);
 
-    if constexpr (kernel_profiler::NON_DROPPING) {
-        // Space was already guaranteed by flush_to_dram_if_full above, so we can write the trailer directly
-        recordNocEventTrailer(noc_event_type, dst_addr);
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2 +
+            trailer_count * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE);
+
+        kernel_profiler::recordNocDebugHeader<kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64(), debug_type);
+
+        KernelProfilerNocEventMetadata trailer = createNocEventTrailer(noc_event_type, dst_addr);
+        kernel_profiler::writeNocDebugTrailer(trailer.asU64());
+    } else {
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
     }
 }
 
