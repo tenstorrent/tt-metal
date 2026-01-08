@@ -198,20 +198,9 @@ struct ChannelCounter {
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
     uint32_t num_free_slots;
-    BufferIndex remote_receiver_buffer_index;
-    size_t cached_next_buffer_slot_addr;
 
     FORCE_INLINE void init() {
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->remote_receiver_buffer_index = BufferIndex{0};
-        this->cached_next_buffer_slot_addr = 0;
-    }
-
-    FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
-
-    FORCE_INLINE void advance_remote_receiver_buffer_index() {
-        remote_receiver_buffer_index =
-            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
     }
 };
 
