@@ -21,6 +21,7 @@ struct SwiGLUForwardProgramFactory {
         uint32_t num_cores{};
         uint32_t num_cores_x{};
         uint32_t num_cores_y{};
+        bool use_multicast{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
