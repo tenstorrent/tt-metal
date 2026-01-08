@@ -476,7 +476,8 @@ void DeviceManager::initialize_active_devices() {
     // Compile programs
     compile_cq_programs();
 
-    // Init command queue
+    std::vector<std::shared_future<void>> events;
+    // Init command queues in parallel.
     for (auto* dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id =
@@ -484,22 +485,26 @@ void DeviceManager::initialize_active_devices() {
         if (mmio_device_id != dev->id()) {
             continue;
         }
-
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        dev->init_command_queue_device();
-        log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
-        if (not this->skip_remote_devices_) {
-            for (const auto& tunnel : tunnels_from_mmio) {
-                // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
-                    auto* device = get_device(mmio_controlled_device_id);
-                    device->init_command_queue_device();
-                    log_info(tt::LogMetal, "Command Queue initialized on Device {}", device->id());
+        events.emplace_back(detail::async([&, dev, mmio_device_id]() {
+            auto tunnels_from_mmio =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+            dev->init_command_queue_device();
+            log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
+            if (not this->skip_remote_devices_) {
+                for (const auto& tunnel : tunnels_from_mmio) {
+                    // Need to create devices from farthest to the closest.
+                    for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                        uint32_t mmio_controlled_device_id = tunnel[ts];
+                        auto* device = get_device(mmio_controlled_device_id);
+                        device->init_command_queue_device();
+                        log_info(tt::LogMetal, "Command Queue initialized on Device {}", device->id());
+                    }
                 }
             }
-        }
+        }));
+    }
+    for (const auto& event : events) {
+        event.get();
     }
     dispatch_firmware_active_ = true;
 }
