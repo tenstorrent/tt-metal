@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Ensure no new tests added to locked directories"
     container:
-      image: ${{ inputs.docker-image }}
+      image: format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
