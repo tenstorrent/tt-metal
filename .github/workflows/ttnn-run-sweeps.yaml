@@ -730,51 +730,48 @@ jobs:
       - name: 🔌 Setup Local Database
         timeout-minutes: 5
         env:
-         PGPASSWORD: tt.sweeps
+          PGPASSWORD: tt.sweeps
         run: |
-         echo "::group::🔧 Database Setup"
-         echo "Setting up local PostgreSQL database for sweep parameter generation..."
+          echo "::group::🔧 Database Setup"
 
-         # psycopg2
-         if ! python3 -c "import psycopg2" 2>/dev/null; then
-          pip install -q psycopg2-binary
-         fi
-
-         echo "⏳ Waiting for postgres service..."
-         for i in {1..20}; do
-          if docker exec postgres pg_isready -U tt-sweeps >/dev/null 2>&1; then
-          echo "✅ Postgres ready"
-          break
+          if ! python3 -c "import psycopg2" 2>/dev/null; then
+            pip install -q psycopg2-binary
           fi
-          sleep 2
-         done
 
-         echo "♻ Restoring database from dump..."
-         docker exec -e PGPASSWORD=tt.sweeps postgres \
-         pg_restore -U tt-sweeps -d tt-model-traces \
-         --clean --if-exists --no-owner --no-privileges \
-         /work/model_tracer/ttnn_operations_db.sql
+          echo "⏳ Waiting for postgres service..."
+          for i in {1..30}; do
+            if pg_isready -h postgres -p 5432 -U tt-sweeps >/dev/null 2>&1; then
+              echo "✅ Postgres ready"
+              break
+            fi
+            sleep 2
+          done
 
-         echo "🔍 Verifying schema..."
-         docker exec -e PGPASSWORD=tt.sweeps postgres \
-         psql -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM operations;"
-         docker exec -e PGPASSWORD=tt.sweeps postgres \
-         psql -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM configurations;"
+          echo "♻ Restoring database..."
+          pg_restore \
+            -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
+            --clean --if-exists --no-owner --no-privileges \
+            model_tracer/ttnn_operations_db.sql
 
-         echo "✅ Database ready"
-         echo "::endgroup::"
-      - name: Verify Database from Python
+          echo "🔍 Verifying schema..."
+          psql -h postgres -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM operations;"
+          psql -h postgres -U tt-sweeps -d tt-model-traces -c "SELECT COUNT(*) FROM configurations;"
+
+          echo "✅ Database ready"
+          echo "::endgroup::"
+
+      - name: Verify DB
         run: |
-         python3 - << 'EOF'
-         import psycopg2
-         conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
-         cur = conn.cursor()
-         cur.execute("SELECT COUNT(*) FROM operations")
-         print("Operations:", cur.fetchone()[0])
-         cur.execute("SELECT COUNT(*) FROM configurations")
-         print("Configurations:", cur.fetchone()[0])
-         conn.close()
-         EOF
+          python3 - << 'EOF'
+          import psycopg2
+          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
+          cur = conn.cursor()
+          cur.execute("SELECT COUNT(*) FROM operations")
+          print("Operations:", cur.fetchone()[0])
+          cur.execute("SELECT COUNT(*) FROM configurations")
+          print("Configurations:", cur.fetchone()[0])
+          conn.close()
+          EOF
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&
