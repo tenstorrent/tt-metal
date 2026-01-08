@@ -145,7 +145,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ matrix.test-group.mlperf && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        - ${{ matrix.test-group.mlperf && '/mnt/MLPerf:/mnt/MLPerf:rw' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -228,10 +228,10 @@ jobs:
           mkdir -p generated/test_reports
           pip install -r models/demos/gpt_oss/requirements.txt
 
-          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
+          TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 900
 
-          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
+          TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 900
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
