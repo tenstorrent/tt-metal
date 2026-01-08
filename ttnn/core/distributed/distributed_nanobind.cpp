@@ -78,7 +78,7 @@ public:
     bool all_local() const { return global_shape_ == local_shape_; }
 };
 
-// NOLINTBEGIN(bugprone-unused-raii)
+// NOLINTBEGIN(bugprone-unused-raii),
 // NOLINTBEGIN(misc-redundant-expression)
 void py_module_types(nb::module_& mod) {
     using namespace tt::tt_metal::distributed::multihost;
