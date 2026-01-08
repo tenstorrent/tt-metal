@@ -42,7 +42,7 @@ void kernel_main() {
     // Loop over all the tiles and read them into the circular buffers.
     for (uint32_t i = 0; i < n_tiles; i++) {
         // First make sure there is space for one tile in each of the circular buffers to be written to.
-        // Deciding how large the bufferS should be is a tradeoff.
+        // Deciding how large the buffers should be is a tradeoff.
         // These are blocking calls.
         cb_reserve_back(cb_in0, 1);
         cb_reserve_back(cb_in1, 1);

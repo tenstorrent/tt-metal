@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace ttnn;
 
-// Define prefix path for kernel files to be an ampty string if not set in the makefile.
+// Define prefix path for kernel files to be an empty string if not set in the makefile.
 // this prefix enables overriding the default kernel path with a custom path, so that the
 // example works in both development environment and when installed.
 #ifndef OVERRIDE_KERNEL_PREFIX
