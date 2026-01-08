@@ -22,7 +22,7 @@ def _linear_coord(coord, mesh_shape):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}], indirect=True
 )
 @pytest.mark.parametrize("test_config", DEEPSEEK_REC_SEND_SHAPE_DTYPE_MEM)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])

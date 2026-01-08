@@ -265,7 +265,7 @@ def run_demo(
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
 
-    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config)
 

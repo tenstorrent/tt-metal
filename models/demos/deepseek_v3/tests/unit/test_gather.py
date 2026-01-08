@@ -13,7 +13,7 @@ DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.u
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}], indirect=True
 )
 @pytest.mark.parametrize("shapes_dtypes", DEEPSEEK_SHAPES_DTYPES)
 @pytest.mark.parametrize("dim", [3])

@@ -26,7 +26,7 @@ DEEPSEEK_SHAPE_PERM_LAYOUT_MEM = [
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}], indirect=True
 )
 @pytest.mark.parametrize("test_config", DEEPSEEK_SHAPE_PERM_LAYOUT_MEM)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
