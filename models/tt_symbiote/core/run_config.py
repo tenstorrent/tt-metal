@@ -174,6 +174,10 @@ class DispatchManager:
         )
 
     @staticmethod
+    def clear_timings():
+        DispatchManager.timings = {}
+
+    @staticmethod
     def get_timing_entries_stats():
         # convert DispatchManager.timings to a dataframe so users can turn into csv
         import pandas as pd
