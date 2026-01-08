@@ -58,9 +58,6 @@ jobs:
             p150)
               models='["llama3.1-8b"]'
               ;;
-            p300)
-              models='["llama3.1-8b"]'
-              ;;
             WH-QB)
               models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
               ;;

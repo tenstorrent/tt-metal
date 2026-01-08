@@ -13,7 +13,6 @@ on:
           - n150
           - n300
           - p150
-          - p300
           - wh-qb
           - bh-qb
           - wh-6u
@@ -87,22 +86,6 @@ jobs:
       runner-label: 'P150'
       arch: 'blackhole'
       mesh-device-env: 'P150'
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
-
-  # P300 Tests (Blackhole dual chip)
-  p300-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'p300' }}
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
-    with:
-      device-type: 'p300'
-      runner-label: 'P300-viommu'
-      arch: 'blackhole'
-      mesh-device-env: 'P300'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
