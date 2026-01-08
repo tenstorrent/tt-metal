@@ -491,7 +491,9 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 
 
 def run_matmul_2d_multiple_output_blocks_per_core(
-    device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast
+    device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast,
+    output_memory_config=None, output_dtype=None, math_fidelity=None, fp32_dest_acc_en=None, program_config_override=None,
+    input_memory_config=None, input_dtype=None, weight_memory_config=None
 ):
     if in0_sharded or out_sharded:
         fuse_batch = True
@@ -527,7 +529,9 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     in0 = torch.randn(in0_shape).bfloat16()
     in1 = torch.randn(in1_shape).bfloat16()
 
-    if in0_sharded:
+    if input_memory_config is not None:
+        in0_memory_config = input_memory_config
+    elif in0_sharded:
         in0_memory_config = ttnn.create_sharded_memory_config(
             (b, 1, m, k),
             core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
@@ -543,12 +547,19 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         device=device,
         memory_config=in0_memory_config,
     )
+    
+    # Use provided weight memory config or default to DRAM
+    if weight_memory_config is not None:
+        weight_mem_config = weight_memory_config
+    else:
+        weight_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    
     in1_t = ttnn.from_torch(
         in1,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=weight_mem_config,
     )
 
     if has_bias:
@@ -563,34 +574,47 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        out_block_h=out_block_h,
-        out_block_w=out_block_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=transpose_mcast,
-        fused_activation=None,
-        fuse_batch=fuse_batch,
-    )
+    # Use provided program config or calculate it
+    if program_config_override is not None:
+        program_config = program_config_override
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=out_block_h,
+            out_block_w=out_block_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=transpose_mcast,
+            fused_activation=None,
+            fuse_batch=fuse_batch,
+        )
 
+    # Use provided config values or defaults
+    math_fidelity_val = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.LoFi
+    fp32_dest_acc_en_val = fp32_dest_acc_en if fp32_dest_acc_en is not None else False
+    
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=math_fidelity_val,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en_val,
         packer_l1_acc=True,
     )
-    if out_sharded:
+    if output_memory_config is not None:
+        out_mem_config = output_memory_config
+    elif out_sharded:
         out_mem_config = ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             buffer_type=ttnn.BufferType.L1,
         )
     else:
         out_mem_config = ttnn.L1_MEMORY_CONFIG
+    
+    output_dtype_val = output_dtype if output_dtype is not None else ttnn.bfloat16
+    
     if has_bias:
         output_t = ttnn.linear(
             in0_t,
@@ -598,7 +622,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             bias=bias_t,
             program_config=program_config,
             memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
+            dtype=output_dtype_val,
             compute_kernel_config=compute_kernel_config,
         )
     else:
@@ -607,7 +631,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             in1_t,
             program_config=program_config,
             memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
+            dtype=output_dtype_val,
             compute_kernel_config=compute_kernel_config,
         )
     pt_out = in0 @ in1
@@ -678,6 +702,182 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert mesh_device.num_program_cache_entries() == 1
+
+
+def test_linear_attention_wo_with_modified_function(device):
+    """
+    Test using modified run_matmul_2d_multiple_output_blocks_per_core with exact attention.py WO config.
+    - Input: [1, 1, 128, 4096]
+    - Weight: [1, 1, 4096, 512]
+    - Output: [1, 1, 128, 512]
+    - MatmulMultiCoreReuseMultiCastProgramConfig with specific parameters
+    - DRAM memory config for output
+    - bfloat8_b dtype for output
+    - HiFi2 math fidelity with fp32_dest_acc_en=True
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = (8, 8)
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Device grid size {compute_grid_size} is smaller than required {grid_size}")
+    
+    # Exact shapes from attention.py (original config)
+    b = 1
+    m = 128
+    k = 4096
+    n = 512
+    has_bias = False  # No bias
+    in0_sharded = False
+    out_sharded = False
+    
+    # Program config matching exact profiler output (original config)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=1,
+        out_block_w=4,
+        per_core_M=1,
+        per_core_N=4,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    
+    # These parameters are still needed for the function logic but program_config will override
+    num_out_block_h = 1
+    num_out_block_w = 1
+    transpose_mcast = False
+    
+    # Run 5 times
+    for _ in range(5):
+        run_matmul_2d_multiple_output_blocks_per_core(
+            device=device,
+            b=b,
+            m=m,
+            k=k,
+            n=n,
+            has_bias=has_bias,
+            grid_size=grid_size,
+            in0_sharded=in0_sharded,
+            out_sharded=out_sharded,
+            num_out_block_h=num_out_block_h,
+            num_out_block_w=num_out_block_w,
+            transpose_mcast=transpose_mcast,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+            program_config_override=program_config,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Input in DRAM
+            input_dtype=ttnn.bfloat16,  # Input dtype BFLOAT16 (original)
+            weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Weight in DRAM_INTERLEAVED (original)
+        )
+
+
+def test_linear_attention_wo_width_sharded(device):
+    """
+    Test using modified run_matmul_2d_multiple_output_blocks_per_core with width-sharded weight config.
+    - Input: [1, 1, 128, 1024]
+    - Weight: [1, 1, 1024, 4096] (width sharded)
+    - Output: [1, 1, 128, 4096]
+    - MatmulMultiCoreReuseMultiCastProgramConfig with specific parameters
+    - DRAM memory config for output
+    - bfloat8_b dtype for output and input
+    - HiFi2 math fidelity with fp32_dest_acc_en=True
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    grid_size = (8, 8)
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Device grid size {compute_grid_size} is smaller than required {grid_size}")
+    
+    # Exact shapes from profiler output (new config)
+    b = 1
+    m = 128
+    k = 1024
+    n = 4096
+    has_bias = False  # No bias
+    in0_sharded = False
+    out_sharded = False
+    
+    # Program config matching exact profiler output (new config)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=1,
+        out_block_w=16,
+        per_core_M=1,
+        per_core_N=16,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    
+    # These parameters are still needed for the function logic but program_config will override
+    num_out_block_h = 1
+    num_out_block_w = 1
+    transpose_mcast = False
+    
+    # Create width-sharded memory config for weight tensor [1, 1, 1024, 4096]
+    # Width sharding: shard along the width dimension (4096) across DRAM cores
+    # For DRAM width-sharded tensors, use DRAM grid size, not compute grid size
+    dram_grid_size = device.dram_grid_size()
+    dram_num_cores = dram_grid_size.x * dram_grid_size.y
+    
+    weight_height = k  # 1024
+    weight_width = n  # 4096
+    shard_width = weight_width // dram_num_cores  # 4096 / dram_num_cores
+    
+    # Create core range set for DRAM grid
+    weight_shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        }
+    )
+    
+    # Create shard spec for width sharding
+    weight_shard_spec = ttnn.ShardSpec(
+        weight_shard_grid,
+        (weight_height, shard_width),  # Full height, sharded width
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    
+    # Create width-sharded DRAM memory config for weight
+    weight_width_sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.DRAM,
+        shard_spec=weight_shard_spec,
+    )
+    
+    # Run 5 times
+    for _ in range(5):
+        run_matmul_2d_multiple_output_blocks_per_core(
+            device=device,
+            b=b,
+            m=m,
+            k=k,
+            n=n,
+            has_bias=has_bias,
+            grid_size=grid_size,
+            in0_sharded=in0_sharded,
+            out_sharded=out_sharded,
+            num_out_block_h=num_out_block_h,
+            num_out_block_w=num_out_block_w,
+            transpose_mcast=transpose_mcast,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat8_b,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+            program_config_override=program_config,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Input in DRAM
+            input_dtype=ttnn.bfloat16,  # Input dtype BFLOAT16 (matching CSV config)
+            weight_memory_config=weight_width_sharded_mem_config,  # Weight in DRAM_WIDTH_SHARDED
+        )
 
 
 def run_matmul_2d_tiny_tile(
@@ -2450,7 +2650,6 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         ((32, 96), (96, 32), (1, 90), (90, 16)),  # Padding introduced in M,K and N dimensions, 1 face padded
         ((32, 96), (96, 32), (1, 65), (65, 16)),  # Padding introduced in M,K and N dimensions, 2 faces padded
     ],
-    ids=["no_padding", "1_face_padded", "2_faces_padded"],
 )
 @pytest.mark.parametrize(
     "program_config,input_a_memory_config,input_b_memory_config,output_memory_config",
@@ -2543,7 +2742,6 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ),
         ),
     ],
-    ids=["reuse", "multicast1d", "multicast1d_sharded", "dram_sharded"],
 )
 def test_matmul_padding(
     device,
