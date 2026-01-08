@@ -157,6 +157,7 @@ using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 // Internal class for holding a group of programs for parallel compilation.
 class ProgramCompileGroup {
 private:
+    std::mutex mutex_;
     std::unordered_map<IDevice*, std::unique_ptr<Program>> program_device_map_;
 
 public:
