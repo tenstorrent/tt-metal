@@ -1,5 +1,5 @@
-########################################
 Lab 1: Single Core Matrix Multiplication
+########################################
 
 Introduction
 ************
@@ -651,7 +651,7 @@ Specifically:
 Conversely, all code in ``lab_eltwise_binary.cpp`` executes on the host, and all its C++ objects are created on the host
 (either in CPU registers or host DRAM). Obvious examples include vectors of data and various local variables.
 However, some host-side objects contain information about data and code on the device. Specifically:
- 
+
 * ``Tensor`` objects are created on the host and contain information about the tensor shape and layout, but actual tensor data is stored in device DRAM.
 
 * ``TensorAccessorArgs`` objects exist on both host and device, but they are different underlying types, defined in different headers
@@ -680,7 +680,7 @@ Perform the following steps:
 
 #. Introduce a syntax error in the kernel code
 
-#. Rebuild the programming examples by running ``./build_metal.sh --build-programming-examples`` and observe that no error is reported. 
+#. Rebuild the programming examples by running ``./build_metal.sh --build-programming-examples`` and observe that no error is reported.
 
 #. Run the example program ``./build/programming_examples/metal_example_lab_eltwise_binary``.
    Observe how JIT compilation errors are reported.
@@ -808,7 +808,7 @@ A simplified example of printing a full tile from an output CB in a writer kerne
                          /* print_untilized = */ true)
                       << ENDL();
            }
-           
+
            // Perform the actual work of this writer kernel
 
            // Mark this tile as consumed in the CB.
@@ -877,7 +877,7 @@ You can introduce a very simple artificial hang by commenting out the calls to `
 
 With this change, for the first two tiles, the program should run normally, but then the reader kernel blocks waiting
 for space in the circular buffers, which from the host side looks like a hang.
-To help pinpoint the problem, you can dump stack traces. 
+To help pinpoint the problem, you can dump stack traces.
 
 #. Make changes to the compute kernel as suggested above.
 
@@ -919,7 +919,7 @@ Note that the log file uses names BRISC and NCRISC for the two RISC-V processors
 Exercise 6: Using Device Profiling to Profile Kernels
 -----------------------------------------------------
 
-#. **Make sure code is built with Release option** 
+#. **Make sure code is built with Release option**
 
    If you previously used the ``--build-type Debug`` flag, do not forget to rebuild the programming examples
    with the ``--build-type Release`` flag before profiling performance.
@@ -995,7 +995,7 @@ Consider the concrete example shown in Figure 6.
 
 Figure 6 shows an example where ``A`` is a ``9x4`` matrix, and ``B`` is a ``4x6`` matrix.
 If we choose ``3x3`` tiles for matrix ``C``, we need 3 rows of matrix ``A`` and 3 columns of matrix ``B`` to compute a single tile of matrix ``C``.
-This means that ``A`` tiles must have 3 rows, ``B`` tiles must have 3 columns, and 
+This means that ``A`` tiles must have 3 rows, ``B`` tiles must have 3 columns, and
 the inner tile dimensions must match (the number of columns in an ``A`` tile equals
 the number of rows in a ``B`` tile).
 If we choose ``3x2`` tiles for matrix ``A``, we can divide ``A`` into six tiles ``A0`` through ``A5``.
@@ -1078,21 +1078,21 @@ Similarly, rename ``tiles_add.cpp`` to e.g. ``tiles_matmul.cpp``.
 Then, adjust the code to perform matrix multiplication, by making the following changes:
 
 #. Update the host program to create input vectors to multiply matrix ``A`` of size ``640x320`` and matrix ``B`` of size ``320x640`` to produce matrix ``C`` of size ``640x640``.
-   
+
 #. Copy the reference matrix multiplication code you created in Exercise 1.
    Adapt it to the ``bfloat16`` data type, so it can be used to verify TT-Metalium results.
-   
+
 #. Update tensor creation code to create tensors of appropriate sizes for matrix multiplication and to
    pass required parameters to kernels (you may need to complete some of the other steps below to determine the correct parameters).
    You should write your code to make the following assumptions about the matrix and tile sizes:
 
    * Tiles will be square with dimensions ``TILE_HEIGHTxTILE_WIDTH`` (i.e. ``TILE_HEIGHT == TILE_WIDTH``).
-   
+
    * All matrices will have dimensions that are divisible by the tile size.
      Note that constants ``TILE_HEIGHT`` and ``TILE_WIDTH`` are defined in the ``tt_metal/api/tt-metalium/constants.hpp`` header in the ``tt::constants`` namespace,
      and height is equal to width for all existing Tenstorrent devices.
      You should add assertions (using ``TT_FATAL``) that check these assumptions.
-   
+
 
 #. Update kernel creation code to refer to kernel ``.cpp`` files in the new directory.
 
