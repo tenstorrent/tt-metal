@@ -64,7 +64,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v6
         with:
           name: ${{ inputs.wheel-artifact-name }}
-          path: ./wheels
+          path: docker-job/wheels
           run_id: 20788440471
           github_token: ${{ secrets.GITHUB_TOKEN }}
       # - name: Download built wheel
