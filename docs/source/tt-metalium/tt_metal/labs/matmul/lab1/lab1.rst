@@ -1,5 +1,5 @@
-Lab 1: Single Core Matrix Multiplication
 ########################################
+Lab 1: Single Core Matrix Multiplication
 
 Introduction
 ************
@@ -1134,6 +1134,22 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    against future labs when we optimize the implementation for performance.
    If you previously used the ``--build-type Debug`` flag, **do not forget to rebuild the programming examples**
    with the ``--build-type Release`` flag, and also to disable DPRINT before profiling performance.
+
+
+Conclusion
+**********
+
+This single-core matrix multiplication implementation highlights several key architectural patterns for programming Tenstorrent devices:
+
+* **Separation of data movement and compute**: By using dedicated RISC-V processors for data movement (reader/writer kernels)
+  and the matrix engine for computation, complex data orchestration patterns do not sacrifice compute throughput.
+  The data movement processors can handle complex access patterns while the compute units remain fully utilized.
+* **Tiled operations**: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance.
+  All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.
+* **Pipelined data movement**: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel
+  processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles.
+  This pipelining ensures efficient utilization of compute resources by minimizing idle time.
+
 
 Troubleshooting and Additional Resources
 ****************************************
