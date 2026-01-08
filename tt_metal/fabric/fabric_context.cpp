@@ -213,9 +213,8 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
 size_t FabricContext::compute_max_payload_size_bytes() const {
     if (is_2D_routing_enabled_) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
-    } else {
-        return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
     }
+    return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
 }
 
 FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
@@ -317,7 +316,8 @@ const FabricBuilderContext& FabricContext::get_builder_context() const {
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {
         return true;
-    } else if (topology_ == Topology::Torus) {
+    }
+    if (topology_ == Topology::Torus) {
         const auto fabric_type = get_fabric_type(fabric_config_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
         const bool is_north_south =

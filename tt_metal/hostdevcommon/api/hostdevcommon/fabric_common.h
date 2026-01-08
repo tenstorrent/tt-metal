@@ -474,12 +474,12 @@ struct routing_l1_info_t {
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-    direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};          // 96 bytes
-    direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};         // 384 bytes
-    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
-    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
-    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
-    uint8_t padding[12] = {};  // pad to 16-byte alignment
+    direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
+    direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
+    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};     // 64 bytes
+    intra_mesh_routing_path_t<2, true> routing_path_table_2d{};      // 512 bytes
+    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
+    uint8_t padding[12] = {};                                        // pad to 16-byte alignment
 } __attribute__((packed));
 
 struct worker_routing_l1_info_t {
