@@ -83,13 +83,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
-        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
-
-        if (is_tile_dim) {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
-        } else {
-            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
-        }
+        need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
     }
     const auto num_input_grad_tiles = input_grad.physical_volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -132,9 +126,9 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/reader_moreh_mean_backward.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/writer_moreh_mean_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
@@ -147,7 +141,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp";
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
     const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};

@@ -2,25 +2,6 @@
 
 TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
-run_t3000_falcon7b_perplexity_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_falcon7b_perplexity_tests"
-
-  # Falcon7B perplexity tests
-  pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_falcon7b_perplexity_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_falcon40b_perplexity_tests() {
   # Record the start time
   fail=0
@@ -201,7 +182,6 @@ run_t3000_qwen3_perplexity_tests() {
 
   echo "LOG_METAL: Warning: updating transformers version. Make sure this is the last-run test."
   echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
-  pip install -r models/tt_transformers/requirements.txt
 
   echo "LOG_METAL: Running run_t3000_qwen3_perplexity_tests"
   qwen32b=Qwen/Qwen3-32B
@@ -241,9 +221,6 @@ run_t3000_tests() {
 
   # Run Qwen3 perplexity tests
   run_t3000_qwen3_perplexity_tests
-
-  # Run Falcon-7B perplexity tests
-  run_t3000_falcon7b_perplexity_tests
 
   # Run Falcon-40B perplexity tests
   run_t3000_falcon40b_perplexity_tests

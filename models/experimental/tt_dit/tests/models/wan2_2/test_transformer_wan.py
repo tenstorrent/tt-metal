@@ -24,6 +24,7 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
+        [(1, 4), (1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
@@ -34,13 +35,7 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
         [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
-        # "1x1sp0tp1",
-        # "1x2sp0tp1",
-        # "1x2sp1tp0",
-        # "2x1sp0tp1",
-        # "2x1sp1tp0",
-        # "2x2sp0tp1",
-        # "2x2sp1tp0",
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
         "wh_4x8sp0tp1",
@@ -208,15 +203,13 @@ def test_wan_transformer_block(
 
 
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
-        # [(1, 1), (1, 1), 0, 1, 1],
-        # [(1, 2), (1, 2), 0, 1, 1],
-        # [(1, 2), (1, 2), 1, 0, 1],
-        # [(2, 1), (2, 1), 0, 1, 1],
-        # [(2, 1), (2, 1), 1, 0, 1],
-        # [(2, 2), (2, 2), 0, 1, 1],
-        # [(2, 2), (2, 2), 1, 0, 1],
+        [(1, 4), (1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
@@ -227,13 +220,7 @@ def test_wan_transformer_block(
         [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
-        # "1x1sp0tp1",
-        # "1x2sp0tp1",
-        # "1x2sp1tp0",
-        # "2x1sp0tp1",
-        # "2x1sp1tp0",
-        # "2x2sp0tp1",
-        # "2x2sp1tp0",
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
         "wh_4x8sp0tp1",
@@ -268,6 +255,7 @@ def test_wan_transformer_model(
     load_cache: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
+    dit_unit_test: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -292,9 +280,13 @@ def test_wan_transformer_model(
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
 
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
-    )
+    if dit_unit_test:
+        torch_model = TorchWanTransformer3DModel(num_layers=1)
+        num_layers = torch_model.config.num_layers
+    else:
+        torch_model = TorchWanTransformer3DModel.from_pretrained(
+            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
+        )
     torch_model.eval()
 
     # Create CCL manager
@@ -326,6 +318,7 @@ def test_wan_transformer_model(
         text_dim=text_dim,
         freq_dim=freq_dim,
         ffn_dim=ffn_dim,
+        num_layers=num_layers,
         cross_attn_norm=cross_attn_norm,
         eps=eps,
         rope_max_seq_len=rope_max_seq_len,
@@ -353,7 +346,7 @@ def test_wan_transformer_model(
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
         start = time.time()
-        tt_model.load_state_dict(torch_model.state_dict())
+        tt_model.load_torch_state_dict(torch_model.state_dict())
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -388,6 +381,7 @@ def test_wan_transformer_model(
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
+        [(1, 4), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
         [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True],
@@ -395,6 +389,7 @@ def test_wan_transformer_model(
         [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
+        "1x4sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
@@ -479,7 +474,7 @@ def test_wan_transformer_model_caching(
         is_fsdp=is_fsdp,
     )
     start = time.time()
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

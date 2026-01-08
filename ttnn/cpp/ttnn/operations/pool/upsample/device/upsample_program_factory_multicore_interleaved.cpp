@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -112,8 +112,8 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
         output_cb_index = src0_cb_index;
     }
 
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
@@ -268,8 +268,8 @@ void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     const auto& num_cores = cached_program.shared_variables.num_cores;
     const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    const auto src_buffer = tensor_args.input_tensor.buffer();
-    const auto dst_buffer = output_tensor.buffer();
+    auto* const src_buffer = tensor_args.input_tensor.buffer();
+    auto* const dst_buffer = output_tensor.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};

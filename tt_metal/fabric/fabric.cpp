@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
@@ -27,12 +27,11 @@
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
+#include "fabric_builder_context.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Program;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
 
@@ -191,9 +190,9 @@ void append_fabric_connection_rt_args(
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 src_chip_id, fabric_router_channel);
 
-        const auto& edm_config = fabric_context.get_fabric_router_config();
-        auto channel_allocator = edm_config.channel_allocator.get();
-        const auto static_channel_allocator =
+        const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
+        auto* channel_allocator = edm_config.channel_allocator.get();
+        auto* const static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
@@ -249,7 +248,7 @@ void append_routing_plane_connection_manager_rt_args(
         auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
         if (dir_opt.has_value()) {
             TT_FATAL(
-                used_directions.find(dir_opt.value()) == used_directions.end(),
+                !used_directions.contains(dir_opt.value()),
                 "Multiple ethernet cores in the same direction ({}) are not currently supported. "
                 "This restriction will be removed in a future update when proper multi-core routing is implemented.",
                 dir_opt.value());
@@ -335,9 +334,10 @@ void SetFabricConfig(
     FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     FabricTensixConfig fabric_tensix_config,
-    FabricUDMMode fabric_udm_mode) {
+    FabricUDMMode fabric_udm_mode,
+    FabricManagerMode fabric_manager) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
+        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode, fabric_manager);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
@@ -352,7 +352,8 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
 
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
 }
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {

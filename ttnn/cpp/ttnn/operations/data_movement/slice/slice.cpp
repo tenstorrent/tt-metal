@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/slice_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
-#include "ttnn/operations/experimental/reshape/view.hpp"
-#include "slice.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -155,20 +153,19 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
-    auto res = tt::tt_metal::operation::run(
-                   SliceDeviceOperation{
-                       ttnn::Shape(modified_begins),
-                       ttnn::Shape(padded_ends),
-                       ttnn::Shape(modified_step),
-                       memory_config,
-                       false,
-                       std::nullopt,
-                       std::nullopt,
-                       sub_core_grids},
-                   {input},
-                   {},
-                   {optional_output_tensor})
-                   .at(0);
+    auto res = ttnn::prim::slice(
+        input,
+        ttnn::Shape(modified_begins),
+        ttnn::Shape(padded_ends),
+        ttnn::Shape(modified_step),
+        memory_config,
+        /*use_tensor_args*/ false,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        sub_core_grids,
+        optional_output_tensor);
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
@@ -266,39 +263,45 @@ ttnn::Tensor SliceOperation::invoke(
         ttnn::Shape dummy_end(dummy_shape);
         ttnn::Shape dummy_step(dummy_step_shape);
 
-        // Use SliceDeviceOperation with tensor args flag
-        auto res =
-            tt::tt_metal::operation::run(
-                SliceDeviceOperation{
-                    dummy_start, dummy_end, dummy_step, memory_config, true, slice_dim, num_devices, sub_core_grids},
-                {input_tensor, output_tensor_start, output_tensor_end},
-                {},
-                {optional_output_tensor})
-                .at(0);
-        return res;
-    } else {
-        // convert the Tensor to Vector
-        std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
-        std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
+        // Use slice device operation with tensor args flag
+        std::optional<Tensor> start_opt = output_tensor_start;
+        std::optional<Tensor> end_opt = output_tensor_end;
 
-        // convert the Vector to Span
-        tt::stl::Span<const T> output_tensor_start_span(
-            output_tensor_start_vector.data(), output_tensor_start_vector.size());
-        tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
-
-        // generate the step value if it is not provided
-        ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
-
-        return SliceOperation::invoke<T>(
+        auto res = ttnn::prim::slice(
             input_tensor,
-            output_tensor_start_span,
-            output_tensor_end_span,
-            tt::stl::Span<const T>(step_value),
-            memory_config_arg,
-            optional_output_tensor,
-            pad_value,
-            sub_core_grids);
-    }
+            dummy_start,
+            dummy_end,
+            dummy_step,
+            memory_config,
+            /*use_tensor_args*/ true,
+            start_opt,
+            end_opt,
+            slice_dim,
+            num_devices,
+            sub_core_grids,
+            optional_output_tensor);
+        return res;
+    }  // convert the Tensor to Vector
+    std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
+    std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
+
+    // convert the Vector to Span
+    tt::stl::Span<const T> output_tensor_start_span(
+        output_tensor_start_vector.data(), output_tensor_start_vector.size());
+    tt::stl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
+
+    // generate the step value if it is not provided
+    ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
+
+    return SliceOperation::invoke<T>(
+        input_tensor,
+        output_tensor_start_span,
+        output_tensor_end_span,
+        tt::stl::Span<const T>(step_value),
+        memory_config_arg,
+        optional_output_tensor,
+        pad_value,
+        sub_core_grids);
 }
 
 // Template instantiations for SliceOperation::invoke

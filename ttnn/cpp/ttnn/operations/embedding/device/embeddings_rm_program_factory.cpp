@@ -235,7 +235,7 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
     const auto& cb_out = shared_variables.cb_out;
     const auto& output_sharded = shared_variables.output_sharded;
 
-    auto output_buffer = tensor_return_value.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
     auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
     auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();

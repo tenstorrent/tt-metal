@@ -849,19 +849,19 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
-        for (size_t i = 0; i < tensors.size(); i++) {
+        for (const auto *tensor : tensors) {
             std::ranges::copy(
                 std::array<uint32_t, 4>{
                     static_cast<uint32_t>(
-                        tensors[i]->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
-                    static_cast<uint32_t>(tensors[i]->buffer()->buffer_type()),
-                    static_cast<uint32_t>(tensors[i]->layout()),
+                        tensor->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
+                    static_cast<uint32_t>(tensor->buffer()->buffer_type()),
+                    static_cast<uint32_t>(tensor->layout()),
                     static_cast<uint32_t>(0)},
                 std::back_inserter(ct_args));
         }
-        for (size_t i = 0; i < tensors.size(); i++) {
+        for (const auto *tensor : tensors) {
             std::ranges::copy(
-                ttnn::ccl::emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
+                ttnn::ccl::emit_address_generator_compile_time_args(*tensor), std::back_inserter(ct_args));
         }
 
         datamovement_kernel_config.compile_args = ct_args;
@@ -1118,7 +1118,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
             bool rt_args_enabled = true;
             rt_args.push_back(rt_args_enabled);
             if (tensor_device_override.has_value() and
-                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
+                tensor_device_override.value().contains(t)) {
                 std::ranges::copy(
                     ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
                     std::back_inserter(rt_args));
@@ -1194,7 +1194,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     TT_ASSERT(num_commands_expected == slices.size());
 
     // If we are on device zero, we send n-1 chunks in ascending order
-    auto& input_tensor = this->op_config.get_input_tensor(0);
+    const auto& input_tensor = this->op_config.get_input_tensor(0);
     TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
 
     std::vector<uint32_t> args = {

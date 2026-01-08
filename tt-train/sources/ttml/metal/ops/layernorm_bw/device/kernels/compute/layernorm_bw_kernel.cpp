@@ -12,7 +12,7 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/reg_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "tt-train/sources/ttml/metal/ops/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 namespace NAMESPACE {
 
@@ -149,8 +149,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register,
-        /* transpose */ 0);
+        /* idst */ reduced_sum_register);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
@@ -228,8 +227,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register,
-        /* transpose */ 0);
+        /* idst */ reduced_sum_register);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
@@ -309,8 +307,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register,
-        /* transpose */ 0);
+        /* idst */ reduced_sum_register);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
@@ -404,8 +401,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
-        /* idst */ reduced_sum_register,
-        /* transpose */ 0);
+        /* idst */ reduced_sum_register);
 
     tile_regs_commit();
     cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);

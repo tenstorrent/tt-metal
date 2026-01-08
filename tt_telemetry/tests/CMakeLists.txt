@@ -7,6 +7,9 @@ target_sources(
     PRIVATE
         test_exception_handling.cpp
         test_custom_labels.cpp
+        test_physical_link_info.cpp
+        test_ethernet_path_parsing.cpp
+        test_topology_helper_api.cpp
 )
 
 target_include_directories(
@@ -14,6 +17,12 @@ target_include_directories(
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${UMD_HOME}
+)
+target_include_directories(
+    telemetry_unit_tests
+    SYSTEM
+    PRIVATE
+        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 
 target_link_libraries(
@@ -25,6 +34,7 @@ target_link_libraries(
         tt_metal # Need this for tt::umd::Cluster destructor
         telemetry_libs
         fmt::fmt-header-only
+        protobuf::libprotobuf # For protobuf runtime
 )
 
 # Register tests with CTest

@@ -118,9 +118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::vector<Tensor> ring_attention_all_gather_async(
     const std::vector<Tensor>& input_tensors,
@@ -134,8 +132,6 @@ std::vector<Tensor> ring_attention_all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

@@ -20,9 +20,9 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto src0_buffer = input_a.buffer();
-    auto src1_buffer = input_b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src0_buffer = input_a.buffer();
+    auto* src1_buffer = input_b.buffer();
+    auto* dst_buffer = output.buffer();
     float scaler = 1.0f;
 
     Program program{};
@@ -69,8 +69,10 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16};
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
+    const auto* const reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
+    const auto* const writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -81,7 +83,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     const uint32_t core_num = 1;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
+    const auto* const compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
     const auto compute_kernel_id = CreateComputeKernel(
         program,
         compute_kernel_file,
@@ -117,9 +119,9 @@ void MorehDotOperation::SingleCore::override_runtime_arguments(
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
 
-    auto src_buffer_a = input_a.buffer();
-    auto src_buffer_b = input_b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer_a = input_a.buffer();
+    auto* src_buffer_b = input_b.buffer();
+    auto* dst_buffer = output.buffer();
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

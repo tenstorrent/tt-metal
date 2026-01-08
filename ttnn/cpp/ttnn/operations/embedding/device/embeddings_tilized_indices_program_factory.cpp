@@ -27,7 +27,7 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    auto device = a.device();
+    auto* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

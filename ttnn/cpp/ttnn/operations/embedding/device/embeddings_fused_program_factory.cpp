@@ -310,7 +310,7 @@ void EmbeddingsFusedProgramFactory::override_runtime_arguments(
     const auto& cores = shared_variables.cores;
     const auto& cb_output = shared_variables.cb_output;
 
-    auto output_buffer = tensor_return_value.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
     auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
     auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();

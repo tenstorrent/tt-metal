@@ -15,6 +15,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
+class TopologyMapper;
 
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
@@ -38,8 +39,7 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 class RoutingTableGenerator {
 public:
-    explicit RoutingTableGenerator(
-        const std::string& mesh_graph_desc_file, std::optional<FabricConfig> fabric_config = std::nullopt);
+    explicit RoutingTableGenerator(const TopologyMapper& topology_mapper);
     ~RoutingTableGenerator() = default;
 
     void dump_to_yaml();
@@ -58,9 +58,8 @@ public:
     // Load Inter-Mesh Connectivity into the Routing Table Generator
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
-    std::unique_ptr<MeshGraph> mesh_graph;
-
 private:
+    const TopologyMapper& topology_mapper_;
     // configurable in future architectures
     const uint32_t max_nodes_in_mesh_ = 1024;
     const uint32_t max_num_meshes_ = 1024;

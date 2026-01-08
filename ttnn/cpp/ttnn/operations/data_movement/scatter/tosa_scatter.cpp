@@ -40,7 +40,7 @@ Tensor pre_tosa_scatter_transform_tensor(
         processed_tensor =
             ttnn::expand(ttnn::unsqueeze(tensor, -1), SmallVector<int32_t>{N, W, C}, tensor.memory_config());
         // WARNING: the rest of this if statement is to be removed after fixing the int32 transpose issue (PR: #23415)
-        auto device = processed_tensor.device();
+        auto* device = processed_tensor.device();
         processed_tensor = processed_tensor.cpu();
         processed_tensor = ttnn::to_dtype(processed_tensor, DataType::UINT16);
         processed_tensor = processed_tensor.to_device(device);

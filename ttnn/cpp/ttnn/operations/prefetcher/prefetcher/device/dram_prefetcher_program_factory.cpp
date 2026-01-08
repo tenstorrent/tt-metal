@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -292,7 +292,7 @@ void DramPrefetcherProgramFactory::override_runtime_arguments(
     const auto& tensor_addrs_cb = cached_program.shared_variables.tensor_addrs_cb;
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
-    auto tensor_addrs_buffer = tensor_addrs.buffer();
+    auto* tensor_addrs_buffer = tensor_addrs.buffer();
     UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
 }
 

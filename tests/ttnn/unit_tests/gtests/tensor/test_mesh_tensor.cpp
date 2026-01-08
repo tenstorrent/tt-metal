@@ -120,12 +120,12 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
         TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
-    Tensor input_tensor = allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+    Tensor input_tensor = create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(input_tensor.is_allocated());
 
     const auto& storage = input_tensor.storage();
-    auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&storage);
+    const auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&storage);
 
     ASSERT_NE(device_storage, nullptr);
     EXPECT_NE(device_storage->mesh_buffer, nullptr);
@@ -136,7 +136,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
     for (auto* device : view.get_devices()) {
         auto coordinate = view.find_device(device->id());
-        auto buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
+        auto* buffer = device_storage->mesh_buffer->get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
         EXPECT_TRUE(buffer->is_allocated());
@@ -224,7 +224,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     std::vector<distributed::MeshCoordinate> device_shard_coords;
     EXPECT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
     for (const auto& tensor_shard : device_tensors) {
-        auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.storage());
+        const auto* shard_storage = std::get_if<tt::tt_metal::DeviceStorage>(&tensor_shard.storage());
         ASSERT_NE(shard_storage, nullptr);
         EXPECT_NE(shard_storage->mesh_buffer, nullptr);
         EXPECT_THAT(shard_storage->coords, SizeIs(1));
@@ -300,7 +300,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
 struct MeshTensorWriteTestParams {
     ttnn::Shape shape;
 
-    // If true, uses pre-allocated tensor APIs (allocate_tensor_on_device/device + write_tensor).
+    // If true, uses pre-allocated tensor APIs (create_device_tensor/device + copy_to_device/host).
     bool use_pre_allocated_tensor_api = false;
 
     // Shape of the resulting shards.
@@ -339,12 +339,11 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
 
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
-            Tensor device_tensor = allocate_tensor_on_device(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
-            write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
+            Tensor device_tensor = create_device_tensor(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
+            tensor_impl::copy_to_device(input_host_tensor_sharded, device_tensor);
             return device_tensor;
-        } else {
-            return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
         }
+        return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
     }();
 
     EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
@@ -356,11 +355,10 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto output_host_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor host_tensor = allocate_tensor_on_host(device_tensor.tensor_spec(), mesh_device_.get());
-            write_tensor(device_tensor, host_tensor, /*blocking=*/true);
+            tensor_impl::copy_to_host(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
-        } else {
-            return tensor_impl::to_host(device_tensor);
         }
+        return tensor_impl::to_host(device_tensor);
     }();
 
     EXPECT_EQ(output_host_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());

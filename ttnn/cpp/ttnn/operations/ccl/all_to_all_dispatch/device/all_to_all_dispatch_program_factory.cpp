@@ -94,7 +94,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
 
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
@@ -137,7 +137,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
@@ -419,7 +419,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
-    for (uint32_t i = 0; i < sender_cores.size(); i++) {
+    for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = {
             input_tensor.buffer()->address(),
             indices_tensor.buffer()->address(),
@@ -436,7 +436,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         writer_runtime_args[7] = tokens_per_core_start;
         writer_runtime_args[8] = reader_runtime_args[7];
         tokens_per_core_start = reader_runtime_args[7];
-        for (auto& neighbor_coordinate : neighbors) {
+        for (const auto& neighbor_coordinate : neighbors) {
             log_debug(
                 tt::LogOp,
                 "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
@@ -445,7 +445,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 mesh_coordinate[1],
                 neighbor_coordinate[0],
                 neighbor_coordinate[1],
-                sender_cores.at(i),
+                sender_core,
                 link_id,
                 reader_runtime_args[6],
                 reader_runtime_args[7]);
@@ -454,12 +454,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,
                 program,
-                sender_cores.at(i),
+                sender_core,
                 writer_runtime_args);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_core, writer_runtime_args);
         link_id++;
     }
 
@@ -479,14 +479,14 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
-        auto& cores = shared_variables.cores;
+        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
+        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
+        const auto& cores = shared_variables.cores;
 
         const auto& output_tensor = tensor_return_value.at(0);
         const auto& metadata_tensor = tensor_return_value.at(1);
 
-        for (auto& core : cores) {
+        for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
             reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();

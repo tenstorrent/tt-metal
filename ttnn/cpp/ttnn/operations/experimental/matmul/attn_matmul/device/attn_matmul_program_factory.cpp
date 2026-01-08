@@ -267,9 +267,9 @@ void AttnMatmulProgramFactory::override_runtime_arguments(
     const auto& b = tensor_args.input_tensor_b;
     auto& output = tensor_return_value;
 
-    auto src_dram_buffer_a = a.buffer();
-    auto src_dram_buffer_b = b.buffer();
-    auto dst_dram_buffer = output.buffer();
+    auto* src_dram_buffer_a = a.buffer();
+    auto* src_dram_buffer_b = b.buffer();
+    auto* dst_dram_buffer = output.buffer();
 
     auto ashape = a.padded_shape();
     auto bshape = b.padded_shape();

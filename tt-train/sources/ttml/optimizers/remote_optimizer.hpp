@@ -21,6 +21,10 @@ using SortedParameters = std::map<std::string, autograd::TensorPtr>;
 
 class RemoteOptimizer : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "RemoteOptimizer";
+    }
+
     RemoteOptimizer(serialization::NamedParameters parameters, int aggregator_rank);
 
     void zero_grad() override;

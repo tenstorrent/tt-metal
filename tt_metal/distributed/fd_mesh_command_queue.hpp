@@ -17,6 +17,12 @@
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
+// Forward declaration of the FDMeshCQTestAccessor class
+// This is used to access the system memory manager from cq test fixtures
+namespace tt::tt_metal::tt_dispatch_tests::Common {
+class FDMeshCQTestAccessor;
+}  // namespace tt::tt_metal::tt_dispatch_tests::Common
+
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
@@ -34,6 +40,10 @@ struct DeviceMemoryAddress {
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
+    // This class can now access private members of FDMeshCommandQueue
+    // This is used to access the system memory manager from cq test fixtures
+    friend class tt_dispatch_tests::Common::FDMeshCQTestAccessor;
+
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     CoreCoord virtual_program_dispatch_core() const;
@@ -61,7 +71,7 @@ private:
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRangeSet& active_sub_grids_set,
+        const MeshCoordinateRangeSet& active_grids_set,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,

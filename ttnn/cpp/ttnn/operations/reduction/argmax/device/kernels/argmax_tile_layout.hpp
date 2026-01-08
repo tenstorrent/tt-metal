@@ -5,9 +5,8 @@
 
 #include "argmax_common.hpp"
 #include "tt-metalium/constants.hpp"
-
-#include "debug/assert.h"
-#include "debug/waypoint.h"
+#include "api/debug/assert.h"
+#include "api/debug/waypoint.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
 constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
@@ -242,8 +241,8 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
         ASSERT(curr_collected + count <= ctx.write_out_count);
     }
 
-    auto stack_ptr = ctx.stack_ptr;
-    auto cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_cb_addr);
+    auto* stack_ptr = ctx.stack_ptr;
+    auto* cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_cb_addr);
 
     for (uint32_t idx = 0; idx < count; idx++) {
         uint32_t write_index = curr_collected + idx;
@@ -281,8 +280,8 @@ void write_to_output(AccessorType& output_accessor, OutputContext& output_ctx) {
         // When keepdim is true, argmax values are accumulated in an on-stack buffer.
         // Otherwise, argmax values are accumulated directly in the outut CB.
         if constexpr (keepdim) {
-            auto stack_ptr = output_ctx.stack_ptr;
-            auto dst_cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
+            auto* stack_ptr = output_ctx.stack_ptr;
+            auto* dst_cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
             // Copy one page of output data into the output CB.
             for (uint32_t idx = 0; idx < output_page_elements; idx++) {
                 dst_cb_ptr[idx] = stack_ptr[sent_count + idx];

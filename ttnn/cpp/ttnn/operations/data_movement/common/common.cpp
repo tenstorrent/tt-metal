@@ -10,9 +10,7 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace data_movement {
+namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
@@ -29,8 +27,7 @@ ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 4); }
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 3); }
 
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
+ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
     auto shape = tensor.logical_shape();
     auto rank = shape.rank();
     TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
@@ -49,9 +46,16 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
         if (rank <= 4) {
             return squeezed;
         }
-        return ttnn::reshape(squeezed, squeeze_shape_to_4D(shape));
+        return ttnn::reshape(
+            squeezed,
+            squeeze_shape_to_4D(shape),
+            std::nullopt,
+            std::nullopt,
+            TileReshapeMapMode::CACHE,
+            sub_core_grids);
     }
-    return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
+    return ttnn::reshape(
+        tensor, squeeze_shape_to_4D(shape), std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
 }
 
 ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
@@ -60,20 +64,18 @@ ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     return ttnn::Shape(shape_vector);
 }
 
-
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape) { return unsqueeze_shape_to_ND(shape, 3); };
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape) { return unsqueeze_shape_to_ND(shape, 4); };
-
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     const auto input_rank = shape.rank();
     if (input_rank == n) {
         return shape;
-    } else if (input_rank < n) {
-        return unsqueeze_shape_to_ND(shape, n);
-    } else {
-        return squeeze_shape_to_ND(shape, n);
     }
+    if (input_rank < n) {
+        return unsqueeze_shape_to_ND(shape, n);
+    }
+    return squeeze_shape_to_ND(shape, n);
 }
 
 enum DatumIndex { WormholeIndex = 0, BlackholeIndex = 1 };
@@ -101,9 +103,8 @@ float get_transaction_noc_bw(
 
     if (transaction_size - lower_pow2 < upper_pow2 - transaction_size) {
         return lower_bw;
-    } else {
-        return upper_bw;
     }
+    return upper_bw;
 }
 
 uint32_t get_effective_l1_cores(
@@ -473,7 +474,7 @@ uint32_t get_estimated_size_of_cbs(
 }
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
     max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -575,12 +576,35 @@ ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_
     return ttnn::Shape(output_shape_vec);
 }
 
-std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
-                                                          const tt::tt_metal::Layout& layout,
-                                                          const tt::tt_metal::CoreCoord& grid_size,
-                                                          const tt::tt_metal::ShardOrientation& orientation,
-                                                          const uint32_t total_num_cores) {
-    TT_FATAL(grid_size.y * grid_size.x == total_num_cores, "compute_block_sharded_shard_shape received a core grid shape that does not match the total number of cores");
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
+    using namespace tt::constants;
+    auto rank = unpadded_shape.rank();
+    TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
+    SmallVector<uint32_t> padded_shape_vec(rank);
+
+    for (auto i = 0; i < rank; ++i) {
+        padded_shape_vec[i] = unpadded_shape[i];
+    }
+    if (rank >= 1) {
+        auto w = tt::round_up(unpadded_shape[rank - 1], TILE_WIDTH);
+        padded_shape_vec[rank - 1] = w;
+    }
+    if (rank >= 2) {
+        auto h = tt::round_up(unpadded_shape[rank - 2], TILE_HEIGHT);
+        padded_shape_vec[rank - 2] = h;
+    }
+    return Shape(padded_shape_vec);
+}
+
+std::array<uint32_t, 2> compute_block_sharded_shard_shape(
+    const std::array<uint32_t, 2>& squeezed_tensor_hw,
+    const tt::tt_metal::Layout& layout,
+    const tt::tt_metal::CoreCoord& grid_size,
+    const tt::tt_metal::ShardOrientation& orientation,
+    const uint32_t total_num_cores) {
+    TT_FATAL(
+        grid_size.y * grid_size.x == total_num_cores,
+        "compute_block_sharded_shard_shape received a core grid shape that does not match the total number of cores");
     auto adjusted_grid_size = grid_size;
     if (orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
         // for col major, we partition the width of the tensor along the height of the core grid
@@ -592,24 +616,24 @@ std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint3
         layout == tt::tt_metal::Layout::TILE
             ? tt::round_up(tensor_height, adjusted_grid_size.y * tt::constants::TILE_HEIGHT)
             : tensor_height;
-    std::array<uint32_t, 2> shard_shape = {tt::div_up(tensor_height_padded_to_tile, adjusted_grid_size.y),
-                                           tt::div_up(tensor_width, adjusted_grid_size.x)};
+    std::array<uint32_t, 2> shard_shape = {
+        tt::div_up(tensor_height_padded_to_tile, adjusted_grid_size.y), tt::div_up(tensor_width, adjusted_grid_size.x)};
 
     return shard_shape;
 }
 
-std::array<uint32_t, 2> compute_width_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
-                                                          const uint32_t total_num_cores) {
+std::array<uint32_t, 2> compute_width_sharded_shard_shape(
+    const std::array<uint32_t, 2>& squeezed_tensor_hw, const uint32_t total_num_cores) {
     return {squeezed_tensor_hw[0], tt::div_up(squeezed_tensor_hw[1], total_num_cores)};
 }
 
-std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
-                                                           const tt::tt_metal::Layout& layout,
-                                                           const uint32_t total_num_cores) {
+std::array<uint32_t, 2> compute_height_sharded_shard_shape(
+    const std::array<uint32_t, 2>& squeezed_tensor_hw,
+    const tt::tt_metal::Layout& layout,
+    const uint32_t total_num_cores) {
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
-    auto squeezed_height_padded_to_tile = layout == tt::tt_metal::Layout::TILE
-                                                    ? tt::round_up(tensor_height, total_num_cores)
-                                                    : tensor_height;
+    auto squeezed_height_padded_to_tile =
+        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores) : tensor_height;
     return {tt::div_up(squeezed_height_padded_to_tile, total_num_cores), tensor_width};
 }
 
@@ -652,7 +676,8 @@ ttnn::MemoryConfig create_sharded_memory_config(
 
         switch (strategy) {
             case ShardStrategy::BLOCK:
-                computed_shard_shape = compute_block_sharded_shard_shape(squeezed_tensor_hw, layout, grid_size, orientation, total_num_cores);
+                computed_shard_shape = compute_block_sharded_shard_shape(
+                    squeezed_tensor_hw, layout, grid_size, orientation, total_num_cores);
                 break;
             case ShardStrategy::WIDTH:
                 computed_shard_shape = compute_width_sharded_shard_shape(squeezed_tensor_hw, total_num_cores);
@@ -660,8 +685,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
             case ShardStrategy::HEIGHT:
                 computed_shard_shape = compute_height_sharded_shard_shape(squeezed_tensor_hw, layout, total_num_cores);
                 break;
-            default:
-                TT_ASSERT(false, "Invalid shard strategy");
+            default: TT_ASSERT(false, "Invalid shard strategy");
         }
     }
 
@@ -669,11 +693,15 @@ ttnn::MemoryConfig create_sharded_memory_config(
         auto [shard_height, shard_width] = computed_shard_shape;
         auto tile_divides_shard_height = shard_height % tt::constants::TILE_HEIGHT == 0;
         auto tile_divides_shard_width = shard_width % tt::constants::TILE_WIDTH == 0;
-        TT_FATAL(tile_divides_shard_width && tile_divides_shard_height,
-                 "For sharding tiled tensors, the shard shape must fit neatly into tiles but "
-                 "create_sharded_memory_config got shard width {} and shard height {} while "
-                 "on this architecture we have tile width {} and tile height {}",
-                 computed_shard_shape[0], computed_shard_shape[1], tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            tile_divides_shard_width && tile_divides_shard_height,
+            "For sharding tiled tensors, the shard shape must fit neatly into tiles but "
+            "create_sharded_memory_config got shard width {} and shard height {} while "
+            "on this architecture we have tile width {} and tile height {}",
+            computed_shard_shape[0],
+            computed_shard_shape[1],
+            tt::constants::TILE_WIDTH,
+            tt::constants::TILE_HEIGHT);
     }
 
     auto shard_spec = tt::tt_metal::ShardSpec(core_grid, computed_shard_shape, orientation);
@@ -722,12 +750,9 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
         return tt::div_up(tensor.padded_shape().volume(), tensor.padded_shape()[-1]);
-    } else {
-        const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
-        return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
     }
+    const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
 }
 
-}  // namespace data_movement
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::data_movement

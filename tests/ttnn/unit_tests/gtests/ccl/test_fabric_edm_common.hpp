@@ -18,7 +18,6 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "tt_metal/fabric/ccl/ccl_common.hpp"
-#include "tt_metal/fabric/erisc_datamover_builder_helper.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
@@ -77,16 +76,16 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
-        } else if (num_devices_ == 4) {
-            return MeshShape{1, 4};
-        } else {
-            return MeshShape{2, 4};
         }
+        if (num_devices_ == 4) {
+            return MeshShape{1, 4};
+        }
+        return MeshShape{2, 4};
     }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
@@ -113,13 +112,12 @@ protected:
     }
 
 public:
-    BaseFabricFixture() : device_open(false) {}
+    BaseFabricFixture() = default;
 
     BaseFabricFixture(
         tt::tt_fabric::FabricConfig fabric_config,
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
-        device_open(false) {
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
     }
 
@@ -146,7 +144,7 @@ public:
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }
@@ -176,13 +174,12 @@ public:
         }
     }
 
-    Fabric1DDeviceInitFixture() : device_open(false) { this->SetupDevices(); }
+    Fabric1DDeviceInitFixture() { this->SetupDevices(); }
 
     Fabric1DDeviceInitFixture(
         tt::tt_fabric::FabricConfig fabric_config,
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
-        device_open(false) {
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }

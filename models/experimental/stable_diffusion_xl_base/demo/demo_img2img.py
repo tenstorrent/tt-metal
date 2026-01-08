@@ -4,19 +4,20 @@
 
 
 import pytest
-import ttnn
 import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline
 from PIL import Image
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTextModel
+from transformers import CLIPTextModelWithProjection
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
-    CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
+    determinate_min_batch_size,
+    prepare_device,
 )
 import os
 from models.common.utility_functions import profiler
@@ -51,7 +52,7 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
+    batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
 
@@ -78,14 +79,13 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
     ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 
-    assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
     ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
@@ -122,7 +122,9 @@ def run_demo_inference(
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         torch_image=torch.randn(batch_size, 3, 1024, 1024),
-        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        all_prompt_embeds_torch=torch.randn(
+            batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
+        ),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
         timesteps=timesteps,
         sigmas=sigmas,
@@ -143,7 +145,6 @@ def run_demo_inference(
     out_images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
-        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
@@ -164,6 +165,7 @@ def run_demo_inference(
             else negative_prompt_2
         )
 
+        profiler.start("end_to_end_generation")
         (
             all_prompt_embeds_torch,
             torch_add_text_embeds,
@@ -189,10 +191,14 @@ def run_demo_inference(
 
         imgs = tt_sdxl.generate_images()
 
+        profiler.end("end_to_end_generation")
+
         logger.info(
             f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
         )
-        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
+        logger.info(
+            f"Image gen for {batch_size} prompts completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
+        )
         logger.info(
             f"Denoising loop for {batch_size} prompts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
@@ -200,8 +206,6 @@ def run_demo_inference(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
-
-        profiler.end("end_to_end_generation")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
@@ -216,12 +220,6 @@ def run_demo_inference(
                 logger.info(f"Image saved to output/output{len(out_images) + start_from}_tt_img2img.png")
 
     return out_images
-
-
-def prepare_device(mesh_device, use_cfg_parallel):
-    if use_cfg_parallel:
-        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
-        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
@@ -262,11 +260,11 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
-    ((7.5),),
+    ((5.0),),
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -294,7 +292,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "strength",
-    ((0.6),),
+    ((0.3),),
 )
 @pytest.mark.parametrize(
     "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",

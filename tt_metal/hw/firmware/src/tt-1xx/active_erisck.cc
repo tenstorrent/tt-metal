@@ -4,21 +4,21 @@
 
 #include "eth_l1_address_map.h"
 #include "noc_parameters.h"
-#include "ethernet/dataflow_api.h"
+#include "internal/ethernet/dataflow_api.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 #include "tensix.h"
 #include "tensix_types.h"
-#include "tt_eth_api.h"
+#include "internal/ethernet/tt_eth_api.h"
 #include "c_tensix_core.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
-#include "debug/dprint.h"
-#include "debug/stack_usage.h"
-#include "dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "internal/debug/stack_usage.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #include <stdint.h>
@@ -31,7 +31,9 @@ void _start() {
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
-    noc_local_state_init(NOC_INDEX);
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        noc_local_state_init(NOC_INDEX);
+    }
 
     {
         DeviceZoneScopedMainChildN("ERISC-KERNEL");

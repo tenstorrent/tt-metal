@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {

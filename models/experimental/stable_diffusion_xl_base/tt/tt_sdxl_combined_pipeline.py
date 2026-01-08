@@ -19,6 +19,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
 )
 
 
@@ -279,7 +280,9 @@ class TtSDXLCombinedPipeline:
         if self.config.use_refiner:
             logger.info("Allocating device tensors for refiner pipeline...")
             dummy_latents = torch.randn(self.batch_size, 4, 128, 128)
-            refiner_dummy_embeds = torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, 1280)
+            refiner_dummy_embeds = torch.randn(
+                self.batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
+            )
 
             _, _, _ = self.refiner_pipeline.generate_input_tensors(
                 all_prompt_embeds_torch=refiner_dummy_embeds,
@@ -367,7 +370,9 @@ class TtSDXLCombinedPipeline:
         if denoising_split is not None and denoising_split != self.config.denoising_split:
             self.set_denoising_split(denoising_split)
 
+        profiler.start("auto_compile_if_needed")
         self._auto_compile_if_needed()
+        profiler.end("auto_compile_if_needed")
 
         profiler.start("combined_generation")
 
@@ -432,7 +437,9 @@ class TtSDXLCombinedPipeline:
                 refiner_prompt_embeds,
                 refiner_add_text_embeds,
             ) = self.refiner_pipeline.generate_input_tensors(
-                all_prompt_embeds_torch=torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, 1280),
+                all_prompt_embeds_torch=torch.randn(
+                    1, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
+                ).repeat(self.batch_size, 1, 1, 1),
                 torch_add_text_embeds=torch_add_text_embeds,
                 torch_image=base_latents,
                 fixed_seed_for_batch=True,

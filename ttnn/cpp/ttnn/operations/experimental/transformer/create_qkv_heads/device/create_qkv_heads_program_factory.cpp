@@ -226,10 +226,10 @@ void CreateQKVHeadsProgramFactory::override_runtime_arguments(
     auto& cb_out1_id = cached_program.shared_variables.cb_out1_id;
     auto& cb_out2_id = cached_program.shared_variables.cb_out2_id;
 
-    auto in0_buffer = input_tensor.buffer();
-    auto out0_buffer = output_q.buffer();
-    auto out1_buffer = output_k.buffer();
-    auto out2_buffer = output_v.buffer();
+    auto* in0_buffer = input_tensor.buffer();
+    auto* out0_buffer = output_q.buffer();
+    auto* out1_buffer = output_k.buffer();
+    auto* out2_buffer = output_v.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_out0_id, *out0_buffer);

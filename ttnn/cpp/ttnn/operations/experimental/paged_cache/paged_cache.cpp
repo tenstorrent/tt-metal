@@ -10,8 +10,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
 
-namespace ttnn {
-namespace operations::experimental::paged_cache {
+namespace ttnn::operations::experimental::paged_cache {
 
 ttnn::Tensor PagedUpdateCacheOperation::invoke(
     const Tensor& cache_tensor,
@@ -76,6 +75,4 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
         cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx_fallback, mesh_coords);
 }
 
-}  // namespace operations::experimental::paged_cache
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::paged_cache

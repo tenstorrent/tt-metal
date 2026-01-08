@@ -125,8 +125,8 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
             .set_page_size(src1_cb_index, input1_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    auto src1_buffer = b->buffer();
-    auto dst_buffer = output.buffer();
+    auto* src1_buffer = b->buffer();
+    auto* dst_buffer = output.buffer();
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
@@ -228,8 +228,8 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
 
     auto& program = cached_program.program;
 
-    auto src_buffer = input_tensor_a.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor_a.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
     auto a = input_tensor_a;
@@ -242,10 +242,8 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
     uint32_t N = ashape[0], C = ashape[1];
     uint32_t bN = input_tensor_b->padded_shape()[0];
     uint32_t NC = N * C;
-    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else {

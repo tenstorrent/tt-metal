@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-#include "dataflow_api.h"
+#include "api/debug/dprint.h"  // required in all kernels using DPRINT
+#include "api/dataflow/dataflow_api.h"
 
 // Helper function to copy a tile from one CB to another CB (eg. input CB to output CB) via L1.
 inline void copy_tile_between_cb(uint32_t src_addr, uint32_t dst_addr, uint32_t bytes) {

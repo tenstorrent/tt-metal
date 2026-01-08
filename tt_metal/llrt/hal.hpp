@@ -27,7 +27,8 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"  // IWYU pragma: export
+#include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
+#include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -35,9 +36,7 @@
 
 enum class AddressableCoreType : uint8_t;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.
 struct HalProcessorIdentifier {
@@ -49,6 +48,10 @@ struct HalProcessorIdentifier {
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
+
+enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 // A set of processors distinguishing programmable core type and index within that core type.
 // See get_processor_index and get_processor_class_and_type_from_index.
@@ -79,7 +82,7 @@ public:
 };
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
-static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 8;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -151,6 +154,7 @@ private:
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
+    tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
 
 public:
     HalCoreInfoType(
@@ -163,7 +167,8 @@ public:
         std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
-        dev_msgs::Factory dev_msgs_factory) :
+        dev_msgs::Factory dev_msgs_factory,
+        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -173,7 +178,8 @@ public:
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
         supports_cbs_(supports_cbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
-        dev_msgs_factory_(dev_msgs_factory) {}
+        dev_msgs_factory_(dev_msgs_factory),
+        fabric_telemetry_factory_(fabric_telemetry_factory) {}
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
@@ -184,6 +190,7 @@ public:
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
     const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
+    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
@@ -216,6 +223,10 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
 
 inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
 
+inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
+    return this->fabric_telemetry_factory_;
+}
+
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
 // These are generated on demand instead of stored in HalJitBuildConfig,
 // as the options may vary based on fw build or kernel build.
@@ -242,6 +253,10 @@ public:
     virtual std::string common_flags(const Params& params) const = 0;
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
+    // Returns a string of linker flags to be added to linker command line.
+    virtual std::string linker_flags(const Params& params) const = 0;
+    // Returns true if firmware should be linked into the kernel as an object.
+    virtual bool firmware_is_kernel_object(const Params& params) const = 0;
     // Returns the target name for the build.
     // Note: this is added only to keep the target names consistent with the previous
     // implementation of build, to avoid breaking users / tools.
@@ -305,9 +320,9 @@ private:
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_wh(bool is_base_routing_fw_enabled);
-    void initialize_bh(bool enable_2_erisc_mode);
-    void initialize_qa();
+    void initialize_wh(bool is_base_routing_fw_enabled, uint32_t profiler_dram_bank_size_per_risc_bytes);
+    void initialize_bh(bool enable_2_erisc_mode, uint32_t profiler_dram_bank_size_per_risc_bytes);
+    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -330,7 +345,10 @@ private:
     VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
-    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled, bool enable_2_erisc_mode);
+    Hal(tt::ARCH arch,
+        bool is_base_routing_fw_enabled,
+        bool enable_2_erisc_mode,
+        uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -418,6 +436,7 @@ public:
     uint32_t get_alignment(HalMemType memory_type) const;
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
+    uint32_t get_dma_alignment() const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -470,6 +489,13 @@ public:
         auto index = get_programmable_core_type_index(programmable_core_type);
         TT_ASSERT(index < this->core_info_.size());
         return this->core_info_[index].get_dev_msgs_factory();
+    }
+
+    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory(
+        HalProgrammableCoreType programmable_core_type) const {
+        TT_ASSERT(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH);
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        return this->core_info_[index].get_fabric_telemetry_factory();
     }
 
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
@@ -584,6 +610,14 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
     return this->mem_write_alignments_[index];
 }
 
+inline uint32_t Hal::get_dma_alignment() const {
+    switch (arch_) {
+        case tt::ARCH::WORMHOLE_B0: return 4;
+        // Only Wormhole B0 devices support DMA transfers today.
+        default: return 1;
+    }
+}
+
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
     uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
@@ -689,8 +723,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
     }
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {

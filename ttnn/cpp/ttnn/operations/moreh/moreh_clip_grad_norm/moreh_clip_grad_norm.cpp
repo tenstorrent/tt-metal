@@ -41,7 +41,7 @@ Tensor MorehClipGradNorm::invoke(
             "`error_if_nonfinite=False`",
             norm_type);
     }
-    auto device = inputs.at(0).device();
+    auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
@@ -51,11 +51,13 @@ Tensor MorehClipGradNorm::invoke(
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
-        inputs.at(0).dtype(),
-        Layout::TILE,
-        device,
-        memory_config.value_or(inputs.at(0).memory_config()));
+        ttnn::TensorSpec(
+            Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
+            tt::tt_metal::TensorLayout(
+                inputs.at(0).dtype(),
+                tt::tt_metal::PageConfig(Layout::TILE),
+                memory_config.value_or(inputs.at(0).memory_config()))),
+        device);
 
     // Run Step 1
     // Sum[|e|^p]

@@ -10,6 +10,43 @@ Automatically extracts real-world operation configurations from model tests and 
 - ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
+### Currently Traced Models
+
+The following models have been traced and their configurations are available in `ttnn_operations_master.json`:
+
+**N300 Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| meta-llama/Llama-3.2-11B-Vision-Instruct | Vision-language model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| meta-llama/Llama-3.2-11B-Vision | Vision model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| meta-llama/Llama-3.2-1B-Instruct | Small instruction-tuned model | `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-7B-Instruct | Code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| deepseek-ai/deepseek-llm-7b-chat | Chat model | `HF_MODEL=deepseek-ai/deepseek-llm-7b-chat python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| ilsp/Llama-Krikri-8B-Instruct | Instruction-tuned model | `HF_MODEL=ilsp/Llama-Krikri-8B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| microsoft/Phi-3-mini-128k-instruct | Small instruction model | `HF_MODEL=microsoft/Phi-3-mini-128k-instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| mistralai/Mistral-7B-Instruct-v0.3 | Instruction-tuned model | `HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
+| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/vit/demo/demo_vit_performant_imagenet_inference.py` |
+| ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
+| stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
+| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/whisper/demo/demo.py` |
+| gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/gemma3/demo/text_demo.py` |
+| falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/falcon7b/demo_wormhole.py` |
+| sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/sentence_bert/demo/demo.py` |
+| segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/segmentation_evaluation/test_segmentation_eval.py` |
+
+**T3K Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|---------------------------------|
+| deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+
+These traced configurations provide real-world operation patterns from production models, ensuring sweep tests validate against actual usage scenarios.
+
+*Last updated: January 2, 2026*
+
 ---
 
 ## Quick Reference
@@ -20,7 +57,7 @@ Automatically extracts real-world operation configurations from model tests and 
 |------|---------|
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
 | **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
-| **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file` |
+| **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name>` |
 | **Run single sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite-name model_traced --vector-source file --file-path <vector_file> --result-dest results_export` |
 
 ### Key Files
@@ -64,16 +101,30 @@ parameters = {
 
 ### 1. Trace a Model
 
+The tracer automatically detects whether to run as pytest or standalone Python script:
+
 ```bash
-# Basic usage
+# Pytest test (with ::test_name or if pytest test cases detected)
 python model_tracer/generic_ops_tracer.py /path/to/model/test.py::test_function
 
-# Example
+# Standalone Python script (if no pytest test cases detected)
+python model_tracer/generic_ops_tracer.py /path/to/model/demo.py
+
+# Examples - Pytest
 python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
+
+# Examples - Standalone scripts
+python model_tracer/generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
+python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inference.py
 
 # Keep trace files (default: auto-deleted after adding to master)
 python model_tracer/generic_ops_tracer.py <test_path> --store
 ```
+
+**Detection Logic:**
+- If path contains `::` → runs as pytest
+- Otherwise, uses `pytest --collect-only` to detect test cases
+- If no pytest tests found → runs as standalone Python script
 
 **Captures:**
 - Operation names (e.g., `sigmoid_accurate`, `add`)
@@ -81,6 +132,7 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 - Data types (e.g., `BFLOAT8_B`, `BFLOAT16`)
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
+- Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`
@@ -115,8 +167,7 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name model_traced.pad_model_traced \
-  --dump-file
+  --module-name model_traced.pad_model_traced
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
