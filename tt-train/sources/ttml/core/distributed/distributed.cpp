@@ -29,7 +29,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     return result;
 }
 
-void synchronize_parameters(const serialization::NamedParameters& parameters) {
+void synchronize_gradients(const serialization::NamedParameters& parameters) {
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
             tensor->set_grad(synchronize_tensor(tensor->get_grad()));
