@@ -252,7 +252,7 @@ if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "lib")
     # (libraries will just be split between lib and lib64 in that case)
     execute_process(
         COMMAND
-            ${CMAKE_COMMAND} -E create_symlink lib ${CMAKE_BINARY_DIR}/lib64
+            ${CMAKE_COMMAND} -E create_symlink lib lib64
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         RESULT_VARIABLE symlink_result
         ERROR_QUIET
