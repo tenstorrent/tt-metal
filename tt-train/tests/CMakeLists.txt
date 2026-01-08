@@ -7,12 +7,16 @@ set(SOURCES
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
     core/random_tests.cpp
+    core/tile_layout_round_trip_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
     model/gpt2s_test.cpp
     model/linear_regression_full_test.cpp
     model/weight_tying_test.cpp
+    model/bert_polymorphism_test.cpp
+    model/bert_weight_loading_test.cpp
+    model/bert_operator_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
@@ -43,6 +47,7 @@ set(SOURCES
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
     ops/layer_norm_composite_test.cpp
+    modules/layer_norm_epsilon_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -57,6 +62,10 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/slice_repeat_ops_test.cpp
+    ops/binary_ops_test.cpp
+    ops/scaled_dot_product_attention_test.cpp
+    ops/gelu_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
