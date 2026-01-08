@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"  //TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -149,43 +149,36 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    tt::tt_metal::operation::ProgramWithCallbacks
-        program_with_callbacks =  // TODO: migrate to not use the old program_with_callbacks in all_gather_async old
-                                  // program factories
-        ttnn::all_gather_async_minimal_default_helper(
-            matmul_program_with_callbacks->program,
-            input_tensor,
-            target_device_coord,
-            forward_coord,
-            backward_coord,
-            all_gather_output_tensor,
-            dim,
-            num_links,
-            ring_size,
-            ring_index,
-            topology,
-            semaphore,
-            barrier_semaphore,
-            using_persistent_buffers,
-            sub_device_id,
-            all_gather_fused_op_signaler,
-            chunks_per_sync,
-            num_workers_per_direction_opt,
-            num_buffers_per_channel,
-            core_grid_offset,
-            false);  // reverse_order = false by default
-    const auto all_gather_override_runtime_arguments_callback =
-        program_with_callbacks.override_runtime_arguments_callback;  // TODO: migrate to not use the old
-                                                                     // override_runtime_arguments_callback in
-                                                                     // all_gather_async old program factories
+    auto all_gather_async_shared_variables = ttnn::build_all_gather_async_minimal_default_program_artifacts(
+        matmul_program_with_callbacks->program,
+        input_tensor,
+        target_device_coord,
+        forward_coord,
+        backward_coord,
+        all_gather_output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        all_gather_fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        false,  // reverse_order = false by default
+        std::nullopt);
 
     return cached_program_t(
-        {std::move(program_with_callbacks.program),
+        {std::move(matmul_program_with_callbacks->program),
          shared_variables_t{
-             .all_gather_override_runtime_arguments_callback =
-                 all_gather_override_runtime_arguments_callback,  // TODO: migrate to not use the old
-                                                                  // override_runtime_arguments_callback in matmul and
-                                                                  // all_gather_async old program factories
+             .all_gather_async_shared_variables = all_gather_async_shared_variables,
+             // TODO: migrate to not use the old
+             // override_runtime_arguments_callback in matmul program factories
              .matmul_override_runtime_arguments_callback = matmul_override_runtime_arguments_callback}});
 }
 
@@ -204,21 +197,21 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
         IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : tensor_args.input_tensor.device();
 
         uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-            tensor_args.input_tensor, mesh_coord, operation_attributes.all_gather_async.cluster_axis);
+            tensor_args.input_tensor, mesh_coord, operation_attributes.all_gather_async_attributes.cluster_axis);
 
         std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor,
             mesh_coord,
             1,
-            operation_attributes.all_gather_async.topology,
-            operation_attributes.all_gather_async.cluster_axis);
+            operation_attributes.all_gather_async_attributes.topology,
+            operation_attributes.all_gather_async_attributes.cluster_axis);
 
         std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor,
             mesh_coord,
             -1,
-            operation_attributes.all_gather_async.topology,
-            operation_attributes.all_gather_async.cluster_axis);
+            operation_attributes.all_gather_async_attributes.topology,
+            operation_attributes.all_gather_async_attributes.cluster_axis);
 
         auto cached_program = create_at(
             tensor_args.input_tensor,
@@ -230,18 +223,18 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
             mesh_coord,
             forward_coord,
             backward_coord,
-            operation_attributes.all_gather_async.dim,
-            operation_attributes.all_gather_async.num_links,
-            operation_attributes.all_gather_async.ring_size,
+            operation_attributes.all_gather_async_attributes.dim,
+            operation_attributes.all_gather_async_attributes.num_links,
+            operation_attributes.all_gather_async_attributes.ring_size,
             device_index,
-            operation_attributes.all_gather_async.topology,
-            operation_attributes.all_gather_async.semaphore,
-            operation_attributes.all_gather_async.barrier_semaphore,
-            operation_attributes.all_gather_async.using_persistent_buffers,
-            operation_attributes.all_gather_async.sub_device_id,
-            operation_attributes.all_gather_async.chunks_per_sync,
-            operation_attributes.all_gather_async.num_workers_per_link,
-            operation_attributes.all_gather_async.num_buffers_per_channel,
+            operation_attributes.all_gather_async_attributes.topology,
+            operation_attributes.all_gather_async_attributes.semaphore,
+            operation_attributes.all_gather_async_attributes.barrier_semaphore,
+            operation_attributes.all_gather_async_attributes.using_persistent_buffers,
+            operation_attributes.all_gather_async_attributes.sub_device_id,
+            operation_attributes.all_gather_async_attributes.chunks_per_sync,
+            operation_attributes.all_gather_async_attributes.num_workers_per_link,
+            operation_attributes.all_gather_async_attributes.num_buffers_per_channel,
             operation_attributes.all_gather_core_grid_offset,
 
             tensor_args.bias,
@@ -278,17 +271,22 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                 );
         }
 
-        if (shared_vars.all_gather_override_runtime_arguments_callback.has_value()) {
-            shared_vars.all_gather_override_runtime_arguments_callback
-                .value()(  // TODO: migrate to not use the old override_runtime_arguments_callback in all_gather_async
-                           // old program factories
-                    &operation_attributes,
-                    program,
-                    {tensor_args.input_tensor}, /* input tensor */
-                    {tensor_args.bias},
-                    {tensor_return_value[0]} /* all gather output tensor */
-                );
-        }
+        auto& all_gather_async_shared_variables = shared_vars.all_gather_async_shared_variables;
+        const auto& all_gather_async_attributes = operation_attributes.all_gather_async_attributes;
+        all_gather_async_minimal_default_helper_override_runtime_arguments(
+            program,
+            all_gather_async_shared_variables.reader_kernel_id,
+            all_gather_async_shared_variables.writer_kernel_id,
+            all_gather_async_shared_variables.all_cores,
+            all_gather_async_attributes.num_links,
+            all_gather_async_shared_variables.num_directions_per_link,
+            all_gather_async_shared_variables.num_workers_per_direction,
+            all_gather_async_shared_variables.num_mux_cores_per_direction_per_link,
+            all_gather_async_shared_variables.num_cores_per_link,
+            all_gather_async_attributes.barrier_semaphore,
+            all_gather_async_attributes.semaphore,
+            tensor_args.input_tensor,
+            tensor_return_value[0]);
     }
 }
 
