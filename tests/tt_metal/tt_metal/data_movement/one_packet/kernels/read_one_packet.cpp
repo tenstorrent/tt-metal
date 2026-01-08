@@ -11,6 +11,7 @@ void kernel_main() {
     constexpr uint32_t num_packets = get_compile_time_arg_val(0);
     constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t test_id = get_compile_time_arg_val(2);
+    constexpr uint32_t same_axis = get_compile_time_arg_val(3);
 
     uint32_t master_l1_addr = get_arg_val<uint32_t>(0);
     uint32_t subordinate_l1_addr = get_arg_val<uint32_t>(1);
@@ -20,7 +21,7 @@ void kernel_main() {
     DeviceTimestampedData("Number of transactions", num_packets);
     DeviceTimestampedData("Transaction size in bytes", packet_size_bytes);
     DeviceTimestampedData("Test id", test_id);
-
+    DeviceTimestampedData("Same axis", same_axis);
     {
         DeviceZoneScopedN("RISCV1");
         uint64_t src_noc_addr = get_noc_addr(responder_x_coord, responder_y_coord, subordinate_l1_addr);
