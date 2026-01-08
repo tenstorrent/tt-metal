@@ -547,9 +547,8 @@ HostId resolve_path_from_proto(
 
         if (child_mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
             return HostId(child_mapping.host_id());
-        } else {
-            throw std::runtime_error("Node " + node_name + " is not a leaf node");
         }
+        throw std::runtime_error("Node " + node_name + " is not a leaf node");
     } else {
         // Multi-level path - descend into subgraph
         const std::string& subgraph_name = path[index];
@@ -1364,7 +1363,9 @@ bool CablingGenerator::operator==(const CablingGenerator& other) const {
         // Both null - equal
     } else if (!root_instance_ || !other.root_instance_) {
         return false;
-    } else if (!compare_resolved_graph_instances(*root_instance_, *other.root_instance_)) {
+    }
+    if (root_instance_ && other.root_instance_ &&
+        !compare_resolved_graph_instances(*root_instance_, *other.root_instance_)) {
         return false;
     }
 
