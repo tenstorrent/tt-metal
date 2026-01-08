@@ -38,6 +38,9 @@ tt_stl/**/CMakeLists.txt @ayerofieiev-tt @tenstorrent/metalium-developers-infra 
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tenstorrent/codeowner-bypass
 
+# Scaleout
+tests/scale_out/test_ccl_fabric_manager.py @cfjchu @aliuTT @tenstorrent/codeowner-bypass
+
 # metal runtime
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass # nothing should be caught by this, if so, someone added a path somewhere
