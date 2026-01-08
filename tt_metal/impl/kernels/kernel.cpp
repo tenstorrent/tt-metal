@@ -398,18 +398,16 @@ std::vector<uint32_t>& Kernel::get_watcher_runtime_args(const CoreCoord& logical
         return core_to_runtime_args_[logical_core.x][logical_core.y];
     }
 
-    // Build [count|args] on first access
-    if (runtime_args_watcher_.empty()) {
-        runtime_args_watcher_.reserve(1 + core_to_runtime_args_[logical_core.x][logical_core.y].size());
-        runtime_args_watcher_.push_back(
-            static_cast<uint32_t>(core_to_runtime_args_[logical_core.x][logical_core.y].size()));
-        runtime_args_watcher_.insert(
-            runtime_args_watcher_.end(),
-            core_to_runtime_args_[logical_core.x][logical_core.y].begin(),
-            core_to_runtime_args_[logical_core.x][logical_core.y].end());
+    // Build [count|args] on first access for this specific core
+    auto& watcher_args = runtime_args_watcher_[logical_core];
+    if (watcher_args.empty()) {
+        const auto& core_args = core_to_runtime_args_[logical_core.x][logical_core.y];
+        watcher_args.reserve(1 + core_args.size());
+        watcher_args.push_back(static_cast<uint32_t>(core_args.size()));
+        watcher_args.insert(watcher_args.end(), core_args.begin(), core_args.end());
     }
 
-    return runtime_args_watcher_;
+    return watcher_args;
 }
 
 RuntimeArgsData& Kernel::runtime_args_data(const CoreCoord& logical_core) {

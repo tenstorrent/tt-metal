@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef COMPILE_FOR_TRISC
-#include "api/dataflow/dataflow_api.h"
+// Kernel for testing watcher RTA/CRTA bounds checking:
+// 1. Writes rta_count, crta_count, and all arg values to L1 for validation
+// 2. If MAX_RTA_IDX/MAX_CRTA_IDX defined: accesses that index to test bounds checking
+// Supports both DM (BRISC/NCRISC) and compute (TRISC0) kernels
 
 extern uint32_t rta_count;
 extern uint32_t crta_count;
 
+#ifndef COMPILE_FOR_TRISC
+#include "api/dataflow/dataflow_api.h"
 void kernel_main() {
-#ifdef COMPILE_FOR_BRISC
     constexpr auto cb_in = tt::CBIndex::c_0;
-#else
-    constexpr auto cb_in = tt::CBIndex::c_1;
-#endif
     uint32_t l1_write_addr = get_write_ptr(cb_in);
     volatile uint32_t* ptr = reinterpret_cast<volatile uint32_t*>(l1_write_addr);
 
@@ -45,10 +45,6 @@ void kernel_main() {
 
 #else
 #include "compute_kernel_api/common.h"
-
-extern uint32_t rta_count;
-extern uint32_t crta_count;
-
 namespace NAMESPACE {
 void MAIN {
     // Pass the CB base address as a compile time arg
@@ -70,17 +66,17 @@ void MAIN {
             // rta_count + 2 as first two are counts + rta args
             ptr[i + rta_count + 2] = get_common_arg_val<uint32_t>(i);
         }
-    })
 
 #ifdef MAX_RTA_IDX
-    // Access RTA: this should have a watcher assert when MAX_RTA_IDX >= rta_count
-    uint32_t rta = get_arg_val<uint32_t>(MAX_RTA_IDX);
+        // Access RTA: this should have a watcher assert when MAX_RTA_IDX >= rta_count
+        uint32_t rta = get_arg_val<uint32_t>(MAX_RTA_IDX);
 #endif
 
 #ifdef MAX_CRTA_IDX
-    // Access CRTA: this should have a watcher assert when MAX_CRTA_IDX >= crta_count
-    uint32_t crta = get_common_arg_val<uint32_t>(MAX_CRTA_IDX);
+        // Access CRTA: this should have a watcher assert when MAX_CRTA_IDX >= crta_count
+        uint32_t crta = get_common_arg_val<uint32_t>(MAX_CRTA_IDX);
 #endif
+    })
 }
 }  // namespace NAMESPACE
 #endif
