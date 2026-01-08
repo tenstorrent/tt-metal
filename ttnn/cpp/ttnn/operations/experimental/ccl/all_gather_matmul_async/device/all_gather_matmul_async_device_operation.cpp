@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -38,8 +38,9 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& all_gather_output_tensor = tensor_args.persistent_output_buffer.value();
         // All Gather validate
-        operation_attributes.all_gather_async.validate_with_output_tensors(
-            {input_tensor}, {all_gather_output_tensor});  // TODO: migrate this code to use new all_gather_async API.
+        all_gather_async::AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
+            operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
+
         // Matmul validate
         operation_attributes.matmul.validate(
             {all_gather_output_tensor, weight_tensor},
@@ -48,7 +49,7 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     }
     // All Gather Matmul validate
     TT_FATAL(
-        operation_attributes.all_gather_async.dim == 3,
+        operation_attributes.all_gather_async_attributes.dim == 3,
         "AllGatherMatmulAsync requires dim=3 for the AllGather operations.");
     TT_FATAL(
         input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
@@ -75,7 +76,7 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
             const uint32_t num_all_gather_output_shards =
                 shard_builder::get_sharding_core_count(all_gather_output_tensor);
             TT_FATAL(
-                operation_attributes.all_gather_async.ring_size ==
+                operation_attributes.all_gather_async_attributes.ring_size ==
                     num_all_gather_output_shards,  // TODO: migrate this code to use new all_gather_async API.
                 "AllGatherMatmulAsync requires number of tensor slices to equal the number of output shards of the "
                 "all_gather.");
@@ -86,8 +87,8 @@ void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t AllGatherMatmulAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
-    auto all_gather_output_specs = operation_attributes.all_gather_async.compute_output_specs(
-        {tensor_args.input_tensor})[0];  // TODO: migrate this code to use new all_gather_async API.
+    auto all_gather_output_specs = all_gather_async::AllGatherAsyncDeviceOperation::compute_output_specs(
+        operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul shape
     auto matmul_output_specs = operation_attributes.matmul.compute_output_specs(
@@ -101,9 +102,8 @@ tensor_return_value_t AllGatherMatmulAsyncDeviceOperation::create_output_tensors
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     std::vector<std::optional<Tensor>> optional_output_tensors = {tensor_args.persistent_output_buffer};
     // All Gather output tensor
-    auto all_gather_output_tensor = operation_attributes.all_gather_async.create_output_tensors(
-        {tensor_args.input_tensor},
-        optional_output_tensors)[0];  // TODO: migrate this code to use new all_gather_async API.
+    auto all_gather_output_tensor = all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
+        operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
 
     // Matmul output tensor
     auto matmul_output_tensor = operation_attributes.matmul.create_output_tensors(
@@ -121,26 +121,24 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     auto input_dtype = input_tensor.dtype();
     auto input_memory_config = input_tensor.memory_config();
 
-    return tt::tt_metal::operation::hash_operation<
-        AllGatherMatmulAsyncDeviceOperation>(  // TODO: migrate this code to use new all_gather_async API. This code
-                                               // relies on the old all_gather_async struct
-        operation_attributes.all_gather_async.dim,
-        operation_attributes.all_gather_async.num_links,
-        operation_attributes.all_gather_async.ring_size,
-        operation_attributes.all_gather_async.output_mem_config,
-        operation_attributes.all_gather_async.topology,
-        operation_attributes.all_gather_async.sub_device_id.has_value(),
-        operation_attributes.all_gather_async.sub_device_id.has_value()
+    return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
+        operation_attributes.all_gather_async_attributes.dim,
+        operation_attributes.all_gather_async_attributes.num_links,
+        operation_attributes.all_gather_async_attributes.ring_size,
+        operation_attributes.all_gather_async_attributes.output_mem_config,
+        operation_attributes.all_gather_async_attributes.topology,
+        operation_attributes.all_gather_async_attributes.sub_device_id.has_value(),
+        operation_attributes.all_gather_async_attributes.sub_device_id.has_value()
             ? input_tensor.device()->worker_cores(
                   tt::tt_metal::HalProgrammableCoreType::TENSIX,
-                  operation_attributes.all_gather_async.sub_device_id.value())
+                  operation_attributes.all_gather_async_attributes.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        operation_attributes.all_gather_async.cluster_axis,
-        operation_attributes.all_gather_async.barrier_semaphore.has_value(),
-        operation_attributes.all_gather_async.using_persistent_buffers,
-        operation_attributes.all_gather_async.chunks_per_sync,
-        operation_attributes.all_gather_async.num_workers_per_link,
-        operation_attributes.all_gather_async.num_buffers_per_channel,
+        operation_attributes.all_gather_async_attributes.cluster_axis,
+        operation_attributes.all_gather_async_attributes.barrier_semaphore.has_value(),
+        operation_attributes.all_gather_async_attributes.using_persistent_buffers,
+        operation_attributes.all_gather_async_attributes.chunks_per_sync,
+        operation_attributes.all_gather_async_attributes.num_workers_per_link,
+        operation_attributes.all_gather_async_attributes.num_buffers_per_channel,
         operation_attributes.all_gather_core_grid_offset,
         input_shape,
         input_memory_layout,
@@ -180,30 +178,33 @@ all_gather_matmul_async(
     using OperationType =
         ttnn::operations::experimental::ccl::all_gather_matmul_async::AllGatherMatmulAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-    bool using_persistent_buffers = persistent_output_buffer.has_value();
 
     /* All Gather setup */
-    ttnn::AllGatherAsync all_gather_async_struct =
-        ttnn::AllGatherAsync(  // TODO: migrate this code to use new all_gather_async API. This code relies on the old
-                               // all_gather_async struct
+    const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
+        ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation::invoke(
+            input_tensor,
+            persistent_output_buffer,
             dim,
+            multi_device_global_semaphore,
             num_links,
-            devices.size(),
             memory_config_ag.value_or(input_tensor.memory_config()),
             topology,
-            multi_device_global_semaphore,
             sub_device_id,
             /*cluster_axis=*/std::nullopt,
-            false,
-            false,
+            /*use_optimal_ccl_for_llama=*/false,
+            /*use_all_gather_async_llama_sharded=*/false,
             barrier_semaphore,
-            using_persistent_buffers,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            /*reverse_order=*/false,
+            /*sub_core_grid=*/std::nullopt,
+            /*optional_mesh_device=*/nullptr);
+
     // Create the all gather output tensor used as input (activation) to the matmul
-    ttnn::Tensor all_gather_out_tensor = all_gather_async_struct.create_output_tensors(
-        {input_tensor}, {persistent_output_buffer})[0];  // TODO: migrate this code to use new all_gather_async API.
+    ttnn::Tensor all_gather_out_tensor =
+        ttnn::operations::experimental::ccl::all_gather_async::AllGatherAsyncDeviceOperation::create_output_tensors(
+            all_gather_async_operation_attributes, all_gather_async_tensor_args);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
@@ -235,7 +236,8 @@ all_gather_matmul_async(
 
     auto operation_attributes = OperationType::operation_attributes_t{
         /* All Gather Params */
-        all_gather_async_struct,
+        all_gather_async_operation_attributes,
+        all_gather_async_tensor_args,
         /* Matmul Params */
         matmul_struct,
         /* Fusion params */
