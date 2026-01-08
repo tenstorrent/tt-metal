@@ -35,7 +35,7 @@ tt::tt_fabric::FabricTelemetrySnapshot CachingFabricTelemetryReader::read_teleme
                 "Set TT_METAL_FABRIC_TELEMETRY=\"chips=all;eth=all;erisc=all;stats=BANDWIDTH|...\" "
                 "and TT_METAL_FABRIC_BW_TELEMETRY=1 to enable.",
                 chip_id_,
-                channel);
+                channel_);
             snapshot.dynamic_info.reset();
         }
 
