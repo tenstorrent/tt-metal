@@ -400,3 +400,6 @@ tt_telemetry/docker/ @btrzynadlowski-tt @kluongTT @tenstorrent/codeowner-bypass 
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+
+# Tech reports
+tech_reports/LLMs/vLLM_integration.md @skhorasganiTT @viktorpusTT @tenstorrent/codeowner-bypass
