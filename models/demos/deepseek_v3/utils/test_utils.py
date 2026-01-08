@@ -360,6 +360,12 @@ def run_reference_with_attention(
     CHUNK_SIZE = 8192
     use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > CHUNK_SIZE
 
+    # Create a mock output object for compatibility
+    class MockOutput:
+        def __init__(self, hidden_state, past_key_values):
+            self.last_hidden_state = hidden_state
+            self.past_key_values = past_key_values
+
     if use_chunked_processing:
         device = activation.device
         num_chunks = (max_position_id_or_seq_len + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -415,8 +421,13 @@ def run_reference_with_attention(
                 )
 
                 # Extract output and update cache
-                chunk_out = chunk_output.last_hidden_state
-                current_cache = chunk_output.past_key_values
+                # Handle tuple return from DeepseekV3Attention
+                if isinstance(chunk_output, tuple):
+                    chunk_out = chunk_output[0]
+                    current_cache = chunk_output[2]
+                else:
+                    chunk_out = chunk_output.last_hidden_state
+                    current_cache = chunk_output.past_key_values
 
                 output_chunks.append(chunk_out)
 
@@ -429,12 +440,6 @@ def run_reference_with_attention(
             # Clean up chunk list
             del output_chunks
 
-            # Create a mock output object for compatibility
-            class MockOutput:
-                def __init__(self, hidden_state, past_key_values):
-                    self.last_hidden_state = hidden_state
-                    self.past_key_values = past_key_values
-
             model_output = MockOutput(model_output_tensor, current_cache)
     else:
         # Standard processing for shorter sequences or decode mode
@@ -444,7 +449,7 @@ def run_reference_with_attention(
         # Use torch.no_grad() to prevent gradient accumulation
         with torch.no_grad():
             # Set output_attentions=False to save memory
-            model_output = reference_model(
+            model_output_raw = reference_model(
                 activation,
                 attention_mask=mask,
                 position_ids=position_ids,
@@ -452,6 +457,11 @@ def run_reference_with_attention(
                 use_cache=True,
                 **{kv_arg_name: deepcopied_cache},
             )
+
+            if isinstance(model_output_raw, tuple):
+                model_output = MockOutput(model_output_raw[0], model_output_raw[2])
+            else:
+                model_output = model_output_raw
 
     # Extract output
     out = model_output.last_hidden_state
