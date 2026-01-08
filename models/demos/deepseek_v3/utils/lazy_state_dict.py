@@ -10,6 +10,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Optional
 
+import psutil
 import torch
 from loguru import logger
 from safetensors import safe_open
@@ -175,7 +176,16 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         full_key = self._full_key(key)
         if full_key in self._cache:
-            return self._cache[full_key]
+            tensor = self._cache[full_key]
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / (1024 * 1024)
+            tensor_mb = tensor.element_size() * tensor.numel() / (1024 * 1024)
+            cache_size_mb = sum(t.element_size() * t.numel() for t in self._cache.values()) / (1024 * 1024)
+            logger.debug(
+                f"LazyStateDict['{key}'] (cached): tensor_size={tensor_mb:.1f} MB, "
+                f"cache_entries={len(self._cache)}, cache_size={cache_size_mb:.1f} MB, process_memory={memory_mb:.1f} MB"
+            )
+            return tensor
         if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
             raise KeyError(key)
 
@@ -188,6 +198,15 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         f = self._get_handle(filename)
         tensor = f.get_tensor(full_key)
         self._cache[full_key] = tensor
+
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / (1024 * 1024)
+        tensor_mb = tensor.element_size() * tensor.numel() / (1024 * 1024)
+        cache_size_mb = sum(t.element_size() * t.numel() for t in self._cache.values()) / (1024 * 1024)
+        logger.debug(
+            f"LazyStateDict['{key}'] (loaded): tensor_size={tensor_mb:.1f} MB, "
+            f"cache_entries={len(self._cache)}, cache_size={cache_size_mb:.1f} MB, process_memory={memory_mb:.1f} MB"
+        )
 
         return tensor
 
