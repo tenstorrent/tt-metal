@@ -39,8 +39,13 @@ class LMHead(LightweightModule):
 
         self.model_config = args.get_model_config()
 
+        # For models with explicit padded_vocab_size set, use it
+        # This handles cases where vocab needs special padding (e.g., for tile alignment per device)
         if args.is_galaxy:
             size_per_device = self.padded_vocab_size // self.num_devices
+        elif self.padded_vocab_size is not None:
+            size_per_device = self.padded_vocab_size // self.num_devices
+            padded_vocab_size = self.padded_vocab_size
         num_splits = math.ceil(size_per_device / max_columns_per_device)
 
         split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)

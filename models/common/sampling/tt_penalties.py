@@ -88,10 +88,14 @@ class TTPenalties(LightweightModule):
         num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
         self.num_devices = num_devices
         self.needs_padding = False
-        if self.vocab_size == args.vocab_size:
-            # need to add at least one tile padding for the histogram to handle padded tokens
-            tile_width = 32
-            padding = tile_width - ((self.vocab_size // num_devices) % tile_width)
+
+        # Ensure vocab_size is tile-aligned PER DEVICE after sharding
+        # Check if per-device vocab size is tile-aligned, regardless of model type
+        tile_width = 32
+        per_device_size = self.vocab_size // num_devices
+        if per_device_size % tile_width != 0:
+            # Per-device size is not tile-aligned, need padding
+            padding = tile_width - (per_device_size % tile_width)
             self.vocab_size += padding * num_devices
             self.needs_padding = True
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
@@ -116,10 +120,13 @@ class TTPenalties(LightweightModule):
         self.inverse_repetition_penalties = self._alloc_bf16_buffer()
 
         self.slice_start = ttnn.from_torch(torch.tensor([0], dtype=torch.int32), device=self.mesh_device)
-        end_tensor = torch.tensor(
+        end_tensor_2d = torch.tensor(
             [[31] * num_devices, [(n + 1) * (self.vocab_size // num_devices) - 1 for n in range(num_devices)]],
             dtype=torch.int32,
-        )[0, :]
+        )
+        # If padding was needed (per-device vocab not tile-aligned), use row 1 (actual vocab end indices per device)
+        # Otherwise use row 0 (fixed tile boundary 31)
+        end_tensor = end_tensor_2d[1, :] if self.needs_padding else end_tensor_2d[0, :]
         self.slice_end = ttnn.from_torch(
             end_tensor,
             device=self.mesh_device,

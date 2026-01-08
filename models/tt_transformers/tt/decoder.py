@@ -10,6 +10,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.mlp import MLP
+from models.tt_transformers.tt.mlp_2_proj import MLP2Proj
 from models.tt_transformers.tt.model_config import TensorGroup
 
 
@@ -81,6 +82,18 @@ class TransformerBlock(LightweightModule):
                 layer_num=layer_num,
                 dtype=dtype,
                 tt_ccl=self.tt_ccl,
+            )
+        elif getattr(self.args, "mlp_structure", "3_projection") == "2_projection":
+            # Arcee AFM: Use 2-projection MLP (only w3 and w2, no w1)
+            self.feed_forward = MLP2Proj(
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                args=args,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                model_config=self.model_config,
             )
         else:
             self.feed_forward = MLP(

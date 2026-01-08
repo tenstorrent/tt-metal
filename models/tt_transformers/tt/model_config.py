@@ -450,6 +450,7 @@ class ModelArgs:
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "AFM-4.5B": "models/tt_transformers/model_params/AFM-4.5B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -1534,6 +1535,7 @@ class ModelArgs:
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
             "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
             "relu": ttnn.UnaryOpType.RELU,
+            "relu2": "relu2",
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
         }
@@ -1578,6 +1580,12 @@ class ModelArgs:
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+
+        # For non-Galaxy models, set padded_vocab_size to tile-aligned vocab_size
+        # This ensures consistency with tt_penalties and lm_head padding
+        if not self.is_galaxy and self.padded_vocab_size is None:
+            self.padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
+
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -1602,6 +1610,7 @@ class ModelArgs:
             self.multiple_of = text_config["multiple_of"]
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
+        self.mlp_structure = text_config.get("mlp_structure", "3_projection")
         if "_name_or_path" in config and config["_name_or_path"]:
             normalized_path = os.path.normpath(config["_name_or_path"])
             # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
@@ -1872,6 +1881,7 @@ class ModelArgs:
 
         text_module_map = {
             "MLP": "feed_forward",
+            "MLP2Proj": "feed_forward",  # Arcee AFM 2-projection MLP
             "Attention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
@@ -2001,6 +2011,36 @@ class ModelArgs:
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+
+            # Auto-detect AFM-style 2-projection MLP (no w1) for HF models
+            has_w1 = any(
+                k.endswith("layers.0.feed_forward.w1.weight")
+                or k.endswith("text_model.layers.0.feed_forward.w1.weight")
+                for k in state_dict.keys()
+            )
+            if not has_w1:
+                self.mlp_structure = "2_projection"
+            else:
+                self.mlp_structure = "3_projection"
+
+            # Ensure vocab_size matches checkpoint lm head
+            # Robustly infer actual vocab size from weights if mismatched
+            try:
+                actual_vocab = None
+                # Prefer lm head if present
+                for k in ("output.weight", "lm_head.weight", "tok_embeddings.weight", "model.embed_tokens.weight"):
+                    if k in state_dict:
+                        shape0 = state_dict[k].shape[0]
+                        # tok_embeddings is [vocab, dim]; lm_head often [vocab, dim]
+                        actual_vocab = shape0
+                        break
+                if actual_vocab and actual_vocab != self.vocab_size:
+                    self.vocab_size = actual_vocab
+                    # Recompute padded_vocab_size to maintain consistency
+                    if not self.is_galaxy:
+                        self.padded_vocab_size = math.ceil(self.vocab_size / 32) * 32
+            except Exception as e:
+                logger.debug(f"Failed to infer vocab_size from checkpoint weights: {e}")
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
