@@ -113,29 +113,3 @@ def test_convert_to_chw_with_program_cache(device):
         )
 
     assert device.num_program_cache_entries() == 4
-
-
-@pytest.mark.parametrize("input_data_type", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("C", [4, 8])
-@pytest.mark.parametrize("HW", [128, 256])
-def test_convert_to_chw_new_test(device, C, HW, input_data_type):
-    """New test to verify workflow catches test count increase"""
-    torch.manual_seed(42)
-    core_grid = ttnn.CoreGrid(x=1, y=1)
-    
-    input_tensor = torch.randn([1, 1, HW, C], dtype=torch.bfloat16)
-    expected = input_tensor.transpose(2, 3)
-    
-    input_tensor = ttnn.from_torch(input_tensor, dtype=input_data_type, layout=ttnn.TILE_LAYOUT)
-    input_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, HW, 32], core_grid, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    input_tensor = ttnn.to_device(input_tensor, device, input_memory_config)
-    
-    actual = ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.bfloat16)
-    
-    if input_data_type == ttnn.bfloat8_b:
-        expected_pcc = 0.9999
-        assert_with_pcc(expected, ttnn.to_torch(actual), expected_pcc)
-    else:
-        assert_equal(expected, ttnn.to_torch(actual))
