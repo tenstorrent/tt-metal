@@ -53,6 +53,11 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history so we can checkout main later
 
+      - name: Install git and pip
+        run: |
+          apt-get update
+          apt-get install -y python3-pip git
+
       - name: Debug git setup
         run: |
           echo "PWD: $(pwd)"
@@ -122,11 +127,6 @@ jobs:
       #   run: |
       #     sudo apt update
       #     sudo apt install -y ./packages/*.deb
-
-      - name: Install pip
-        run: |
-          apt-get update
-          apt-get install -y python3-pip git
 
       - name: Install Python dependencies
         run: |
