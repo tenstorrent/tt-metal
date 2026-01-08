@@ -69,6 +69,7 @@ jobs:
       - name: Initialize git repository
         run: |
           git init
+          git config --global --add safe.directory /work
           git remote add origin https://github.com/${{ github.repository }}.git
           git fetch --all --depth=0
           git checkout ${{ github.ref_name }}
