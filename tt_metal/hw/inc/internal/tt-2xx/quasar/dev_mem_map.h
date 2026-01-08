@@ -94,6 +94,7 @@
 
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 16
+#define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 30272
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)

@@ -23,7 +23,7 @@
 // clang-format on
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t* const ncrisc_run = &mailboxes->subordinate_sync.dm1;
+volatile tt_l1_ptr uint8_t* const ncrisc_run = mailboxes->subordinate_sync.map;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
