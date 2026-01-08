@@ -7,7 +7,7 @@
   - [1.2 Multi-Mesh vs Big-Mesh](#12-multi-mesh-vs-big-mesh)
 - [2. Physical Topologies](#2-physical-topologies)
   - [2.1 Closetbox (16 Loudbox)](#21-closetbox-16-loudbox)
-  - [2.2 Wormhole Galaxy Exabox (5 Galaxies All-to-All)](#22-wormhole-galaxy-exabox-5-galaxies-all-to-all)
+  - [2.2 WH Galaxy All-to-All System (5 Galaxies)](#22-wh-galaxy-all-to-all-system-5-galaxies)
 - [3. Mesh Graph Descriptors](#3-mesh-graph-descriptors)
   - [3.1 Why MGDs Matter](#31-why-mgds-matter)
   - [3.2 MGD 2.0 Format](#32-mgd-20-format)
@@ -52,13 +52,13 @@ Multi-Mesh works well for:
 
 ### 1.2 Multi-Mesh vs Big-Mesh
 
-TT-Metal supports two distributed execution patterns:
+TT-Metal supports two independent distributed execution patterns:
 
-- **Big-Mesh**: All processes share one mesh and run identical code in lockstep (SPMD). Use this for tensor/data parallelism where you need a unified view of all devices, like large matrix multiplications split across the mesh.
+- **Big-Mesh (scale-up)**: All processes share one mesh and run identical code in lockstep (SPMD). Use this for tensor/data parallelism where you need a unified view of all devices, like large matrix multiplications split across the mesh.
 
-- **Multi-Mesh**: Each process owns a separate mesh and communicates via sockets. Use this for pipeline parallelism or multi-model inference where stages run asynchronously.
+- **Multi-Mesh (scale-out)**: Each process owns a separate mesh and communicates via sockets. Use this for pipeline parallelism or multi-model inference where stages run asynchronously.
 
-The key difference is ownership. Big-Mesh shares everything and requires tight synchronization. Multi-Mesh isolates everything and allows asynchronous execution.
+In the Big-Mesh case, all devices are managed in lockstep. In the Multi-Mesh case, devices across meshes can have independent state. These patterns can be combined: you can build Multi Big-Meshes where each mesh uses scale-up internally while multiple meshes communicate via scale-out.
 
 This document focuses on the **Multi-Mesh** pattern.
 
@@ -67,57 +67,56 @@ This document focuses on the **Multi-Mesh** pattern.
 This section describes example physical topologies used for Multi-Mesh software development and testing. For background on Tenstorrent hardware (Wormhole chips, N300 cards, Galaxy systems), see the [Ethernet Multichip Guide](../EthernetMultichip/BasicEthernetGuide.md).
 
 >[!NOTE]
->The Closetbox and Wormhole Galaxy Exabox are **experimental systems** for software bringup and testing, not production deployments. They demonstrate how to virtualize multi-host systems using the software.
+>The Closetbox and WH Galaxy All-to-All system are **experimental systems** for software bringup and testing, not production deployments. They demonstrate how to virtualize multi-host systems using the software.
 
 ### 2.1 Closetbox (16 Loudbox)
 
 The Closetbox consists of 16 Loudbox units organized hierarchically into Super-Pods (groups of 4 Loudboxes that share high-bandwidth interconnects). As shown in Figure 1:
 
-- **4 Super-Pods** arranged in a 2×2 grid
-- Each Super-Pod: **4 Loudbox units**
+- **4 Super-Pods** connected in all-to-all topology
+- Each Super-Pod: **4 Loudbox units** in all-to-all connectivity
 - Each Loudbox: **8 Wormhole B0 devices** (2×4 mesh, built from 4× N300 cards). An N300 card contains 2 Wormhole chips connected over ethernet.
 - **Total: 128 devices** across 16 meshes. Each mesh can run independent workloads.
 
-<img src="images/closetbox.png" alt="Closetbox Physical Topology" style="width:600px;"/>
+<img src="images/closetbox_cabling.png" alt="Closetbox Physical Topology" style="width:600px;"/>
 
 *Figure 1: Closetbox Physical Topology. Purple dashed boxes indicate Super-Pods, red dashed box indicates the Cluster boundary.*
 
 <img src="images/closetbox_logical.png" alt="Closetbox Logical Topology" style="width:500px;"/>
 
-*Figure 2: Closetbox Logical Topology. Shows the MGD hierarchy: 16 meshes (M0) grouped into 4 PODs (G0), composed into 1 Cluster (G1).*
+*Figure 2: Closetbox Cabling Topology. Shows the MGD hierarchy: 16 meshes (M0) grouped into 4 PODs (G0), composed into 1 Cluster (G1).*
 
-### 2.2 Wormhole Galaxy Exabox (5 Galaxies All-to-All)
+### 2.2 WH Galaxy All-to-All System (5 Galaxies)
 
-The Wormhole (WH) Galaxy Exabox consists of 5 Galaxy systems in an all-to-all topology. As shown in Figure 3:
+The WH Galaxy All-to-All system consists of 5 Galaxy systems in an all-to-all topology. As shown in Figure 3:
 
-- **5 Galaxy units**, each an 8×4 mesh (32 Wormhole B0 devices). A Galaxy is Tenstorrent's standard high-density system.
+- **5 Galaxy units**, each an 8×4 mesh (32 Wormhole B0 devices). A Galaxy is Tenstorrent's standard system.
 - **Total: 160 devices** across 5 meshes. Massive compute capacity for large models.
 - **Inter-Galaxy connectivity**: All-to-all with 4 ethernet channels per connection. Any Galaxy can send directly to any other Galaxy without routing through intermediaries.
 
-<img src="images/exabox.png" alt="Wormhole Galaxy Exabox Physical Topology" style="width:600px;"/>
+<img src="images/exabox_cabling.png" alt="WH Galaxy All-to-All System Physical Topology" style="width:600px;"/>
 
-*Figure 3: Wormhole Galaxy Exabox Physical Topology. Blue lines show intra-Galaxy connections, orange lines show inter-Galaxy connections.*
+*Figure 3: WH Galaxy All-to-All System Physical Topology. Blue lines show intra-Galaxy connections, orange lines show inter-Galaxy connections.*
 
-<img src="images/exabox_logical.png" alt="Wormhole Galaxy Exabox Logical Topology" style="width:500px;"/>
+<img src="images/exabox_logical.png" alt="WH Galaxy All-to-All System Logical Topology" style="width:500px;"/>
 
-*Figure 4: Wormhole Galaxy Exabox Logical Topology. 5 Galaxy meshes in a single FABRIC graph with all-to-all connectivity.*
+*Figure 4: WH Galaxy All-to-All System Cabling Topology. 5 Galaxy meshes in a single FABRIC graph with all-to-all connectivity.*
 
 ## 3. Mesh Graph Descriptors
 
-Now that we've seen the physical hardware, let's describe these topologies in software. A Mesh Graph Descriptor (MGD) defines the logical topology of your system. It tells the runtime how to organize physical devices into logical meshes and how those meshes connect. The MGD is a configuration file you write once and reference from your rank bindings. It's the blueprint for your distributed system.
+Now that we've seen the physical hardware, let's virtualize these topologies through software. A Mesh Graph Descriptor (MGD) defines the logical topology required by a workload. It tells the runtime how to organize physical devices into logical meshes and how those meshes connect. The MGD is a configuration file you write once and reference from your rank bindings. It's the blueprint for your distributed workload.
 
-### 3.1 Why MGDs Matter
+### 3.1 The Purpose of MGDs
 
 The physical hardware topology (which devices are connected by ethernet) is fixed. But how you partition and use those devices is up to you. An MGD lets you:
 
-- **Define mesh boundaries**: Which devices belong to each logical mesh. You pick the size and shape.
+- **Define mesh boundaries**: How many devices are assigned to each logical mesh.
 - **Set up connectivity**: Which meshes can talk to each other and through how many channels. More channels means more bandwidth.
 - **Create hierarchy**: Group meshes into pods, clusters, or custom topologies. This mirrors physical cable organization.
-- **Build routing tables**: The runtime uses the MGD to figure out how to move data efficiently. Packets take the shortest path.
 
 Without an MGD, the runtime doesn't know how to partition the system or route traffic between meshes.
 
-The MGD is validated at startup. If the physical hardware doesn't match the MGD specification (e.g., missing ethernet links), initialization will fail unless you use `RELAXED` channel policy. Always verify your MGD matches your actual hardware.
+The MGD is validated at startup. If the physical hardware can't accommodate the MGD, initialization will fail.
 
 ### 3.2 MGD 2.0 Format
 
@@ -226,17 +225,17 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 
 ## 4. Rank Bindings and tt-run
 
-The MGD describes your hardware topology. But to actually run a workload, you need to tell each process which mesh it owns. This is where rank bindings come in.
+The MGD describes your hardware topology. But to actually run a workload, you need to tell each process/host which mesh it owns. This is where rank bindings come in.
 
 ### 4.1 The Role of Rank Bindings
 
-When launching a Multi-Mesh workload, multiple processes need to coordinate which mesh each owns. The `tt-run` launcher uses MPI (Message Passing Interface) to spawn these processes. MPI is a standard protocol for distributed computing. Each process gets a rank number starting from 0. Rank bindings map these ranks to your hardware, telling each process:
+When launching a Multi-Mesh workload, multiple processes need to coordinate ownership. The `tt-run` launcher uses MPI (Message Passing Interface) to spawn these processes. MPI is a standard protocol for distributed computing. Each process gets a rank number starting from 0. Rank bindings map these ranks to your hardware, telling each process:
 
 - **Which mesh to use**: The `mesh_id` assigns a process to a specific logical mesh defined in the MGD
 - **Device visibility**: Which physical PCIe devices this process can access (via `TT_VISIBLE_DEVICES`)
 - **Environment configuration**: Any rank-specific environment variables needed for isolation
 
-Without rank bindings, all processes would fight over the same devices. The `tt-run` launcher reads the binding file and sets up the environment for each rank.
+Without rank bindings, ownership of meshes across processes would be ambiguous. The `tt-run` launcher reads the binding file and sets up the environment for each rank.
 
 Rank bindings decouple your code from hardware. The same Python script runs on a 2-mesh Galaxy or a 16-mesh Closetbox. Only the binding file changes.
 
@@ -284,21 +283,6 @@ tt-run --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindin
 - `TT_MESH_HOST_RANK`: Host rank within mesh (if specified)
 
 Each process inherits these environment variables before your script starts. You don't need to parse them. The runtime reads them automatically when you open a device.
-
->[!NOTE]
->`TT_VISIBLE_DEVICES` is NOT automatically set by `tt-run`. Specify it using `env_overrides` in the rank binding file:
-
-```yaml
-rank_bindings:
-  - rank: 0
-    mesh_id: 0
-    env_overrides:
-      TT_VISIBLE_DEVICES: "0"
-  - rank: 1
-    mesh_id: 1
-    env_overrides:
-      TT_VISIBLE_DEVICES: "1"
-```
 
 ### 4.4 Generating Rank Bindings
 
@@ -597,7 +581,7 @@ Both sockets are returned directly. No need to create them separately. Data flow
 
 ## 8. Programming Example
 
-Let's put everything together with a complete working example. This demonstrates a two-stage pipeline: Process 0 applies ReLU and sends to Process 1, which applies Exp and validates. Both processes run the same Python script but take different code paths based on their rank. This is the SPMD pattern in action.
+Let's put everything together with a complete working example. This demonstrates a two-stage pipeline: Process 0 applies ReLU and sends to Process 1, which applies Exp and validates. Both processes run the same Python script but take different code paths based on their rank. This is the SPMD (Single Program, Multiple Data) pattern in action, deployed across both meshes.
 
 ```bash
 # Generate rank binding file (run once)
@@ -700,10 +684,9 @@ if __name__ == "__main__":
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | `RuntimeError: Distributed context not initialized` | Called `get_rank()` or `get_size()` before opening any device | Open a device first, or call `ttnn.init_distributed_context()` manually |
-| Processes hang on socket operations | Mismatched socket configurations | Ensure `sender_rank` and `receiver_rank` are correct and both processes create sockets with identical `SocketConnection` lists |
+| Processes hang on socket operations | Ranks are incorrectly specified in socket configuration | Ensure `sender_rank` and `receiver_rank` are correct and match the actual process ranks |
 | `TT_VISIBLE_DEVICES` not working | Environment variable not set before device opens | Set `TT_VISIBLE_DEVICES` before importing `ttnn`, or use `env_overrides` in rank bindings |
 | Kernel compilation conflicts | Multiple processes sharing cache | Set unique `TT_METAL_CACHE` per process (done automatically by `tt-run`) |
-| `allocate_tensor_on_device` fails on receiver | Tensor spec mismatch | Both processes must create tensors with identical shapes, use same random seed for SPMD pattern |
 | Fabric initialization fails | MGD doesn't match physical hardware | Use `RELAXED` channel policy or verify ethernet links match MGD specification |
 
 ### Debugging Tips
