@@ -335,8 +335,10 @@ def import_tracy_op_logs(
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
-    tracyOpTimesData = []
-    df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
+    try:
+        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
+    except (ImportError, ValueError):
+        df = pd.read_csv(tracyOpTimesLog)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     tt_mask = df["name"].str.contains("TT_DNN|TT_METAL", regex=True, na=False)
