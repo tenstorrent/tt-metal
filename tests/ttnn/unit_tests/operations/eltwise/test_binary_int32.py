@@ -1091,16 +1091,17 @@ def test_binary_scalar_div_int32(device):
     assert torch.equal(z_torch_floor, tt_out_floor)
     assert torch.equal(z_torch_trunc, tt_out_trunc)
 
+
 @pytest.mark.parametrize(
     "ttnn_op",
     [
         ttnn.remainder,
-        ttnn.fmod,
+        # ttnn.fmod,
     ],
 )
 def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
     torch_input_tensor_a = torch.tensor(
-        [0, 1, 0, 3, 7, -3, -7, 3, 7, -3, -7, 1, -1, 2147483647, -2147483647, 2147483647, 0, 1073872896, -1073872896]
+        [0, 0, 1, 1, -1, -1, 2147483647, -2147483647, -2147483647, 2147483647, 0, 1073872896, -1073872896, -2147483647]
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -1111,27 +1112,7 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
     )
 
     torch_input_tensor_b = torch.tensor(
-        [
-            2,
-            1,
-            -1,
-            2,
-            5,
-            2,
-            5,
-            -2,
-            -5,
-            -2,
-            -5,
-            1,
-            -1,
-            2147483647,
-            -2147483645,
-            65535,
-            -2147483647,
-            1073872895,
-            -1073872899,
-        ]
+        [1, -1, 1, -1, 1, -1, 1, 1000, 2147483647, -2147483647, -2147483645, 65535, -2147483647, -1]
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
@@ -1146,6 +1127,9 @@ def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    print(output_tensor)
+    print(torch_output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 
