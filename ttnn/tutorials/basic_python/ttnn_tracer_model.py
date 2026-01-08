@@ -103,10 +103,7 @@ def main():
         input_tensor = torch.rand((1, 64, config.hidden_size))
 
         # Run the layer forward pass
-        hidden_states = model(hidden_states, input_tensor)
-
-        # Convert output to TT-NN format for visualization
-        output = ttnn.from_torch(hidden_states)
+        output = model(hidden_states, input_tensor)
 
     # Visualize the BERT layer computation graph
     visualize(output)
@@ -157,17 +154,19 @@ def main():
         with trace():
             # Create dummy input tensors
             # input_ids: Token IDs from vocabulary
-            input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
+            input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.uint32)
 
             # token_type_ids: Segment IDs (0 for question, 1 for context in QA)
-            torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+            torch_token_type_ids = torch.ones((batch_size, sequence_size), dtype=torch.uint32)
 
             # position_ids: Position embeddings (usually just 0 to sequence_length-1)
-            torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
+            torch_position_ids = torch.ones((batch_size, sequence_size), dtype=torch.uint32)
 
             # attention_mask: Mask for padding tokens (only for optimized version)
             # Shape differs between regular and optimized BERT implementations
-            torch_attention_mask = torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None
+            torch_attention_mask = (
+                torch.zeros(1, sequence_size, dtype=torch.bfloat16) if bert == ttnn_optimized_bert else None
+            )
 
             # Preprocess inputs for TT-NN format
             # This converts PyTorch tensors to device tensors with appropriate layout

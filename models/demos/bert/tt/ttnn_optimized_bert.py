@@ -295,7 +295,7 @@ def preprocess_inputs(
     if attention_mask is not None:
         attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, torch.float32)
         attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
-        attention_mask = torch.clamp(attention_mask, min=-100000)
+        attention_mask = torch.clamp(attention_mask, min=-100000).to(torch.bfloat16)  # GH issue: #35371
         attention_mask = ttnn.from_torch(
             attention_mask,
             dtype=ttnn.bfloat16,
