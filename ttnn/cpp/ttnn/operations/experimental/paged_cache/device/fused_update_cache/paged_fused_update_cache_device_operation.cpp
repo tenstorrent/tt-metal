@@ -19,18 +19,16 @@ PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDev
     if (input_tensor1.layout() == Layout::TILE && input_tensor2.layout() == Layout::TILE) {
         if (use_mesh_workload_factory) {
             return program::tiled::PagedTiledFusedUpdateCacheMeshWorkloadFactory{};
-        } else {
-            return program::tiled::PagedTiledFusedUpdateCacheProgramFactory{};
         }
-    } else if (input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR) {
+        return program::tiled::PagedTiledFusedUpdateCacheProgramFactory{};
+    }
+    if (input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR) {
         if (use_mesh_workload_factory) {
             return program::rm::PagedRowMajorFusedUpdateCacheMeshWorkloadFactory{};
-        } else {
-            return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
         }
-    } else {
-        TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
+        return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
     }
+    TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
 }
 
 void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_hit(

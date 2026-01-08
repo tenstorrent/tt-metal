@@ -511,16 +511,15 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
-    } else {
-        const auto& grid_size = this->grid_size();
-        // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = this->virtual_core_from_physical_core(coord);
-        // Derive virtual coord in noc_index space.
-        CoreCoord virtual_coord = {
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return virtual_coord;
     }
+    const auto& grid_size = this->grid_size();
+    // Coordinate in Physical NOC0 Space. Convert to Virtual.
+    coord = this->virtual_core_from_physical_core(coord);
+    // Derive virtual coord in noc_index space.
+    CoreCoord virtual_coord = {
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return virtual_coord;
 }
 
 CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord& logical_core) const {
@@ -581,10 +580,9 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     if (noc_index == 0) {
         return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
             virtual_noc_start.x, virtual_noc_start.y, virtual_noc_end.x, virtual_noc_end.y);
-    } else {
-        return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
-            virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
     }
+    return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
 }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
@@ -691,9 +689,8 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_dat
     if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
-    } else {
-        return 0;
     }
+    return 0;
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
@@ -836,9 +833,8 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
         !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
         return HalMemType::DRAM;
-    } else {
-        return HalMemType::L1;
     }
+    return HalMemType::L1;
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }

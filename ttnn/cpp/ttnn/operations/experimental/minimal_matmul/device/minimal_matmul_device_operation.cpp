@@ -3,15 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_device_operation.hpp"
-#include <array>
-#include <cstdint>
-#include <optional>
-#include <vector>
+#include "minimal_matmul_program_factory.hpp"
+
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
-#include "minimal_matmul_program_factory.hpp"
-
 #include <tt-metalium/hal.hpp>
 
 using namespace tt::constants;
@@ -19,15 +15,23 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
-void MinimalMatmulOp::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2, "minimal_matmul expects exactly 2 inputs: activation and weight");
+MinimalMatmulDeviceOperation::program_factory_t MinimalMatmulDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return program::MinimalMatmulProgramFactory{};
+}
 
-    const auto& act_tensor = input_tensors.at(0);
-    const auto& weight_tensor = input_tensors.at(1);
-    const bool has_bias = (optional_input_tensors.size() == 1) && optional_input_tensors.at(0).has_value();
-    const Tensor* bias_ptr = has_bias ? &optional_input_tensors.at(0).value() : nullptr;
+void MinimalMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& act_tensor = tensor_args.input_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const bool has_bias = tensor_args.bias_tensor.has_value();
+    const Tensor* bias_ptr = has_bias ? &tensor_args.bias_tensor.value() : nullptr;
+    const auto& config = operation_attributes.config;
 
     // Basic device/storage checks
     TT_FATAL(
@@ -138,15 +142,16 @@ void MinimalMatmulOp::validate(
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
             "compute_with_storage_grid_size must be <= device grid size");
 
-        const uint32_t max_dest_volume = get_dest_reg_count(this->compute_kernel_config);
+        const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
         TT_FATAL(
             cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
     }
 }
 
-std::vector<TensorSpec> MinimalMatmulOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    const auto& in0_input_tensor = input_tensors.at(0);
-    const auto& in1_input_tensor = input_tensors.at(1);
+MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& in0_input_tensor = tensor_args.input_tensor;
+    const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
     uint32_t N = in1_input_tensor_shape[-1];
@@ -154,32 +159,49 @@ std::vector<TensorSpec> MinimalMatmulOp::compute_output_specs(const std::vector<
     ttnn::Shape output_shape(in0_input_tensor_shape);
     output_shape[-1] = N;
 
-    const auto& memory_config = this->output_mem_config.value_or(in0_input_tensor.memory_config());
-    auto dtype = this->output_dtype.value_or(in0_input_tensor.dtype());
+    const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
+    auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
-    return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
+    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 }
 
-std::vector<Tensor> MinimalMatmulOp::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
-}
-
-tt::tt_metal::operation::ProgramWithCallbacks MinimalMatmulOp::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& act_tensor = input_tensors.at(0);
-    const auto& weight_tensor = input_tensors.at(1);
-    const auto& bias_tensor = optional_input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    return detail::minimal_matmul_factory(
-        act_tensor,
-        weight_tensor,
-        bias_tensor,
-        this->fused_activation,
-        this->config,
-        output_tensor,
-        compute_kernel_config);
+MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul
+
+namespace ttnn::prim {
+
+operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation::tensor_return_value_t minimal_matmul(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<Tensor>& bias_tensor,
+    std::optional<operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    using OperationType = operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation;
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi2,
+        false /*approx_mode*/,
+        true /*fp32_acc*/,
+        true /*packer_acc*/);
+
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .config = config,
+            .fused_activation = std::move(fused_activation),
+            .output_mem_config = memory_config,
+            .output_dtype = dtype,
+            .compute_kernel_config = kernel_config_val},
+        OperationType::tensor_args_t{
+            .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
+}
+
+}  // namespace ttnn::prim

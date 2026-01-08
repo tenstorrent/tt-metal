@@ -26,13 +26,10 @@ ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/int
 ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
 ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp
 ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
-ttnn/cpp/ttnn/operations/eltwise/binary/device/binary_device_operation.cpp
 ttnn/cpp/ttnn/operations/eltwise/binary/device/binary_device_operation.hpp
-ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation.cpp
 ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation.hpp
 ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp
 ttnn/cpp/ttnn/operations/eltwise/unary/unary_pybind.hpp
-ttnn/cpp/ttnn/operations/embedding/device/embedding_device_operation.cpp
 ttnn/cpp/ttnn/operations/embedding/device/embedding_device_operation.hpp
 ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.cpp
 ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp
@@ -47,11 +44,9 @@ tests/tt_metal/tt_metal/api/test_global_semaphores.cpp
 tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp
 tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_golden.json
 tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
 tests/ttnn/unit_tests/gtests/test_ccl_on_galaxy.cpp
 
 # Suspicious Formatting Could Cause Issues
-tests/tt_metal/tt_metal/debug_tools/*
 tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp
 tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp
 tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp

@@ -125,10 +125,9 @@ bool check_connection_requested(
     if (!requested_intermesh_ports.empty()) {
         return requested_intermesh_ports.contains(*my_mesh_id) &&
                requested_intermesh_ports.at(*my_mesh_id).contains(*neighbor_mesh_id);
-    } else {
-        return requested_intermesh_connections.contains(*my_mesh_id) &&
-               requested_intermesh_connections.at(*my_mesh_id).contains(*neighbor_mesh_id);
     }
+    return requested_intermesh_connections.contains(*my_mesh_id) &&
+           requested_intermesh_connections.at(*my_mesh_id).contains(*neighbor_mesh_id);
 }
 
 [[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
@@ -707,10 +706,10 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
                 num_ports_per_chip = tt::tt_metal::MetalContext::instance()
-                                        .get_cluster()
-                                        .get_soc_desc(physical_chip_id)
-                                        .get_cores(CoreType::ETH)
-                                        .size();
+                                         .get_cluster()
+                                         .get_soc_desc(physical_chip_id)
+                                         .get_cores(CoreType::ETH)
+                                         .size();
                 break;
             }
         }
@@ -996,8 +995,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         FabricNodeId(mesh_id, logical_connected_chip_id));
 
                     const auto& connected_chips_and_eth_cores =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
-                            physical_chip_id);
+                        tt::tt_metal::MetalContext::instance()
+                            .get_cluster()
+                            .get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
                     // If connected_chips_and_eth_cores contains physical_connected_chip_id then atleast one connection
                     // exists to physical_connected_chip_id
@@ -1954,19 +1954,6 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
-void ControlPlane::set_routing_mode(uint16_t mode) {
-    if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
-        log_warning(
-            tt::LogFabric,
-            "Control Plane: Routing mode already set to {}. Setting to {}",
-            (uint16_t)this->routing_mode_,
-            (uint16_t)mode);
-    }
-    this->routing_mode_ = mode;
-}
-
-uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
-
 void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
@@ -1975,6 +1962,14 @@ void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_conf
 FabricContext& ControlPlane::get_fabric_context() const {
     TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
     return *this->fabric_context_;
+}
+
+std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() const {
+    if (this->fabric_context_ == nullptr) {
+        return {};
+    }
+
+    return this->fabric_context_->get_fabric_kernel_defines();
 }
 
 void ControlPlane::clear_fabric_context() {
@@ -2379,7 +2374,6 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     }
 }
 
-
 // Intermesh Connectivity Generation Functions
 
 void ControlPlane::generate_intermesh_connectivity() {
@@ -2430,8 +2424,8 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::unordered_set<port_id_t>& assigned_port_ids) {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-    const auto& neighbor_binding =
-        this->global_logical_bindings_.at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
+    const auto& neighbor_binding = this->global_logical_bindings_.at(
+        tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
     const auto neighbor_mesh_id = neighbor_binding.first;
 
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
@@ -2534,11 +2528,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
         port_descriptors[my_mesh_id][neighbor_mesh_id] = this->assign_logical_ports_to_exit_nodes(
-            my_host,
-            neighbor_host,
-            strict_binding,
-            requested_exit_nodes,
-            assigned_port_ids);
+            my_host, neighbor_host, strict_binding, requested_exit_nodes, assigned_port_ids);
     }
     return port_descriptors;
 }
@@ -2906,7 +2896,8 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                     if (strict_binding &&
                         num_ports_assigned_at_exit_node[node] >= num_ports_requested_at_exit_node[node]) {
                         continue;
-                    } else if (num_connections_assigned >= connected_eth_chans.size()) {
+                    }
+                    if (num_connections_assigned >= connected_eth_chans.size()) {
                         break;
                     }
                     // Skip if this port doesn't match our node and direction constraints

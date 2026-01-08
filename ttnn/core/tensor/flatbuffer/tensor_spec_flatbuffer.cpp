@@ -211,7 +211,8 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
             flatbuffer::CreateTilePageConfig(builder, flat_tile).Union(),
             ttnn::to_flatbuffer(layout.get_memory_config(), builder),
             flat_alignment);
-    } else if (page_config.get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+    }
+    if (page_config.get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         return flatbuffer::CreateTensorLayout(
             builder,
             to_flatbuffer(layout.get_data_type()),

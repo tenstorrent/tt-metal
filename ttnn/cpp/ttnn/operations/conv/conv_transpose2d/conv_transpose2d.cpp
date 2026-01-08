@@ -34,9 +34,11 @@ ResultWithOptions result_to_result_with_options(
             std::get<0>(result),
             std::make_tuple(std::get<1>(result), std::get<2>(result)),
             std::make_tuple(std::get<3>(result), std::get<4>(result)));
-    } else if (return_output_dim) {
+    }
+    if (return_output_dim) {
         return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<1>(result), std::get<2>(result)));
-    } else if (return_weights_and_bias) {
+    }
+    if (return_weights_and_bias) {
         return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<3>(result), std::get<4>(result)));
     }
     return std::get<0>(result);
@@ -986,7 +988,6 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     return ConvT2dExecutionPath::DRAM;
 }
 
-
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv_transpose2d_slice_attr(
     uint32_t batch_size,
     uint32_t input_height,
@@ -1083,33 +1084,32 @@ ResultWithOptions ConvTranpose2dOperation::invoke(
                 mirror_kernel),
             return_output_dim,
             return_weights_and_bias);
-    } else {
-        log_trace(tt::LogOp, "Conv2d L1 without slice config");
-        return result_to_result_with_options(
-            conv_transpose2d_L1(
-                input_tensor,
-                weight_tensor,
-                device,
-                in_channels,
-                out_channels,
-                batch_size,
-                input_height,
-                input_width,
-                kernel_size,
-                stride,
-                padding,
-                output_padding,
-                dilation,
-                groups,
-                dtype,
-                bias_tensor,
-                conv_config_,
-                compute_config_,
-                memory_config_,
-                mirror_kernel),
-            return_output_dim,
-            return_weights_and_bias);
     }
+    log_trace(tt::LogOp, "Conv2d L1 without slice config");
+    return result_to_result_with_options(
+        conv_transpose2d_L1(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            output_padding,
+            dilation,
+            groups,
+            dtype,
+            bias_tensor,
+            conv_config_,
+            compute_config_,
+            memory_config_,
+            mirror_kernel),
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 }  // namespace ttnn::operations::conv::conv_transpose2d

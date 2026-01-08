@@ -303,9 +303,8 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
                     // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
                     // buffer.
                     return storage.mesh_buffer->get_backing_buffer();
-                } else {
-                    return t.buffer();
                 }
+                return t.buffer();
             }
             return nullptr;
         },

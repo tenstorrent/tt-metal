@@ -1962,9 +1962,9 @@ TEST_P(RandomTestFixture, RandomTest) {
                 }
                 break;
             }
-            case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH: break;
-            case CQ_PREFETCH_CMD_STALL: break;
-            case CQ_PREFETCH_CMD_DEBUG: break;
+            case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
+            case CQ_PREFETCH_CMD_STALL:
+            case CQ_PREFETCH_CMD_DEBUG:
             default: break;
         }
     }

@@ -78,9 +78,8 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool();
-    } else {
-        return create_device_bound_thread_pool(physical_devices);
     }
+    return create_device_bound_thread_pool(physical_devices);
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -267,40 +266,37 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
                     dispatch_core_config),
                 mapped_devices.fabric_node_ids,
                 mapped_devices.mesh_shape);
-        } else {
-            // Initialize fabric node ids manually.
-            // TODO: #22087 - Remove this code path.
-            std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+        }  // Initialize fabric node ids manually.
+        // TODO: #22087 - Remove this code path.
+        std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+        TT_FATAL(config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
+        const auto& supplied_ids = config.physical_device_ids();
+        for (int supplied_id : supplied_ids) {
+            auto fabric_node_id =
+                MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
             TT_FATAL(
-                config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
-            const auto& supplied_ids = config.physical_device_ids();
-            for (int supplied_id : supplied_ids) {
-                auto fabric_node_id =
-                    MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
-                TT_FATAL(
-                    !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
-                    "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
-                    "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
-                    supplied_id,
-                    *fabric_node_id.mesh_id);
-                fabric_node_ids.push_back(fabric_node_id);
-            }
-            auto mapped_devices_full_system_device_ids =
-                (*MetalContext::instance().global_distributed_context().size() > 1)
-                    ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
-                    : wrap_to_maybe_remote(supplied_ids);
-            return std::make_tuple(
-                std::make_shared<ScopedDevices>(
-                    mapped_devices_full_system_device_ids,
-                    wrap_to_maybe_remote(supplied_ids),
-                    l1_small_size,
-                    trace_region_size,
-                    num_command_queues,
-                    worker_l1_size,
-                    dispatch_core_config),
-                fabric_node_ids,
-                config.mesh_shape().value());
+                !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
+                "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
+                "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
+                supplied_id,
+                *fabric_node_id.mesh_id);
+            fabric_node_ids.push_back(fabric_node_id);
         }
+        auto mapped_devices_full_system_device_ids =
+            (*MetalContext::instance().global_distributed_context().size() > 1)
+                ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids
+                : wrap_to_maybe_remote(supplied_ids);
+        return std::make_tuple(
+            std::make_shared<ScopedDevices>(
+                mapped_devices_full_system_device_ids,
+                wrap_to_maybe_remote(supplied_ids),
+                l1_small_size,
+                trace_region_size,
+                num_command_queues,
+                worker_l1_size,
+                dispatch_core_config),
+            fabric_node_ids,
+            config.mesh_shape().value());
     }();
 
     // Make a copy because we std::move the scoped_devices when creating MeshDevice
@@ -436,9 +432,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
                 submesh_shape,
                 *offset);
             return *offset;
-        } else {
-            return MeshCoordinate::zero_coordinate(submesh_shape.dims());
         }
+        return MeshCoordinate::zero_coordinate(submesh_shape.dims());
     }();
 
     tt::stl::SmallVector<uint32_t> end_coords;
@@ -1121,9 +1116,8 @@ uint8_t MeshDevice::noc_data_start_index(SubDeviceId sub_device_id, bool unicast
     if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
-    } else {
-        return 0;
     }
+    return 0;
 }
 SubDeviceManagerId MeshDevice::get_active_sub_device_manager_id() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->id();

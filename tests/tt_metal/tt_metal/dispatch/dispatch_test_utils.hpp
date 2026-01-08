@@ -116,9 +116,14 @@ inline void verify_kernel_coordinates(
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
 
-    CoreType core_type = hal_core_type == HalProgrammableCoreType::TENSIX     ? CoreType::WORKER
-                         : hal_core_type == HalProgrammableCoreType::IDLE_ETH ? CoreType::IDLE_ETH
-                                                                              : CoreType::ETH;
+    CoreType core_type;
+    if (hal_core_type == HalProgrammableCoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    } else if (hal_core_type == HalProgrammableCoreType::IDLE_ETH) {
+        core_type = CoreType::IDLE_ETH;
+    } else {
+        core_type = CoreType::ETH;
+    }
 
     const auto& sub_device_origin = mesh_device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
     for (const auto& cr : cr_set.ranges()) {

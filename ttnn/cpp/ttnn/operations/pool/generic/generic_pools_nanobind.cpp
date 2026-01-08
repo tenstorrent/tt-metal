@@ -97,9 +97,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                 // Return single tensor or tuple based on vector size
                 if (result.size() == 1) {
                     return nb::cast(std::move(result[0]));
-                } else {
-                    return nb::cast(std::move(result));
                 }
+                return nb::cast(std::move(result));
             },
             nb::arg("input_tensor"),
             nb::arg("batch_size"),

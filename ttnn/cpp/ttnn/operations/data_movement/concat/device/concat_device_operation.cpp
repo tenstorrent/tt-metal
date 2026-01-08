@@ -42,17 +42,14 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
             if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
                 return program::ConcatS2SRMProgramFactory{};
-            } else {
-                return program::ConcatS2STiledProgramFactory{};
             }
-        } else {
-            // Multi-tensor s2s case
-            return program::ConcatS2SMultiProgramFactory{};
-        }
-    } else {
-        // Sharded-to-interleaved (s2i) case
-        return program::ConcatS2IProgramFactory{};
+            return program::ConcatS2STiledProgramFactory{};
+
+        }  // Multi-tensor s2s case
+        return program::ConcatS2SMultiProgramFactory{};
     }
+    // Sharded-to-interleaved (s2i) case
+    return program::ConcatS2IProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_hit(
@@ -264,34 +261,32 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);
 
         return std::max(2u, safe_max);
-    } else {
-        // Interleaved concat - precise calculation
-        // Formula: 5 + 5N ≤ 256
-        const Layout layout = input_tensors[0].layout();
-        base_args = 5;
-        args_per_tensor = 5;
+    }  // Interleaved concat - precise calculation
+    // Formula: 5 + 5N ≤ 256
+    const Layout layout = input_tensors[0].layout();
+    base_args = 5;
+    args_per_tensor = 5;
 
-        uint32_t max_tensors = (effective_args_limit - base_args) / args_per_tensor;
+    uint32_t max_tensors = (effective_args_limit - base_args) / args_per_tensor;
 
-        // Verify our calculation matches empirical evidence
-        uint32_t total_args_at_limit = base_args + (args_per_tensor * max_tensors);
-        log_debug(
-            tt::LogOp,
-            "ttnn.concat: Interleaved concat - max_tensors = {}, total_args = {} (limit = {}, layout = {}, dim = {})",
-            max_tensors,
-            total_args_at_limit,
-            effective_args_limit,
-            layout,
-            dim);
-        // Ensure variables are used even if log_debug is compiled out
-        (void)total_args_at_limit;
-        (void)layout;
+    // Verify our calculation matches empirical evidence
+    uint32_t total_args_at_limit = base_args + (args_per_tensor * max_tensors);
+    log_debug(
+        tt::LogOp,
+        "ttnn.concat: Interleaved concat - max_tensors = {}, total_args = {} (limit = {}, layout = {}, dim = {})",
+        max_tensors,
+        total_args_at_limit,
+        effective_args_limit,
+        layout,
+        dim);
+    // Ensure variables are used even if log_debug is compiled out
+    (void)total_args_at_limit;
+    (void)layout;
 
-        // Should be exactly 50 based on our formula: (256 - 5) / 5 = 50.2 => 50
-        TT_FATAL(max_tensors == 50, "Unexpected max_tensors calculation: expected 50, got {}", max_tensors);
+    // Should be exactly 50 based on our formula: (256 - 5) / 5 = 50.2 => 50
+    TT_FATAL(max_tensors == 50, "Unexpected max_tensors calculation: expected 50, got {}", max_tensors);
 
-        return max_tensors;
-    }
+    return max_tensors;
 }
 }  // anonymous namespace
 
@@ -309,9 +304,8 @@ Tensor concat_impl(
         const auto& input = input_tensors[0];
         if (input.memory_config() != output_mem_config) {
             return ttnn::clone(input, std::nullopt, output_mem_config, std::nullopt);
-        } else {
-            return input;
         }
+        return input;
     }
 
     // Handle large number of tensors by splitting into batches
@@ -357,46 +351,44 @@ Tensor concat_impl(
 
     if (input_tensors[0].is_sharded()) {
         return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
-    } else {
-        if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
-            for (const auto& input_tensor : input_tensors) {
-                TT_FATAL(
-                    (input_tensor.padded_shape()[dim] * input_tensor.element_size()) %
-                            input_tensor.buffer()->alignment() ==
-                        0,
-                    "Current concat implementation requires aligned last dim when concatting on last dim");
-            }
-        }
-        // Determine target layout by checking all inputs
-        // Start with first input's layout, but may need to fall back to ROW_MAJOR
-        Layout target_layout = input_tensors[0].layout();
-
-        // Check all inputs - if any ROW_MAJOR input cannot be tiled, use ROW_MAJOR for all
-        for (const auto& input_tensor : input_tensors) {
-            if (input_tensor.layout() == Layout::ROW_MAJOR) {
-                const auto& input_shape = input_tensor.padded_shape();
-                if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
-                    target_layout = Layout::ROW_MAJOR;
-                    break;
-                }
-            }
-        }
-
-        // Format all inputs to target layout
-        std::vector<Tensor> formatted_tensors;
-        formatted_tensors.reserve(input_tensors.size());
-
-        for (const auto& input_tensor : input_tensors) {
-            if (input_tensor.layout() == target_layout) {
-                // Already in target layout
-                formatted_tensors.push_back(input_tensor);
-            } else {
-                formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
-            }
-        }
-
-        return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config);
     }
+    if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
+        for (const auto& input_tensor : input_tensors) {
+            TT_FATAL(
+                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
+                    0,
+                "Current concat implementation requires aligned last dim when concatting on last dim");
+        }
+    }
+    // Determine target layout by checking all inputs
+    // Start with first input's layout, but may need to fall back to ROW_MAJOR
+    Layout target_layout = input_tensors[0].layout();
+
+    // Check all inputs - if any ROW_MAJOR input cannot be tiled, use ROW_MAJOR for all
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.layout() == Layout::ROW_MAJOR) {
+            const auto& input_shape = input_tensor.padded_shape();
+            if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
+                target_layout = Layout::ROW_MAJOR;
+                break;
+            }
+        }
+    }
+
+    // Format all inputs to target layout
+    std::vector<Tensor> formatted_tensors;
+    formatted_tensors.reserve(input_tensors.size());
+
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.layout() == target_layout) {
+            // Already in target layout
+            formatted_tensors.push_back(input_tensor);
+        } else {
+            formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
+        }
+    }
+
+    return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement

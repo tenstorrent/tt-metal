@@ -16,9 +16,8 @@ ScatterDeviceOperation::program_factory_t ScatterDeviceOperation::select_program
     if ((args.opt_reduction != ScatterReductionType::INVALID) &&
         tensor_args.input_tensor.dtype() == DataType::BFLOAT16) {
         return ScatterReduceBfloat16ProgramFactory{};
-    } else {
-        return ScatterProgramFactory{};
     }
+    return ScatterProgramFactory{};
 }
 
 void ScatterDeviceOperation::validate_on_program_cache_hit(

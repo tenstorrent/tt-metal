@@ -799,11 +799,9 @@ void set_or_update_runtime_arguments(
         uint32_t scalar_arg = 0u;
         if (variant == TernaryVariant::TTS) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_b.value(), output.dtype());
-        } else if (variant == TernaryVariant::TST) {
-            scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         } else if (
-            operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
-            operation_attributes.scalar_input_a.has_value()) {
+            variant == TernaryVariant::TST || (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+                                               operation_attributes.scalar_input_a.has_value())) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         }
         auto [freq, counter] = [&] {

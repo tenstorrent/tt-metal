@@ -27,7 +27,8 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 @pytest.mark.timeout(500)
-def test_grok_mlp_inference(t3k_mesh_device, reset_seeds):
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_grok_mlp_inference(mesh_device, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
         "linear": ttnn.bfloat4_b,
@@ -35,12 +36,12 @@ def test_grok_mlp_inference(t3k_mesh_device, reset_seeds):
         "linear_v": ttnn.bfloat4_b,
     }
 
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
     tt_model = TtGrokMLP(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,
@@ -67,15 +68,15 @@ def test_grok_mlp_inference(t3k_mesh_device, reset_seeds):
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
-        device=t3k_mesh_device,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
 
     pcc_required = 0.98  # random weights = 0.985
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

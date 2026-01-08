@@ -14,9 +14,8 @@ NLPConcatHeadsDecodeDeviceOperation::program_factory_t NLPConcatHeadsDecodeDevic
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.on_subcoregrids) {
         return program::NLPConcatHeadsDecodeSubcoregridsProgramFactory{};
-    } else {
-        return program::NLPConcatHeadsDecodeProgramFactory{};
     }
+    return program::NLPConcatHeadsDecodeProgramFactory{};
 }
 
 void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_hit(

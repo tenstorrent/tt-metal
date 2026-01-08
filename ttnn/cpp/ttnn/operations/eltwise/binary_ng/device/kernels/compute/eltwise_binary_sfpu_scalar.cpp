@@ -15,6 +15,7 @@
 #include "compute_kernel_api/mul_int_sfpu.h"
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
+#include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/quantization.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/binary_comp.h"

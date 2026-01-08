@@ -15,9 +15,8 @@ GridSampleOperation::program_factory_t GridSampleOperation::select_program_facto
     const std::string mode = operation_attributes.mode;
     if (mode == "bilinear") {
         return program::GridSampleBilinearProgramFactory{};
-    } else {
-        return program::GridSampleNearestProgramFactory{};
     }
+    return program::GridSampleNearestProgramFactory{};
 }
 
 void GridSampleOperation::validate_on_program_cache_miss(

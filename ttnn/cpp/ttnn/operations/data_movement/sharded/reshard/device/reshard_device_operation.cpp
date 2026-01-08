@@ -31,21 +31,17 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
     if (inp_mem_layout == out_mem_layout && inp_mem_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         // Resharding must have at least one buffer in L1
         return inp_buffer_type == BufferType::L1 || out_buffer_type == BufferType::L1;
-    } else {
-        // Resharding requires output buffer to be in L1
-        return out_mem_config.buffer_type() == BufferType::L1;
-    }
+    }  // Resharding requires output buffer to be in L1
+    return out_mem_config.buffer_type() == BufferType::L1;
 
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         if (inp_mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             // row major must have shard_spec[0] be the same on both input and output
             return input_tensor.memory_config().shard_spec().value().shape[0] ==
                    out_mem_config.shard_spec().value().shape[0];
-        } else {
-            // row major must have shard_spec[1] be the same on both input and output
-            return input_tensor.memory_config().shard_spec().value().shape[1] ==
-                   out_mem_config.shard_spec().value().shape[1];
-        }
+        }  // row major must have shard_spec[1] be the same on both input and output
+        return input_tensor.memory_config().shard_spec().value().shape[1] ==
+               out_mem_config.shard_spec().value().shape[1];
     }
     return true;
 }
@@ -62,11 +58,10 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 return program::ReshardSameWidthFactory</*local_is_output*/ true>{};
-            } else {
-                return program::ReshardSameWidthFactory</*local_is_output*/ false>{};
             }
-        } else if (
-            input_tensor.layout() == Layout::ROW_MAJOR &&
+            return program::ReshardSameWidthFactory</*local_is_output*/ false>{};
+        }
+        if (input_tensor.layout() == Layout::ROW_MAJOR &&
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
             out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
@@ -84,39 +79,35 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
                     return program::ReshardGenericFactory{};
                 }
                 return program::ReshardSameHeightFactory</*local_is_output*/ true>{};
-            } else {
-                return program::ReshardSameHeightFactory</*local_is_output*/ false>{};
             }
-        } else {
-            return program::ReshardGenericFactory{};
+            return program::ReshardSameHeightFactory</*local_is_output*/ false>{};
         }
-    } else {
-        auto input_buffer_type = input_tensor.memory_config().buffer_type();
-        auto output_buffer_type = out_mem_config.buffer_type();
-        auto input_page_size = input_tensor.buffer()->page_size();
-        auto output_tensor_spec = compute_output_specs(args, tensor_args);
-        auto output_page_size = output_tensor_spec.compute_page_size_bytes();
+        return program::ReshardGenericFactory{};
+    }
+    auto input_buffer_type = input_tensor.memory_config().buffer_type();
+    auto output_buffer_type = out_mem_config.buffer_type();
+    auto input_page_size = input_tensor.buffer()->page_size();
+    auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
-        TT_FATAL(
-            input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
-            "Input buffer type must be DRAM or L1");
-        TT_FATAL(
-            output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
-            "Output buffer type must be DRAM or L1");
+    TT_FATAL(
+        input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
+        "Input buffer type must be DRAM or L1");
+    TT_FATAL(
+        output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
+        "Output buffer type must be DRAM or L1");
 
-        if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
-            return program::NdReshardCopyPagesFactory{};
-        }
-        if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
-            input_page_size != output_page_size) {
-            return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
-        }
-
-        if (input_buffer_type == BufferType::DRAM) {
-            return program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
-        }
+    if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
+        return program::NdReshardCopyPagesFactory{};
+    }
+    if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
+        input_page_size != output_page_size) {
         return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
     }
+
+    if (input_buffer_type == BufferType::DRAM) {
+        return program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
+    }
+    return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
 }
 
 void ReshardDeviceOperation::validate_on_program_cache_hit(

@@ -584,10 +584,10 @@ std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
-    if constexpr (std::is_integral<ValueType>::value) {
+    if constexpr (std::is_integral_v<ValueType>) {
         std::uniform_int_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
-    } else if constexpr (std::is_floating_point<ValueType>::value) {
+    } else if constexpr (std::is_floating_point_v<ValueType>) {
         std::uniform_real_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {
@@ -1544,25 +1544,22 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
                 "Expected exactly one host in the cluster when no deployment descriptor is provided");
             return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
                 .generate_factory_system_descriptor();
-        } else {
-            return tt::scaleout_tools::CablingGenerator(
-                       cabling_descriptor_path.value(), deployment_descriptor_path.value())
-                .generate_factory_system_descriptor();
         }
-    } else {
-        // Load FSD from file
-        fsd::proto::FactorySystemDescriptor fsd_proto;
-        std::ifstream fsd_file(fsd_path.value());
-        if (!fsd_file.is_open()) {
-            TT_THROW("Failed to open FSD file: {}", fsd_path.value());
-        }
-        std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
-        fsd_file.close();
-        if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
-            TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
-        }
-        return fsd_proto;
+        return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), deployment_descriptor_path.value())
+            .generate_factory_system_descriptor();
+
+    }  // Load FSD from file
+    fsd::proto::FactorySystemDescriptor fsd_proto;
+    std::ifstream fsd_file(fsd_path.value());
+    if (!fsd_file.is_open()) {
+        TT_THROW("Failed to open FSD file: {}", fsd_path.value());
     }
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
+        TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
+    }
+    return fsd_proto;
 }
 
 tt_metal::AsicTopology validate_connectivity(

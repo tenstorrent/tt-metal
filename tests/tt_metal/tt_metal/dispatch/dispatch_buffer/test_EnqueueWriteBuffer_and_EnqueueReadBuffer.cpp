@@ -624,11 +624,7 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
 
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get()));
             srcs.push_back(generate_arange_vector(buffers[i]->size()));
-            if (use_void_star_api) {
-                distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
-            } else {
-                distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
-            }
+            distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
         }
 
         for (uint i = 0; i < cqs.size(); i++) {

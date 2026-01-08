@@ -149,7 +149,8 @@ Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const Mem
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
         return Alignment({shard_spec.shape[1]});
-    } else if (memory_config.nd_shard_spec().has_value()) {
+    }
+    if (memory_config.nd_shard_spec().has_value()) {
         const auto& nd_shard_spec = *memory_config.nd_shard_spec();
         return Alignment({nd_shard_spec.shard_shape[-1]});
     }

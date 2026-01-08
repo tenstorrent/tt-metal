@@ -318,225 +318,221 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         return {
             std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
 
-    } else {
-        // compute index info
+    }  // compute index info
 
-        IndexInfo index_info[5] = {{false}};
+    IndexInfo index_info[5] = {{false}};
 
-        for (uint32_t i = 0; i < index_tensors.size(); i++) {
-            auto dim = index_dims[i] + input_dim_offset;
-            const auto& index = index_tensors[i];
+    for (uint32_t i = 0; i < index_tensors.size(); i++) {
+        auto dim = index_dims[i] + input_dim_offset;
+        const auto& index = index_tensors[i];
 
-            index_info[dim].is_defined = true;
-            index_info[dim].address = index_tensors[i].buffer()->address();
-            index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
-            index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
-        }
-        uint32_t index_size = index_tensors[0].logical_shape()[-1];
-
-        uint32_t input_unit_size = 16 * input.element_size();
-        uint32_t output_unit_size = 16 * output.element_size();
-
-        uint32_t num_units = output_5d_shape_without_padding[0] * output_5d_shape_without_padding[1] *
-                             output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
-                             ((output_5d_shape_without_padding[4] + 15) / 16);
-
-        uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
-
-        auto
-            [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-                split_work_to_cores_wt_core_range(core_range, num_units);
-
-        Program program = Program();
-
-        // create circular buffers
-        auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-        auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
-        auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-
-        auto src_cb_index = CBIndex::c_0;
-        auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
-        auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
-                                  .set_page_size(src_cb_index, rounded_input_page_size);
-        CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-        for (uint32_t dim = 0; dim < 5; dim++) {
-            if (!index_info[dim].is_defined) {
-                continue;
-            }
-
-            auto src1_cb_index = CBIndex::c_1 + dim;
-            // auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
-            auto index_page_size = 1024 * 4;
-            auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
-                                       .set_page_size(src1_cb_index, index_page_size);
-            CreateCircularBuffer(program, all_cores, cb_index_config);
-        }
-
-        auto out_cb_index = CBIndex::c_16;
-        auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
-                                  .set_page_size(out_cb_index, rounded_input_page_size);
-        CreateCircularBuffer(program, all_cores, cb_out0_config);
-
-        // create read/wrtie kernel
-        std::map<std::string, std::string> reader_defines;
-        std::map<std::string, std::string> writer_defines;
-
-        if (is_row_major_index) {
-            reader_defines["ROW_MAJOR_INDEX"] = "1";
-        } else {
-            reader_defines["TILIZE_INDEX"] = "1";
-        }
-
-        std::vector<uint32_t> reader_compile_time_args;
-        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-        for (const auto& info : index_info) {
-            info.args.append_to(reader_compile_time_args);
-        }
-        auto reader_kernel_id = CreateReadKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
-            "reader_moreh_getitem_tilize.cpp",
-            all_cores,
-            reader_compile_time_args,
-            reader_defines);
-        std::vector<uint32_t> writer_compile_time_args;
-        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-        auto writer_kernel_id = CreateWriteKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
-            "writer_moreh_getitem_tilize.cpp",
-            all_cores,
-            writer_compile_time_args,
-            writer_defines);
-
-        uint32_t face_width = 16;
-        uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
-        uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
-
-        uint32_t input_num_tile_c = input_5d_shape[1];
-        uint32_t input_num_tile_d = input_5d_shape[2];
-        uint32_t input_num_tile_height = input_5d_shape[3] / TILE_HEIGHT;
-        uint32_t input_num_tile_width = input_5d_shape[4] / TILE_WIDTH;
-        uint32_t input_noc_id_stride_h = input_num_tile_width;
-        uint32_t input_noc_id_stride_d = input_noc_id_stride_h * input_num_tile_height;
-        uint32_t input_noc_id_stride_c = input_noc_id_stride_d * input_num_tile_d;
-        uint32_t input_noc_id_stride_n = input_noc_id_stride_c * input_num_tile_c;
-
-        uint32_t output_num_tile_c = output_5d_shape[1];
-        uint32_t output_num_tile_d = output_5d_shape[2];
-        uint32_t output_num_tile_height = output_5d_shape[3] / TILE_HEIGHT;
-        uint32_t output_num_tile_width = output_5d_shape[4] / TILE_WIDTH;
-
-        uint32_t output_noc_id_stride_h = output_num_tile_width;
-        uint32_t output_noc_id_stride_d = output_noc_id_stride_h * output_num_tile_height;
-        uint32_t output_noc_id_stride_c = output_noc_id_stride_d * output_num_tile_d;
-        uint32_t output_noc_id_stride_n = output_noc_id_stride_c * output_num_tile_c;
-
-        uint32_t input_stick_idx_stride_w = 1;
-        uint32_t input_stick_idx_stride_h = input_num_stick_width;
-        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape_without_padding[3];
-        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape_without_padding[2];
-        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape_without_padding[1];
-
-        // Set Runtime Args
-        auto core_x_offset = core_range.start_coord.x;
-        auto core_y_offset = core_range.start_coord.y;
-        uint32_t g1_numcores = core_group_1.num_cores();
-
-        uint32_t start_id = 0;
-        for (uint32_t i = 0; i < num_cores; i++) {
-            CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
-            uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
-
-            std::vector<uint32_t> reader_args = {
-                // buffers
-                input.buffer()->address(),
-                index_info[0].address,
-                index_info[1].address,
-                index_info[2].address,
-                index_info[3].address,
-                index_info[4].address,
-
-                // input
-                input_stick_idx_stride_n,
-                input_stick_idx_stride_c,
-                input_stick_idx_stride_d,
-                input_stick_idx_stride_h,
-                input_stick_idx_stride_w,
-                input_5d_shape_without_padding[1],
-                input_5d_shape_without_padding[2],
-                input_5d_shape_without_padding[3],
-                input_noc_id_stride_n,
-                input_noc_id_stride_c,
-                input_noc_id_stride_d,
-                input_noc_id_stride_h,
-                input_num_stick_width,
-
-                input_5d_shape_without_padding[0],
-                input_5d_shape_without_padding[1],
-                input_5d_shape_without_padding[2],
-                input_5d_shape_without_padding[3],
-                input_5d_shape_without_padding[4],
-
-                // index
-                index_info[0].is_defined,
-                index_info[1].is_defined,
-                index_info[2].is_defined,
-                index_info[3].is_defined,
-                index_info[4].is_defined,
-                index_info[0].unit_size,
-                index_info[1].unit_size,
-                index_info[2].unit_size,
-                index_info[3].unit_size,
-                index_info[4].unit_size,
-                index_size,
-
-                // output
-                output_5d_shape[0],
-                output_5d_shape[1],
-                output_5d_shape[2],
-                output_5d_shape_without_padding[3],
-                output_5d_shape_without_padding[4],
-                output_num_stick_width,
-
-                // etc
-                start_id,
-                num_units_per_core,
-                input_unit_size,
-                input.element_size(),
-            };
-            std::vector<uint32_t> writer_args = {
-                // buffers
-                output.buffer()->address(),
-
-                // output
-                output_5d_shape_without_padding[1],
-                output_5d_shape_without_padding[2],
-                output_5d_shape_without_padding[3],
-                output_5d_shape_without_padding[4],
-                output_noc_id_stride_n,
-                output_noc_id_stride_c,
-                output_noc_id_stride_d,
-                output_noc_id_stride_h,
-                output_num_stick_width,
-
-                // etc
-                start_id,
-                num_units_per_core,
-                output_unit_size,
-                output.element_size(),
-            };
-
-            SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-            SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
-
-            start_id += num_units_per_core;
-        }
-
-        return {
-            std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
+        index_info[dim].is_defined = true;
+        index_info[dim].address = index_tensors[i].buffer()->address();
+        index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
+        index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
+    uint32_t index_size = index_tensors[0].logical_shape()[-1];
+
+    uint32_t input_unit_size = 16 * input.element_size();
+    uint32_t output_unit_size = 16 * output.element_size();
+
+    uint32_t num_units = output_5d_shape_without_padding[0] * output_5d_shape_without_padding[1] *
+                         output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
+                         ((output_5d_shape_without_padding[4] + 15) / 16);
+
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
+        split_work_to_cores_wt_core_range(core_range, num_units);
+
+    Program program = Program();
+
+    // create circular buffers
+    auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
+    auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+
+    auto src_cb_index = CBIndex::c_0;
+    auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+    auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
+                              .set_page_size(src_cb_index, rounded_input_page_size);
+    CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    for (uint32_t dim = 0; dim < 5; dim++) {
+        if (!index_info[dim].is_defined) {
+            continue;
+        }
+
+        auto src1_cb_index = CBIndex::c_1 + dim;
+        // auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
+        auto index_page_size = 1024 * 4;
+        auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
+                                   .set_page_size(src1_cb_index, index_page_size);
+        CreateCircularBuffer(program, all_cores, cb_index_config);
+    }
+
+    auto out_cb_index = CBIndex::c_16;
+    auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
+                              .set_page_size(out_cb_index, rounded_input_page_size);
+    CreateCircularBuffer(program, all_cores, cb_out0_config);
+
+    // create read/wrtie kernel
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+
+    if (is_row_major_index) {
+        reader_defines["ROW_MAJOR_INDEX"] = "1";
+    } else {
+        reader_defines["TILIZE_INDEX"] = "1";
+    }
+
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    for (const auto& info : index_info) {
+        info.args.append_to(reader_compile_time_args);
+    }
+    auto reader_kernel_id = CreateReadKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+        "reader_moreh_getitem_tilize.cpp",
+        all_cores,
+        reader_compile_time_args,
+        reader_defines);
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    auto writer_kernel_id = CreateWriteKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+        "writer_moreh_getitem_tilize.cpp",
+        all_cores,
+        writer_compile_time_args,
+        writer_defines);
+
+    uint32_t face_width = 16;
+    uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
+    uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
+
+    uint32_t input_num_tile_c = input_5d_shape[1];
+    uint32_t input_num_tile_d = input_5d_shape[2];
+    uint32_t input_num_tile_height = input_5d_shape[3] / TILE_HEIGHT;
+    uint32_t input_num_tile_width = input_5d_shape[4] / TILE_WIDTH;
+    uint32_t input_noc_id_stride_h = input_num_tile_width;
+    uint32_t input_noc_id_stride_d = input_noc_id_stride_h * input_num_tile_height;
+    uint32_t input_noc_id_stride_c = input_noc_id_stride_d * input_num_tile_d;
+    uint32_t input_noc_id_stride_n = input_noc_id_stride_c * input_num_tile_c;
+
+    uint32_t output_num_tile_c = output_5d_shape[1];
+    uint32_t output_num_tile_d = output_5d_shape[2];
+    uint32_t output_num_tile_height = output_5d_shape[3] / TILE_HEIGHT;
+    uint32_t output_num_tile_width = output_5d_shape[4] / TILE_WIDTH;
+
+    uint32_t output_noc_id_stride_h = output_num_tile_width;
+    uint32_t output_noc_id_stride_d = output_noc_id_stride_h * output_num_tile_height;
+    uint32_t output_noc_id_stride_c = output_noc_id_stride_d * output_num_tile_d;
+    uint32_t output_noc_id_stride_n = output_noc_id_stride_c * output_num_tile_c;
+
+    uint32_t input_stick_idx_stride_w = 1;
+    uint32_t input_stick_idx_stride_h = input_num_stick_width;
+    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape_without_padding[3];
+    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape_without_padding[2];
+    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape_without_padding[1];
+
+    // Set Runtime Args
+    auto core_x_offset = core_range.start_coord.x;
+    auto core_y_offset = core_range.start_coord.y;
+    uint32_t g1_numcores = core_group_1.num_cores();
+
+    uint32_t start_id = 0;
+    for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
+        uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
+
+        std::vector<uint32_t> reader_args = {
+            // buffers
+            input.buffer()->address(),
+            index_info[0].address,
+            index_info[1].address,
+            index_info[2].address,
+            index_info[3].address,
+            index_info[4].address,
+
+            // input
+            input_stick_idx_stride_n,
+            input_stick_idx_stride_c,
+            input_stick_idx_stride_d,
+            input_stick_idx_stride_h,
+            input_stick_idx_stride_w,
+            input_5d_shape_without_padding[1],
+            input_5d_shape_without_padding[2],
+            input_5d_shape_without_padding[3],
+            input_noc_id_stride_n,
+            input_noc_id_stride_c,
+            input_noc_id_stride_d,
+            input_noc_id_stride_h,
+            input_num_stick_width,
+
+            input_5d_shape_without_padding[0],
+            input_5d_shape_without_padding[1],
+            input_5d_shape_without_padding[2],
+            input_5d_shape_without_padding[3],
+            input_5d_shape_without_padding[4],
+
+            // index
+            index_info[0].is_defined,
+            index_info[1].is_defined,
+            index_info[2].is_defined,
+            index_info[3].is_defined,
+            index_info[4].is_defined,
+            index_info[0].unit_size,
+            index_info[1].unit_size,
+            index_info[2].unit_size,
+            index_info[3].unit_size,
+            index_info[4].unit_size,
+            index_size,
+
+            // output
+            output_5d_shape[0],
+            output_5d_shape[1],
+            output_5d_shape[2],
+            output_5d_shape_without_padding[3],
+            output_5d_shape_without_padding[4],
+            output_num_stick_width,
+
+            // etc
+            start_id,
+            num_units_per_core,
+            input_unit_size,
+            input.element_size(),
+        };
+        std::vector<uint32_t> writer_args = {
+            // buffers
+            output.buffer()->address(),
+
+            // output
+            output_5d_shape_without_padding[1],
+            output_5d_shape_without_padding[2],
+            output_5d_shape_without_padding[3],
+            output_5d_shape_without_padding[4],
+            output_noc_id_stride_n,
+            output_noc_id_stride_c,
+            output_noc_id_stride_d,
+            output_noc_id_stride_h,
+            output_num_stick_width,
+
+            // etc
+            start_id,
+            num_units_per_core,
+            output_unit_size,
+            output.element_size(),
+        };
+
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
+        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
+
+        start_id += num_units_per_core;
+    }
+
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
 }
 
 void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_arguments(

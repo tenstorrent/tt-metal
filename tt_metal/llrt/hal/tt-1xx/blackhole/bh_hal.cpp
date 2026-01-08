@@ -214,13 +214,13 @@ public:
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
                 if (params.processor_id < 2) {
-                    return fmt::format(
-                        "{}/{}_{}aerisc.ld",
-                        path,
-                        fork,
-                        params.processor_id    ? "subordinate_"
-                        : enable_2_erisc_mode_ ? "main_"
-                                               : "");
+                    const char* prefix = "";
+                    if (params.processor_id) {
+                        prefix = "subordinate_";
+                    } else if (enable_2_erisc_mode_) {
+                        prefix = "main_";
+                    }
+                    return fmt::format("{}/{}_{}aerisc.ld", path, fork, prefix);
                 }
                 break;
             case HalProgrammableCoreType::IDLE_ETH:
@@ -357,9 +357,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DispatchFeature::ETH_MAILBOX_API: return true;
-            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return true;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::ETH_MAILBOX_API:
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER:
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
         }

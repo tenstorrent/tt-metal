@@ -9,6 +9,7 @@
 #include <nanobind/stl/set.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/vector.h>
 #include <nanobind/operators.h>
 
 #include "tools/profiler/op_profiler.hpp"
@@ -28,6 +29,14 @@ nb::dict convert_sets_to_lists(const std::map<tt::ChipId, std::set<ttm::ProgramA
             programs.append(nb::cast(program_data));
         }
         out[nb::int_(chip_id)] = programs;
+    }
+    return out;
+}
+
+nb::dict convert_kernel_duration_summaries_to_dict(const std::map<tt::ChipId, ttm::KernelDurationSummary>& summaries) {
+    nb::dict out;
+    for (const auto& [chip_id, summary] : summaries) {
+        out[nb::int_(chip_id)] = nb::cast(summary);
     }
     return out;
 }
@@ -82,6 +91,24 @@ void ProfilerModule(nb::module_& mod) {
                 data.core_count,
                 data.num_available_cores);
         });
+
+    nb::class_<ttm::DurationHistogram>(mod, "DurationHistogram")
+        .def(nb::init<>())
+        .def_rw("min_ns", &ttm::DurationHistogram::min_ns)
+        .def_rw("max_ns", &ttm::DurationHistogram::max_ns)
+        .def_rw("num_buckets", &ttm::DurationHistogram::num_buckets)
+        .def_rw("bucket_edges_ns", &ttm::DurationHistogram::bucket_edges_ns)
+        .def_rw("bucket_counts", &ttm::DurationHistogram::bucket_counts)
+        .def_rw("underflow", &ttm::DurationHistogram::underflow)
+        .def_rw("overflow", &ttm::DurationHistogram::overflow);
+
+    nb::class_<ttm::KernelDurationSummary>(mod, "KernelDurationSummary")
+        .def(nb::init<>())
+        .def_rw("count", &ttm::KernelDurationSummary::count)
+        .def_rw("min_ns", &ttm::KernelDurationSummary::min_ns)
+        .def_rw("max_ns", &ttm::KernelDurationSummary::max_ns)
+        .def_rw("avg_ns", &ttm::KernelDurationSummary::avg_ns)
+        .def_rw("histogram", &ttm::KernelDurationSummary::histogram);
     mod.def(
         "start_tracy_zone",
         &tt::tt_metal::op_profiler::start_tracy_zone,
@@ -154,6 +181,31 @@ void ProfilerModule(nb::module_& mod) {
         R"doc(
         Get performance results for all programs that have been read so far across all calls to `ttnn.ReadDeviceProfiler()`.
         Returns a dictionary mapping chip IDs to lists of ProgramAnalysisData objects. The list contains all entries for each program.
+        TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, and TT_METAL_PROFILER_CPP_POST_PROCESS=1 environment variables must be set.
+        Returns an empty dictionary if the environment variables are not set.
+    )doc");
+
+    mod.def(
+        "get_latest_kernel_duration_summary",
+        []() {
+            return convert_kernel_duration_summaries_to_dict(
+                tt::tt_metal::experimental::GetLatestKernelDurationSummary());
+        },
+        R"doc(
+        Get a summary (min/max/avg + histogram) of DEVICE KERNEL duration for the latest captured program set.
+        Returns a dictionary mapping chip IDs to KernelDurationSummary objects.
+        TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, and TT_METAL_PROFILER_CPP_POST_PROCESS=1 environment variables must be set.
+        Returns an empty dictionary if the environment variables are not set.
+    )doc");
+
+    mod.def(
+        "get_all_kernel_duration_summary",
+        []() {
+            return convert_kernel_duration_summaries_to_dict(tt::tt_metal::experimental::GetAllKernelDurationSummary());
+        },
+        R"doc(
+        Get a summary (min/max/avg + histogram) of DEVICE KERNEL duration across all captured program sets so far.
+        Returns a dictionary mapping chip IDs to KernelDurationSummary objects.
         TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, and TT_METAL_PROFILER_CPP_POST_PROCESS=1 environment variables must be set.
         Returns an empty dictionary if the environment variables are not set.
     )doc");

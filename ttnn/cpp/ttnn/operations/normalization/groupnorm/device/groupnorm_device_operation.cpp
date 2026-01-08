@@ -36,9 +36,8 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
 
     if (batch >= num_virtual_rows) {
         return GroupNormNoMcastProgramFactory{};
-    } else {
-        return GroupNormMcastProgramFactory{};
     }
+    return GroupNormMcastProgramFactory{};
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_hit(

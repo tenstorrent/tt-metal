@@ -3,15 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/math.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
+
+using matmul_device_operation_t = ttnn::operations::experimental::minimal_matmul::MinimalMatmulDeviceOperation;
 
 namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async {
 
@@ -38,12 +36,14 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
 StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalMatmulAsync::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
-    ttnn::TensorSpec strided_all_gather_output_shape = attributes.ag_op.compute_output_specs(
-        attributes.strided_all_gather_async_struct, strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
+    ttnn::TensorSpec strided_all_gather_output_shape =
+        strided_all_gather_async::StridedAllGatherAsync::compute_output_specs(
+            attributes.strided_all_gather_async_struct,
+            strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
 
     // Matmul shape
-    ttnn::TensorSpec minimal_matmul_output_specs =
-        attributes.matmul_struct.compute_output_specs({tensor_args.input_tensor, tensor_args.weight_tensor})[0];
+    ttnn::TensorSpec minimal_matmul_output_specs = matmul_device_operation_t::compute_output_specs(
+        attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
 
     return {strided_all_gather_output_shape, minimal_matmul_output_specs};
 }
@@ -51,13 +51,14 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
 StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinimalMatmulAsync::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather output tensor
-    ttnn::Tensor strided_all_gather_output_tensor = attributes.ag_op.create_output_tensors(
-        attributes.strided_all_gather_async_struct,
-        strided_all_gather_async::tensor_args_t{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
+    ttnn::Tensor strided_all_gather_output_tensor =
+        strided_all_gather_async::StridedAllGatherAsync::create_output_tensors(
+            attributes.strided_all_gather_async_struct,
+            strided_all_gather_async::tensor_args_t{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
     // Matmul output tensor
-    ttnn::Tensor minimal_matmul_output_tensor = attributes.matmul_struct.create_output_tensors(
-        {strided_all_gather_output_tensor, tensor_args.weight_tensor})[0];
+    ttnn::Tensor minimal_matmul_output_tensor = matmul_device_operation_t::create_output_tensors(
+        attributes.matmul_struct, {strided_all_gather_output_tensor, tensor_args.weight_tensor});
 
     return {strided_all_gather_output_tensor, minimal_matmul_output_tensor};
 }
@@ -138,12 +139,12 @@ ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::St
                 config->K_block_size);
 
     /* Matmul setup */
-    ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp matmul_struct =
-        ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp{
-            .config = config,
-            .fused_activation = std::move(fused_activation),
-            .output_mem_config = memory_config_mm,
-            .compute_kernel_config = compute_kernel_config.value()};
+    auto matmul_struct = decltype(ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::
+                                      operation_attributes_t::matmul_struct){
+        .config = config,
+        .fused_activation = std::move(fused_activation),
+        .output_mem_config = memory_config_mm,
+        .compute_kernel_config = compute_kernel_config.value()};
     ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync ag_op{};
 
     bool read_local_from_input = read_local_slice_from_input.value_or(false);

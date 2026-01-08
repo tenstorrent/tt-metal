@@ -2450,6 +2450,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         ((32, 96), (96, 32), (1, 90), (90, 16)),  # Padding introduced in M,K and N dimensions, 1 face padded
         ((32, 96), (96, 32), (1, 65), (65, 16)),  # Padding introduced in M,K and N dimensions, 2 faces padded
     ],
+    ids=["no_padding", "1_face_padded", "2_faces_padded"],
 )
 @pytest.mark.parametrize(
     "program_config,input_a_memory_config,input_b_memory_config,output_memory_config",
@@ -2542,6 +2543,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ),
         ),
     ],
+    ids=["reuse", "multicast1d", "multicast1d_sharded", "dram_sharded"],
 )
 def test_matmul_padding(
     device,

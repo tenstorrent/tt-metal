@@ -61,6 +61,8 @@ inline std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set);
+
 using tt::tt_metal::GlobalSemaphore;
 using tt::tt_metal::SubDevice;
 using tt::tt_metal::SubDeviceManagerId;

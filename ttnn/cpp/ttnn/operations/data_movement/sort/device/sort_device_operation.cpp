@@ -38,7 +38,8 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     if (Wt <= WT_THRESHOLD) {
         // Single-core implementation
         return program::SortProgramFactorySingleRowSingleCore{};
-    } else if (Wt <= total_number_of_tiles_for_hybrid_approach) {
+    }
+    if (Wt <= total_number_of_tiles_for_hybrid_approach) {
         // Hybrid implementation
         return program::SortProgramFactoryCrossCoreDataExchange{};
     }

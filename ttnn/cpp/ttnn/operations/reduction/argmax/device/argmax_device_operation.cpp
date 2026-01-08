@@ -59,9 +59,8 @@ ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_f
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.use_multicore) {
         return program::ArgMaxMultiCoreProgramFactory{};
-    } else {
-        return program::ArgMaxSingleCoreProgramFactory{};
     }
+    return program::ArgMaxSingleCoreProgramFactory{};
 }
 
 void ArgMaxDeviceOperation::validate_on_program_cache_hit(

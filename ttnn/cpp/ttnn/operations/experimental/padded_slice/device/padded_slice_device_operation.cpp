@@ -14,11 +14,11 @@ PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return program::PaddedSliceRMProgramFactory{};
-    } else if (tensor_args.input.layout() == Layout::TILE) {
-        return program::PaddedSliceTileProgramFactory{};
-    } else {
-        TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
     }
+    if (tensor_args.input.layout() == Layout::TILE) {
+        return program::PaddedSliceTileProgramFactory{};
+    }
+    TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
 }
 
 void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
@@ -28,7 +28,6 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
 
 void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor_a = tensor_args.input;
 
     // Validate step parameter early - padded_slice does not support strided slices

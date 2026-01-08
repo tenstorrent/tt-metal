@@ -17,10 +17,9 @@ ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         return RingReduceScatterMeshWorkloadFactory{};
-    } else {
-        TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
-        return LineReduceScatterMeshWorkloadFactory{};
     }
+    TT_FATAL(operation_attributes.topology == ttnn::ccl::Topology::Linear, "Topology must be Ring or Linear");
+    return LineReduceScatterMeshWorkloadFactory{};
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(

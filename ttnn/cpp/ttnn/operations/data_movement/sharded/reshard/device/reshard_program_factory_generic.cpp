@@ -109,12 +109,9 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                     while (consecutive_it != end and consecutive_it->has_value()) {
                         auto next_input_page = *(consecutive_it);
                         auto curr_input_page = *(last_it_consec);
-                        // diff core , not consecutive
-                        if (curr_input_page.value().first != next_input_page.value().first) {
-                            break;
-                        }
-                        // not consecutive
-                        else if ((curr_input_page.value().second + 1) != next_input_page.value().second) {
+                        // diff core or not consecutive
+                        if (curr_input_page.value().first != next_input_page.value().first ||
+                            (curr_input_page.value().second + 1) != next_input_page.value().second) {
                             break;
                         }
                         // next page is padding
