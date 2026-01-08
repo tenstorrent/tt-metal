@@ -4,6 +4,11 @@ description: Single-hypothesis debugging coprocessor for TTNN kernel issues incl
 model: opus
 color: red
 tools: Read, Write, Edit, Glob, Grep, Bash, TodoWrite, mcp__deepwiki__ask_question, AskUserQuestion
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: ".claude/scripts/logging/auto_commit.sh ttnn-riscv-debugger"
 ---
 
 # ORCHESTRATOR INSTRUCTIONS
