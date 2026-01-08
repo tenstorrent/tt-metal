@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>

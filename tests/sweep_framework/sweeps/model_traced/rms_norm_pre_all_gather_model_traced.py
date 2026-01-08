@@ -38,13 +38,10 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    input_b_dtype=None,
-    input_b_layout=None,
     input_b_memory_config=None,
-    output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 

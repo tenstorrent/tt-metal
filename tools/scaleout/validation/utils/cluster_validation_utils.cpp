@@ -584,10 +584,10 @@ std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
-    if constexpr (std::is_integral<ValueType>::value) {
+    if constexpr (std::is_integral_v<ValueType>) {
         std::uniform_int_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
-    } else if constexpr (std::is_floating_point<ValueType>::value) {
+    } else if constexpr (std::is_floating_point_v<ValueType>) {
         std::uniform_real_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {
@@ -1220,9 +1220,9 @@ void reset_local_ethernet_links(
                 auto src_chan = eth_connection.src_chan;
                 auto dst_chan = eth_connection.dst_chan;
 
-                if (reset_cores[*dst_asic_id].find(dst_chan) != reset_cores[*dst_asic_id].end()) {
+                if (reset_cores[*dst_asic_id].contains(dst_chan)) {
                     TT_FATAL(
-                        reset_cores[*asic_id].find(src_chan) != reset_cores[*asic_id].end(),
+                        reset_cores[*asic_id].contains(src_chan),
                         "Expected channel {} on ASIC {} to already be reset",
                         src_chan,
                         *asic_id);
@@ -1272,8 +1272,7 @@ void get_cross_node_ethernet_links_to_reset(
                 // These links are being retrained for the second time if the current dst_asic was paired with the
                 // current src_asic in a previous iteration.
                 // In this case, we skip the link reset.
-                if (paired_asic_ids.find(*dst_asic_id) != paired_asic_ids.end() and
-                    paired_asic_ids[*dst_asic_id].find(*asic_id) != paired_asic_ids[*dst_asic_id].end()) {
+                if (paired_asic_ids.contains(*dst_asic_id) and paired_asic_ids[*dst_asic_id].contains(*asic_id)) {
                     continue;
                 }
                 paired_asic_ids[*asic_id].insert(*dst_asic_id);
@@ -1424,7 +1423,7 @@ AsicTopology generate_asic_topology_from_connections(
             src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
             dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
-        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
+        if (!visited[src_asic_id].contains(dst_asic_id)) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
                  {EthConnection(
@@ -1435,7 +1434,7 @@ AsicTopology generate_asic_topology_from_connections(
             asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
                 *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
         }
-        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
+        if (!visited[dst_asic_id].contains(src_asic_id)) {
             asic_topology[dst_asic_id].push_back(
                 {src_asic_id,
                  {EthConnection(
@@ -1471,7 +1470,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
 
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     TT_FATAL(
-        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        asic_descriptors.contains(dst_asic_id),
         "Could not find ASIC descriptor for destination ASIC ID: {}",
         dst_asic_id);
 
@@ -1545,25 +1544,22 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
                 "Expected exactly one host in the cluster when no deployment descriptor is provided");
             return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
                 .generate_factory_system_descriptor();
-        } else {
-            return tt::scaleout_tools::CablingGenerator(
-                       cabling_descriptor_path.value(), deployment_descriptor_path.value())
-                .generate_factory_system_descriptor();
         }
-    } else {
-        // Load FSD from file
-        fsd::proto::FactorySystemDescriptor fsd_proto;
-        std::ifstream fsd_file(fsd_path.value());
-        if (!fsd_file.is_open()) {
-            TT_THROW("Failed to open FSD file: {}", fsd_path.value());
-        }
-        std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
-        fsd_file.close();
-        if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
-            TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
-        }
-        return fsd_proto;
+        return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), deployment_descriptor_path.value())
+            .generate_factory_system_descriptor();
+
+    }  // Load FSD from file
+    fsd::proto::FactorySystemDescriptor fsd_proto;
+    std::ifstream fsd_file(fsd_path.value());
+    if (!fsd_file.is_open()) {
+        TT_THROW("Failed to open FSD file: {}", fsd_path.value());
     }
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
+        TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
+    }
+    return fsd_proto;
 }
 
 tt_metal::AsicTopology validate_connectivity(

@@ -26,8 +26,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
     // Track connections per VC for packing
-    downstream_edms_connected_by_vc.at(inbound_vc_idx).push_back(
-        {downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
+    downstream_edms_connected_by_vc.at(inbound_vc_idx)
+        .push_back({downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
 
     if (is_2D_routing) {
         // Calculate compact index based on downstream_direction relative to my_direction
@@ -211,21 +211,23 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     if (!is_2D_routing) {
         // 1D routing: single downstream connection
         if (downstream_edms_connected_by_vc[vc_idx].empty()) {
-            return 0; // no connection here
+            return 0;  // no connection here
         }
-        TT_FATAL(downstream_edms_connected_by_vc[vc_idx].size() == 1, "Downstream edms connected by vc should be 1 for non-2D routing. vc_idx: {}, size: {}", vc_idx, downstream_edms_connected_by_vc[vc_idx].size());
+        TT_FATAL(
+            downstream_edms_connected_by_vc[vc_idx].size() == 1,
+            "Downstream edms connected by vc should be 1 for non-2D routing. vc_idx: {}, size: {}",
+            vc_idx,
+            downstream_edms_connected_by_vc[vc_idx].size());
         auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().second);
         return ord;
-    } else {
-        // 2D routing: encode NOC coordinates using compact index (works for both VC0 and VC1)
-        uint32_t ord = 0;
-        for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
-            // Calculate compact index based on direction relative to my_direction
-            size_t compact_index = get_receiver_channel_compact_index(my_direction, direction);
-            ord |= (get_noc_ord(noc_xy) << (compact_index * 8));
-        }
-        return ord;
+    }  // 2D routing: encode NOC coordinates using compact index (works for both VC0 and VC1)
+    uint32_t ord = 0;
+    for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+        // Calculate compact index based on direction relative to my_direction
+        size_t compact_index = get_receiver_channel_compact_index(my_direction, direction);
+        ord |= (get_noc_ord(noc_xy) << (compact_index * 8));
     }
+    return ord;
 }
 
 void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(
@@ -239,7 +241,7 @@ void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(
     // Validate that all connected VCs have non-zero buffer counts
     // downstream_sender_channels_num_buffers is indexed by VC (receiver channel), not by sender channel
     for (size_t vc_idx = 0; vc_idx < builder_config::num_max_receiver_channels; vc_idx++) {
-        if (this->downstream_edms_connected_by_vc_set.find(vc_idx) != this->downstream_edms_connected_by_vc_set.end()) {
+        if (this->downstream_edms_connected_by_vc_set.contains(vc_idx)) {
             TT_FATAL(
                 this->downstream_sender_channels_num_buffers[vc_idx] != 0,
                 "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}",

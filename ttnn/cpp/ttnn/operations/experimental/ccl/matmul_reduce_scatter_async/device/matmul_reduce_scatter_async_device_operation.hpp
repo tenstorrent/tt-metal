@@ -42,8 +42,15 @@ struct MatmulReduceScatterAsyncDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
+
+namespace ttnn::prim {
+
+ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceScatterAsyncDeviceOperation::
+    tensor_return_value_t
+    matmul_reduce_scatter_async(
         const Tensor& input_tensor,
         const Tensor& weight_tensor,
         Tensor& persistent_intermediate_buffer,
@@ -66,14 +73,5 @@ struct MatmulReduceScatterAsyncDeviceOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
-
-namespace ttnn::prim {
-
-constexpr auto matmul_reduce_scatter_async = ttnn::register_operation<
-    "ttnn::prim::matmul_reduce_scatter_async",
-    ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::MatmulReduceScatterAsyncDeviceOperation>();
 
 }  // namespace ttnn::prim

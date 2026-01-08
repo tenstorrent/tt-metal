@@ -2219,9 +2219,7 @@ process_gather_in0_program_and_create_override_variables(
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
     auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
     auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
-    for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
-        auto core = all_cores_vec[i];
-
+    for (auto core : all_cores_vec) {
         auto all_worker_cores_iter = std::find(worker_cores_vec.begin(), worker_cores_vec.end(), core);
         auto hop_cores_iter = std::find(hop_cores_vec.begin(), hop_cores_vec.end(), core);
         bool core_is_in_all_worker_cores = all_worker_cores_iter != worker_cores_vec.end();
@@ -2590,8 +2588,7 @@ inline void override_gather_in0_program_parameters(
         }
     }
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
-    for (uint32_t i = 0; i < override_variables.cores.size(); ++i) {
-        const auto& core = override_variables.cores[i];
+    for (const auto& core : override_variables.cores) {
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
         /* in1 */
@@ -2878,48 +2875,47 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler);
-    } else {
-        return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
-            program,
-            a,
-            device,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode,
-            packer_l1_acc,
-            compute_with_storage_grid_size,
-            throttle_level,
-            B,
-            Mt,
-            Nt,
-            Kt,
-            bcast_batch,
-            transpose_a,
-            transpose_b,
-            in0_block_w,
-            out_subblock_h,
-            out_subblock_w,
-            out_block_h,
-            out_block_w,
-            per_core_M,
-            per_core_N,
-            fused_activation,
-            in0_buffer,
-            in1_buffer,
-            bias_buffer,
-            out_buffer,
-            in0_tile,
-            in1_tile,
-            bias.has_value() ? bias->tensor_spec().tile() : output_tile,
-            output_tile,
-            in0_data_format,
-            in1_data_format,
-            bias_data_format,
-            output_data_format,
-            a.memory_config().is_sharded(),
-            output.memory_config().is_sharded(),
-            untilize_out);
     }
+    return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
+        program,
+        a,
+        device,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        compute_with_storage_grid_size,
+        throttle_level,
+        B,
+        Mt,
+        Nt,
+        Kt,
+        bcast_batch,
+        transpose_a,
+        transpose_b,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        out_block_h,
+        out_block_w,
+        per_core_M,
+        per_core_N,
+        fused_activation,
+        in0_buffer,
+        in1_buffer,
+        bias_buffer,
+        out_buffer,
+        in0_tile,
+        in1_tile,
+        bias.has_value() ? bias->tensor_spec().tile() : output_tile,
+        output_tile,
+        in0_data_format,
+        in1_data_format,
+        bias_data_format,
+        output_data_format,
+        a.memory_config().is_sharded(),
+        output.memory_config().is_sharded(),
+        untilize_out);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
