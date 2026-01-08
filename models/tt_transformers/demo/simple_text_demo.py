@@ -1004,6 +1004,7 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
+                enable_trace=False, # WARNING! Enabling tracing for prefill warmup can cause memory corruption issues
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
