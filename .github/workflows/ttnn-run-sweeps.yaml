@@ -743,11 +743,11 @@ jobs:
             echo "✅ psycopg2 already available"
           fi
 
-          # PostgreSQL service is already running, just restore the dump
-          echo "Restoring database from SQL dump (963KB)..."
-          PGPASSWORD=tt.sweeps psql -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
-            -f model_tracer/ttnn_operations_db.sql \
-            -q 2>&1 | grep -v "^NOTICE:" || true
+          # PostgreSQL service is already running, restore the custom format dump
+          echo "Restoring database from custom format dump (963KB)..."
+          PGPASSWORD=tt.sweeps pg_restore -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
+            --clean --if-exists --no-owner --no-privileges \
+            model_tracer/ttnn_operations_db.sql 2>&1 | grep -v "^WARNING:" | grep -v "^ERROR:.*does not exist" || true
           echo "✅ Database restored"
 
           # Verify database
