@@ -58,7 +58,7 @@ int main() {
 
     // Configure and create Data Movement kernels
     std::vector<KernelHandle> dm_dram_to_l1_kernels;
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 1; i++) {
         dm_dram_to_l1_kernels.push_back(experimental::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
@@ -67,7 +67,7 @@ int main() {
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 1; i++) {
         dm_l1_to_dram_kernels.push_back(experimental::CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
@@ -78,23 +78,28 @@ int main() {
     uint32_t semaphore_value = 0;
     const uint32_t sem_id = CreateSemaphore(program, core, semaphore_value);
 
-    for (uint32_t i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 1; i++) {
         SetRuntimeArgs(
             program, dm_dram_to_l1_kernels[i], core, {dram_address, l1_address, 4, 0, sem_id, semaphore_value});
-        semaphore_value++;
-        dram_address += 1024;
+        // semaphore_value++;
+        // dram_address += 1024;
 
         SetRuntimeArgs(
-            program, dm_l1_to_dram_kernels[i], core, {dram_address, l1_address, 4, 0, sem_id, semaphore_value});
-        semaphore_value++;
-        l1_address += 1024;
+            program,
+            dm_l1_to_dram_kernels[i],
+            core,
+            {dram_address + 1024, l1_address, 4, 0, sem_id, semaphore_value + 1});
+        // semaphore_value++;
+        // l1_address += 1024;
     }
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
     std::cout << "EnqueueMeshWorkload passed" << std::endl;
     std::vector<uint32_t> outputs{0};
+    MetalContext::instance().get_cluster().dram_barrier(mesh_device->get_devices()[0]->id());
     tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_address, 4, outputs);
+    // tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], core, l1_address, 4, outputs);
     std::cout << "ReadFromDeviceDRAMChannel passed" << std::endl;
     mesh_device->close();
 

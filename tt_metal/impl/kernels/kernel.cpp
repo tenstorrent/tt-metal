@@ -775,6 +775,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
     //         device->build_id(), tensix_core_type, dm_class_idx, riscv_id));
     // }
     // jit_build_subset(build_states, this);
+    log_info(tt::LogMetal, "Building kernel for processor {}", riscv_id);
     jit_build(
         BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id),
@@ -803,6 +804,11 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device) {
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
+    log_info(
+        tt::LogMetal,
+        "Reading binary for processor {} with path {}",
+        riscv_id,
+        build_state.get_target_out_path(this->kernel_full_name_));
     const ll_api::memory& binary_mem =
         llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
     binaries.push_back(&binary_mem);
@@ -829,11 +835,17 @@ bool QuasarDataMovementKernel::configure(
     const std::vector<const ll_api::memory*>& binaries =
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     for (int i = 0; i < this->expected_num_binaries(); i++) {
+        log_info(
+            tt::LogMetal,
+            "Writing binary for processor {} at offset {}. Binary size: {}",
+            this->dm_cores_[i],
+            offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0])],
+            binaries[i]->get_packed_size());
         llrt::write_binary_to_address(
             *binaries[i],
             device_id,
             worker_core,
-            base_address + offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[i])]);
+            base_address + offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_cores_[0])]);
     }
 
     return true;

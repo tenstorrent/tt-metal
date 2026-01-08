@@ -27,6 +27,7 @@
 #include "api/compile_time_args.h"
 #include "hostdev/dev_msgs.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/debug/dprint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 
@@ -1864,6 +1865,9 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
+
+    // DPRINT << *sem_addr << ENDL();
+    // DPRINT << val << ENDL();
 
     WAYPOINT("NSW");
     do {
