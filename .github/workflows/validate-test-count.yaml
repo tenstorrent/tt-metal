@@ -113,6 +113,10 @@ jobs:
           apt-get update
           apt-get install -y python3-pip git
 
+      - name: Configure git
+        run: |
+          git config --global --add safe.directory /work
+
       - name: Install Python dependencies
         run: |
           python3 -m pip install pytest torch loguru transformers
@@ -145,7 +149,7 @@ jobs:
           count_tests() {
             local dir=$1
             echo "Collecting from: $dir" >&2
-            output=$(pytest --collect-only -q "$dir" --noconftest -p no:warnings 2>&1)
+            output=$(pytest --collect-only -q "$dir" --noconftest 2>&1)
             echo "Pytest output:" >&2
             echo "$output" >&2
             count=$(echo "$output" | tail -1 | grep -oE '[0-9]+' | head -1)
