@@ -89,10 +89,16 @@ install(
         metalium-dev
 )
 
-# Install the library file using a generator expression that resolves at install time
-# This avoids path resolution issues that can occur with install(TARGETS) LIBRARY
-# when LIBRARY_OUTPUT_DIRECTORY is overridden
-install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
+# Install the library file using install(CODE) to resolve the path at install time
+# This avoids path resolution issues that can occur with install(FILES) when
+# LIBRARY_OUTPUT_DIRECTORY is overridden and CMake hardcodes paths at configure time
+install(
+    CODE
+        "
+        file(INSTALL $<TARGET_FILE:tt_stl> DESTINATION \${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
+        "
+    COMPONENT metalium-runtime
+)
 
 # Ensure the generated install target builds tt_stl first.
 # This avoids intermittent "file INSTALL cannot find ..." failures in generators
