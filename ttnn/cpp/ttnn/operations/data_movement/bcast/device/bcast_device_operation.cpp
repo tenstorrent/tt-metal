@@ -8,6 +8,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::data_movement::bcast {
 
