@@ -42,9 +42,7 @@ void kernel_main() {
     //     [compute processes all c for this (r, c_block)]
     //     write Y[r, c_block] to DRAM
     // ============================================================================
-    // DPRINT << "Writer kernel start, processing rows " << start_row << " to " << end_row - 1 << "\n";
     for (uint32_t r = start_row; r < end_row; ++r) {
-        // DPRINT << "Writing output row r: " << r << "\n";
         // Loop over output columns in blocks - matches compute kernel order
         for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
             const uint32_t current_block_size = (c_block_start + block_size <= Wt) ? block_size : (Wt - c_block_start);
@@ -55,7 +53,5 @@ void kernel_main() {
             write_tiles_by_row(
                 cb_y_idx, y_address_generator, start_tile_idx, current_block_size, tile_bytes, block_size);
         }
-        // DPRINT << "Finished writing output row r: " << r << "\n";
     }
-    // DPRINT << "Writer kernel end\n";
 }

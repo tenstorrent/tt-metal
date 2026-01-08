@@ -28,15 +28,11 @@ constexpr auto kComputeKernelPath =
 constexpr auto kComputeKernelMfitsL1Path =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel_m_fits_l1.cpp";
 
-// Reader buffer indices (sender kernel has W1, receiver doesn't)
+// Reader buffer indices (sender kernel has W1/W2/W3, receiver gets all weights via multicast)
 constexpr uint32_t kInputBufferIdx = 0;
 constexpr uint32_t kW1BufferIdx = 1U;
 constexpr uint32_t kW2BufferIdx = 2U;
 constexpr uint32_t kW3BufferIdx = 3U;
-
-// Receiver kernel buffer indices (no W1 - it comes via multicast)
-constexpr uint32_t kReceiverW2BufferIdx = 1U;  // w2 is at index 1 for receiver (no w1)
-constexpr uint32_t kReceiverW3BufferIdx = 2U;  // w3 is at index 2 for receiver
 
 // Writer buffer indices
 constexpr uint32_t kSwigluBufferIdx = 0;
@@ -94,7 +90,8 @@ void assign_per_core_runtime_args(
     ttnn::IDevice* device,
     uint32_t mcast_sender_semaphore_id,
     uint32_t mcast_receiver_semaphore_id,
-    bool use_multicast) {
+    bool use_multicast,
+    const std::map<uint32_t, uint32_t>& max_rows_per_grid_row) {
     uint32_t num_senders = 0;
     uint32_t num_receivers = 0;
 
@@ -110,6 +107,12 @@ void assign_per_core_runtime_args(
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_FATAL(false, "Core not in specified core ranges");
+        }
+
+        // Get max rows for this grid row (for multicast synchronization)
+        uint32_t max_rows_for_sync = num_rows_per_core;  // Default: no padding needed
+        if (use_multicast && max_rows_per_grid_row.find(core.y) != max_rows_per_grid_row.end()) {
+            max_rows_for_sync = max_rows_per_grid_row.at(core.y);
         }
 
         // Determine kernel assignment based on multicast flag:
@@ -167,6 +170,7 @@ void assign_per_core_runtime_args(
                  w2->address(),
                  w3->address(),
                  num_rows_per_core,
+                 max_rows_for_sync,
                  num_rows_written,
                  // Shared multicast args for W1/W2/W3 (all use same topology)
                  mcast_start_physical_x,
@@ -178,7 +182,7 @@ void assign_per_core_runtime_args(
                  mcast_receiver_semaphore_id});
         } else if (use_multicast && core.x > 0) {
             // Receiver core: only used when multicast is enabled
-            // Receives W1 via multicast, still reads X, W2, W3 from DRAM
+            // Receives W1/W2/W3 via multicast, reads only X from DRAM
             num_receivers++;
             tt::tt_metal::CoreCoord sender_core = {0, core.y};  // Sender is in left column
             auto sender_physical = device->worker_core_from_logical_core(sender_core);
@@ -188,10 +192,9 @@ void assign_per_core_runtime_args(
                 kernels.reader_w1_receiver,
                 core,
                 {input_buffer->address(),
-                 // NOTE: w1->address() is NOT passed - W1 comes via multicast!
-                 w2->address(),
-                 w3->address(),
+                 // NOTE: W1/W2/W3 all come via multicast - no addresses passed!
                  num_rows_per_core,
+                 max_rows_for_sync,
                  num_rows_written,
                  // Shared multicast args for W1/W2/W3 (all use same sender)
                  static_cast<uint32_t>(sender_physical.x),
@@ -306,50 +309,37 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process, /*row_wise=*/true);
 
     // -------------------------------------------------------------------------
-    // 1.5) Check if multicast should be enabled
+    // 1.5) Calculate max rows per grid row for multicast synchronization
     // -------------------------------------------------------------------------
-    // Multicast requires all cores in each logical row to process the same number of rows.
-    // If split_work_to_cores assigns different row counts within a row, disable multicast.
-    bool use_multicast = true;
-    if (num_cores_x > 1) {
-        // Build a map of row_index -> set of row counts
-        std::map<uint32_t, std::set<uint32_t>> row_workloads;
-        // std::cerr << "SwiGLU: Checking workload distribution:\n";
+    // UNIFORM WORKLOAD PADDING FOR MULTICAST:
+    // Multicast requires all cores in a grid row to participate in the same number
+    // of multicast operations. When batch size doesn't divide evenly (e.g., 100 rows
+    // across 8 cores → some get 13 rows, others 12), we use uniform padding:
+    //
+    // 1. All cores in a grid row loop for max_rows_for_sync iterations
+    // 2. Cores with fewer actual rows read the last valid row during padding iterations
+    // 3. This maintains multicast sync without producing extra outputs
+    // 4. Compute kernel processes only actual rows (num_rows_per_core)
+    // 5. Writer kernel writes only actual rows (num_rows_per_core)
+    //
+    // This approach enables multicast for all batch sizes while avoiding CB overflow/underflow.
+    bool use_multicast = (num_cores_x > 1);
+    std::map<uint32_t, uint32_t> max_rows_per_grid_row;
+
+    if (use_multicast) {
+        // Build map of grid row -> maximum num_rows_per_core in that row
         for (uint32_t i = 0; i < num_cores; ++i) {
             tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
             uint32_t num_rows_per_core =
                 core_group_1.contains(core) ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
-            row_workloads[core.y].insert(num_rows_per_core);
-            // if (i < 24) {  // Debug first 3 rows
-            //     std::cerr << "  Core (" << core.x << "," << core.y
-            //               << "): " << (core_group_1.contains(core) ? "group_1" : "group_2") << " = "
-            //               << num_rows_per_core << " rows\n";
-            // }
-        }
 
-        // Check if any row has mixed workloads
-        for (const auto& [row_index, workload_set] : row_workloads) {
-            // std::cerr << "  Row y=" << row_index << " has workloads: ";
-            // for (auto w : workload_set) std::cerr << w << " ";
-            // std::cerr << (workload_set.size() > 1 ? " [IMBALANCE]" : " [OK]") << "\n";
-            if (workload_set.size() > 1) {
-                use_multicast = false;
-                // std::cerr << "SwiGLU: Disabling multicast due to workload imbalance in row " << row_index <<
-                // std::endl;
-                break;
+            if (max_rows_per_grid_row.find(core.y) == max_rows_per_grid_row.end()) {
+                max_rows_per_grid_row[core.y] = num_rows_per_core;
+            } else {
+                max_rows_per_grid_row[core.y] = std::max(max_rows_per_grid_row[core.y], num_rows_per_core);
             }
         }
-    } else {
-        // Single column: no multicast needed
-        use_multicast = false;
     }
-
-    // std::cerr << "SwiGLU CREATE: use_multicast=" << use_multicast << ", num_cores=" << num_cores << " (" <<
-    // num_cores_x
-    //           << "x" << num_cores_y << ")"
-    //           << ", total_rows=" << total_rows_to_process << ", group_1=" << num_rows_per_core_group_1 << " rows"
-    //           << ", group_2=" << num_rows_per_core_group_2 << " rows"
-    //           << ", Wt=" << Wt << ", hidden_Wt=" << hidden_Wt << std::endl;
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -545,12 +535,12 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
             block_size,                 // per_core_block_size
             Wt,                         // num_inner / TILE_W
             hidden_Wt                   // hidden_num_inner / TILE_W
-
         };
 
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, defines, kComputeKernelToUse, /*fp32_dest_acc_en=*/true);
     }
+
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
@@ -572,7 +562,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         device,
         mcast_sender_semaphore_id,
         mcast_receiver_semaphore_id,
-        use_multicast);
+        use_multicast,
+        max_rows_per_grid_row);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -632,12 +623,10 @@ void SwiGLUForwardProgramFactory::override_runtime_arguments(
         //   - All cores use sender kernel (with mcast_num_dests=0)
         if (use_multicast && core.x > 0) {
             // Update input buffers for receiver cores (when multicast enabled)
+            // NOTE: W1/W2/W3 all come via multicast - only input_buffer address needs updating
             auto& receiver_runtime_args = GetRuntimeArgs(program, swiglu_fw_reader_w1_receiver_kernel_id);
             auto& runtime_args = receiver_runtime_args[core.x][core.y];
             runtime_args[kInputBufferIdx] = input_buffer->address();
-            // NOTE: Receiver has different arg layout - no W1 (comes via multicast)
-            runtime_args[kReceiverW2BufferIdx] = w2_buffer->address();
-            runtime_args[kReceiverW3BufferIdx] = w3_buffer->address();
         } else {
             // Update input buffers for sender cores (all cores when multicast disabled, or x==0 when multicast enabled)
             auto& runtime_args = sender_runtime_args[core.x][core.y];
