@@ -721,6 +721,16 @@ jobs:
           echo "::group::🔧 Database Connection Setup"
           echo "Setting up PostgreSQL database connection for sweep parameter generation..."
 
+          # Install psycopg2 if not present
+          echo "Checking for psycopg2..."
+          if ! python3 -c "import psycopg2" 2>/dev/null; then
+            echo "Installing psycopg2-binary..."
+            pip install psycopg2-binary
+            echo "✅ psycopg2 installed"
+          else
+            echo "✅ psycopg2 already available"
+          fi
+
           # Check if cloudflared is available
           if command -v cloudflared &> /dev/null; then
             echo "✅ cloudflared found, starting tunnel..."
