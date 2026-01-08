@@ -19,6 +19,9 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/reduce_custom.h"
+#include "llk_sfpu_types.h"
+#include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "api/debug/dprint.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -410,6 +413,263 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
 }
 
 #ifdef TRISC_MATH
+
+constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
+constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
+
+template <uint32_t scale>
+inline void init_clamp_loadmacro() {
+    constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+    constexpr float THRESHOLD = -88.5f;
+    constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
+
+    TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+    TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
+
+    // There are two ways to program the macro instruction registers, and this setup leverages both ways
+    //  - we can either use the SFPCONFIG flow, by setting up the bits of the instruction into LREG[0] and then
+    //  targeting the Macro instruction register
+    //  - or we can use the shortcut / backdoor load method which relies on having some illegal destination register
+    //  values as part of the instruction
+
+    // Use SFPCONFIG method for the SWAP instruction, since we want the SWAP itself to use a destination register which
+    // is not normally a legal value
+    //      (we are cheating a bit here, since we only care about one half of the swap and we want to use a constant for
+    //      the other half)
+    //
+    //              imm12 = 0,       lreg_src_c = 0 (will be fed by value loaded from Dest into Loadmacro lreg_dest),
+    //              lreg_dest = LREG[14] = - 88.5, instr_mod1 = 1 swap the values with the larger of the two ending up
+    //              in lreg_dest -> but we will use the Loadmacro lreg_dest register as output
+    // TTI_SFP_SWAP(0,               0, 14,                            1);
+    TTI_SFPLOADI(0, 0xA, 0x00E1);
+    TTI_SFPLOADI(0, 0x8, 0x9200);
+    TTI_SFPCONFIG(
+        0, 0, 0);  // SFPCONFIG Dest 0 = Programmable Macro instruction 0: TTI_SFPSWAP(0, 0, 14, 1); // compare against
+                   // LREG[14] (-88.5), and put the larger value into LREG[loadmacro_lreg_dest]
+    TTI_SFPNOP;
+
+    // So at this point, we have the following instructions loaded into our macro registers:
+    //
+    // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not programmable
+    // 01: ( Rsvd                                                            ) <-- these are fixed / not programmable
+    // 02: ( NOP                                                             ) <-- these are fixed / not programmable
+    // 03: ( SFPSTORE                                                        ) <-- these are fixed / not programmable
+    // 04: TTI_SFPSWAP       (0, 0, 11, 1)
+
+    // Now we want to set up our two sequences
+
+    // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
+    //       Delay slot:                  0     1        2
+    //                                                                                                                                                                                                 Use
+    //                                                                                                                                                                                                 Loaded  Result          Macro
+    //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+    //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
+    TTI_SFPLOADI(
+        0,
+        0xA,
+        0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed by 0 ;
+                  // not using staging flop as dest; not using load reg as srcb : 8'b0_______0_______000_____100 = 0x04
+                  // slot2 : MAD    UNIT, unused : 8'b0_______0_______000_____000          = 0x00
+    TTI_SFPLOADI(
+        0, 0x8, 0x1300);  // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 : STORE
+                          // UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2 ; not using
+                          // staging flop as src ; : 8'b0_______0_______010_____011          = 0x13
+    TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
+}
+
+inline void run_clamp_loadmacro() {
+    // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is more
+    // negative than that, swap the input value with -88.5 and store back to DEST
+    //  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}
+
+    // Macro Sequence Register 1 configured to read back in the original values from dest, sanitize them to a range we
+    // can handle, and then store them back to dest
+    //  LD     : bring in the original value from DEST (y)
+    //  MAD    : unused
+    //  ROUND  : unused
+    //  SIMPLE : SWAP the larger value of y and -88.5 into the LREG
+    //  STORE  : store the sanitized value back to dest
+    TTI_SFPLOADMACRO(
+        4,
+        0,
+        ADDR_MOD_7,
+        0);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is targeting
+             // the even columns for rows   3: 0
+    TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
+    TTI_SFPLOADMACRO(
+        5,
+        0,
+        ADDR_MOD_7,
+        2);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is targeting
+             // the odd  columns for rows   3: 0
+    TTI_SFPNOP;
+    TTI_SFPLOADMACRO(
+        6,
+        0,
+        ADDR_MOD_7,
+        4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is targeting
+             // the even columns for rows   7: 4
+    TTI_SFPNOP;
+    TTI_SFPLOADMACRO(
+        7,
+        0,
+        ADDR_MOD_7,
+        6);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is targeting
+             // the odd  columns for rows   7: 4
+    TTI_SFPNOP;
+    TTI_SFPLOADMACRO(
+        4,
+        0,
+        ADDR_MOD_7,
+        8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is targeting
+             // the even columns for rows  11: 8
+    TTI_SFPNOP;
+    TTI_SFPLOADMACRO(
+        5,
+        0,
+        ADDR_MOD_7,
+        10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is
+              // targeting the even columns for rows  11: 8
+    TTI_SFPNOP;
+    TTI_SFPLOADMACRO(
+        6,
+        0,
+        ADDR_MOD_7,
+        12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is
+              // targeting the odd  columns for rows  15:12
+    TTI_SFPNOP;
+    TTI_SFPLOADMACRO(
+        7,
+        0,
+        ADDR_MOD_7,
+        14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is
+              // targeting the even columns for rows  15:12
+    // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately use the
+    // SIMPLE unit
+}
+
+template <bool USE_ARECIP_INSTR, int NUM_TERMS, uint32_t SCALE>
+void calculate_exponential_more_terms_init() {
+    constexpr float M_LN2 = -0.69314718055994530942f;  // -ln(2)
+
+    // L11 is used by LCONST_neg1 in the floor function.
+    // L14 is used by SWAP LoadMacro.
+
+    constexpr float scale_fp32 = __builtin_bit_cast(float, SCALE);
+    TTI_SFPLOADI(0, 0xA, lo16(scale_fp32));
+    TTI_SFPLOADI(0, 0x8, hi16(scale_fp32));
+    TTI_SFPCONFIG(0, 12, 0);
+
+    // -ln(2) for computing r = x - k*ln2.
+    TTI_SFPLOADI(0, 0xA, lo16(M_LN2));
+    TTI_SFPLOADI(0, 0x8, hi16(M_LN2));
+    TTI_SFPCONFIG(0, 13, 0);
+
+    if constexpr (!USE_ARECIP_INSTR) {
+        LLK_ASSERT(NUM_TERMS >= 1 && NUM_TERMS <= 3, "Only 1, 2, or 3 terms is supported");
+
+        float c0 = (NUM_TERMS == 1)   ? 1.1233623192692236032135985743012506909535502780929f
+                   : (NUM_TERMS == 2) ? 0.99753586992155448808365863701299141006547850119893f
+                                      : 0.9987744242042385423631271908377461652500045536011f;
+        TTI_SFPLOADI(0, 0xA, lo16(c0));
+        TTI_SFPLOADI(0, 0x8, hi16(c0));
+        TTI_SFPCONFIG(0, 11, 0);  // L11 also used by the floor function.
+    }
+
+    init_clamp_loadmacro<SCALE>();
+}
+
+template <bool USE_ARECIP_INSTR, bool SCALE_EN, int ITERATIONS, int NUM_TERMS>
+void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) {
+    // Clamp values < -88.5 to 0.
+    run_clamp_loadmacro();
+
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
+
+    if constexpr (USE_ARECIP_INSTR) {
+        TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(LN2_RECIP));
+    } else {
+        LLK_ASSERT(NUM_TERMS >= 1 && NUM_TERMS <= 3, "Only 1, 2, or 3 terms is supported");
+
+        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(LN2_RECIP));
+
+        float c1 = (NUM_TERMS == 1)   ? 1.0820212806667225532377520284909768979269800054308f
+                   : (NUM_TERMS == 2) ? 1.06124048373286974827555447405224249606107006990166f
+                                      : 0.99901998795742600963202540686824558627408454106245f;
+        float c2 = (NUM_TERMS == 1)   ? 0
+                   : (NUM_TERMS == 2) ? 0.52547100916184135258988956948179959663957303082728f
+                                      : 0.52031779522223959306148327026770360633893731713813f;
+        float c3 = (NUM_TERMS == 1) ? 0 : (NUM_TERMS == 2) ? 0 : 0.17275631602849673535810267286740793455047549878205f;
+        switch (NUM_TERMS) {
+            case 3: TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c3)); TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c3));
+            case 2: TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c2)); TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c2));
+            case 1: TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c1)); TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c1));
+            default: break;
+        }
+    }
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Load the input.
+        TTI_SFPLOAD(p_sfpu::LREG4, 0, ADDR_MOD_7, 0);
+
+        if constexpr (SCALE_EN) {
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+        }
+
+        if constexpr (USE_ARECIP_INSTR) {
+            // Multiply by 1/ln(2).
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+
+            // Compute exp(x - k*ln2).
+            ckernel::sfpu::_floor_body_();  // L1=floor(L0).
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
+        } else {
+            // Multiply by 1/ln(2).
+            TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+
+            // Compute r = x - k*ln2.
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
+            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+
+            // Compute polynomial.
+            if constexpr (NUM_TERMS == 1) {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+            } else if constexpr (NUM_TERMS == 2) {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+            } else {
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG2, 0);
+                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG11, p_sfpu::LREG0, 0);
+            }
+        }
+
+        // Set the new exponent.
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);  // 0=debias, 1=no debias.
+        TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+        TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+
+        // Store the result.
+        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0);
+        sfpi::dst_reg += 2;
+    }
+}
+
 /**
  * exp_tile on only the columns 0:8 of a face
  */
@@ -428,6 +688,11 @@ void calculate_exponential_first_column(int scale_bf16) {
             sfpi::dst_reg += 2;
         }
     } else {
+        if constexpr (!DST_ACCUM_MODE) {
+            calculate_exponential_more_terms<1, true, ITERATIONS_HALF_FACE, 3>(scale_bf16);
+            return;
+        }
+        ASSERT(false);
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = val * sfpi::s2vFloat16b(scale_bf16);
@@ -464,6 +729,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE, false>();
+    MATH((calculate_exponential_more_terms_init<1, 3, scale_fp32>()));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -471,6 +737,27 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
+    /*
+#ifdef TRISC_PACK
+    constexpr float scale_fp32_ = __builtin_bit_cast(float, scale_fp32);
+    DPRINT << "SCALE = " << scale_fp32_ << ENDL();
+    DPRINT << "======" << ENDL();
+    DPRINT << "IN0" << ENDL();
+    for (uint32_t r = 0; r < 4; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT << r << " " << TileSlice(in0_cb, 0, sr, true, false) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+
+    DPRINT << "======" << ENDL();
+    DPRINT << "IN1" << ENDL();
+    for (uint32_t r = 0; r < 4; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT << r << " " << TileSlice(in1_cb, 0, sr, true, false) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+#endif
+    */
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
 
@@ -484,6 +771,18 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         cb_push_back(out_cb, 1);
         release_dst();
     }
+    /*
+#ifdef TRISC_PACK
+    cb_wait_front(out_cb, 1);
+    DPRINT << "======" << ENDL();
+    DPRINT << "OUTPUT" << ENDL();
+    for (uint32_t r = 0; r < 4; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT << r << " " << TileSlice(out_cb, 0, sr, true, false) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+#endif
+    */
 }
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
