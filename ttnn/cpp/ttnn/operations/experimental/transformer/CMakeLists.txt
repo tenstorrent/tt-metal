@@ -33,6 +33,7 @@ file(
     rotary_embedding_llama_fused_qk/device/kernels/*
     rotate_half/device/kernels/*
     split_query_key_value_and_split_heads/device/kernels/*
+    dit_layernorm_distributed/device/kernels/*
 )
 target_sources(
     ttnn_op_experimental_transformer
