@@ -226,8 +226,9 @@ public:
 
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         this->channel_base_address = reinterpret_cast<volatile uint32_t*>(channel_base_address);
-        max_eth_payload_size_in_bytes = buffer_size_bytes;
-
+        this->max_eth_payload_size_in_bytes = buffer_size_bytes;
+        this->next_packet_buffer_index = 0;
+        
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             #pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {

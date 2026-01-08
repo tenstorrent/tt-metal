@@ -520,7 +520,7 @@ template <
     typename ReceiverChannelT>
 FORCE_INLINE void send_next_data(
     SenderChannelT & sender_buffer_channel,
-    WorkerInterfaceT& sender_worker_interface,
+    WorkerInterfaceT & sender_worker_interface,
     uint32_t& outbound_to_receiver_channel_pointers_num_free_slots,
     ReceiverChannelT& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
@@ -1839,7 +1839,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
     // Workaround the perf regression in RingAsLinear test.
     //
-    uint32_t& outbound_to_receiver_channel_pointers_num_free_slots =
+    uint32_t & outbound_to_receiver_channel_pointers_ch0_num_free_slots =
         outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>().num_free_slots;
 
     auto receiver_channel_pointers = ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make();
@@ -1849,8 +1849,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
 #if defined(FABRIC_2D_VC1_ACTIVE)
     // VC1 receiver channel pointer for inter-mesh routing
-    auto outbound_to_receiver_channel_pointer_ch1 =
-        outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
+    //
+    uint32_t & outbound_to_receiver_channel_pointers_ch1_num_free_slots =
+        outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>().num_free_slots;
 
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
     receiver_channel_pointers_ch1.reset();
@@ -1898,7 +1899,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointers_num_free_slots,
+                outbound_to_receiver_channel_pointers_ch0_num_free_slots,
                 remote_receiver_channels,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids,
@@ -1941,7 +1942,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointers_num_free_slots,
+                outbound_to_receiver_channel_pointers_ch0_num_free_slots,
                 remote_receiver_channels,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids,
@@ -1952,7 +1953,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointers_num_free_slots,
+                    outbound_to_receiver_channel_pointers_ch0_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,
@@ -1962,7 +1963,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointers_num_free_slots,
+                    outbound_to_receiver_channel_pointers_ch0_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,
@@ -1973,7 +1974,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointers_num_free_slots,
+                    outbound_to_receiver_channel_pointers_ch1_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,
@@ -1983,7 +1984,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 5, ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointers_num_free_slots,
+                    outbound_to_receiver_channel_pointers_ch1_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,
@@ -1993,7 +1994,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 6, ENABLE_FIRST_LEVEL_ACK_VC1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointers_num_free_slots,
+                    outbound_to_receiver_channel_pointers_ch1_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,
