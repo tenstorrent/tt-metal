@@ -166,7 +166,13 @@ jobs:
           done
           
           # Configure git and checkout base branch
+          echo "Current directory: $(pwd)"
+          echo "Listing /work:"
+          ls -la /work | head -20
+          echo "Checking for .git:"
+          ls -la /work/.git 2>&1 || echo ".git not found"
           git config --global --add safe.directory /work
+          git status
           git fetch origin main
           git checkout origin/main
           
