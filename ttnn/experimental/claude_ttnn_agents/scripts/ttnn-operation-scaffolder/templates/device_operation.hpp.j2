@@ -15,10 +15,10 @@
 namespace {{ namespace }} {
 
 struct {{ operation_name_pascal }}DeviceOperation {
-    using operation_attributes_t = {{ operation_name }}::operation_attributes_t;
-    using tensor_args_t = {{ operation_name }}::tensor_args_t;
-    using spec_return_value_t = {{ operation_name }}::spec_return_value_t;
-    using tensor_return_value_t = {{ operation_name }}::tensor_return_value_t;
+    using operation_attributes_t = {{ operation_name_pascal }}Params;
+    using tensor_args_t = {{ operation_name_pascal }}Inputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<program::{{ operation_name_pascal }}ProgramFactory>;
 
     // ALL STATIC FUNCTIONS - This is the modern pattern!
