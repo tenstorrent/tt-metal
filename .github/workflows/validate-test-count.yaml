@@ -84,14 +84,14 @@ jobs:
       #   with:
       #     name: ${{ inputs.package-artifact-name }}
       #     path: ./packages
-      - name: Download built packages
-        if: ${{ inputs.package-artifact-name != '' }}
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: packages-ubuntu-22.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-no-distributed-7f5ee7b1d03e6570a27680cabb2f0e662aa87be3-20796940884
-          path: ./packages
-          run_id: 20796940884
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Download built packages
+      #   if: ${{ inputs.package-artifact-name != '' }}
+      #   uses: dawidd6/action-download-artifact@v6
+      #   with:
+      #     name: packages-ubuntu-22.04-amd64-Release-x86_64-linux-clang-17-libstdcpp-no-distributed-7f5ee7b1d03e6570a27680cabb2f0e662aa87be3-20796940884
+      #     path: ./packages
+      #     run_id: 20796940884
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # - name: Download built wheel
       #   if: ${{ inputs.wheel-artifact-name != '' }}
@@ -100,11 +100,11 @@ jobs:
       #     name: ${{ inputs.wheel-artifact-name }}
       #     path: ./wheels
 
-      - name: Install tt-metal packages (for models source code)
-        if: ${{ inputs.package-artifact-name != '' }}
-        run: |
-          sudo apt update
-          sudo apt install -y ./packages/*.deb
+      # - name: Install tt-metal packages (for models source code)
+      #   if: ${{ inputs.package-artifact-name != '' }}
+      #   run: |
+      #     sudo apt update
+      #     sudo apt install -y ./packages/*.deb
 
       - name: Install Python dependencies
         run: |
