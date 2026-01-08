@@ -105,129 +105,90 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
-
-    std::vector<MeshCoordinateRange> device_ranges_to_compile;
-    if (mesh_device->get_parent_mesh()) {
-        // This is a submesh - filter programs that belong to this submesh
-        auto* parent_mesh = mesh_device->get_parent_mesh().get();
-        for (auto& [device_range, program] : programs_) {
-            bool belongs_to_submesh = false;
-            for (const auto& coord : device_range) {
-                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
-                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
-                    belongs_to_submesh = true;
-                    break;
-                }
-            }
-            if (belongs_to_submesh) {
-                device_ranges_to_compile.push_back(device_range);
-            }
-        }
+    if (programs_.size() == 1) {
+        // Compile from main thread for homogeneous workloads
+        this->compile_program(programs_.begin()->first, mesh_device);
     } else {
-        // Parent mesh - compile all programs
         for (auto& [device_range, _] : programs_) {
-            device_ranges_to_compile.push_back(device_range);
+            // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
+            mesh_device->enqueue_to_thread_pool(
+                [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
         }
+        mesh_device->wait_for_thread_pool();
     }
-
-    for (const auto& device_range : device_ranges_to_compile) {
-        // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
-        mesh_device->enqueue_to_thread_pool(
-            [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
-    }
-    mesh_device->wait_for_thread_pool();
     finalize_offsets(mesh_device);
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
-    // Load binaries for all programs to their respective devices in
-    // the Mesh. Only done when the MeshWorkload is enqueued for the first
-    // time.
+    // Load binaries for all programs to their respective devices in the Mesh.
+    // This is done per MeshDevice - if the same MeshWorkload is used on multiple
+    // MeshDevices (e.g., submesh routing), binaries are loaded separately for each.
     auto* mesh_device = mesh_cq.device();
-    if (!program_binary_status_.empty()) {
-        TT_FATAL(
-            program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
-            "Reusing MeshWorkloads across MeshDevices is currently not supported.");
-        TT_FATAL(
-            program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
-            "Expected Program Binaries to be committed to DRAM.");
-    } else {
-        // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
-        uint32_t max_kernel_bin_buf_size = 0;
-        for (auto& [device_range, program] : programs_) {
-            uint32_t curr_kernel_bin_size =
-                program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
-            max_kernel_bin_buf_size = std::max(max_kernel_bin_buf_size, curr_kernel_bin_size);
-        }
-        // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
-        // primarily for test workloads, where a program may not have an attached kernel.
-        if (max_kernel_bin_buf_size) {
-            // Allocate a MeshBuffer for kernel binaries on each device. This buffer is replicated along the MeshDevice
-            // and matches the max kernel binary size across programs.
-            DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
-                .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
-                .buffer_type = BufferType::DRAM,
-                .bottom_up = false,
-            };
-            ReplicatedBufferConfig global_kernel_bin_buf_config = {
-                .size = max_kernel_bin_buf_size,
-            };
-            kernel_bin_buf_ =
-                MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
-            // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
-            for (auto& [device_range, program] : this->programs_) {
-                std::size_t kernel_bin_size =
-                    program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
-                global_kernel_bin_buf_config.size = kernel_bin_size;
-                auto kernel_bin_buf_view = MeshBuffer::create(
-                    global_kernel_bin_buf_config,
-                    device_local_kernel_bin_buf_config,
-                    mesh_device,
-                    kernel_bin_buf_->address());
+    auto status = get_program_binary_status(mesh_device->id());
 
-                // Convert device_range from parent mesh coordinates to submesh local coordinates
-                // For submeshes, we need to convert parent coordinates to submesh local coordinates
-                MeshCoordinateRange local_device_range = device_range;
-                if (mesh_device->get_parent_mesh()) {
-                    auto* parent_mesh = mesh_device->get_parent_mesh().get();
-                    bool belongs_to_submesh = false;
-                    for (const auto& coord : device_range) {
-                        auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
-                        if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
-                            belongs_to_submesh = true;
-                            break;
-                        }
-                    }
-
-                    if (belongs_to_submesh) {
-                        // For a submesh, use its local coordinate space (typically [0,0] for 1x1 submeshes)
-                        // The submesh's shape defines its local coordinate range
-                        local_device_range = MeshCoordinateRange(mesh_device->shape());
-                    } else {
-                        // Skip this program if it doesn't belong to this submesh
-                        continue;
-                    }
-                }
-
-                mesh_cq.enqueue_write_shard_to_sub_grid(
-                    *kernel_bin_buf_view,
-                    program.impl().get_program_transfer_info().binary_data.data(),
-                    local_device_range,
-                    false);
-
-                std::shared_ptr<Buffer> buffer_view = Buffer::create(
-                    mesh_device,
-                    kernel_bin_buf_->address(),
-                    kernel_bin_size,
-                    HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
-                    BufferType::DRAM,
-                    std::nullopt,
-                    false);
-                program.impl().set_kernels_bin_buffer(buffer_view);
-            }
-        }
-        set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::InFlight);
+    if (status == ProgramBinaryStatus::Committed) {
+        // Already loaded for this device, nothing to do
+        return;
     }
+
+    TT_FATAL(
+        status == ProgramBinaryStatus::NotSent,
+        "Expected Program Binaries to be NotSent or Committed, got InFlight for mesh device {}.",
+        mesh_device->id());
+
+    // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
+    uint32_t max_kernel_bin_buf_size = 0;
+    for (auto& [device_range, program] : programs_) {
+        uint32_t curr_kernel_bin_size =
+            program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+        max_kernel_bin_buf_size = std::max(max_kernel_bin_buf_size, curr_kernel_bin_size);
+    }
+    // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
+    // primarily for test workloads, where a program may not have an attached kernel.
+    if (max_kernel_bin_buf_size) {
+        // Allocate a MeshBuffer for kernel binaries on each device. This buffer is replicated along the MeshDevice
+        // and matches the max kernel binary size across programs.
+        DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
+            .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
+            .buffer_type = BufferType::DRAM,
+            .bottom_up = false,
+        };
+        ReplicatedBufferConfig global_kernel_bin_buf_config = {
+            .size = max_kernel_bin_buf_size,
+        };
+        kernel_bin_buf_[mesh_device->id()] =
+            MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
+
+        auto& kernel_bin_buf = kernel_bin_buf_.at(mesh_device->id());
+        // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
+        for (auto& [device_range, program] : this->programs_) {
+            std::size_t kernel_bin_size =
+                program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+            global_kernel_bin_buf_config.size = kernel_bin_size;
+            auto kernel_bin_buf_view = MeshBuffer::create(
+                global_kernel_bin_buf_config,
+                device_local_kernel_bin_buf_config,
+                mesh_device,
+                kernel_bin_buf->address());
+
+            mesh_cq.enqueue_write_shard_to_sub_grid(
+                *kernel_bin_buf_view,
+                program.impl().get_program_transfer_info().binary_data.data(),
+                device_range,
+                false);
+
+            std::shared_ptr<Buffer> buffer_view = Buffer::create(
+                mesh_device,
+                kernel_bin_buf->address(),
+                kernel_bin_size,
+                HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
+                BufferType::DRAM,
+                std::nullopt,
+                false);
+            program.impl().set_kernels_bin_buffer(buffer_view);
+        }
+    }
+    set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::InFlight);
 }
 
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
@@ -253,23 +214,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     bool use_prefetcher_cache =
         this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {
-        // For submeshes, only generate dispatch commands for programs that belong to this submesh
-        if (mesh_device->get_parent_mesh()) {
-            auto* parent_mesh = mesh_device->get_parent_mesh().get();
-            bool belongs_to_submesh = false;
-            for (const auto& coord : device_range) {
-                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
-                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
-                    belongs_to_submesh = true;
-                    break;
-                }
-            }
-
-            if (!belongs_to_submesh) {
-                // Skip this program if it doesn't belong to this submesh
-                continue;
-            }
-        }
         program.impl().generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
     this->use_prefetcher_cache_ = use_prefetcher_cache;
@@ -349,26 +293,10 @@ std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     return semaphores_;
 }
 
-std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes(MeshDevice* mesh_device) {
+std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
     // Get the config sizes for all L1 Program Data Structures
     std::vector<uint32_t> global_program_config_sizes;
     for (auto& program_on_grid : programs_) {
-        // Filter programs based on whether they belong to the current mesh_device
-        if (mesh_device->get_parent_mesh()) {
-            auto* parent_mesh = mesh_device->get_parent_mesh().get();
-            bool belongs_to_submesh = false;
-            for (const auto& coord : program_on_grid.first) {
-                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
-                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
-                    belongs_to_submesh = true;
-                    break;
-                }
-            }
-            if (!belongs_to_submesh) {
-                continue;
-            }
-        }
-
         if (!global_program_config_sizes.empty()) {
             for (int i = 0; i < global_program_config_sizes.size(); i++) {
                 TT_FATAL(
@@ -470,99 +398,23 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         return;
     }
 
-    // Filter programs to only include those that belong to this submesh (if it's a submesh)
-    std::vector<MeshCoordinateRange> device_ranges_to_finalize;
-    std::unordered_set<uint32_t> filtered_device_range_handles;
-    if (mesh_device->get_parent_mesh()) {
-        auto* parent_mesh = mesh_device->get_parent_mesh().get();
-        uint32_t device_range_idx = 0;
-        for (auto& [device_range, program] : programs_) {
-            bool belongs_to_submesh = false;
-            for (const auto& coord : device_range) {
-                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
-                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
-                    belongs_to_submesh = true;
-                    break;
-                }
-            }
-            if (belongs_to_submesh) {
-                device_ranges_to_finalize.push_back(device_range);
-                filtered_device_range_handles.insert(device_range_idx << 16);
-            }
-            device_range_idx++;
-        }
-    } else {
-        // Parent mesh - finalize all programs
-        uint32_t device_range_idx = 0;
-        for (auto& [device_range, program] : programs_) {
-            device_ranges_to_finalize.push_back(device_range);
-            filtered_device_range_handles.insert(device_range_idx << 16);
-            device_range_idx++;
-        }
-    }
-
-    // Create filtered kernels and kernel groups getters that only return kernels from filtered programs
-    // Store filtered results in member variables to avoid thread_local caching issues
-    struct FilteredGetters {
-        std::unordered_map<uint32_t, std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> filtered_kernels;
-        std::unordered_map<uint32_t, std::vector<std::shared_ptr<KernelGroup>>> filtered_kernel_groups;
-        std::vector<Semaphore> filtered_semaphores;
-    };
-    auto filtered_getters = std::make_shared<FilteredGetters>();
-
-    // Populate filtered kernels and kernel groups
-    for (uint32_t index = 0; index < MetalContext::instance().hal().get_programmable_core_type_count(); ++index) {
-        auto& all_kernels = this->get_kernels(index);
-        for (const auto& kernel : all_kernels) {
-            uint32_t device_range_handle = (kernel.first >> 16) << 16;
-            if (filtered_device_range_handles.find(device_range_handle) != filtered_device_range_handles.end()) {
-                filtered_getters->filtered_kernels[index][kernel.first] = kernel.second;
-            }
-        }
-
-        auto& all_kernel_groups = this->get_kernel_groups(index);
-        for (auto& kg : all_kernel_groups) {
-            // Check if any kernel in this group belongs to a filtered device range
-            bool belongs_to_filtered = false;
-            for (auto kernel_id : kg->kernel_ids) {
-                uint32_t device_range_handle = (kernel_id >> 16) << 16;
-                if (filtered_device_range_handles.find(device_range_handle) != filtered_device_range_handles.end()) {
-                    belongs_to_filtered = true;
-                    break;
-                }
-            }
-            if (belongs_to_filtered) {
-                filtered_getters->filtered_kernel_groups[index].push_back(kg);
-            }
-        }
-    }
-
-    // Populate filtered semaphores
-    for (const auto& device_range : device_ranges_to_finalize) {
-        auto& program_semaphores = programs_.at(device_range).impl().semaphores();
-        filtered_getters->filtered_semaphores.insert(
-            filtered_getters->filtered_semaphores.end(), program_semaphores.begin(), program_semaphores.end());
-    }
-
     tt::tt_metal::detail::KernelsGetter kernels_getter =
-        [filtered_getters](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
-        return filtered_getters->filtered_kernels[index];
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
     };
 
     tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
-        [filtered_getters](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return filtered_getters->filtered_kernel_groups[index];
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+
+    tt::tt_metal::detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
     };
 
-    tt::tt_metal::detail::SemaphoresGetter semaphores_getter = [filtered_getters]() -> const std::vector<Semaphore>& {
-        return filtered_getters->filtered_semaphores;
-    };
-
-    // Create a span with only filtered programs
+    // Create a span with all programs
     std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
-    program_impls.reserve(device_ranges_to_finalize.size());
-    for (const auto& device_range : device_ranges_to_finalize) {
-        program_impls.push_back(&programs_.at(device_range).impl());
+    program_impls.reserve(programs_.size());
+    for (auto& [_, program] : programs_) {
+        program_impls.push_back(&program.impl());
     }
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 

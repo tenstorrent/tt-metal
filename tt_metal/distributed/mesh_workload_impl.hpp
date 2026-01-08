@@ -35,7 +35,7 @@ private:
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
-    std::vector<uint32_t> get_program_config_sizes(MeshDevice* mesh_device);
+    std::vector<uint32_t> get_program_config_sizes();
     std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
     bool kernel_binary_always_stored_in_ringbuffer();
     bool is_finalized() const { return this->finalized_; }
@@ -48,7 +48,7 @@ private:
     void finalize_offsets(MeshDevice* mesh_device);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
-    std::shared_ptr<MeshBuffer> kernel_bin_buf_;
+    std::unordered_map<std::size_t, std::shared_ptr<MeshBuffer>> kernel_bin_buf_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
@@ -60,6 +60,8 @@ private:
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
+    friend void EnqueueMeshWorkloadWithOffset(
+        MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, const MeshCoordinate& offset);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
 

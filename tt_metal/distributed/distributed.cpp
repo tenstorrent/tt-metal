@@ -14,17 +14,108 @@
 
 namespace tt::tt_metal::distributed {
 
+namespace {
+
+// Helper to compute the offset of a submesh relative to its parent mesh.
+// The offset is the parent coordinate of the submesh's origin (0,0,...).
+MeshCoordinate compute_submesh_offset(MeshDevice* parent_mesh, MeshDevice* submesh) {
+    auto zero_coord = MeshCoordinate::zero_coordinate(submesh->shape().dims());
+    auto* submesh_origin_device = submesh->get_device(zero_coord);
+    return parent_mesh->get_view().find_device(submesh_origin_device->id());
+}
+
+// Helper to check if a parent coordinate falls within a mesh when translated by offset.
+// Returns true if (parent_coord - offset) is a valid coordinate in mesh_shape.
+bool is_coord_in_mesh_with_offset(
+    const MeshCoordinate& parent_coord, const MeshCoordinate& offset, const MeshShape& mesh_shape) {
+    if (parent_coord.dims() != offset.dims() || parent_coord.dims() != mesh_shape.dims()) {
+        return false;
+    }
+    for (size_t i = 0; i < parent_coord.dims(); i++) {
+        if (parent_coord[i] < offset[i]) {
+            return false;  // Would result in negative coordinate
+        }
+        auto translated = parent_coord[i] - offset[i];
+        if (translated >= mesh_shape[i]) {
+            return false;  // Out of bounds
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+// Internal function that handles coordinate translation when routing to submeshes.
+// The offset represents the submesh's origin in the parent mesh's coordinate system.
+void EnqueueMeshWorkloadWithOffset(
+    MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking, const MeshCoordinate& offset) {
+    auto* mesh_device = mesh_cq.device();
+
+    // Check if this mesh has any programs in the workload (using translated coordinates)
+    bool has_programs_for_device = false;
+    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+        for (const auto& parent_coord : device_range) {
+            if (is_coord_in_mesh_with_offset(parent_coord, offset, mesh_device->shape())) {
+                has_programs_for_device = true;
+                break;
+            }
+        }
+        if (has_programs_for_device) {
+            break;
+        }
+    }
+
+    if (!has_programs_for_device) {
+        return;
+    }
+
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        mesh_workload.impl().compile(mesh_cq.device());
+        mesh_workload.impl().load_binaries(mesh_cq);
+        mesh_workload.impl().generate_dispatch_commands(mesh_cq);
+    }
+    mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
+}
+
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     auto* mesh_device = mesh_cq.device();
     if (mesh_device->is_parent_mesh()) {
         auto submeshes = mesh_device->get_submeshes();
-        // Only route to submeshes that have programs in the workload
+
+        std::unordered_set<int> all_submesh_devices;
+        for (const auto& submesh : submeshes) {
+            for (auto device_id : submesh->get_device_ids()) {
+                all_submesh_devices.insert(device_id);
+            }
+        }
+
+        size_t num_program_devices = 0;
+        size_t num_program_devices_in_submeshes = 0;
+        for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+            num_program_devices += device_range.shape().mesh_size();
+            for (const auto& coord : device_range) {
+                if (all_submesh_devices.contains(mesh_device->get_device(coord)->id())) {
+                    num_program_devices_in_submeshes++;
+                }
+            }
+        }
+
+        TT_FATAL(
+            num_program_devices == num_program_devices_in_submeshes,
+            "Program targets {} devices but only {} are covered by submeshes. "
+            "Some devices in the program's device range are not in any submesh.",
+            num_program_devices,
+            num_program_devices_in_submeshes);
+
+        // Route to submeshes, passing the offset for coordinate translation
         for (auto& submesh : submeshes) {
+            auto offset = compute_submesh_offset(mesh_device, submesh.get());
+
+            // Check if this submesh has any programs
             bool has_programs_for_submesh = false;
             for (const auto& [device_range, program] : mesh_workload.get_programs()) {
                 for (const auto& coord : device_range) {
-                    auto submesh_for_coord = mesh_device->get_submesh_for_coordinate(coord);
-                    if (submesh_for_coord && submesh_for_coord.get() == submesh.get()) {
+                    if (is_coord_in_mesh_with_offset(coord, offset, submesh->shape())) {
                         has_programs_for_submesh = true;
                         break;
                     }
@@ -37,33 +128,16 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
             if (has_programs_for_submesh) {
                 for (uint8_t cq_id = 0; cq_id < submesh->num_hw_cqs(); ++cq_id) {
                     auto& submesh_cq = submesh->mesh_command_queue(cq_id);
-                    EnqueueMeshWorkload(submesh_cq, mesh_workload, blocking);
+                    EnqueueMeshWorkloadWithOffset(submesh_cq, mesh_workload, blocking, offset);
                 }
             }
         }
         return;
     }
-    // Check if this submesh has any programs in the workload
-    bool has_programs_for_device = false;
-    if (mesh_device->get_parent_mesh()) {
-        auto* parent_mesh = mesh_device->get_parent_mesh().get();
-        for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-            for (const auto& coord : device_range) {
-                auto submesh_for_coord = parent_mesh->get_submesh_for_coordinate(coord);
-                if (submesh_for_coord && submesh_for_coord.get() == mesh_device) {
-                    has_programs_for_device = true;
-                    break;
-                }
-            }
-            if (has_programs_for_device) {
-                break;
-            }
-        }
-    } else {
-        has_programs_for_device = !mesh_workload.get_programs().empty();
-    }
 
-    // Only process if there are programs for this device
+    // Non-parent mesh path (standalone mesh without submeshes)
+    bool has_programs_for_device = !mesh_workload.get_programs().empty();
+
     if (!has_programs_for_device) {
         return;
     }
