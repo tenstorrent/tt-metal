@@ -240,7 +240,7 @@ All generated code follows the modern pattern:
 ### Key Characteristics
 
 1. **Static functions** - All member functions are static
-2. **Nested structs** - `operation_attributes_t`, `tensor_args_t`
+2. **Named structs** - `{OpName}Params`, `{OpName}Inputs` (with type aliases `operation_attributes_t`, `tensor_args_t` inside DeviceOperation)
 3. **File naming** - `{op}_device_operation.hpp/cpp` (NOT `{op}_op.hpp`)
 4. **Includes** - `ttnn/device_operation.hpp` (NOT `ttnn/run_operation.hpp`)
 5. **Registration** - `ttnn::prim::{op}()` (NOT `operation::run()`)
