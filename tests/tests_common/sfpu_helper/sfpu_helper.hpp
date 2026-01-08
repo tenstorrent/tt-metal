@@ -37,7 +37,7 @@ inline float ref_log2(float x) { return ref_log(x) * std::numbers::log2e_v<float
 
 inline float ref_tanh(float x) { return std::tanh(x); }
 
-std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(size_t num_bytes, int seed) {
+inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(size_t num_bytes, int seed) {
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed);  // 0.0f..2.0f
 }
 
@@ -82,11 +82,11 @@ inline std::vector<uint32_t> sfpu(const std::vector<uint32_t>& src, const std::f
     return dst;
 }
 
-std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed) {
+inline std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, int seed) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, 1), std::mt19937(seed));
 
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
-    for (size_t i = 0; i < vec.size(); i++) {
+    for (std::uint32_t& num : vec) {
         float num_1_float = rand_float();
         float num_2_float = rand_float();
 
@@ -96,7 +96,7 @@ std::vector<uint32_t> create_random_binary_vector_of_bfloat16(size_t num_bytes, 
         bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
 
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        num = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
     return vec;
 }
