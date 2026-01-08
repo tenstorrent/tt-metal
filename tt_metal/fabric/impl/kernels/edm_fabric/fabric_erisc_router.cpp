@@ -546,7 +546,7 @@ FORCE_INLINE void send_next_data(
 
     receiver_buffer_channel.advance_remote_receiver_buffer_index();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
-    
+
     outbound_to_receiver_channel_pointers_num_free_slots--;
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
