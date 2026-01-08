@@ -62,19 +62,10 @@ if model_traced_params:
 def run(
     input_shape,
     input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
     input_b_dtype=None,
-    input_b_layout=None,
-    input_b_memory_config=None,
-    input_c_dtype=None,
-    input_c_layout=None,
-    input_c_memory_config=None,
-    input_d_dtype=None,  # cur_pos tensor dtype
-    input_d_layout=None,  # cur_pos tensor layout
-    input_d_memory_config=None,  # cur_pos tensor memory config
-    output_memory_config=None,
-    storage_type="StorageType::DEVICE",
+    input_c_dtype=None,  # cur_pos tensor dtype
+    # curtensor layout
+    # curtensor memory config
     scale=None,  # Extracted from arg8
     sliding_window_size=None,  # Extracted from arg9
     is_causal=None,  # Extracted from arg3
