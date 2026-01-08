@@ -6,7 +6,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "reader_unary_transpose_wh_universal_input_cols_partitioned" << ENDL();
+
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t col_start_tile_id =
         get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
@@ -64,8 +68,8 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
                 noc_async_read_page(curr_id, tensor_accessor, l1_write_addr);
                 noc_async_read_barrier();
+                DPRINT << "k=" << k << ", curr_id=" << curr_id << ", l1_write_addr=" << l1_write_addr << ENDL();
                 cb_push_back(cb_id_in0, onetile);
-
                 ++w;
 
                 if (w == Wt) {

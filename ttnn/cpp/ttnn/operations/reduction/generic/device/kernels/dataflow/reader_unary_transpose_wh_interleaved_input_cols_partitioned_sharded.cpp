@@ -6,6 +6,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t Wt = get_arg_val<uint32_t>(1);
@@ -16,6 +18,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+
+    DPRINT << "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded" << ENDL();
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);

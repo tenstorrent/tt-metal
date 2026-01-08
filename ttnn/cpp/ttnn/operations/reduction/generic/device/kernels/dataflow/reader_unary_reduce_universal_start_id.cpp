@@ -10,7 +10,11 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
 #endif
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "reader_unary_reduce_universal_start_id" << ENDL();
+
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);

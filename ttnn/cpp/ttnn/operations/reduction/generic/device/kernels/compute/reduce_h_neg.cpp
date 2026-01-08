@@ -58,8 +58,8 @@ void MAIN {
                 reduce_dst_idx = 0;
                 DPRINT << "ht=" << ht << ENDL();
                 DPRINT << "cb_wait_front(cb_input, ntiles)" << ENDL();
+                acquire_dst();
                 cb_wait_front(cb_input, ntiles);
-                tile_regs_acquire();
 
                 unary_op_init_common(cb_input, cb_ineg);
 
@@ -75,27 +75,30 @@ void MAIN {
                     negative_tile(i);
                 }
                 DPRINT << "tile_regs_wait()" << ENDL();
-                tile_regs_commit();
+
                 DPRINT << "cb_pop_front(cb_input, chunk_end - wt)" << ENDL();
                 cb_pop_front(cb_input, chunk_end - wt);
                 DPRINT << "cb_reserve_back(cb_ineg, ntiles)" << ENDL();
                 cb_reserve_back(cb_ineg, ntiles);
-                tile_regs_wait();
+
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     DPRINT << "pack_tile(i, cb_ineg): i=" << i << ", ntiles=" << ntiles << ENDL();
                     pack_tile(i, cb_ineg);
                 }
                 DPRINT << "cb_push_back(cb_ineg, ntiles)" << ENDL();
                 cb_push_back(cb_ineg, ntiles);
-                tile_regs_release();
+                release_dst();
+
+                acquire_dst();
 
                 if (ht > 0) {
                     DPRINT << "cb_wait_front(cb_acc, ntiles)" << ENDL();
                     cb_wait_front(cb_acc, ntiles);
                 }
                 DPRINT << "cb_wait_front(cb_ineg, ntiles)" << ENDL();
+
                 cb_wait_front(cb_ineg, ntiles);
-                tile_regs_acquire();
+
                 if (ht > 0) {
                     DPRINT << "copy_tile_init(cb_acc)" << ENDL();
                     copy_tile_init(cb_acc);
@@ -110,25 +113,26 @@ void MAIN {
                     reduce_tile(cb_ineg, cb_scaler, i, 0, i);
                 }
                 reduce_uninit();
-                tile_regs_commit();
                 cb_pop_front(cb_ineg, ntiles);
+
                 if (ht > 0) {
                     cb_pop_front(cb_acc, ntiles);
                 }
                 cb_reserve_back(cb_acc, ntiles);
-                tile_regs_wait();
+
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     DPRINT << "pack_tile(i, cb_acc): i=" << i << ", ntiles=" << ntiles << ENDL();
                     pack_tile(i, cb_acc);
                 }
                 DPRINT << "cb_push_back(cb_acc, ntiles)" << ENDL();
                 cb_push_back(cb_acc, ntiles);
-                tile_regs_release();
+                release_dst();
             }
+
+            acquire_dst();
 
             DPRINT << "cb_wait_front(cb_acc, ntiles)" << ENDL();
             cb_wait_front(cb_acc, ntiles);
-            tile_regs_acquire();
 
             unary_op_init_common(cb_acc, cb_output);
 
@@ -140,18 +144,18 @@ void MAIN {
             for (uint32_t i = 0; i < ntiles; ++i) {
                 negative_tile(i);
             }
-            tile_regs_commit();
+
             DPRINT << "cb_pop_front(cb_acc, ntiles)" << ENDL();
             cb_pop_front(cb_acc, ntiles);
             cb_reserve_back(cb_output, ntiles);
-            tile_regs_wait();
+
             for (uint32_t i = 0; i < ntiles; ++i) {
                 DPRINT << "pack_tile(i, cb_output): i=" << i << ", ntiles=" << ntiles << ENDL();
                 pack_tile(i, cb_output);
             }
             DPRINT << "cb_push_back(cb_output, ntiles)" << ENDL();
             cb_push_back(cb_output, ntiles);
-            tile_regs_release();
+            release_dst();
             DPRINT << "cb_push_back(cb_output, ntiles)" << ENDL();
         }
     }
