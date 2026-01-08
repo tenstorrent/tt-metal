@@ -153,7 +153,7 @@ def test_chunked_prefill_single_user(
             kv_cache=tt_kv_cache,
         )
 
-        tt_output_torch = tt_model.process_output_prefill(tt_output_device, last_token_idx=(last_token_idx % 32))
+        tt_output_torch = tt_model.process_output_prefill(tt_output_device.cpu(), last_token_idx=(last_token_idx % 32))
         tt_output_torch = tt_output_torch.reshape(batch_size, 1, -1)
 
         ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]
