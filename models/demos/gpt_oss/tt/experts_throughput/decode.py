@@ -115,29 +115,31 @@ def _apply_swiglu(
         Activated tensor with same shape as inputs
     """
     # Clamp gate (max only)
-    gate = ttnn.clamp(gate, min=None, max=limit)
+    gate_clamped = ttnn.clamp(gate, min=None, max=limit)
+    ttnn.deallocate(gate)
 
     # Clamp up (both min and max)
-    up = ttnn.clamp(up, min=-limit, max=limit)
+    up_clamped = ttnn.clamp(up, min=-limit, max=limit)
+    ttnn.deallocate(up)
 
     # Compute gate_alpha = gate * alpha
-    gate_alpha = ttnn.mul(gate, alpha)
+    gate_alpha = ttnn.mul(gate_clamped, alpha)
 
     # Compute gate_sigmoid = sigmoid(gate_alpha)
     gate_sigmoid = ttnn.sigmoid(gate_alpha)
     ttnn.deallocate(gate_alpha)
 
     # Compute glu = gate * gate_sigmoid
-    glu = ttnn.mul(gate, gate_sigmoid, memory_config=memory_config)
-    ttnn.deallocate(gate)
+    glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config)
+    ttnn.deallocate(gate_clamped)
     ttnn.deallocate(gate_sigmoid)
 
     # Add 1 to up: up = up + 1
-    up = ttnn.add(up, 1.0)
+    up_clamped = ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
 
     # Multiply: result = up * glu
-    result = ttnn.mul(up, glu, memory_config=memory_config)
-    ttnn.deallocate(up)
+    result = ttnn.mul(up_clamped, glu, memory_config=memory_config)
+    ttnn.deallocate(up_clamped)
     ttnn.deallocate(glu)
 
     return result
@@ -184,6 +186,7 @@ def decode_forward(
     """
     hidden_states = ttnn.reshape(hidden_states, (-1, 1, 1, config.hidden_size))
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
+
     topk_expert_indices = ttnn.reshape(topk_expert_indices, (-1, 1, 1, config.num_experts_per_tok))
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, config.num_experts_per_tok))
@@ -208,6 +211,7 @@ def decode_forward(
     # Expert indices need to be in ROW_MAJOR with shape [B, 1, S, K]
     # where K = num_experts_per_tok (top-k experts selected per token)
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    # topk_expert_indices.deallocate(True)
     topk_indices_rm = ttnn.reshape(
         topk_indices_rm, shape=(batch_size_per_device, 1, seq_len, config.num_experts_per_tok)
     )
@@ -242,7 +246,6 @@ def decode_forward(
     #
     # The remap_topk_mask is broadcast across batch dimension
     remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
-
     # moe_expert_token_remap returns:
     #   - mapping: [D, B, S, experts_per_device] - local expert activation weights
     #   - sparsity: [D, 1, B*S/reduction_size, experts_per_device] - which blocks are active
@@ -304,7 +307,7 @@ def decode_forward(
     # Add gate bias
     # w1_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
-    w1_out = ttnn.add(w1_out, weights.w1_bias)
+    w1_out = ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
     save_intermediate = False
     if save_intermediate:
         for expert_idx in range(4):
@@ -332,7 +335,7 @@ def decode_forward(
     # Add up bias
     # w3_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
-    w3_out = ttnn.add(w3_out, weights.w3_bias)
+    w3_out = ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
     if save_intermediate:
         for expert_idx in range(4):
             torch.save(
@@ -355,7 +358,7 @@ def decode_forward(
     activated = ttnn.squeeze(activated, 1)
 
     # Down projection (w2): [B*S/block, experts, block, I] x [experts, I, H] -> [B*S/block, experts, block, H]
-    expert_output = ttnn.sparse_matmul(
+    expert_output_sparse = ttnn.sparse_matmul(
         activated,
         weights.w2,
         sparsity=sparsity,
@@ -381,7 +384,8 @@ def decode_forward(
     # To: [experts_per_device, B_global, S, H] (ROW_MAJOR)
     #
     # Permute to get experts_per_device as first dimension (what combine expects)
-    expert_output = ttnn.permute(expert_output, (1, 0, 2, 3))
+    expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
+    ttnn.deallocate(expert_output_sparse)
     expert_output = ttnn.reshape(
         expert_output,
         shape=(config.num_experts_per_device, batch_size, seq_len, config.hidden_size),
@@ -446,13 +450,14 @@ def decode_forward(
     # 3. But tokens may route to experts in different COLUMNS
     # 4. After combine, each device has partial results from experts in its column
     # 5. We need to sum these partials across columns to get complete expert outputs
-    output = ttnn.all_reduce(
+    output_all_reduced = ttnn.all_reduce(
         output,
         num_links=1,
         topology=ttnn.Topology.Linear,
         cluster_axis=1,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
+    ttnn.deallocate(output)
 
     # Final shape: [1, 1, B_per_device * S, H]
-    return output
+    return output_all_reduced
