@@ -1313,7 +1313,7 @@ void MetalContext::initialize_firmware(
                         fw_size);
 
                     if (not rtoptions_.get_skip_loading_fw()) {
-                        llrt::test_multicast_write_risc_binary(
+                        llrt::test_load_multicast_write_risc_binary(
                             binary_mem,
                             device_id,
                             start_core,

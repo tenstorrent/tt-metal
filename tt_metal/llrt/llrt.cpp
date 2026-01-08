@@ -227,7 +227,7 @@ bool test_load_write_read_risc_binary(
     return true;
 }
 
-bool test_multicast_write_risc_binary(
+bool test_load_multicast_write_risc_binary(
     const ll_api::memory& mem,
     tt::ChipId chip_id,
     const CoreCoord& start_core,

@@ -76,7 +76,7 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
 
-bool test_multicast_write_risc_binary(
+bool test_load_multicast_write_risc_binary(
     const ll_api::memory& mem,
     tt::ChipId chip_id,
     const CoreCoord& start_core,

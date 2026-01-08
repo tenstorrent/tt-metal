@@ -146,6 +146,13 @@ inline void watcher_sanitize_host_noc_multicast_write(
     const CoreCoord& core_end,
     uint64_t addr,
     uint32_t lbytes) {
+    if (core_start.x > core_end.x || core_start.y > core_end.y) {
+        TT_THROW(
+            "Host watcher: bad multicast write coordinates - start {} must be <= end {} in both x and y",
+            core_start.str(),
+            core_end.str());
+    }
+
     if (not coord_found_p(soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0), core_start) and
         not coord_found_p(virtual_worker_cores, core_start)) {
         TT_THROW("Host watcher: bad multicast write NOC coord {} - start core is not tensix", core_start.str());
