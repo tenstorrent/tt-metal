@@ -6,7 +6,7 @@
 # We also demonstrate how a user can setup a pipeline across MeshDevices using sockets.
 # Run this on a system with 2x N300 devices as follows:
 #
-# t3k --rank-binding tests/ttnn/distributed/disaggregated_pd_rank_binding.yaml \
+# tt-run --rank-binding tests/ttnn/distributed/disaggregated_pd_rank_binding.yaml \
 #     --mpi-args "--tag-output" \
 #     python3 tests/ttnn/distributed/test_n150_dual_mesh.py
 #
