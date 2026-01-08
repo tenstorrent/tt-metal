@@ -11,9 +11,9 @@
 // M must be divisible by TH
 // N must be divisible by TW
 // K must be divisible by TK
-constexpr int TILE_HEIGHT = 16;  // Output tile and A tile height
-constexpr int TILE_WIDTH = 16;   // Output tile and B tile width
-constexpr int TILE_K = 16;       // A tile width, B tile height
+constexpr int TILE_HEIGHT = 32;  // Output tile and A tile height
+constexpr int TILE_WIDTH = 32;   // Output tile and B tile width
+constexpr int TILE_K = 32;       // A tile width, B tile height
 
 // Simple triple-loop matrix multiplication
 std::vector<float> simple_matrix_multiply(
@@ -180,9 +180,9 @@ bool verify_matrix_multiply(
 int main() {
     // 4. Setup Dimensions
     // Ensure these fit the divisibility rules with TH=16, TW=16, TK=16
-    constexpr int M = 1600;
-    constexpr int K = 1600;
-    constexpr int N = 1600;
+    constexpr int M = 640;
+    constexpr int K = 320;
+    constexpr int N = 640;
 
     // Create Dummy Data (Linear sequence for easy verification)
     std::vector<float> A(M * K);
