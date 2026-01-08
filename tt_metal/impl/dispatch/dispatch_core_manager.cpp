@@ -22,6 +22,7 @@
 namespace tt::tt_metal {
 
 const tt_cxy_pair& dispatch_core_manager::prefetcher_core(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.prefetcher.has_value()) {
         return assignment.prefetcher.value();
@@ -35,11 +36,13 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_core(ChipId device_id, uint
 }
 
 bool dispatch_core_manager::is_prefetcher_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.prefetcher.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::prefetcher_d_core(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.prefetcher_d.has_value()) {
         return assignment.prefetcher_d.value();
@@ -51,12 +54,14 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_d_core(ChipId device_id, ui
 }
 
 bool dispatch_core_manager::is_prefetcher_d_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.prefetcher_d.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::completion_queue_writer_core(
     ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.completion_queue_writer.has_value()) {
         return assignment.completion_queue_writer.value();
@@ -79,11 +84,17 @@ const tt_cxy_pair& dispatch_core_manager::completion_queue_writer_core(
 
 bool dispatch_core_manager::is_completion_queue_writer_core_allocated(
     ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.completion_queue_writer.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_core(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    return this->dispatcher_core_locked(device_id, channel, cq_id);
+}
+
+const tt_cxy_pair& dispatch_core_manager::dispatcher_core_locked(ChipId device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.dispatcher.has_value()) {
         return assignment.dispatcher.value();
@@ -101,21 +112,29 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_core(ChipId device_id, uint
 }
 
 bool dispatch_core_manager::is_dispatcher_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.dispatcher.has_value();
 }
 
 bool dispatch_core_manager::is_dispatcher_s_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.dispatcher_s.has_value();
 }
 
 bool dispatch_core_manager::is_dispatcher_d_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.dispatcher_d.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_d_core(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    return this->dispatcher_d_core_locked(device_id, channel, cq_id);
+}
+
+const tt_cxy_pair& dispatch_core_manager::dispatcher_d_core_locked(ChipId device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.dispatcher_d.has_value()) {
         return assignment.dispatcher_d.value();
@@ -128,6 +147,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_d_core(ChipId device_id, ui
 
 const tt_cxy_pair& dispatch_core_manager::fabric_mux_core(
     ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (!assignment.fabric_mux.contains(tunnel)) {
         CoreCoord coord = this->get_next_available_dispatch_core(device_id);
@@ -139,11 +159,13 @@ const tt_cxy_pair& dispatch_core_manager::fabric_mux_core(
 
 bool dispatch_core_manager::is_fabric_mux_core_allocated(
     ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.fabric_mux.contains(tunnel);
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, uint16_t channel, uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.dispatcher_s.has_value()) {
         return assignment.dispatcher_s.value();
@@ -154,10 +176,10 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         if (mmio_device_id == device_id) {
             // dispatch_s is on the same tensix core as dispatch_hd
-            dispatcher_s_coord = this->dispatcher_core(device_id, channel, cq_id);
+            dispatcher_s_coord = this->dispatcher_core_locked(device_id, channel, cq_id);
         } else {
             // dispatch_s is on the same tensix as dispatch_d
-            dispatcher_s_coord = this->dispatcher_d_core(device_id, channel, cq_id);
+            dispatcher_s_coord = this->dispatcher_d_core_locked(device_id, channel, cq_id);
         }
     } else {
         dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);
@@ -172,6 +194,11 @@ CoreType dispatch_core_manager::get_dispatch_core_type() { return this->dispatch
 DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
 
 void dispatch_core_manager::add_dispatch_core_to_device(ChipId device_id, const CoreCoord& core) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    this->add_dispatch_core_to_device_locked(device_id, core);
+}
+
+void dispatch_core_manager::add_dispatch_core_to_device_locked(ChipId device_id, const CoreCoord& core) {
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
     auto& dispatch_cores = available_dispatch_cores_by_device.at(device_id);
     if (std::find(dispatch_cores.begin(), dispatch_cores.end(), core) == dispatch_cores.end()) {
@@ -191,6 +218,7 @@ dispatch_core_manager::dispatch_core_manager(const DispatchCoreConfig& dispatch_
 
 void dispatch_core_manager::reset_dispatch_core_manager(
     const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
     this->dispatch_core_config_ = dispatch_core_config;
@@ -209,7 +237,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         if (dispatch_core_config.get_core_type() == CoreType::ETH) {
             for (const auto& idle_eth_core :
                  tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
-                add_dispatch_core_to_device(device_id, idle_eth_core);
+                add_dispatch_core_to_device_locked(device_id, idle_eth_core);
             }
         }
     }
