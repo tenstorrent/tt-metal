@@ -71,18 +71,28 @@ set_target_properties(
             "${CMAKE_BINARY_DIR}/lib"
 )
 
+# Install library, EXPORT, and FILE_SET using TARGETS
+# When LIBRARY_OUTPUT_DIRECTORY is set to a custom location, install(TARGETS) LIBRARY
+# may fail to resolve the file path correctly on some systems. We use install(FILES)
+# with a generator expression for the library file, while keeping install(TARGETS)
+# for the EXPORT and FILE_SET to maintain proper CMake package configuration.
 install(
     TARGETS
         tt_stl
     EXPORT Metalium
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT metalium-runtime
+    # Note: We install the library file separately using install(FILES) below
+    # because install(TARGETS) LIBRARY may fail to find the file when
+    # LIBRARY_OUTPUT_DIRECTORY is set to a custom location
     FILE_SET
     api
         DESTINATION COMPONENT
         metalium-dev
 )
+
+# Install the library file using a generator expression that resolves at install time
+# This avoids path resolution issues that can occur with install(TARGETS) LIBRARY
+# when LIBRARY_OUTPUT_DIRECTORY is overridden
+install(FILES $<TARGET_FILE:tt_stl> DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT metalium-runtime)
 
 # Ensure the generated install target builds tt_stl first.
 # This avoids intermittent "file INSTALL cannot find ..." failures in generators
