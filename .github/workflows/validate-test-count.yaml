@@ -60,6 +60,13 @@ jobs:
           ls -la /work/.git 2>&1 || echo ".git directory not found"
           echo "Listing /work:"
           ls -la /work | head -20
+          
+      - name: Initialize git repository
+        run: |
+          git init
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --all --depth=0
+          git checkout ${{ github.ref_name }}
 
       # Python is already installed in the container image
       # - name: Set up Python
