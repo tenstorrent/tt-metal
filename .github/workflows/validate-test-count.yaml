@@ -50,6 +50,7 @@ jobs:
       - name: Checkout PR branch
         uses: actions/checkout@v4
         with:
+          path: docker-job
           fetch-depth: 0  # Fetch all history so we can checkout main later
 
       - name: Set up Python
