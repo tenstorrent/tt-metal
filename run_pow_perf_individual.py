@@ -64,6 +64,8 @@ PERF_TOOL = "./tools/tracy/profile_this.py"
 OUTPUT_DIR = Path("/home/ubuntu/tt-metal/pow_perf_reports")
 CSV_OUTPUT = OUTPUT_DIR / "perf_results.csv"
 LOG_FILE = OUTPUT_DIR / "execution.log"
+RAW_CSV_DIR = OUTPUT_DIR / "profiler_csvs"
+PROFILER_REPORTS_DIR = Path("/home/ubuntu/tt-metal/generated/profiler/reports")
 
 # Create directories
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -193,47 +195,43 @@ def run_perf_test(test_file, test_num, output_file):
 
 
 def extract_duration(output_file, stdout_content, test_num):
-    """Extract device kernel duration from generated profiler CSV"""
+    """Extract and SUM all device kernel durations from generated profiler CSV
 
-    # The tracy profiler generates CSV reports in:
-    # generated/profiler/reports/pow_test_N/YYYY_MM_DD_HH_MM_SS/ops_perf_results_pow_test_N_YYYY_MM_DD_HH_MM_SS.csv
+    Returns: (total_duration, source_csv_path) or (None, None)
+    """
 
-    profiler_reports_dir = Path("/home/ubuntu/tt-metal/generated/profiler/reports")
     test_name = f"pow_test_{test_num}"
 
     try:
         # Find the test directory
-        test_dir = profiler_reports_dir / test_name
+        test_dir = PROFILER_REPORTS_DIR / test_name
         if not test_dir.exists():
-            # Profiler report directory not found
-            return None
+            return None, None
 
         # Find the most recent timestamp directory
         timestamp_dirs = sorted([d for d in test_dir.iterdir() if d.is_dir()], reverse=True)
         if not timestamp_dirs:
-            # No timestamp directories found
-            return None
+            return None, None
 
         latest_timestamp = timestamp_dirs[0]
 
         # Find the CSV file
         csv_files = list(latest_timestamp.glob("ops_perf_results_*.csv"))
         if not csv_files:
-            # No CSV file found
-            return None
+            return None, None
 
         csv_file = csv_files[0]
-        # Reading CSV file
 
-        # Read the CSV and extract DEVICE KERNEL DURATION [ns]
+        # Read the CSV using proper CSV parsing (handles quoted fields with commas)
         with open(csv_file, "r") as f:
-            lines = f.readlines()
-            if len(lines) < 2:
-                # CSV file has insufficient data
-                return None
+            reader = csv.reader(f)
+            rows = list(reader)
+
+            if len(rows) < 2:
+                return None, None
 
             # Parse header
-            header = lines[0].strip().split(",")
+            header = rows[0]
 
             # Find the column index for "DEVICE KERNEL DURATION [ns]"
             duration_col_idx = None
@@ -243,27 +241,33 @@ def extract_duration(output_file, stdout_content, test_num):
                     break
 
             if duration_col_idx is None:
-                # Could not find 'DEVICE KERNEL DURATION [ns]' column
-                return None
+                return None, None
 
-            # Parse data row
-            data_line = lines[1].strip().split(",")
-            if duration_col_idx >= len(data_line):
-                # Duration column index out of range
-                return None
+            # Sum durations from ALL data rows
+            total_duration = 0.0
+            row_count = 0
+            for row in rows[1:]:
+                if not row:
+                    continue
+                if duration_col_idx >= len(row):
+                    continue
+                duration_str = row[duration_col_idx].strip()
+                if duration_str:
+                    try:
+                        total_duration += float(duration_str)
+                        row_count += 1
+                    except ValueError:
+                        continue
 
-            duration_str = data_line[duration_col_idx].strip()
-            if not duration_str or duration_str == "":
-                # Duration value is empty
-                return None
+            if row_count == 0:
+                return None, None
 
-            duration = float(duration_str)
-            log(f"  Extracted duration: {duration} ns")
-            return duration
+            log(f"  Extracted duration: {total_duration} ns (sum of {row_count} ops)")
+            return total_duration, csv_file
 
     except Exception as e:
         log(f"  Error extracting duration: {e}")
-        return None
+        return None, None
 
 
 def cleanup():
@@ -280,6 +284,9 @@ def main():
     with open(LOG_FILE, "w") as f:
         f.write(f"Started: {datetime.now()}\n\n")
 
+    # Create directories
+    RAW_CSV_DIR.mkdir(parents=True, exist_ok=True)
+
     print("\n" + "=" * 80)
     print("POW UNARY PERFORMANCE TEST - INDIVIDUAL EXECUTION")
     print("=" * 80)
@@ -288,6 +295,7 @@ def main():
     print("=" * 80 + "\n")
 
     results = []
+    csv_copy_list = []  # Track CSVs to copy
 
     for idx, (shape, memory_config, exponent) in enumerate(CONFIGS):
         test_num = idx + 1
@@ -318,7 +326,7 @@ def main():
 
         # Extract duration
         print(f"  Extracting duration...")
-        duration = extract_duration(output_file, stdout, test_num)
+        duration, source_csv = extract_duration(output_file, stdout, test_num)
         if duration:
             print(f"  ✓ Duration: {duration} ns")
             log(f"  Duration: {duration} ns")
@@ -336,11 +344,23 @@ def main():
             }
         )
 
+        # Track source CSV for copying
+        if source_csv:
+            csv_copy_list.append(
+                {
+                    "test_num": test_num,
+                    "source": source_csv,
+                    "memory_config": memory_config,
+                    "exponent": exponent,
+                }
+            )
+
         time.sleep(1)
 
-    # Generate CSV
+    # Generate consolidated CSV
     print(f"\n{'=' * 80}")
-    print("Generating CSV...")
+    print("GENERATING CONSOLIDATED CSV")
+    print("=" * 80)
 
     with open(CSV_OUTPUT, "w", newline="") as f:
         writer = csv.writer(f)
@@ -350,6 +370,24 @@ def main():
 
     print(f"✓ CSV: {CSV_OUTPUT}")
 
+    # Copy raw profiler CSVs with descriptive names
+    print(f"\n{'=' * 80}")
+    print("COPYING RAW PROFILER CSVs")
+    print("=" * 80)
+
+    copy_success = 0
+    for item in csv_copy_list:
+        dest_name = f"perf_{item['test_num']:02d}_{item['memory_config']}_exp{item['exponent']}.csv"
+        dest_path = RAW_CSV_DIR / dest_name
+        try:
+            shutil.copy2(item["source"], dest_path)
+            print(f"  ✓ Copied: {dest_name}")
+            copy_success += 1
+        except Exception as e:
+            print(f"  ✗ Failed to copy: {e}")
+
+    print(f"\n✓ Copied {copy_success}/{len(csv_copy_list)} raw CSV files")
+
     # Summary
     print(f"\n{'=' * 80}")
     print("SUMMARY")
@@ -358,16 +396,21 @@ def main():
     print(f"Passed: {sum(1 for r in results if r['success'])}")
     print(f"Failed: {sum(1 for r in results if not r['success'])}")
     print(f"With duration: {sum(1 for r in results if r['device_kernel_duration_ns'] != 'N/A')}")
-    print(f"\nFiles:")
-    print(f"  CSV: {CSV_OUTPUT}")
-    print(f"  Log: {LOG_FILE}")
-    print(f"  Reports: {OUTPUT_DIR}/perf_*.txt")
-    print("=" * 80)
 
     # Cleanup temp files
     print(f"\nCleaning up temporary test files...")
     cleanup()
     print(f"✓ Done")
+
+    # Print output folder paths
+    print(f"\n{'=' * 80}")
+    print("OUTPUT FILES")
+    print("=" * 80)
+    print(f"  Consolidated CSV:  {CSV_OUTPUT}")
+    print(f"  Raw Profiler CSVs: {RAW_CSV_DIR}/")
+    print(f"  Execution Logs:    {OUTPUT_DIR}/perf_*.txt")
+    print(f"  Log File:          {LOG_FILE}")
+    print("=" * 80)
 
     print(f"\n{'=' * 80}")
     print("COMPLETED")

@@ -5,6 +5,7 @@ and regenerate the CSV file.
 """
 
 import csv
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -44,23 +45,27 @@ CONFIGS = [
 
 PROFILER_REPORTS_DIR = Path("/home/ubuntu/tt-metal/generated/profiler/reports")
 OUTPUT_CSV = Path("/home/ubuntu/tt-metal/pow_perf_reports/perf_results.csv")
+RAW_CSV_DIR = Path("/home/ubuntu/tt-metal/pow_perf_reports/profiler_csvs")
 
 
 def extract_duration_from_csv(test_num):
-    """Extract DEVICE KERNEL DURATION [ns] from profiler CSV"""
+    """Extract and SUM all DEVICE KERNEL DURATION [ns] from profiler CSV
+
+    Returns: (total_duration, source_csv_path) or (None, None)
+    """
 
     test_name = f"pow_test_{test_num}"
     test_dir = PROFILER_REPORTS_DIR / test_name
 
     if not test_dir.exists():
         print(f"  ✗ Directory not found: {test_dir}")
-        return None
+        return None, None
 
     # Find most recent timestamp directory
     timestamp_dirs = sorted([d for d in test_dir.iterdir() if d.is_dir()], reverse=True)
     if not timestamp_dirs:
         print(f"  ✗ No timestamp directories in {test_dir}")
-        return None
+        return None, None
 
     latest_timestamp = timestamp_dirs[0]
 
@@ -68,21 +73,23 @@ def extract_duration_from_csv(test_num):
     csv_files = list(latest_timestamp.glob("ops_perf_results_*.csv"))
     if not csv_files:
         print(f"  ✗ No CSV file in {latest_timestamp}")
-        return None
+        return None, None
 
     csv_file = csv_files[0]
 
     try:
         with open(csv_file, "r") as f:
-            lines = f.readlines()
-            if len(lines) < 2:
+            reader = csv.reader(f)
+            rows = list(reader)
+
+            if len(rows) < 2:
                 print(f"  ✗ CSV has insufficient data")
-                return None
+                return None, None
 
             # Parse header
-            header = lines[0].strip().split(",")
+            header = rows[0]
 
-            # Find DEVICE KERNEL DURATION [ns] column
+            # Find DEVICE KERNEL DURATION [ns] column index
             duration_col_idx = None
             for idx, col in enumerate(header):
                 if "DEVICE KERNEL DURATION" in col and "[ns]" in col:
@@ -91,26 +98,36 @@ def extract_duration_from_csv(test_num):
 
             if duration_col_idx is None:
                 print(f"  ✗ Column 'DEVICE KERNEL DURATION [ns]' not found")
-                return None
+                return None, None
 
-            # Parse data row
-            data_line = lines[1].strip().split(",")
-            if duration_col_idx >= len(data_line):
-                print(f"  ✗ Duration column index out of range")
-                return None
+            # Sum durations from ALL data rows
+            total_duration = 0.0
+            row_count = 0
+            for row in rows[1:]:
+                if not row:
+                    continue
 
-            duration_str = data_line[duration_col_idx].strip()
-            if not duration_str:
-                print(f"  ✗ Duration value is empty")
-                return None
+                if duration_col_idx >= len(row):
+                    continue
 
-            duration = float(duration_str)
-            print(f"  ✓ Duration: {duration} ns (from {csv_file.name})")
-            return duration
+                duration_str = row[duration_col_idx].strip()
+                if duration_str:
+                    try:
+                        total_duration += float(duration_str)
+                        row_count += 1
+                    except ValueError:
+                        continue
+
+            if row_count == 0:
+                print(f"  ✗ No valid duration values found")
+                return None, None
+
+            print(f"  ✓ Total Duration: {total_duration} ns (sum of {row_count} ops, from {csv_file.name})")
+            return total_duration, csv_file
 
     except Exception as e:
         print(f"  ✗ Error: {e}")
-        return None
+        return None, None
 
 
 def main():
@@ -121,17 +138,22 @@ def main():
     print("=" * 80)
     print(f"Profiler reports: {PROFILER_REPORTS_DIR}")
     print(f"Output CSV: {OUTPUT_CSV}")
+    print(f"Raw CSVs: {RAW_CSV_DIR}")
     print("=" * 80)
     print()
 
+    # Create raw CSV directory
+    RAW_CSV_DIR.mkdir(parents=True, exist_ok=True)
+
     results = []
+    csv_copy_list = []  # Track CSVs to copy
 
     for idx, (shape, memory_config, exponent) in enumerate(CONFIGS):
         test_num = idx + 1
 
         print(f"Test {test_num}: {shape} / {memory_config} / exp={exponent}")
 
-        duration = extract_duration_from_csv(test_num)
+        duration, source_csv = extract_duration_from_csv(test_num)
 
         results.append(
             {
@@ -141,10 +163,22 @@ def main():
             }
         )
 
-    # Write CSV
+        # Track source CSV for copying
+        if source_csv:
+            csv_copy_list.append(
+                {
+                    "test_num": test_num,
+                    "source": source_csv,
+                    "memory_config": memory_config,
+                    "exponent": exponent,
+                    "shape": shape,
+                }
+            )
+
+    # Write consolidated CSV
     print()
     print("=" * 80)
-    print("GENERATING CSV")
+    print("GENERATING CONSOLIDATED CSV")
     print("=" * 80)
 
     with open(OUTPUT_CSV, "w", newline="") as csvfile:
@@ -155,6 +189,27 @@ def main():
             writer.writerow([r["exponent"], r["memory_config_type"], r["device_kernel_duration_ns"]])
 
     print(f"✓ CSV saved: {OUTPUT_CSV}")
+
+    # Copy raw profiler CSVs with descriptive names
+    print()
+    print("=" * 80)
+    print("COPYING RAW PROFILER CSVs")
+    print("=" * 80)
+
+    copy_success = 0
+    for item in csv_copy_list:
+        # Create descriptive filename: perf_04_L1_interleaved_exp3.56.csv
+        dest_name = f"perf_{item['test_num']:02d}_{item['memory_config']}_exp{item['exponent']}.csv"
+        dest_path = RAW_CSV_DIR / dest_name
+
+        try:
+            shutil.copy2(item["source"], dest_path)
+            print(f"  ✓ Copied: {dest_name}")
+            copy_success += 1
+        except Exception as e:
+            print(f"  ✗ Failed to copy {item['source'].name}: {e}")
+
+    print(f"\n✓ Copied {copy_success}/{len(csv_copy_list)} raw CSV files to {RAW_CSV_DIR}")
 
     # Summary
     print()
@@ -183,7 +238,9 @@ def main():
         print("-" * 80)
 
     print()
-    print(f"✓ CSV file ready: {OUTPUT_CSV}")
+    print("OUTPUT FILES:")
+    print(f"  Consolidated CSV: {OUTPUT_CSV}")
+    print(f"  Raw profiler CSVs: {RAW_CSV_DIR}/")
     print()
 
 
