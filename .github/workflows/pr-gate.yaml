@@ -271,7 +271,7 @@ jobs:
       product: tt-nn
 
   APC-test-count-check:
-    # needs: [ build, find-changed-files ]
+    needs: [ build, find-changed-files ]
     # if: ${{
     #     github.ref_name == 'main' ||
     #     needs.find-changed-files.outputs.cmake-changed == 'true' ||
