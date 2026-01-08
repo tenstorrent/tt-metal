@@ -55,15 +55,15 @@ def run_test_moe(device, M, K, N, check_accuracy):
         torch_input_replicated = torch_input.repeat(NUM_EXPERTS, 1)  # Shape: (64*M, K)
         tt_input = ttnn.from_torch(
             torch_input_replicated,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=input_sharded_mem_config,
         )
-        tt_weight0 = ttnn.from_torch(torch_w0, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight1 = ttnn.from_torch(torch_w1, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight2 = ttnn.from_torch(torch_w2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.from_torch(torch_w0, dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight1 = ttnn.from_torch(torch_w1, dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight2 = ttnn.from_torch(torch_w2, dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
     else:
         # Replicate empty input 64 times for performance testing
         torch_input_replicated = torch.empty((NUM_EXPERTS * M, K), dtype=torch.bfloat16)
@@ -74,10 +74,10 @@ def run_test_moe(device, M, K, N, check_accuracy):
             layout=ttnn.TILE_LAYOUT,
             memory_config=input_sharded_mem_config,
         )
-        tt_weight0 = ttnn.empty((K, N), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight1 = ttnn.empty((K, N), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_weight2 = ttnn.empty((N, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight0 = ttnn.empty((K, N), dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight1 = ttnn.empty((K, N), dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_weight2 = ttnn.empty((N, K), dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat8, device=device, layout=ttnn.TILE_LAYOUT)
 
     if check_accuracy:
         with torch.no_grad():
@@ -100,7 +100,7 @@ def run_test_moe(device, M, K, N, check_accuracy):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2048): 450_000,
+    (32, 7168, 2048): 360_000,
 }
 
 

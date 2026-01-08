@@ -97,7 +97,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     }
 
     // Create kernels for the program
-    [[maybe_unused]] auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
+    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm0.cpp",
         cores,
@@ -106,7 +106,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = dm_compile_args});
 
-    [[maybe_unused]] auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
+    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
         cores,
@@ -115,7 +115,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = dm_compile_args});
 
-    [[maybe_unused]] auto compute_kernel_handle = tt::tt_metal::CreateKernel(
+    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/compute.cpp",
         cores,
@@ -142,6 +142,13 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_handle, core, runtime_args);
         }
+    }
+
+    auto all_worker_cores_ordered =
+        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
+            tt::tt_metal::NOC::RISCV_0_default);
+    for (const auto& core : all_worker_cores_ordered) {
+        log_warning(tt::LogOp, "Worker core: {}", core.str());
     }
 
     return cached_program_t{std::move(program), MoESharedVariables{}};
