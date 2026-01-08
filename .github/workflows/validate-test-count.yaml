@@ -167,12 +167,17 @@ jobs:
           
           # Configure git and checkout base branch
           echo "Current directory: $(pwd)"
+          echo "GitHub workspace: ${{ github.workspace }}"
+          echo "Searching for .git:"
+          find ${{ github.workspace }} -name .git -type d 2>/dev/null || echo "No .git directory found"
+          find ${{ github.workspace }} -name .git -type f 2>/dev/null || echo "No .git file found"
+          echo "Listing github.workspace:"
+          ls -la ${{ github.workspace }} 2>&1 | head -20
           echo "Listing /work:"
           ls -la /work | head -20
-          echo "Checking for .git:"
-          ls -la /work/.git 2>&1 || echo ".git not found"
+          git config --global --add safe.directory ${{ github.workspace }}/docker-job
           git config --global --add safe.directory /work
-          git status
+          cd ${{ github.workspace }}/docker-job && git status
           git fetch origin main
           git checkout origin/main
           
