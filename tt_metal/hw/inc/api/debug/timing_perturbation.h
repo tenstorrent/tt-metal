@@ -14,12 +14,12 @@ namespace tt::compute::common {
  * @brief Helper to inline variable number of nops/TTI_NOPs
  *
  * @tparam num_nops: number of nops to insert
- * @tparam nop_type: 0 for accelerator TTI_NOP, 1 for RISC-V nop
+ * @tparam is_riscv_nop: 0 for Tensix nop, 1 for RISC-V nop
  */
-template <const int num_nops, const int nop_type>
+template <const int num_nops, const int is_riscv_nop>
 inline void add_nops() {
     for (int i = 0; i < num_nops; i++) {
-        if constexpr (nop_type) {
+        if constexpr (is_riscv_nop) {
             asm volatile("nop");
         } else {
             TTI_NOP;
@@ -33,22 +33,22 @@ inline void add_nops() {
  * @tparam num_unpack_nops: number of unpack nops to insert
  * @tparam num_math_nops: number of math nops to insert
  * @tparam num_pack_nops: number of pack nops to insert
- * @tparam nop_type: 0 for accelerator TTI_NOP, 1 for RISC-V nop
+ * @tparam is_riscv_nop: 0 for Tensix nop, 1 for RISC-V nop
  */
-template <const int num_unpack_nops, const int num_math_nops, const int num_pack_nops, const int nop_type>
+template <const int num_unpack_nops, const int num_math_nops, const int num_pack_nops, const int is_riscv_nop>
 inline void add_compute_nops() {
-    DPRINT << "NOP Type: " << (uint32_t)nop_type << " Unpack NOPs: " << (uint32_t)num_unpack_nops
+    DPRINT << "is_riscv_nop: " << (uint32_t)is_riscv_nop << " Unpack NOPs: " << (uint32_t)num_unpack_nops
            << " Math NOPs: " << (uint32_t)num_math_nops << " Pack NOPs: " << (uint32_t)num_pack_nops << ENDL();
     if constexpr (num_unpack_nops) {
-        UNPACK((add_nops<num_unpack_nops, nop_type>()));
+        UNPACK((add_nops<num_unpack_nops, is_riscv_nop>()));
     }
 
     if constexpr (num_math_nops) {
-        MATH((add_nops<num_math_nops, nop_type>()));
+        MATH((add_nops<num_math_nops, is_riscv_nop>()));
     }
 
     if constexpr (num_pack_nops) {
-        PACK((add_nops<num_pack_nops, nop_type>()));
+        PACK((add_nops<num_pack_nops, is_riscv_nop>()));
     }
 }
 }  // namespace tt::compute::common
