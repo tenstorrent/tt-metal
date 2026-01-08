@@ -430,7 +430,7 @@ inline void mcast_sender_send_data(
     const uint32_t num_dests) {
     const uint64_t multicast_noc_addr = get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, l1_addr);
     noc_async_write_multicast(l1_addr, multicast_noc_addr, num_bytes, num_dests);
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 
 /**
@@ -456,7 +456,7 @@ inline void mcast_sender_signal_receivers(
     const uint64_t receiver_sem_noc_addr =
         get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_sem_addr);
     noc_semaphore_set_multicast(receiver_sem_addr, receiver_sem_noc_addr, num_dests);
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 
 /**
@@ -469,7 +469,7 @@ inline void mcast_receiver_wait_for_data(
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr, const uint64_t sender_sem_noc_addr) {
     noc_semaphore_set(receiver_sem_ptr, 0);
     noc_semaphore_inc(sender_sem_noc_addr, 1);
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
     noc_semaphore_wait(receiver_sem_ptr, 1);
 }
 

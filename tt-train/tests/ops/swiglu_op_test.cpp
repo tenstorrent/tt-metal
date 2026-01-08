@@ -210,6 +210,65 @@ TEST_F(SwiGLUOpTest, SwiGLU_Large_4x1x64x256) {
     CompareKernelVsReferenceWithShape({4, 1, 64, 256}, 256);
 }
 
+TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
+    using namespace ttml;
+
+    auto& device = autograd::ctx().get_device();
+    const auto grid = device.compute_with_storage_grid_size();
+    const uint32_t num_columns = grid.x;
+
+    // Create a batch size that will force row imbalance:
+    // Use enough rows to fill multiple grid rows with uneven distribution
+    // This ensures some logical grid rows have cores with different workloads
+    const uint32_t batch = 100;
+
+    const std::vector<uint32_t> input_shape = {batch, 1, 32, 64};
+    const uint32_t hidden_dim = 128U;
+
+    auto& rng = autograd::ctx().get_generator();
+    const float bound = 1.0f;
+
+    xt::xarray<float> input_data = xt::empty<float>(input_shape);
+    core::parallel_generate<float>(
+        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+
+    std::vector<uint32_t> w_shape = {1, 1, input_shape.back(), hidden_dim};
+    std::vector<uint32_t> w2_shape = {1, 1, hidden_dim, input_shape.back()};
+
+    xt::xarray<float> w1_data = xt::empty<float>(w_shape);
+    core::parallel_generate<float>(
+        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
+    core::parallel_generate<float>(
+        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w3_data = xt::empty<float>(w_shape);
+    core::parallel_generate<float>(
+        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+
+    auto input_tensor = autograd::create_tensor(core::from_xtensor(input_data, &device));
+    auto w1_tensor = autograd::create_tensor(core::from_xtensor(w1_data, &device));
+    auto w2_tensor = autograd::create_tensor(core::from_xtensor(w2_data, &device));
+    auto w3_tensor = autograd::create_tensor(core::from_xtensor(w3_data, &device));
+
+    auto reference = swiglu_forward_reference(input_data, w1_data, w2_data, w3_data);
+
+    const float tolerance = 1e-2f;
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        auto output_tensor = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+        auto value = output_tensor->get_value();
+        auto output_xtensor = core::to_xtensor(value);
+
+        EXPECT_EQ(output_xtensor.shape(), reference.shape()) << "Unexpected output shape on iteration " << iteration;
+        EXPECT_TRUE(xt::all(xt::isfinite(output_xtensor))) << "Non-finite tensor detected on iteration " << iteration;
+
+        auto diff = output_xtensor - reference;
+        float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
+        float ref_l2 = std::sqrt(xt::sum(xt::square(reference))());
+        const float rel_l2 = diff_l2 / (ref_l2 + 1e-12f);
+        EXPECT_LT(rel_l2, tolerance) << "Relative L2 error too large on iteration " << iteration;
+    }
+}
+
 // 7. Large test: 2x1x128x512, hidden_dim=512
 TEST_F(SwiGLUOpTest, SwiGLU_Large_2x1x128x512) {
     CompareKernelVsReferenceWithShape({2, 1, 128, 512}, 512);
