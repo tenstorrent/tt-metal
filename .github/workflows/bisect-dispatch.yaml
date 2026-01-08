@@ -20,6 +20,7 @@ on:
           - N150
           - N300
           - P150
+          - P100
           - config-t3000
           - BH-LoudBox
           - topology-6u-wormhole_b0
