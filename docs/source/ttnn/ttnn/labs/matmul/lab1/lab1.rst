@@ -338,14 +338,14 @@ launch is key to reasoning about performance, correctness, and why the APIs are 
 
 
 Example TT-Metalium Program
-===========================
+***************************
 
 We now present a simple example TT-Metalium program that performs an elementwise addition of two tensors of shape ``MxN``.
 This program will be used to illustrate the TT-Metalium programming model, different types of kernels, and how they map to the underlying architecture.
 Key points will be highlighted in this text. Detailed comments are provided in the C++ code to help with code understanding.
 
 Exercise 2: Running the Example Program
----------------------------------------
+=======================================
 
 If you haven't already done so, clone an appropriate release of the TT-Metalium repository from https://github.com/tenstorrent/tt-metal
 Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
@@ -359,7 +359,7 @@ Make sure you are in the ``tt-metal`` directory and then build the example progr
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
 
 Program Description
--------------------
+===================
 
 The main program for the code example being discussed is located in the file ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 The first thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
@@ -379,7 +379,7 @@ Finally, the program validates the results by comparing the Tensix output with t
 
 
 Kernel Types and Data Flow
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------------------
 
 Before diving into the function ``eltwise_add_tensix``, let us discuss the different types of kernels and how they map to the underlying hardware.
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
@@ -434,7 +434,7 @@ The Tensix core consists of four major parts:
 
 
 Kernel Creation and Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---------------------------------
 
 The function ``eltwise_add_tensix`` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
 At a high level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
@@ -511,7 +511,7 @@ not on the device.
 We will examine kernel code next.
 
 Reader Kernel Code
-~~~~~~~~~~~~~~~~~~
+------------------
 
 The function can be summarized by the following pseudo-code:
 
@@ -555,7 +555,7 @@ The reader kernel repeats this process for all tiles. Given that circular buffer
 read a new tile while the compute kernel is processing the previous one.
 
 Compute Kernel Code
-~~~~~~~~~~~~~~~~~~~
+-------------------
 
 The compute kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`` is responsible for performing the elementwise addition of two tiles.
 
@@ -611,7 +611,7 @@ with the compute processor writing results and the packer processor reading them
 
 
 Writer Kernel Code
-~~~~~~~~~~~~~~~~~~
+------------------
 
 The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring
 computed results from circular buffers in internal device SRAM back to device DRAM.
@@ -630,7 +630,7 @@ This coordination between the compute and writer kernels enables pipelined execu
 
 
 Example Program Summary
------------------------
+=======================
 
 It is useful to wrap up this example description by emphasizing one more time the nature of the Metalium programming model and
 division of tasks and data between host and device.
