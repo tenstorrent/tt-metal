@@ -87,8 +87,12 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
         input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
     std::vector<TensorSpec> intermediate_specs;
-    if (tensor_args.optional_intermediate_tensor.has_value()) {
-        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
+    if (tensor_args.optional_fw_intermediate_tensor.has_value() &&
+        tensor_args.optional_bw_intermediate_tensor.has_value() &&
+        tensor_args.optional_coord_intermediate_tensor.has_value()) {
+        intermediate_specs.push_back(tensor_args.optional_fw_intermediate_tensor.value().tensor_spec());
+        intermediate_specs.push_back(tensor_args.optional_bw_intermediate_tensor.value().tensor_spec());
+        intermediate_specs.push_back(tensor_args.optional_coord_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
     // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
@@ -97,7 +101,9 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
                        (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
     Shape intermediate_shape = Shape{shape_0, shape_1};
     TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
-    intermediate_specs.push_back(intermediate_spec);
+    for (auto j = 0; j < 3; j++) {
+        intermediate_specs.push_back(intermediate_spec);
+    }
 
     return {intermediate_specs, final_output_spec};
 }
@@ -111,9 +117,17 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
     std::vector<ttnn::Tensor> intermediate_output_tensors;
     std::vector<ttnn::Tensor> final_output_tensors;
 
-    auto intermediate_output_tensor_l = create_device_tensor(output_specs.at(0)[0], mesh_device);
-    if (tensor_args.optional_intermediate_tensor.has_value()) {
-        intermediate_output_tensor_l = tensor_args.optional_intermediate_tensor.value();
+    auto fw_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[0], mesh_device);
+    if (tensor_args.optional_fw_intermediate_tensor.has_value()) {
+        fw_intermediate_output_tensor = tensor_args.optional_fw_intermediate_tensor.value();
+    }
+    auto bw_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[1], mesh_device);
+    if (tensor_args.optional_bw_intermediate_tensor.has_value()) {
+        bw_intermediate_output_tensor = tensor_args.optional_bw_intermediate_tensor.value();
+    }
+    auto coord_intermediate_output_tensor = create_device_tensor(output_specs.at(0)[2], mesh_device);
+    if (tensor_args.optional_coord_intermediate_tensor.has_value()) {
+        coord_intermediate_output_tensor = tensor_args.optional_coord_intermediate_tensor.value();
     }
 
     auto final_output_tensor_l = create_device_tensor(output_specs.at(1)[0], mesh_device);
@@ -131,7 +145,8 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
         final_output_tensor_m = tensor_args.optional_output_tensor_m.value();
     }
 
-    intermediate_output_tensors = {intermediate_output_tensor_l};
+    intermediate_output_tensors = {
+        fw_intermediate_output_tensor, bw_intermediate_output_tensor, coord_intermediate_output_tensor};
     final_output_tensors = {final_output_tensor_l, final_output_tensor_s, final_output_tensor_m};
 
     return {intermediate_output_tensors, final_output_tensors};
@@ -159,7 +174,7 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     log_debug(tt::LogOp, "Synchronize devices in reduce_to_root op done");
 
     const auto& coords = tensor_coords.coords();
-    auto topology = tt::tt_fabric::Topology::Linear;
+    auto topology = tt::tt_fabric::Topology::Ring;
     for (const auto& coord : coords) {
         std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor_l, coord, 1, topology, std::nullopt);
@@ -170,6 +185,13 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
         if (coord == operation_attributes.root_coord) {
             if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
                 TT_FATAL(false, "Root device must have both forward and backward neighbors in reduce_to_root op");
+            }
+        }
+        if (topology == tt::tt_fabric::Topology::Ring) {
+            if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
+                TT_FATAL(
+                    false,
+                    "In ring topology, all devices must have both forward and backward neighbors in reduce_to_root op");
             }
         }
         auto cached_workload = create_at(
@@ -216,7 +238,9 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
     const std::optional<Tensor>& optional_output_tensor_l,
     const std::optional<Tensor>& optional_output_tensor_s,
     const std::optional<Tensor>& optional_output_tensor_m,
-    const std::optional<Tensor>& optional_intermediate_tensor,
+    const std::optional<Tensor>& optional_fw_intermediate_tensor,
+    const std::optional<Tensor>& optional_bw_intermediate_tensor,
+    const std::optional<Tensor>& optional_coord_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     using OperationType = ttnn::operations::ccl::ReduceToRootOp;
     return ttnn::device_operation::launch<OperationType>(
@@ -233,6 +257,8 @@ ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
             optional_output_tensor_l,
             optional_output_tensor_s,
             optional_output_tensor_m,
-            optional_intermediate_tensor});
+            optional_fw_intermediate_tensor,
+            optional_bw_intermediate_tensor,
+            optional_coord_intermediate_tensor});
 }
 }  // namespace ttnn::prim

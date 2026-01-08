@@ -31,7 +31,10 @@ void bind_reduce_to_root(nb::module_& mod) {
             Keyword Args:
                 topology (ttnn.Topology): Fabric topology.
                 output_tensor (ttnn.Tensor,optional): Optional output tensor.
-                intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
+                fw_intermediate_tensor (ttnn.Tensor,optional): Optional fw intermediate tensor.
+                bw_intermediate_tensor (ttnn.Tensor,optional): Optional bw intermediate tensor.
+                coord_intermediate_tensor (ttnn.Tensor,optional): Optional coord intermediate tensor.
+                input_mux_cores (List[ttnn.CoreCoord], optional): List of mux core
 
            Returns:
                ttnn.Tensor output_tensor_l: the output tensor for values.
@@ -60,7 +63,7 @@ void bind_reduce_to_root(nb::module_& mod) {
                         input_tensor_m,
                         root_coord,
                         scale_fp32=1.0,
-                        topology=ttnn.Topology.Linear)
+                        topology=ttnn.Topology.Ring)
             )doc";
 
     using OperationType = decltype(ttnn::reduce_to_root);
@@ -78,7 +81,9 @@ void bind_reduce_to_root(nb::module_& mod) {
                const std::optional<ttnn::Tensor>& output_tensor_l,
                const std::optional<ttnn::Tensor>& output_tensor_s,
                const std::optional<ttnn::Tensor>& output_tensor_m,
-               const std::optional<ttnn::Tensor>& intermediate_tensor,
+               const std::optional<ttnn::Tensor>& fw_intermediate_tensor,
+               const std::optional<ttnn::Tensor>& bw_intermediate_tensor,
+               const std::optional<ttnn::Tensor>& coord_intermediate_tensor,
                const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
                const tt::tt_fabric::Topology topology) {
                 return self(
@@ -91,7 +96,9 @@ void bind_reduce_to_root(nb::module_& mod) {
                     output_tensor_l,
                     output_tensor_s,
                     output_tensor_m,
-                    intermediate_tensor,
+                    fw_intermediate_tensor,
+                    bw_intermediate_tensor,
+                    coord_intermediate_tensor,
                     input_mux_cores);
             },
             nb::arg("input_tensor_l").noconvert(),
@@ -103,9 +110,11 @@ void bind_reduce_to_root(nb::module_& mod) {
             nb::arg("output_tensor_l") = nb::none(),
             nb::arg("output_tensor_s") = nb::none(),
             nb::arg("output_tensor_m") = nb::none(),
-            nb::arg("intermediate_tensor") = nb::none(),
+            nb::arg("fw_intermediate_tensor") = nb::none(),
+            nb::arg("bw_intermediate_tensor") = nb::none(),
+            nb::arg("coord_intermediate_tensor") = nb::none(),
             nb::arg("input_mux_cores") = nb::none(),
-            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear)});
+            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Ring)});
 
     mod.def(
         "reduce_to_root_tensor_spec",
