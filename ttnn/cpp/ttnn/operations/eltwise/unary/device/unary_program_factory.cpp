@@ -278,9 +278,8 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (num_tiles % ncores == 0) {
             break;
-        } else {
-            ncores--;
         }
+        ncores--;
     }
     TT_FATAL(
         (num_tiles % (ncores) == 0),

@@ -720,9 +720,8 @@ public:
             last_topology_key_ = topology_key;
 
             return cached_policy_;  // Return new policy
-        } else {
-            return std::nullopt;  // Signal to reuse existing policy
         }
+        return std::nullopt;  // Signal to reuse existing policy
     }
 
     const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }

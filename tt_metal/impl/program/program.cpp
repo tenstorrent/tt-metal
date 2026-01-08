@@ -102,9 +102,8 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
         return device->allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-    } else {
-        return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     }
+    return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
@@ -147,7 +146,6 @@ namespace tt::tt_metal {
 using detail::ProgramImpl;
 
 namespace {
-std::atomic<bool> enable_persistent_kernel_cache = false;
 
 void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
     // ZoneScoped;
@@ -192,13 +190,6 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     return compile_hash;
 }
 }  // namespace
-namespace detail {
-
-void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
-
-void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
-
-}  // namespace detail
 
 namespace experimental {
 
@@ -395,7 +386,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
 }
 
@@ -1267,41 +1258,39 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
             auto [sub_device_ids, _] =
                 sub_device_ids_map.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
             return sub_device_ids->second;
-        } else {
-            std::unordered_set<SubDeviceId> used_sub_device_ids;
-            auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
-                auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
-                if (core_type_index == -1) {
-                    return;
-                }
-                const auto& program_kgs =
-                    this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
-                uint32_t num_intersections = 0;
-                uint32_t num_cores = 0;
-                for (const auto& kg : program_kgs) {
-                    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                        const auto& sub_device_cores =
-                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
-                        auto intersection = sub_device_cores.intersection(kg->core_ranges);
-                        if (!intersection.empty()) {
-                            used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
-                            num_intersections += intersection.num_cores();
-                        }
-                    }
-                    num_cores += kg->core_ranges.num_cores();
-                }
-                TT_FATAL(
-                    num_intersections == num_cores,
-                    "Kernel group cores do not match sub device cores for programmable core type {}",
-                    enchantum::to_string(core_type));
-            };
-            find_sub_device_ids(HalProgrammableCoreType::TENSIX);
-            find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
-            auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
-                sub_device_manager_id,
-                std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
-            return sub_device_ids->second;
         }
+        std::unordered_set<SubDeviceId> used_sub_device_ids;
+        auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
+            auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
+            if (core_type_index == -1) {
+                return;
+            }
+            const auto& program_kgs =
+                this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
+            uint32_t num_intersections = 0;
+            uint32_t num_cores = 0;
+            for (const auto& kg : program_kgs) {
+                for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+                    const auto& sub_device_cores =
+                        device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
+                    auto intersection = sub_device_cores.intersection(kg->core_ranges);
+                    if (!intersection.empty()) {
+                        used_sub_device_ids.insert(SubDeviceId{static_cast<unsigned char>(i)});
+                        num_intersections += intersection.num_cores();
+                    }
+                }
+                num_cores += kg->core_ranges.num_cores();
+            }
+            TT_FATAL(
+                num_intersections == num_cores,
+                "Kernel group cores do not match sub device cores for programmable core type {}",
+                enchantum::to_string(core_type));
+        };
+        find_sub_device_ids(HalProgrammableCoreType::TENSIX);
+        find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
+        auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
+            sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
+        return sub_device_ids->second;
     }
     return sub_device_ids->second;
 }
@@ -1450,12 +1439,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
                     kernel->register_kernel_elf_paths_with_watcher(*device);
 
-                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
-                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                            detail::HashLookup::inst().add(kernel_hash);
-                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                        }
-                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                    if (detail::HashLookup::inst().add(kernel_hash)) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
@@ -1770,11 +1754,13 @@ detail::ProgramCompileGroup::~ProgramCompileGroup() { program_device_map_.clear(
 
 void detail::ProgramCompileGroup::add_program(
     tt::tt_metal::IDevice* device, std::unique_ptr<tt::tt_metal::Program> program) {
+    std::lock_guard lock(mutex_);
     TT_FATAL(!program_device_map_.contains(device), "Program already exists in the compile group.");
     program_device_map_[device] = std::move(program);
 }
 
 void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
+    std::lock_guard lock(mutex_);
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
         auto* pgm = program.get();
@@ -1785,21 +1771,27 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
 }
 
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
+    std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
         detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
     }
 }
 
 std::unique_ptr<Program> detail::ProgramCompileGroup::remove_program(tt::tt_metal::IDevice* device) {
+    std::lock_guard lock(mutex_);
     TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
     std::unique_ptr<Program> program = std::move(program_device_map_[device]);
     program_device_map_.erase(device);
     return program;
 }
 
-void detail::ProgramCompileGroup::clear() { program_device_map_.clear(); }
+void detail::ProgramCompileGroup::clear() {
+    std::lock_guard lock(mutex_);
+    program_device_map_.clear();
+}
 
 bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
+    std::lock_guard lock(mutex_);
     return program_device_map_.contains(device);
 }
 

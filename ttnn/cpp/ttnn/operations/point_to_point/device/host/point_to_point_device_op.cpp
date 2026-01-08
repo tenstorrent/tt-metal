@@ -52,16 +52,15 @@ auto fabric_1d_routing_vector(const MeshCoordinate& sender_coord, const MeshCoor
         return std::make_tuple(std::abs(hops), is_fwd, dim);
     }
     // transmit along col
-    else if (sender_coord[1] == receiver_coord[1]) {
+    if (sender_coord[1] == receiver_coord[1]) {
         constexpr auto dim = 0;
         const int hops = receiver_coord[dim] - sender_coord[dim];
         bool is_fwd = (hops > 0);
 
         return std::make_tuple(std::abs(hops), is_fwd, dim);
-    } else {
-        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
-        return std::make_tuple(0, false, 0);
     }
+    TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
+    return std::make_tuple(0, false, 0);
 }
 
 Fabric1DRoute fabric_1d_routing(
@@ -228,8 +227,8 @@ cached_workload_t PointToPointOp::SendReceive::create_at(
     if (mesh_coordinate == send_coordinate) {
         return send_program_factory(
             tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value, semaphore);
-
-    } else if (mesh_coordinate == receive_coordinate) {
+    }
+    if (mesh_coordinate == receive_coordinate) {
         return receive_program_factory(operation_attributes, tensor_return_value, semaphore);
     }
 
