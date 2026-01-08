@@ -17,11 +17,26 @@ from slack_sdk.errors import SlackApiError
 from typing import Dict, List
 
 # --- CONFIGURATION ---
-SLACK_TOKEN = ""
-CHANNEL_ID = ""
+SECRETS_FILE = "build_secrets.json"
 START_DATE_STR = "January 1, 2026"
 OUTPUT_FILE = "build_slack_export_with_threads.json"
 DEBUG_LOG = "debug.log"
+
+
+def load_secrets(secrets_file: str) -> dict:
+    """Load secrets from JSON file."""
+    if not os.path.exists(secrets_file):
+        raise FileNotFoundError(
+            f"Secrets file '{secrets_file}' not found. " f"Please create it with 'slack_token' and 'channel_id' fields."
+        )
+
+    with open(secrets_file, "r", encoding="utf-8") as f:
+        secrets = json.load(f)
+
+    if "slack_token" not in secrets or "channel_id" not in secrets:
+        raise ValueError(f"Secrets file '{secrets_file}' must contain 'slack_token' and 'channel_id' fields.")
+
+    return secrets
 
 
 def get_unix_timestamp(date_string):
@@ -292,6 +307,11 @@ def extract_nd_failure_from_reply(reply: dict) -> dict:
 
 def download_and_extract_messages():
     """Download messages from Slack and extract structured information from all replies."""
+    # Load secrets from file
+    secrets = load_secrets(SECRETS_FILE)
+    SLACK_TOKEN = secrets["slack_token"]
+    CHANNEL_ID = secrets["channel_id"]
+
     # Delete output file if it already exists
     if os.path.exists(OUTPUT_FILE):
         print(f"Deleting existing {OUTPUT_FILE}...")
