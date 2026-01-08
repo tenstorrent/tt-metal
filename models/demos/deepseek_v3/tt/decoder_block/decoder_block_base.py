@@ -55,6 +55,14 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
         mla_config = cls.decode_mla_config(hf_config, mesh_device)
+        mlp_config = cls.decode_mlp_config(hf_config, mesh_device)
+
+        # Get the input_memory_config for the mlp_reshard
+        # For MoE blocks, input_memory_config is nested inside shared_expert
+        if "shared_expert" in mlp_config:
+            mlp_input_memory_config = mlp_config["shared_expert"]["input_memory_config"]
+        else:
+            mlp_input_memory_config = mlp_config["input_memory_config"]
 
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
@@ -63,8 +71,8 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
             "mla": mla_config,
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
-            "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            "mlp": cls.decode_mlp_config(hf_config, mesh_device),
+            "mlp_reshard": ReshardConfig(memory_config=mlp_input_memory_config),
+            "mlp": mlp_config,
         }
 
     @classmethod
