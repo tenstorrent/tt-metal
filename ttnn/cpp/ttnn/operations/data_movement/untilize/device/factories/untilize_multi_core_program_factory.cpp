@@ -73,13 +73,24 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
     if (input_is_sharded) {
-        ShardSpec input_shard_spec = a.shard_spec().value();
-        uint32_t input_shard_height = input_shard_spec.shape[0];
-        uint32_t input_shard_width = input_shard_spec.shape[1];
+        CoreRangeSet grid;
+        uint32_t input_shard_height;
+        uint32_t input_shard_width;
+        if (a.shard_spec().has_value()) {
+            const auto& shard_spec = a.shard_spec().value();
+            input_shard_height = shard_spec.shape[0];
+            input_shard_width = shard_spec.shape[1];
+            grid = shard_spec.grid;
+        } else {
+            const auto& nd_shard_spec = a.nd_shard_spec().value();
+            input_shard_height = nd_shard_spec.shard_shape[-2];
+            input_shard_width = nd_shard_spec.shard_shape[-1];
+            grid = nd_shard_spec.grid;
+        }
 
-        num_compute_cores = input_shard_spec.grid.num_cores();
-        compute_core_range = input_shard_spec.grid;
-        full_compute_core_range = input_shard_spec.grid;
+        num_compute_cores = grid.num_cores();
+        compute_core_range = grid;
+        full_compute_core_range = grid;
         cliff_compute_core_range = CoreRangeSet();
 
         // Note: Accounting for uneven input shards
@@ -161,7 +172,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_shard_width = output.shard_spec().value().shape[1];
+        uint32_t output_shard_width;
+        if (output.shard_spec().has_value()) {
+            output_shard_width = output.shard_spec().value().shape[1];
+        } else {
+            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+        }
         output_num_blocks_across_width = tensor_width / output_shard_width;
     }
     uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
@@ -257,7 +273,16 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
-    bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
+    bool is_row_major = true;
+    if (input_is_sharded) {
+        ShardOrientation orientation;
+        if (a.shard_spec().has_value()) {
+            orientation = a.shard_spec().value().orientation;
+        } else {
+            orientation = a.nd_shard_spec().value().orientation;
+        }
+        is_row_major = orientation == ShardOrientation::ROW_MAJOR;
+    }
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     for (uint32_t i = 0; i < full_cores.size(); ++i) {
         CoreCoord core = full_cores[i];
@@ -268,9 +293,14 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Handle uneven input sharding width wise (writer run-time arg)
         uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
         if (input_is_sharded) {
+            uint32_t input_shard_width;
+            if (a.shard_spec().has_value()) {
+                input_shard_width = a.shard_spec().value().shape[1];
+            } else {
+                input_shard_width = a.nd_shard_spec().value().shard_shape[-1];
+            }
             bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
             if (is_last_input_shard_in_row) {
-                uint32_t input_shard_width = a.shard_spec().value().shape[1];
                 num_unpadded_cols_per_input_block =
                     num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
             }
@@ -279,7 +309,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Handle uneven input sharding height wise (reader, compute, writer run-time arg)
         uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
         if (input_is_sharded) {
-            uint32_t input_shard_height = a.shard_spec().value().shape[0];
+            uint32_t input_shard_height;
+            if (a.shard_spec().has_value()) {
+                input_shard_height = a.shard_spec().value().shape[0];
+            } else {
+                input_shard_height = a.nd_shard_spec().value().shard_shape[-2];
+            }
             uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
             uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
             bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;

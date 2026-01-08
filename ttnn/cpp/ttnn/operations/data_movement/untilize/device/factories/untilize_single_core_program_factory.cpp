@@ -54,7 +54,13 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        num_columns_of_blocks = a.padded_shape()[-1] / output.shard_spec().value().shape[1];
+        uint32_t output_shard_width;
+        if (output.shard_spec().has_value()) {
+            output_shard_width = output.shard_spec().value().shape[1];
+        } else {
+            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+        }
+        num_columns_of_blocks = a.padded_shape()[-1] / output_shard_width;
     }
     uint32_t num_tiles_per_column_row = a.padded_shape()[-1] / num_columns_of_blocks / tile_width;
 

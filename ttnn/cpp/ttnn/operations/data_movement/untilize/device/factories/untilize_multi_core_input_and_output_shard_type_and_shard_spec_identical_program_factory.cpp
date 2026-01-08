@@ -44,9 +44,23 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    ShardSpec shard_spec = a.shard_spec().value();
-    uint32_t shard_height = shard_spec.shape[0];
-    uint32_t shard_width = shard_spec.shape[1];
+    uint32_t shard_height;
+    uint32_t shard_width;
+    CoreRangeSet grid;
+    ShardOrientation orientation;
+    if (a.shard_spec().has_value()) {
+        const auto& shard_spec = a.shard_spec().value();
+        shard_height = shard_spec.shape[0];
+        shard_width = shard_spec.shape[1];
+        grid = shard_spec.grid;
+        orientation = shard_spec.orientation;
+    } else {
+        const auto& nd_shard_spec = a.nd_shard_spec().value();
+        shard_height = nd_shard_spec.shard_shape[-2];
+        shard_width = nd_shard_spec.shard_shape[-1];
+        grid = nd_shard_spec.grid;
+        orientation = nd_shard_spec.orientation;
+    }
 
     uint32_t num_tiles_per_block = shard_width / tile_width;
     uint32_t num_blocks_per_core = shard_height / tile_height;
@@ -56,7 +70,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
-        shard_spec.grid,
+        grid,
         input_single_tile_size,
         num_tiles_per_shard,
         input_cb_data_format,
@@ -66,7 +80,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
         program,
-        shard_spec.grid,
+        grid,
         output_single_tile_size,
         num_tiles_per_shard,
         output_cb_data_format,
@@ -79,7 +93,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        shard_spec.grid,
+        grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
@@ -89,7 +103,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
-        shard_spec.grid,
+        grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Compute compile-time args
@@ -124,7 +138,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     CreateKernel(
         program,
         compute_kernel,
-        shard_spec.grid,
+        grid,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
@@ -132,8 +146,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
             .defines = compute_kernel_defines});
 
     // Run-time args
-    auto cores =
-        corerange_to_cores(shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
     for (auto core : cores) {
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_core;
