@@ -45,13 +45,14 @@ def convert2ref(state_dict):
     return out
 
 
+@pytest.mark.parametrize("layer_idx", [0])
 @pytest.mark.parametrize(
     "batch",
     (32,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_params):
+def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_params, layer_idx):
     """
     b: batch
     s: sequence length
@@ -71,7 +72,6 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
     mesh_device.disable_and_clear_program_cache()
 
     state_dict = model_args.load_state_dict()
-    layer_idx = 0
     first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", layer_idx)
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
@@ -105,7 +105,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         mesh_device=mesh_device,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=layer_idx,
         dtype=dtype,
         transformation_mats=transformation_mats,
         args=model_args,

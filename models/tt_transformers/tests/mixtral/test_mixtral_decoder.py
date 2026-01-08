@@ -40,13 +40,14 @@ def convert2ref(state_dict):
     return out
 
 
+@pytest.mark.parametrize("layer_idx", [0])
 @pytest.mark.parametrize(
     "batch",
     (32,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_params):
+def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_params, layer_idx):
     """
     b: batch
     s: sequence length
@@ -67,7 +68,6 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
 
     hf_config = load_hf_mixtral_config()
     model_args = ModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
-    layer_idx = 0
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith(f"layers.{layer_idx}."))}
     reference_model = MixtralDecoderLayer(hf_config, layer_idx)
@@ -88,7 +88,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
-        layer_num=0,
+        layer_num=layer_idx,
         dtype=dtype,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=rope_setup.get_both_trans_mats(),
