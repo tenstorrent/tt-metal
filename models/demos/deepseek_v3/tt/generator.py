@@ -479,13 +479,14 @@ class DeepseekGenerator:
         """
         assert len(tokens_list) > 0 and len(tokens_list) <= batch_size
         max_len = max(len(t) for t in tokens_list)
-        max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
+        if self.prefill_max_tokens is not None:
+            max_len = min(self.prefill_max_tokens, max_len)  # truncate all sequences to the prefill_max_tokens
         # Round up to nearest multiple of TILE_SIZE
         max_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         out = torch.full((batch_size, max_len), self.tokenizer.pad_token_id, dtype=torch.long)
         lengths = torch.zeros((batch_size,), dtype=torch.int32)
         for i, seq in enumerate(tokens_list):
-            len_seq = min(self.prefill_max_tokens, len(seq))
+            len_seq = len(seq) if self.prefill_max_tokens is None else min(self.prefill_max_tokens, len(seq))
             out[i, :len_seq] = torch.tensor(seq[:len_seq], dtype=torch.long)
             lengths[i] = len_seq
         return out, lengths
