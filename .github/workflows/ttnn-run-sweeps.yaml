@@ -752,12 +752,11 @@ jobs:
           sudo -u postgres psql -c "CREATE DATABASE \"tt-model-traces\" OWNER \"tt-sweeps\";" || echo "Database already exists"
           sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"tt-model-traces\" TO \"tt-sweeps\";" || true
 
-          # Restore database from dump
-          echo "Restoring database from dump (963KB compressed)..."
-          PGPASSWORD=tt.sweeps pg_restore \
-            -h localhost -p 5432 -U tt-sweeps -d tt-model-traces \
-            --no-owner --no-privileges --clean --if-exists \
-            model_tracer/ttnn_operations_db.dump 2>&1 | grep -v "^pg_restore: warning:" || true
+          # Restore database from compressed SQL dump
+          echo "Restoring database from SQL dump (963KB)..."
+          PGPASSWORD=tt.sweeps psql -h localhost -p 5432 -U tt-sweeps -d tt-model-traces \
+            -f model_tracer/ttnn_operations_db.sql \
+            -q 2>&1 | grep -v "^NOTICE:" || true
 
           # Verify database
           echo "Verifying database..."
