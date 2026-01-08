@@ -64,6 +64,18 @@ class Generator:
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
+        # Create persistent buffer for accumulated logits (used for on-device sampling)
+        self.tt_logits_accumulated = [
+            ttnn.from_torch(
+                torch.zeros(1, 1, 1, self.model.args.padded_vocab_size // self.model_args.cluster_shape[0]),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                dtype=ttnn.bfloat8_b,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            for _ in range(self.model_args.max_batch_size)
+        ]
+        self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
         self.prev_page_table = None
         self.prefill_traces_warmup = False
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
@@ -83,6 +95,7 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        return
         # Avoids an infinite loop
         self.prefill_traces_warmup = True
 
@@ -181,7 +194,6 @@ class Generator:
             and not return_logits
         ):
             use_batched_prefill = True
-
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
@@ -192,7 +204,6 @@ class Generator:
         do_device_sampling = (not return_logits) and (not save_logits_to_host)
 
         # Accumulate sharded logits (same format as decode, before all-gather) for on-device sampling.
-        tt_logits_accumulated = [] if do_device_sampling else None
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -255,6 +266,10 @@ class Generator:
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:
+                # For batched prefill, reset to empty list since we use extend()
+                # For non-batched prefill with device sampling, use persistent buffer from __init__
+                if use_batched_prefill and do_device_sampling:
+                    self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
@@ -278,35 +293,35 @@ class Generator:
                 tt_logits_list = self.model.process_output_prefill_logits(tt_tok, last_token_idx=last_token_idx)
                 if use_batched_prefill:
                     # Batched prefill: logits list has 32 entries ordered by slot position
-                    tt_logits_accumulated.extend(tt_logits_list)
+                    self.tt_logits_accumulated_batched.extend(tt_logits_list)
                 else:
-                    # Single user: logits list has 1 entry
-                    tt_logits_accumulated.append(ttnn.clone(tt_logits_list[0]))
+                    # Single user: logits list has 1 entry, copy into persistent buffer
+                    ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[id])
 
         # On-device sampling for prefill
-        if do_device_sampling and tt_logits_accumulated:
+        if do_device_sampling:
             padded_batch = 32
 
+            # Use batched list for batched prefill, persistent buffer for non-batched
+            logits_source = (
+                self.tt_logits_accumulated_batched
+                if use_batched_prefill
+                else self.tt_logits_accumulated[: len(empty_slots)]
+            )
+
             # lm_head output is a list [logits_tensor], extract the tensor
-            logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in tt_logits_accumulated]
+            logits_tensors = [logits[0] if isinstance(logits, list) else logits for logits in logits_source]
 
-            if use_batched_prefill:
-                # Batched prefill: logits already have 32 entries (one per slot), ordered by slot.
-                tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
-            else:
-                # Non-batched prefill: we have `batch` logits, need to pad to 32.
-                # Logits are in batch order (same as tokens and sampling_params).
-                if len(logits_tensors) > 1:
-                    tt_logits_batch = ttnn.concat(logits_tensors, dim=2)
-                else:
-                    tt_logits_batch = logits_tensors[0]
+            # Prepare list of 32 tensors, one per slot
+            dummy_logits = ttnn.clone(logits_tensors[-1])
+            slot_logits = [dummy_logits for _ in range(padded_batch)]
 
-                # Pad to 32 users for sampling
-                num_users = len(logits_tensors)
-                if num_users < padded_batch:
-                    padding_needed = padded_batch - num_users
-                    padding_tensors = [logits_tensors[-1]] * padding_needed
-                    tt_logits_batch = ttnn.concat([tt_logits_batch] + padding_tensors, dim=2)
+            # Put each real user's logits into the correct slot
+            for idx, empty_slot_idx in enumerate(empty_slots):
+                slot_logits[empty_slot_idx] = logits_tensors[idx]
+
+            # Concatenate along slot dimension -> [1, 1, 32, vocab_shard]
+            tt_logits_batch = ttnn.concat(slot_logits, dim=2)
 
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
@@ -314,13 +329,15 @@ class Generator:
             self.model.switch_mode("decode")
 
             # Setting sampling module up after switch to decode mode
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            sampling_params = format_sampling_params(
+                sampling_params, self.model_args.max_batch_size, empty_slots=empty_slots
+            )
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
             # if prompt_tokens is not None:  # Guard for warmup
             sampling_module.reset_prompt_tokens(prefill_ids)
             sampling_module.reset_output_state()
-            sampling_module.reset_seed(sampling_params.seed)
+            sampling_module.reset_seed(sampling_params.seed)  # , empty_slots=empty_slots)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
@@ -532,7 +549,6 @@ class Generator:
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
-                sampling_module.reset_seed(sampling_params.seed)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
