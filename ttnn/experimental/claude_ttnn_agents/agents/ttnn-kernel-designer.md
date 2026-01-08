@@ -88,70 +88,25 @@ You MUST produce a structured Kernel Design Document saved to:
 
 **Note**: `REDUCE_OP` and `REDUCE_DIM` macros are **deprecated**. Always specify template parameters explicitly.
 
-### Reduce Helper API Reference
+## Kernel Helper Library Reference
 
-The `reduce()` helper uses `TileShape` and `TileLayout` structs:
+When designing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel_lib/`:
+- `tilize_helpers.hpp` - tilize() function
+- `untilize_helpers.hpp` - untilize() function
+- `reduce_helpers.hpp` - reduce(), TileShape, ReduceInputMode, Accumulation types
+- `dest_helpers.hpp` - DEST register limits (DEST_AUTO_LIMIT)
 
-**IMPORTANT**: "Tile" in `TileShape` refers to the **block dimensions being processed** (rows × cols × batches of 32×32 tiles), NOT the 32×32 hardware tile itself.
+The code is self-documenting with Doxygen comments and @example blocks.
 
-```cpp
-// TileShape factory methods:
-TileShape::grid(Ht, Wt, NC)  // Full grid: Ht rows × Wt cols × NC batches
-TileShape::row(Wt, NC)       // Single row: 1 × Wt × NC
-TileShape::col(Ht, NC)       // Single column: Ht × 1 × NC
-TileShape::single()          // Single tile: 1 × 1 × 1
+**CRITICAL**: Helpers encapsulate CB operations and DST management internally.
+When recommending "USE HELPER", do NOT also recommend the raw operations it handles.
 
-// TileLayout factory methods (for PRELOADED/PERSISTENT modes):
-TileLayout::contiguous()              // Default row-major
-TileLayout::with_row_stride(stride)   // Custom stride between rows
+## Design Anti-Patterns
 
-// Accumulation types (for multi-block accumulation):
-NoAccumulation{}                      // Default - no accumulation (zero overhead)
-Accumulate(cfg, iteration)            // Enable accumulation with iteration index
-AccumulationConfig::with_cb(cb, dst)  // Configuration: accumulator CB and DST index
-
-// Full signature:
-compute_kernel_lib::reduce<PoolType, ReduceDim, ReduceInputMode, ReduceDataFormatReconfig,
-                           init, uninit, AccumT, PostReduceOp>(
-    cb_in, cb_scaler, cb_out, TileShape, TileLayout, AccumT, PostReduceOp);
-
-// Common usage (defaults handle most cases):
-compute_kernel_lib::reduce<PoolType, ReduceDim, ReduceInputMode>(
-    cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
-```
-
-### Accumulation Support
-
-For operations requiring multi-block accumulation (e.g., large tensor reductions):
-
-```cpp
-// Configure accumulator CB
-const auto cfg = AccumulationConfig::with_cb(cb_accumulator);
-
-// Process blocks with accumulation
-for (uint32_t i = 0; i < num_blocks; ++i) {
-    compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
-        cb_in, cb_scaler, cb_out, TileShape::row(Wt),
-        TileLayout::contiguous(), Accumulate(cfg, i));
-}
-```
-
-When `AccumT` is `NoAccumulation` (default), all accumulation code is eliminated at compile-time.
-
-### Post-Reduce Operations
-
-The `post_reduce_op` callback receives a `dst_idx` parameter indicating which DEST register to operate on:
-
-```cpp
-// Post-reduce operation signature (REQUIRED format):
-[](uint32_t dst_idx) {
-    recip_tile_init();
-    recip_tile(dst_idx);  // Use dst_idx, not hardcoded 0
-}
-
-// DEPRECATED (will not compile):
-// []() { recip_tile(0); }  // Missing dst_idx parameter
-```
+When recommending "USE HELPER", do NOT also list these raw operations (helpers handle them):
+- CB ops: cb_wait_front, cb_pop_front, cb_reserve_back, cb_push_back
+- DST ops: tile_regs_acquire, tile_regs_commit
+- Low-level: reduce_tile, pack_tile
 
 ### Phase 1: {phase_name}
 - **Description**: {what this phase does}
