@@ -48,7 +48,7 @@ def main(
         if cleanup:
             cleaned = cleanup_dead_processes()
             if cleaned > 0 and not watch:
-                console.print(f"[green]✓ Cleaned up {cleaned} dead process(es)[/green]")
+                console.print(f"[green]Cleaned up {cleaned} dead process(es)[/green]")
 
         # Get devices
         devices = get_devices()
@@ -65,7 +65,8 @@ def main(
         except Exception as e:
             # Telemetry update failed (devices may be unavailable/resetting)
             if not watch:  # Only show error in non-watch mode
-                console.print(f"[yellow]⚠ Telemetry update failed: {e}[/yellow]")
+                console.print(f"[yellow]Warning: Telemetry update failed: {e}[/yellow]")
+
         # Also update memory stats (from SHM)
         for dev in devices:
             try:
@@ -125,7 +126,7 @@ def main(
         else:
             # Single snapshot
             if graph:
-                console.print("[yellow]⚠ Graph mode only available in watch mode (-w)[/yellow]")
+                console.print("[yellow]Warning: Graph mode only available in watch mode (-w)[/yellow]")
             dashboard.print_snapshot(devices)
 
         return 0

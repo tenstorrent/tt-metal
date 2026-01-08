@@ -6,8 +6,8 @@ A comprehensive monitoring tool for Tenstorrent devices with real-time telemetry
 
 ```bash
 # Pure Python (30-second install, no compilation)
-cd /home/ttuser/aperezvicente/tt-metal-apv/tt_metal/programming_examples/alexp_examples/memory_utilization_monitor
-# export TT_SMI_BUILD_NATIVE=0
+cd $TT_METAL_HOME/tt_metal/programming_examples/alexp_examples/memory_utilization_monitor
+
 pip install -e .
 
 # Run
@@ -20,62 +20,33 @@ tt-smi-ui -w -r 500     # Fast refresh (500ms)
 
 ## Features
 
-### 🎨 Beautiful UI
+### Beautiful UI
 - **Rich library** with colors, tables, live updates
 - **Graph mode** with nvtop-style charts (temperature, power, DRAM, L1)
 - **Dynamic resizing** - charts adjust to terminal size
 - **Matrix layout** - 2x2, 2x4, 4x4 device grids
 
-### 📊 Telemetry
+### Telemetry
 - Temperature, Power, AICLK via UMD
 - Voltage and current monitoring
 - Local and remote device support (Ethernet)
 - Resilient error handling with cached values
 
-### 💾 Memory Tracking
+### Memory Tracking
 - DRAM, L1, L1_SMALL, Trace, CB allocations
 - Per-process breakdown (PID, name)
 - Per-chip tracking (local + remote)
 - Automatic dead process cleanup
 
-### 🛠️ Dual Backend
-- **C++ (fast)**: Full telemetry + memory + graphs
-- **Pure Python (portable)**: Memory only, no compilation
-
-### 🎯 Device Management
-- Device reset (`--reset`, `--reset-m3`)
-- SHM-only mode (non-invasive during reset)
-- Multi-chip support (N300, T3000, Galaxy)
-
 ---
 
 ## Installation
-
-### Option 1: Pure Python (Recommended for Quick Start)
-
-**No compilation, works immediately:**
-
-```bash
-cd memory_utilization_monitor
-export TT_SMI_BUILD_NATIVE=0
-pip install -e .
-```
-
-**Features:**
-- ✓ Memory monitoring (DRAM/L1 from SHM)
-- ✓ Per-process tracking
-- ✓ Graph visualization
-- ✗ No telemetry (temp/power/clock)
-
----
-
-### Option 2: With C++ Bindings (Full Features)
 
 **Requires TT-Metal to be built first:**
 
 ```bash
 # Step 1: Build TT-Metal (if not already done)
-cd /home/ttuser/aperezvicente/tt-metal-apv
+cd $TT_METAL_HOME$
 ./build_metal_with_flags.sh
 
 # Step 2: Install Python UI with C++ support
@@ -85,24 +56,12 @@ pip install -e .
 ```
 
 **Features:**
-- ✓ Memory monitoring
-- ✓ Per-process tracking
-- ✓ Graph visualization
-- ✓ Telemetry (temp/power/clock via UMD)
-- ✓ Remote device support
+- Memory monitoring
+- Per-process tracking
+- Graph visualization
+- Telemetry (temp/power/clock via UMD)
+- Remote device support
 
----
-
-### Option 3: Use CMake-Built Binary
-
-**Already built with TT-Metal:**
-
-```bash
-# C++ binary (fastest, full features)
-/home/ttuser/aperezvicente/tt-metal-apv/build_Release/programming_examples/tt_smi -w
-```
-
----
 
 ## Usage
 
@@ -121,14 +80,9 @@ tt-smi-ui -w -g
 # Fast refresh (500ms)
 tt-smi-ui -w -r 500
 
-# SHM-only (non-invasive, works during reset)
-tt-smi-ui --shm-only
 
 # JSON output
 tt-smi-ui --json
-
-# Device reset
-tt-smi-ui --reset
 ```
 
 ### Python API
@@ -342,19 +296,6 @@ export TT_METAL_SHM_TRACKING_DISABLED=1
 python my_workload.py
 ```
 
-#### Monitor
-
-```bash
-# Real-time monitoring (with automatic dead PID cleanup)
-tt-smi-ui -w
-
-# One-time snapshot
-tt-smi-ui
-
-# Disable automatic cleanup (for debugging)
-tt-smi-ui -w --no-cleanup
-```
-
 ### Automatic Dead Process Cleanup
 
 - `tt-smi-ui` automatically detects and removes dead PIDs from all SHM files
@@ -491,106 +432,6 @@ Expected: Graphs show temperature/power/DRAM/L1 history, adjust to window size.
 
 ---
 
-## Troubleshooting
-
-### Issue: "No devices found"
-
-**Solution:**
-```bash
-# Check for SHM files
-ls -lh /dev/shm/tt_device_*
-
-# Run simple Metal operation
-python -c "import ttnn; device = ttnn.open_device(0); ttnn.close_device(device)"
-
-# Try SHM-only mode
-tt-smi-ui --shm-only
-```
-
-### Issue: "Telemetry shows N/A"
-
-**Causes:**
-1. Pure Python mode (no C++ bindings)
-2. Remote devices showing "ETH busy" during inference
-
-**Solution:**
-```bash
-# Rebuild with C++ bindings
-pip uninstall tt-smi-ui
-pip install pybind11
-pip install -e .
-
-# Or use SHM-only mode
-tt-smi-ui --shm-only
-```
-
-### Issue: "C++ bindings fail to compile"
-
-**Solution:**
-```bash
-# Option A: Use pure Python mode
-export TT_SMI_BUILD_NATIVE=0
-pip install -e .
-
-# Option B: Build TT-Metal first
-cd /home/ttuser/aperezvicente/tt-metal-apv
-./build_metal_with_flags.sh
-cd tt_metal/programming_examples/alexp_examples/memory_utilization_monitor
-pip install -e .
-```
-
-### Issue: "Stale memory allocations after process crash"
-
-**Solution:**
-- `tt-smi-ui` automatically cleans dead PIDs by default
-- If stale data persists:
-```bash
-rm /dev/shm/tt_device_*_memory
-```
-
-### Issue: "Remote devices not showing telemetry"
-
-**Solution:**
-```bash
-# Check topology
-tt-topology
-
-# Reset devices
-tt-smi-ui --reset
-
-# Check for "ETH busy" messages (normal during inference)
-tt-smi-ui -w
-```
-
----
-
-## Feature Comparison
-
-| Feature | Pure Python | C++ Bindings | CMake Binary |
-|---------|------------|--------------|--------------|
-| **Memory (DRAM/L1)** | ✓ | ✓ | ✓ |
-| **Per-process tracking** | ✓ | ✓ | ✓ |
-| **Graph mode** | ✓ | ✓ | ✗ |
-| **Telemetry (temp/power)** | ✗ | ✓ | ✓ |
-| **Remote devices** | ✗ | ✓ | ✓ |
-| **Beautiful UI** | ✓ | ✓ | ✗ (basic) |
-| **JSON export** | ✓ | ✓ | ✗ |
-| **Python API** | ✓ | ✓ | ✗ |
-| **Installation time** | 5 sec | 30 sec | Built-in |
-| **Dependencies** | Python, rich, click | + pybind11, UMD | None |
-
----
-
-## Environment Variables
-
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `TT_SMI_BUILD_NATIVE` | `1` | Set to `0` to skip C++ compilation |
-| `TT_METAL_SHM_TRACKING_DISABLED` | `0` | Set to `1` to disable memory tracking |
-| `TT_VISIBLE_DEVICES` | all | Comma-separated list of device IDs |
-
----
-
 ## Example Output
 
 ### Table View
@@ -627,33 +468,3 @@ Dev          PID      Process       DRAM        L1         L1 Small    Trace    
 │   0 └─┘                                     │                        │
 └───────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## Summary
-
-**TT-SMI** provides comprehensive monitoring for Tenstorrent devices:
-
-### Key Features
-- ✅ Real-time telemetry (temperature, power, AICLK)
-- ✅ Memory tracking (DRAM, L1, per-process)
-- ✅ Beautiful terminal UI (table + graphs)
-- ✅ Local and remote device support
-- ✅ Automatic dead process cleanup
-- ✅ Fast refresh (500ms default)
-- ✅ Non-invasive SHM-only mode
-- ✅ Python API for integration
-- ✅ Device reset functionality
-
-### Performance
-- SHM tracking overhead: ~110-140ns per allocation
-- Telemetry query: 100μs (local), 5-10ms (remote)
-- No interference with inference workloads
-- Enabled by default with negligible impact
-
-### Installation
-- **Quick**: Pure Python in 30 seconds
-- **Full**: With C++ bindings in 2 minutes
-- **Ready**: CMake binary built with TT-Metal
-
-**Result**: Complete observability of Tenstorrent devices with nvidia-smi-like experience! 🚀
