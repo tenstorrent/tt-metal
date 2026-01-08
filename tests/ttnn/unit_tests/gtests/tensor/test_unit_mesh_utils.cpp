@@ -5,16 +5,24 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <memory>
+#include <numeric>
 #include <vector>
 
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::experimental::unit_mesh {
@@ -26,6 +34,15 @@ using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshShape;
 
 using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4Fixture;
+
+class UnitMeshUtils2x4FabricTest : public ::tt::tt_metal::MeshDeviceFixtureBase {
+protected:
+    UnitMeshUtils2x4FabricTest() :
+        ::tt::tt_metal::MeshDeviceFixtureBase(::tt::tt_metal::MeshDeviceFixtureBase::Config{
+            .mesh_shape = ::tt::tt_metal::distributed::MeshShape{2, 4},
+            .trace_region_size = 64 * 1024,  // 64KB for trace capture
+            .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
+};
 
 TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
@@ -228,6 +245,146 @@ TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
     EXPECT_THAT(
         ([&]() { disaggregate(tensor); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("Number of submeshes (0) must match mesh size")));
+}
+
+TEST_F(UnitMeshUtils2x4FabricTest, MorehProfiling) {
+    FrameMark;
+
+    auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
+    ASSERT_THAT(unit_meshes, SizeIs(mesh_device_->shape().mesh_size()));
+
+    const uint32_t tensor_height = 32;
+    const uint32_t tensor_width = 32;
+    const size_t tensor_size = tensor_height * tensor_width;
+    const float add_scalar = 1.0f;
+
+    for (int f = 0; f < 1; ++f) {
+        std::cout << "Iteration " << f << std::endl;
+        // Create unit tensors with known values: each tensor filled with its device index
+        std::vector<Tensor> unit_tensors;
+        unit_tensors.reserve(unit_meshes.size());
+        {
+            ZoneScopedN("CreateUnitTensors");
+            for (size_t i = 0; i < unit_meshes.size(); ++i) {
+                // Create  tensor filled with device index value
+                std::vector<bfloat16> host_data(tensor_size, bfloat16(static_cast<float>(i)));
+                auto tensor_spec = tt::tt_metal::TensorSpec(
+                    ttnn::Shape(std::array<uint32_t, 2>{tensor_height, tensor_width}),
+                    tt::tt_metal::TensorLayout(
+                        tt::tt_metal::DataType::BFLOAT16,
+                        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                        tt::tt_metal::MemoryConfig()));
+
+                auto host_tensor = Tensor::from_vector(host_data, tensor_spec);
+                unit_tensors.push_back(host_tensor.to_device(unit_meshes[i].get()));
+            }
+        }
+
+        // Pre-allocate add outputs for each unit tensor (to reuse in trace)
+        std::vector<Tensor> add_outputs;
+        add_outputs.reserve(unit_tensors.size());
+        Tensor all_gathered_output;
+
+        // Run full flow during warmup to:
+        // 1. Populate program cache
+        // 2. Create semaphores (which involves writes)
+        // 3. Get the correctly-shaped output tensors for reuse in trace
+        {
+            ZoneScopedN("CacheWarmup");
+
+            // Run add with scalar on each unit tensor
+            {
+                ZoneScopedN("RunAddOps");
+                for (const auto& unit_tensor : unit_tensors) {
+                    add_outputs.push_back(ttnn::add(unit_tensor, add_scalar));
+                }
+            }
+
+            // Aggregate the add outputs
+            Tensor aggregated_add;
+            {
+                ZoneScopedN("Aggregate");
+                aggregated_add = aggregate(add_outputs);
+            }
+
+            // Quiesce the parent mesh before all gather
+            {
+                ZoneScopedN("QuiesceDevices");
+                mesh_device_->quiesce_devices();
+                std::cout << "Finished Quiesce before all gather" << std::endl;
+            }
+
+            // Replace with simpler CCL?
+            {
+                ZoneScopedN("AllGather");
+                all_gathered_output = ttnn::all_gather(aggregated_add, /*dim=*/0, /*cluster_axis=*/1);
+                std::cout << "Finished AllGather" << std::endl;
+            }
+
+            // Quiesce parent mesh after all gather
+            {
+                ZoneScopedN("QuiesceDevicesAfterAllGather");
+                mesh_device_->quiesce_devices();
+                std::cout << "Finished Quiesce after all gather" << std::endl;
+            }
+
+            {
+                ZoneScopedN("Disaggregate");
+                auto disaggregated_tensors = disaggregate(all_gathered_output);
+            }
+        }
+
+        // Verify correctness of all_gather results
+        // For a 2x4 mesh with cluster_axis=1 (columns), each row gathers from 4 column devices
+        // Row 0 devices: 0, 1, 2, 3 (indices in unit_meshes)
+        // Row 1 devices: 4, 5, 6, 7 (indices in unit_meshes)
+        // After all_gather on dim=0, output shape is [4*32, 32] = [128, 32]
+        {
+            ZoneScopedN("VerifyResults");
+
+            auto disaggregated_tensors = disaggregate(all_gathered_output);
+            ASSERT_THAT(disaggregated_tensors, SizeIs(unit_meshes.size()));
+
+            const uint32_t ring_size = 4;  // 4 columns
+            const uint32_t expected_height = ring_size * tensor_height;
+
+            for (size_t device_idx = 0; device_idx < disaggregated_tensors.size(); ++device_idx) {
+                auto& output_tensor = disaggregated_tensors[device_idx];
+                auto output_shape = output_tensor.logical_shape();
+
+                // Verify output shape
+                EXPECT_EQ(output_shape[0], expected_height) << "Device " << device_idx << " has wrong output height";
+                EXPECT_EQ(output_shape[1], tensor_width) << "Device " << device_idx << " has wrong output width";
+
+                // Read back data and verify values
+                auto output_data = output_tensor.to_vector<bfloat16>();
+                ASSERT_EQ(output_data.size(), expected_height * tensor_width)
+                    << "Device " << device_idx << " has wrong output size";
+
+                // Determine which row this device is in (0 or 1)
+                size_t row = device_idx / ring_size;
+
+                // Each chunk of 32x32 should contain data from the corresponding column device in this row
+                // The order depends on all_gather implementation, but typically it's the gather order
+                for (uint32_t chunk = 0; chunk < ring_size; ++chunk) {
+                    // The source device for this chunk is in the same row, column = chunk
+                    size_t source_device = row * ring_size + chunk;
+                    float expected_value = static_cast<float>(source_device) + add_scalar;
+
+                    // Check a sample of values in this chunk
+                    size_t chunk_start = chunk * tensor_height * tensor_width;
+                    for (size_t j = 0; j < std::min<size_t>(10, tensor_size); ++j) {
+                        float actual_value = static_cast<float>(output_data[chunk_start + j]);
+                        EXPECT_NEAR(actual_value, expected_value, 0.1f)
+                            << "Device " << device_idx << ", chunk " << chunk << ", element " << j << ": expected "
+                            << expected_value << " (from device " << source_device << ")";
+                    }
+                }
+            }
+        }
+    }
+
+    FrameMark;  // Mark the end of a frame
 }
 
 }  // namespace

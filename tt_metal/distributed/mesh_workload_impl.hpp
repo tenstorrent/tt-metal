@@ -35,7 +35,7 @@ private:
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
-    std::vector<uint32_t> get_program_config_sizes();
+    std::vector<uint32_t> get_program_config_sizes(MeshDevice* mesh_device);
     std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
     bool kernel_binary_always_stored_in_ringbuffer();
     bool is_finalized() const { return this->finalized_; }

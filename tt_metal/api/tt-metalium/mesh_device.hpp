@@ -320,6 +320,12 @@ public:
     const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
+    // Given a coordinate in this mesh's coordinate space, find the submesh that
+    // contains the device at that coordinate. Used for routing parent mesh operations
+    // to the appropriate submesh. Returns nullptr if the coordinate is out of bounds
+    // or no submesh contains the device.
+    std::shared_ptr<MeshDevice> get_submesh_for_coordinate(const MeshCoordinate& coord) const;
+
     /**
      * @brief Synchronize with all devices derived from this mesh (including submeshes).
      *

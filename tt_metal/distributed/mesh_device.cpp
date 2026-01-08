@@ -758,6 +758,41 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     return result;
 }
 
+std::shared_ptr<MeshDevice> MeshDevice::get_submesh_for_coordinate(const MeshCoordinate& coord) const {
+    // Given a coordinate in THIS mesh's coordinate space, find the submesh that
+    // contains the device at that coordinate. This is used for routing operations
+    // from a parent mesh to the appropriate submesh.
+    //
+    // For example, in a 2x4 parent mesh with 1x1 submeshes:
+    //   - Parent coordinate (0,1) maps to the submesh containing device at (0,1)
+    //   - That submesh's local coordinate for the same device is (0,0)
+    //
+    // Returns nullptr if:
+    //   - The coordinate is not within this mesh's bounds
+    //   - No submesh contains the device at the given coordinate
+    //   - This mesh has no submeshes
+
+    if (!view_->contains(coord)) {
+        return nullptr;
+    }
+    auto* target_device = view_->get_device(coord);
+    if (!target_device) {
+        return nullptr;
+    }
+    ChipId target_id = target_device->id();
+
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            for (auto* dev : submesh->get_devices()) {
+                if (dev->id() == target_id) {
+                    return submesh;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_program_cache() {
@@ -1180,7 +1215,9 @@ void MeshDevice::quiesce_devices() {
         for (auto& device : get_devices()) {
             TT_ASSERT(
                 device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
-                "Last completed event is not 0");
+                "Last completed event is not 0 for device {} and command queue {}",
+                device->id(),
+                command_queue->id());
             TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
         }
     }
