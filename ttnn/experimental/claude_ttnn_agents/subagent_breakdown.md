@@ -694,3 +694,98 @@ If context fills, restart from the last checkpoint with a fresh agent that reads
 4. **`ttnn-riscv-debugger`** ✅ - The escape hatch for kernel issues (hangs, wrong output)
 5. **`ttnn-kernel-dataflow`** 🔲 - RISCV_1 and RISCV_0 kernels (may read AND write)
 6. **`ttnn-kernel-compute`** 🔲 - Compute kernel implementation
+
+---
+
+## Agent Execution Logging (Optional)
+
+Logging is **OPTIONAL** for implementation agents (`ttnn-operation-scaffolder`, `ttnn-factory-builder`, `ttnn-kernel-writer`). When enabled, logs provide:
+- Understanding what agents tried and why
+- Tracking failures and recovery attempts
+- Identifying instruction improvements
+- Flagging upstream issues (problems with input from previous agents)
+
+### Enabling Logging
+
+To enable logging for an agent, include one of these phrases in the prompt:
+- "with execution logging"
+- "enable logging"
+- "enable detailed logging"
+
+**Example:**
+```
+Scaffold the operation at path/to/spec.md with execution logging
+```
+
+**When to enable logging:**
+- Debugging a problematic operation
+- Developing/testing new agent instructions
+- Tracking patterns across multiple operations for instruction improvement
+
+**When to skip logging:**
+- Routine operation creation where logging overhead isn't needed
+- Quick prototyping
+
+### Log Architecture (When Enabled)
+
+```
+During Execution                          At Completion
+─────────────────                         ─────────────
+Agent appends breadcrumbs (JSONL)    →    Agent writes structured log (MD)
+{operation_path}/agent_logs/              {operation_path}/agent_logs/
+  {agent}_breadcrumbs.jsonl                 {agent}_execution_log.md
+```
+
+### Log Location (When Enabled)
+
+All logs are stored under the operation directory:
+```
+{operation_path}/agent_logs/
+├── ttnn-operation-scaffolder_breadcrumbs.jsonl
+├── ttnn-operation-scaffolder_execution_log.md
+├── ttnn-factory-builder_breadcrumbs.jsonl
+├── ttnn-factory-builder_execution_log.md
+├── ttnn-kernel-writer_breadcrumbs.jsonl
+└── ttnn-kernel-writer_execution_log.md
+```
+
+### Orchestrator Responsibilities (If Logging Enabled)
+
+**If logging was enabled**, after each agent completes:
+
+1. **Read the execution log**:
+   ```
+   Read: {operation_path}/agent_logs/{agent_name}_execution_log.md
+   ```
+
+2. **Summarize for user**:
+   - Final status (SUCCESS/PARTIAL/FAILED)
+   - Total attempts and recovery cycles
+   - Key issues encountered
+
+3. **Check upstream feedback** (log Section 1):
+   - If HIGH severity issues, note for future workflow improvements
+   - Consider whether upstream agent instructions need updates
+
+4. **Check instruction recommendations** (log Section 7):
+   - Track patterns across operations
+   - If same recommendation appears 3+ times, propose instruction update
+
+5. **Check unresolved issues** (log Section 3):
+   - If agent couldn't resolve an issue, may need `ttnn-riscv-debugger`
+
+**If logging was NOT enabled**: Skip log review.
+
+### Agent-Specific Log Sections
+
+| Agent | Key Sections |
+|-------|--------------|
+| scaffolder | Script Execution Log, JSON Validation, Spec Parsing Decisions |
+| factory-builder | CB Configuration Audit, CB Sync Verification, Work Distribution |
+| kernel-writer | Design Compliance, Redundant CB Op Check, Correctness Test Results |
+
+### Reference Files
+
+- **Logging instructions**: `.claude/references/agent-execution-logging.md`
+- **Log template**: `.claude/references/agent-log-template.md`
+- **Helper scripts**: `.claude/scripts/logging/`
