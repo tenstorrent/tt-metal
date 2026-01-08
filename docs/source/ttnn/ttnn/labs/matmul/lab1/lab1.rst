@@ -1,14 +1,14 @@
 Lab 1: Single Core Matrix Multiplication
-========================================
+########################################
 
 Introduction
-------------
+************
 
 Matrix multiplication is a fundamental linear-algebra operation used in scientific computing, machine learning, and graphics.
 The standard algorithm multiplies two input matrices to produce a third matrix.
 
 Basic Algorithm
----------------
+===============
 
 Given two matrices ``A`` of shape ``MxK`` and ``B`` of shape ``KxN``, the resulting matrix ``C`` will have shape ``MxN``.
 The classical matrix multiplication algorithm can be expressed using a triple-nested loop structure,
@@ -29,7 +29,7 @@ The naive implementation has a time complexity of O(M*N*K).
 
 
 Row-Major Memory Layout
------------------------
+***********************
 
 Memory space is a linear (one-dimensional) array of memory words.
 However, we often need to represent data with more dimensions, such as two-dimensional matrices or n-dimensional tensors.
@@ -56,13 +56,14 @@ When accessing element ``A[i][j]`` in a matrix with ``N`` columns, the memory ad
    address = base_address + (i * N + j) * sizeof(element)
 
 Cache-Friendly Access Patterns
-------------------------------
+==============================
 
 Modern CPUs fetch data in cache lines of consecutive words, so accessing nearby addresses is much faster than scattered accesses.
 Accessing matrix elements in row-major order (left-to-right, top-to-bottom) is cache-friendly because consecutive elements in a row are already loaded in the cache.
 Conversely, accessing matrix elements column-by-column is cache-unfriendly because each access may involve a different cache line.
 
-**Implications for Matrix Multiplication**
+Implications for Matrix Multiplication
+--------------------------------------
 
 In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] = ∑ₖ A[i][k] * B[k][j]``, and assuming ``i``, ``j``, ``k`` loop order:
 
@@ -72,7 +73,7 @@ In the standard matrix multiplication algorithm ``C = A * B``, where ``C[i][j] =
 This asymmetry significantly impacts performance and motivates various optimization techniques such as loop reordering or tiling.
 
 Linear Transformation and Computational Flexibility
-===================================================
+***************************************************
 
 Matrix multiplication represents a linear transformation where the computation can be viewed as a sequence of dot products.
 This linearity allows significant computational flexibility, such as:
@@ -85,7 +86,7 @@ Note that changing the operation order can affect the result because floating-po
 In this lab, we ignore this issue, but be aware of it when matrix values differ greatly in magnitude.
 
 Loop Tiling
------------
+***********
 
 Loop tiling (a.k.a. loop blocking) is a loop transformation technique that splits loops into smaller chunks.
 On architectures with caches, this often improves performance by reducing cache misses, especially when combined with loop reordering.
@@ -97,10 +98,10 @@ As we will see later, the Tenstorrent Tensix processor has hardware support for 
 when programming Tensix cores.
 
 Simple Tiling Example
-^^^^^^^^^^^^^^^^^^^^^
+=====================
 
 Original Doubly Nested Loop
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---------------------------
 
 .. code-block:: cpp
 
@@ -112,7 +113,7 @@ Original Doubly Nested Loop
    }
 
 Tiled Version
-~~~~~~~~~~~~~
+-------------
 
 .. code-block:: cpp
 
@@ -196,7 +197,7 @@ The tiled version should be implemented as follows:
 
 
 Introduction to Tenstorrent Architecture
-========================================
+****************************************
 
 Tenstorrent's devices are AI accelerators typically delivered as PCIe cards that can be attached to a standard host.
 In this model, the host CPU runs a standard C++ program. In that program, developers can use the TT-Metalium C++ API to configure the accelerator,
@@ -235,7 +236,7 @@ will be limited to this context.
 We will extend the architectural and programming model description to multiple Tensix cores in subsequent labs.
 
 Tile-Based Architecture
------------------------
+=======================
 
 The Tenstorrent architecture is a tile-based architecture.
 This means that the data is processed in tiles, which are commonly ``32x32`` blocks of data.
@@ -244,7 +245,7 @@ a Tensix core can perform matrix operations on one or more tiles in one instruct
 For example, a Tensix core can perform a matrix multiplication on two tiles each having ``32x32`` elements and produce a ``32x32`` result tile in one instruction.
 
 Memory Layout and Tiling
-========================
+------------------------
 
 Most applications deal with data that is larger than a single ``32x32`` tile, so we need to find a way to serve the data to Tensix cores in tile-sized chunks.
 In the previous exercise, you performed loop tiling, which changed the memory access pattern without changing the underlying data layout,
@@ -292,7 +293,7 @@ This allows for efficient memory access and computation.
 
 
 TT-Metalium Programming Model
-=============================
+*****************************
 
 Tenstorrent devices can be programmed at multiple abstraction levels, from high-level neural network libraries to low-level kernel development.
 At the highest level, TT-NN provides a PyTorch-like Python API for neural network operations, while TT-Metalium serves as the low-level programming
@@ -344,7 +345,7 @@ This program will be used to illustrate the TT-Metalium programming model, diffe
 Key points will be highlighted in this text. Detailed comments are provided in the C++ code to help with code understanding.
 
 Exercise 2: Running the Example Program
-=======================================
+---------------------------------------
 
 If you haven't already done so, clone an appropriate release of the TT-Metalium repository from https://github.com/tenstorrent/tt-metal
 Make sure you are in the ``tt-metal`` directory and then build the example program, using the following commands:
@@ -358,7 +359,7 @@ Make sure you are in the ``tt-metal`` directory and then build the example progr
 Make sure that the program executes correctly and that the output says "Test Passed" on the host terminal.
 
 Program Description
-===================
+-------------------
 
 The main program for the code example being discussed is located in the file ``tt_metal/programming_examples/lab_eltwise_binary/lab_eltwise_binary.cpp``.
 The first thing to emphasize is that all the code in this file executes on the host, although there are many API calls that cause activity on the device.
@@ -378,7 +379,7 @@ Finally, the program validates the results by comparing the Tensix output with t
 
 
 Kernel Types and Data Flow
---------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Before diving into the function ``eltwise_add_tensix``, let us discuss the different types of kernels and how they map to the underlying hardware.
 Programming with Metalium typically requires three kernel types per Tensix core: a **reader kernel** for data input,
@@ -433,7 +434,7 @@ The Tensix core consists of four major parts:
 
 
 Kernel Creation and Configuration
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The function ``eltwise_add_tensix`` creates and configures the kernels that will be used to perform the elementwise addition on the Tensix device.
 At a high level, the function creates a tensor object that resides in device DRAM and then creates two dataflow kernels, one reader and one writer,
@@ -510,7 +511,7 @@ not on the device.
 We will examine kernel code next.
 
 Reader Kernel Code
-------------------
+~~~~~~~~~~~~~~~~~~
 
 The function can be summarized by the following pseudo-code:
 
@@ -531,8 +532,8 @@ The kernel reads the base addresses of the two input tensors in DRAM and the tot
 The kernel uses two circular buffers (``c_0`` and ``c_1``) as destination buffers for the two input tensors.
 It retrieves the tile size from the circular buffer configuration, which must match the tile size used in the DRAM buffers.
 
-Recall that the host uses ``TensorAccessorArgs`` to pack tensor shape and layout into a compile‑time ``uint32_t`` argument vector.
-On the device, this vector is unpacked into a device‑side ``TensorAccessorArgs`` (a different underlying type but same name),
+Recall that the host uses ``TensorAccessorArgs`` to pack tensor shape and layout into a compile-time ``uint32_t`` argument vector.
+On the device, this vector is unpacked into a device-side ``TensorAccessorArgs`` (a different underlying type but same name),
 which is then combined with the runtime base addresses to create an address generator object (``TensorAccessor``).
 An address generator object abstracts away the complexity of physical memory layout, such as data distribution among DRAM banks,
 by automatically computing the physical DRAM address for any given tile index.
@@ -554,7 +555,7 @@ The reader kernel repeats this process for all tiles. Given that circular buffer
 read a new tile while the compute kernel is processing the previous one.
 
 Compute Kernel Code
--------------------
+~~~~~~~~~~~~~~~~~~~
 
 The compute kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp`` is responsible for performing the elementwise addition of two tiles.
 
@@ -610,7 +611,7 @@ with the compute processor writing results and the packer processor reading them
 
 
 Writer Kernel Code
-------------------
+~~~~~~~~~~~~~~~~~~
 
 The writer kernel in ``tt_metal/programming_examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp`` is responsible for transferring
 computed results from circular buffers in internal device SRAM back to device DRAM.
@@ -662,7 +663,7 @@ Understanding the location of data and code on the host and device is useful whe
 
 
 Kernel Compilation and Execution
---------------------------------
+********************************
 
 As mentioned earlier, kernels are JIT compiled and executed on the device. This presents both advantages and disadvantages during development.
 On the one hand, if one updates only kernel code, there is no need to rebuild before running the program to test that the changes had the desired effect.
@@ -685,7 +686,7 @@ Perform the following steps:
 
 
 Debug Facilities in TT-Metalium
-===============================
+*******************************
 
 Host code can be debugged using the usual debugger tools like ``gdb``.
 To debug host code, build the program with debug symbols:
@@ -705,7 +706,7 @@ These methods are useful for debugging hangs and other issues that may not be ap
 
 
 Debug Print API
----------------
+===============
 
 Because kernel code runs on the device, it can't use standard C++ functions to print debug information,
 as the device doesn't have a terminal.
@@ -836,7 +837,7 @@ needing deep knowledge of the underlying Tenstorrent architecture, while still a
 
 
 Exercise 4: Using DPRINT to Debug a Kernel
-==========================================
+------------------------------------------
 
 Add DPRINT statements to the writer kernel in our example program to print:
 
@@ -864,7 +865,7 @@ This will print the call stacks for all RISC-V processors on all cores.
 
 
 Exercise 5: Using tt-triage to Debug a Hang
-===========================================
+-------------------------------------------
 
 To illustrate how ``tt-triage`` can be used to debug a hang, we will use the ``lab_eltwise_binary`` example program.
 You can introduce a very simple artificial hang by commenting out the calls to ``cb_pop_front``
@@ -955,7 +956,7 @@ Exercise 6: Using Device Profiling to Profile Kernels
 
 
 Matrix Multiplication in TT-Metalium
-====================================
+************************************
 
 Now that you have a basic understanding of using the TT-Metalium APIs and building data movement and compute kernels,
 we can look at a more complex example of matrix multiplication.
@@ -1132,7 +1133,7 @@ Then, adjust the code to perform matrix multiplication, by making the following 
    with the ``--build-type Release`` flag, and also to disable DPRINT before profiling performance.
 
 Troubleshooting and Additional Resources
-========================================
+****************************************
 
 In rare cases, a Tensix device may enter an undefined operational state if a program performs actions outside the supported behavior.
 In such a case, the ``tt-smi -r`` command can be used to reset the device.
