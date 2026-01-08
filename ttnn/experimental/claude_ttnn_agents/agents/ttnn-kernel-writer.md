@@ -170,54 +170,48 @@ def test_functional_correctness(device):
     torch.testing.assert_close(output_torch, expected, rtol=..., atol=...)
 ```
 
-## Code Templates
+## Kernel Helper Library Reference
 
-### Compute Kernel with Helpers
+When implementing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel_lib/`:
+- `tilize_helpers.hpp` - tilize() function
+- `untilize_helpers.hpp` - untilize() function
+- `reduce_helpers.hpp` - reduce(), TileShape, Accumulation
+- `dest_helpers.hpp` - DEST_AUTO_LIMIT
+
+The code is self-documenting with Doxygen comments and @example blocks.
+
+**CRITICAL**: Helpers are self-contained. They handle internally:
+- CB operations: cb_wait_front, cb_pop_front, cb_reserve_back, cb_push_back
+- DST management: tile_regs_acquire, tile_regs_commit, tile_regs_wait, tile_regs_release
+- Init/uninit sequences
+
+DO NOT wrap helper calls with these operations.
+
+## CRITICAL Anti-Patterns
+
+**Anti-Pattern 1: Wrapping helpers with CB/DST operations**
 ```cpp
-#include "compute_kernel_api/common.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+// WRONG - helpers handle CB and DST internally
+cb_wait_front(cb_in, n);
+tile_regs_acquire();
+compute_kernel_lib::reduce<...>(...);
+tile_regs_commit();
+cb_pop_front(cb_in, n);
 
-namespace NAMESPACE {
-void MAIN {
-    // Get compile-time args
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
-
-    // REQUIRED: Initialize hardware before using helpers
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
-
-    // Implement phases as specified in design document
-    // Example: reduce with TileShape API
-    // NOTE: "Tile" in TileShape = block dimensions (Ht×Wt×NC), NOT the 32×32 tile
-    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_in, cb_scaler, cb_out,
-        compute_kernel_lib::TileShape::grid(Ht, Wt, NC));
-
-    // For single-row reduction:
-    // compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-    //     cb_in, cb_scaler, cb_out,
-    //     compute_kernel_lib::TileShape::row(Wt));
-
-    // For PRELOADED mode with custom stride:
-    // compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW,
-    //                            compute_kernel_lib::ReduceInputMode::PRELOADED>(
-    //     cb_in, cb_scaler, cb_out,
-    //     compute_kernel_lib::TileShape::grid(Ht, Wt, NC),
-    //     compute_kernel_lib::TileLayout::with_row_stride(input_stride));
-
-    // For multi-block accumulation:
-    // const auto cfg = AccumulationConfig::with_cb(cb_accumulator);
-    // for (uint32_t i = 0; i < num_blocks; ++i) {
-    //     compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
-    //         cb_in, cb_scaler, cb_out, TileShape::row(Wt),
-    //         TileLayout::contiguous(), Accumulate(cfg, i));
-    // }
-}
-}
+// CORRECT - just call the helper
+compute_kernel_lib::reduce<...>(...);
 ```
+
+**Anti-Pattern 2: Wrong post_reduce_op signature**
+```cpp
+// WRONG - missing dst_idx (won't compile)
+[]() { recip_tile(0); }
+
+// CORRECT
+[](uint32_t dst_idx) { recip_tile(dst_idx); }
+```
+
+## Code Templates
 
 ### Dataflow Kernel (Raw Calls)
 ```cpp
@@ -235,24 +229,6 @@ void kernel_main() {
         cb_push_back(cb_out, num_pages);
     }
 }
-```
-
-### Post-Reduce Operations (Important API Note)
-
-If the design specifies a `post_reduce_op` callback, it MUST receive a `dst_idx` parameter:
-
-```cpp
-// CORRECT - Required signature:
-compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
-    cb_in, cb_scaler, cb_out, TileShape::row(Wt),
-    TileLayout::contiguous(), NoAccumulation{},
-    [](uint32_t dst_idx) {  // dst_idx parameter is REQUIRED
-        recip_tile_init();
-        recip_tile(dst_idx);  // Use dst_idx, not hardcoded 0
-    });
-
-// WRONG - Will not compile:
-// [](){ recip_tile(0); }  // Missing dst_idx parameter
 ```
 
 ## Violation Detection
