@@ -23,16 +23,18 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     indirect=True,
 )
 def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, model_location_generator):
-    torch.manual_seed(0)
+    """
+    Test ViT encoder layer with variable sequence lengths and hidden dimensions.
 
+    Supported configurations:
+        - batch: 1, 4, 8
+        - sequence_length: 1024, 2048, 3072
+        - hidden_size: 512, 1024, 1536, 2304
+        - heads: 16 (12 for hidden_size >= 2048)
+        - layers: 12
+        - MLP intermediate size: 4x hidden_size
     """
-    ● batch : 1, 4, 8
-    ● sequence_length : 1024, 2048, 3072
-    ● dimension_length : 512, 1024, 1536, 2048
-    ● heads : 16
-    ● layers : 12
-    ● MLP hidden layer size as a multiple of dimension: 4
-    """
+    torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.hidden_size = hidden_size

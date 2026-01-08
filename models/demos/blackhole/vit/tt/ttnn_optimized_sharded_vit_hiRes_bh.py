@@ -12,10 +12,10 @@ import ttnn
 
 try:
     from tracy import signpost
-
-    use_signpost = True
 except ModuleNotFoundError:
-    use_signpost = False
+
+    def signpost(header):
+        pass
 
 
 def update_model_config(config, batch_size, sequence_size):
@@ -532,22 +532,6 @@ def vit(
         program_config=config.program_configs["classifer_matmul_program_config"],
     )
     return classifier_output
-
-
-def preprocess_inputs(
-    input_ids,
-    token_type_ids,
-    device,
-):
-    batch_size, _ = input_ids.shape
-
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    token_type_ids = ttnn.from_torch(
-        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-
-    return input_ids, token_type_ids
 
 
 def custom_preprocessor(torch_model, name):
