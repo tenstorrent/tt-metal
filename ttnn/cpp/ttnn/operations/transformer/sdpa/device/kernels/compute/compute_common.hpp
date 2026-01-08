@@ -570,9 +570,10 @@ void calculate_exponential_more_terms_init() {
     if constexpr (!USE_ARECIP_INSTR) {
         LLK_ASSERT(NUM_TERMS >= 1 && NUM_TERMS <= 3, "Only 1, 2, or 3 terms is supported");
 
-        float c0 = (NUM_TERMS == 1)   ? 1.1233623192692236032135985743012506909535502780929f
-                   : (NUM_TERMS == 2) ? 0.99753586992155448808365863701299141006547850119893f
-                                      : 0.9987744242042385423631271908377461652500045536011f;
+        float c0 = (NUM_TERMS == 1)   ? 1.03022936050163882354355235184958220293399209290987f
+                   : (NUM_TERMS == 2) ? 0.999848792924395313327307061545061386175496934006f
+                                      : 0.99992449655091231753798502608929170703152709521188f;
+
         TTI_SFPLOADI(0, 0xA, lo16(c0));
         TTI_SFPLOADI(0, 0x8, hi16(c0));
         TTI_SFPCONFIG(0, 11, 0);  // L11 also used by the floor function.
@@ -604,13 +605,14 @@ void calculate_exponential_more_terms(const uint16_t /*exp_base_scale_factor*/) 
         TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(LN2_RECIP));
         TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(LN2_RECIP));
 
-        float c1 = (NUM_TERMS == 1)   ? 1.0820212806667225532377520284909768979269800054308f
-                   : (NUM_TERMS == 2) ? 1.06124048373286974827555447405224249606107006990166f
-                                      : 0.99901998795742600963202540686824558627408454106245f;
+        float c1 = (NUM_TERMS == 1)   ? 1.0201394465967894800285756834161653337107187804001f
+                   : (NUM_TERMS == 2) ? 1.01508760098521056684783640695492761469306929535975f
+                                      : 0.99993960415029750534472970577402987498389428593233f;
         float c2 = (NUM_TERMS == 1)   ? 0
-                   : (NUM_TERMS == 2) ? 0.52547100916184135258988956948179959663957303082728f
-                                      : 0.52031779522223959306148327026770360633893731713813f;
-        float c3 = (NUM_TERMS == 1) ? 0 : (NUM_TERMS == 2) ? 0 : 0.17275631602849673535810267286740793455047549878205f;
+                   : (NUM_TERMS == 2) ? 0.50628367056745568861842335616023694454759126020461f
+                                      : 0.50502329058055065591138054839814880512001604099324f;
+        float c3 = (NUM_TERMS == 1) ? 0 : (NUM_TERMS == 2) ? 0 : 0.16817330195731531429790827442800245470170482723302f;
+
         switch (NUM_TERMS) {
             case 3: TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c3)); TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c3));
             case 2: TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c2)); TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c2));
@@ -737,8 +739,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    /*
-#ifdef TRISC_PACK
+    /*#ifdef TRISC_PACK
     constexpr float scale_fp32_ = __builtin_bit_cast(float, scale_fp32);
     DPRINT << "SCALE = " << scale_fp32_ << ENDL();
     DPRINT << "======" << ENDL();
@@ -756,8 +757,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         DPRINT << r << " " << TileSlice(in1_cb, 0, sr, true, false) << ENDL();
     }
     DPRINT << "++++++" << ENDL();
-#endif
-    */
+    #endif*/
+
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
 
@@ -771,18 +772,16 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         cb_push_back(out_cb, 1);
         release_dst();
     }
-    /*
-#ifdef TRISC_PACK
+    /*#ifdef TRISC_PACK
     cb_wait_front(out_cb, 1);
     DPRINT << "======" << ENDL();
     DPRINT << "OUTPUT" << ENDL();
-    for (uint32_t r = 0; r < 4; ++r) {
-        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+    for (uint32_t r = 0; r < 8; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
         DPRINT << r << " " << TileSlice(out_cb, 0, sr, true, false) << ENDL();
     }
     DPRINT << "++++++" << ENDL();
-#endif
-    */
+    #endif*/
 }
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
