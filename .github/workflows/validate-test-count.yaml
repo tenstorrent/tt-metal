@@ -33,7 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     name: "Ensure no new tests added to locked directories"
     container:
-      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
+      #image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) }}
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-basic-dev-amd64:7c703d657df3754df3882f93fa908fedab02fa15
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
