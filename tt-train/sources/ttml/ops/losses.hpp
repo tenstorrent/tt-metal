@@ -19,4 +19,10 @@ autograd::TensorPtr cross_entropy_loss(
 autograd::TensorPtr nll_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce = ReduceType::MEAN);
 
+autograd::TensorPtr grpo_loss(
+    const autograd::TensorPtr& prediction,
+    const autograd::TensorPtr& target,
+    const autograd::TensorPtr& advantages,
+    float normalization_factor);
+
 }  // namespace ttml::ops

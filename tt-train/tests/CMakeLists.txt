@@ -41,6 +41,7 @@ set(SOURCES
     serialization/tensor_serializer_test.cpp
     serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
+    ops/grpo_loss_op_test.cpp
     ops/positional_embedding_test.cpp
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp

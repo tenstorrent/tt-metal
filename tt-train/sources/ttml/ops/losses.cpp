@@ -148,4 +148,31 @@ autograd::TensorPtr nll_loss(
     return out;
 }
 
+autograd::TensorPtr grpo_loss(
+    const autograd::TensorPtr& prediction,
+    const autograd::TensorPtr& target,
+    const autograd::TensorPtr& advantages,
+    float normalization_factor) {
+    // Calculate log probabilities using cross_entropy_loss with NONE reduction
+    // Note: cross_entropy_loss returns NLL = -logp, so we negate to get logp
+    auto loss_per_token = cross_entropy_loss(prediction, target, ReduceType::NONE);
+    auto logp = ops::mul(loss_per_token, -1.0F);  // Negate to get log probabilities
+
+    // Multiply log probabilities by advantages (with broadcasting)
+    // Advantages should be shape (B,) or (B, 1) and will broadcast to (B, T)
+    auto pg_obj_per_token = ops::mul(logp, advantages);
+
+    // Sum all elements: use mean and scale by volume to get sum
+    // This allows automatic backward through autograd operations
+    auto pg_obj_mean = ops::mean(pg_obj_per_token);
+    auto volume = static_cast<float>(pg_obj_per_token->get_value().logical_volume());
+    auto pg_obj_sum = ops::mul(pg_obj_mean, volume);
+
+    // Normalize by the normalization factor
+    auto normalized_pg_obj = ops::mul(pg_obj_sum, 1.0F / normalization_factor);
+
+    // Negate to get loss (since we want to minimize, but pg_obj is something we want to maximize)
+    return ops::mul(normalized_pg_obj, -1.0F);
+}
+
 }  // namespace ttml::ops
