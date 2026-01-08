@@ -171,7 +171,7 @@ using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
 TEST_F(LaunchOperation2x4Test, UniformTensor) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto full_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+    auto full_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(all_tensors_have_uniform_storage(full_tensor));
 
@@ -204,7 +204,7 @@ TEST_F(LaunchOperation2x4Test, UnevenTensor) {
 TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto full_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+    auto full_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
 
     EXPECT_TRUE(all_tensors_have_uniform_storage(full_tensor));
     EXPECT_THAT(
