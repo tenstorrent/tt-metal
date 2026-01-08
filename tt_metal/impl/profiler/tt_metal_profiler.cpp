@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
 #include <device.hpp>
-#include <dispatch_core_common.hpp>
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <host_api.hpp>
 #include <profiler.hpp>
 #include <mesh_workload.hpp>

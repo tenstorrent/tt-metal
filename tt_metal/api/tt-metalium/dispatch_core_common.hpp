@@ -53,10 +53,6 @@ public:
     bool operator==(const DispatchCoreConfig& other) const { return (type_ == other.type_) && (axis_ == other.axis_); }
 };
 
-// Helper functions to get the dispatch core config/type
-DispatchCoreConfig get_dispatch_core_config();
-CoreType get_dispatch_core_type();
-
 }  // namespace tt::tt_metal
 
 namespace std {

@@ -25,4 +25,7 @@ enum DispatchWorkerType : uint32_t {
     COUNT,
 };
 
+// Helper functions to get the dispatch core config/type
+DispatchCoreConfig get_dispatch_core_config();
+
 }  // namespace tt::tt_metal
