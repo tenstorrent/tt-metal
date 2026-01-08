@@ -183,8 +183,8 @@ void eltwise_add_tensix(
     // This creates the tensors and queues transfer of data to device in one step.
     Tensor src0_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(a), t_spec, prog_state.mesh_device.get());
     Tensor src1_tensor = Tensor::from_vector<bfloat16>(std::vector<bfloat16>(b), t_spec, prog_state.mesh_device.get());
-    // Allocate output tensor on device (no initialization needed - kernel will write into it).
-    Tensor dst_tensor = allocate_tensor_on_device(t_spec, prog_state.mesh_device.get());
+    // Create output tensor on device (no initialization needed - kernel will write into it).
+    Tensor dst_tensor = create_device_tensor(t_spec, prog_state.mesh_device.get());
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
