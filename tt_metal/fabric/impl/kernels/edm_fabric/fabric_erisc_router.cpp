@@ -527,11 +527,7 @@ FORCE_INLINE void send_next_data(
 
     uint32_t const src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
-    union {
-        volatile PACKET_HEADER_TYPE* pkt_header;
-        uintptr_t addr;
-    } src_addr_cast;
-    src_addr_cast.addr = src_addr;
+    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
 
     volatile PACKET_HEADER_TYPE* pkt_header = src_addr_cast.pkt_header;
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
