@@ -29,7 +29,7 @@
         "batch_1": {
             "prefill_128": {
                 "T3K_gpt-oss-20b": {
-                    "TTFT": [350, 1.2],
+                    "TTFT": [400, 1.2],
                     "decode_tok_s_u": 12,
                     "decode_tok_s": 2200
                 },
