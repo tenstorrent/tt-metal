@@ -875,8 +875,18 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
 void Cluster::noc_multicast_write(
     const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core_start, tt_cxy_pair core_end, uint64_t addr) const {
     TT_FATAL(core_start.chip == core_end.chip, "core_start and core_end must be on the same chip");
+    noc_multicast_write(
+        mem_ptr,
+        sz_in_bytes,
+        core_start.chip,
+        tt_xy_pair(core_start.x, core_start.y),
+        tt_xy_pair(core_end.x, core_end.y),
+        addr);
+}
 
-    const ChipId chip_id = core_start.chip;
+void Cluster::noc_multicast_write(
+    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, CoreCoord core_start, CoreCoord core_end, uint64_t addr)
+    const {
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
@@ -897,12 +907,6 @@ void Cluster::noc_multicast_write(
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
-}
-
-void Cluster::noc_multicast_write(
-    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, CoreCoord core_start, CoreCoord core_end, uint64_t addr)
-    const {
-    noc_multicast_write(mem_ptr, sz_in_bytes, tt_cxy_pair(chip_id, core_start), tt_cxy_pair(chip_id, core_end), addr);
 }
 
 void Cluster::write_sysmem(
