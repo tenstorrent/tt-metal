@@ -20,26 +20,6 @@ int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const u
     return flat_index;
 };
 
-std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile) {
-    const size_t volume = shape.volume();
-    auto tile_hw = tile.get_tile_hw();
-    if (data_type == DataType::BFLOAT8_B) {
-        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp8_b);
-        TT_ASSERT(volume % tile_hw == 0);
-        const auto bfloat8_b_volume = volume / tile_hw * tile_size_bytes;
-        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
-        return bfloat8_b_volume / sizeof(std::uint32_t);
-    }
-    if (data_type == DataType::BFLOAT4_B) {
-        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp4_b);
-        TT_ASSERT(volume % tile_hw == 0);
-        const auto bfloat4_b_volume = volume / tile_hw * tile_size_bytes;
-        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
-        return bfloat4_b_volume / sizeof(std::uint32_t);
-    }
-    return volume;
-}
-
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }

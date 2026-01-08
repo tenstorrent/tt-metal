@@ -11,8 +11,12 @@
 
 namespace ttnn::operations::normalization {
 
-ttnn::Tensor get_mask_tensor(const ttnn::Tensor& input_tensor, const std::optional<ttnn::Tensor>& input_mask,
-        const std::optional<ttnn::Tensor>& negative_mask, std::optional<CoreGrid> core_grid, const int num_groups) {
+ttnn::Tensor get_mask_tensor(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& input_mask,
+    const std::optional<ttnn::Tensor>& negative_mask,
+    std::optional<CoreGrid> core_grid,
+    const int num_groups) {
     ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
     if (!input_mask.has_value() and !negative_mask.has_value()) {
         // create input mask
@@ -22,7 +26,8 @@ ttnn::Tensor get_mask_tensor(const ttnn::Tensor& input_tensor, const std::option
             num_cores_across_channel = core_grid.has_value() ? core_grid.value().y : 1;
         } else {
             // Choose number of virtual columns for DRAM params/mask generation.
-            // Tries to find the largest number of virtual columns that will evenly divide the number of channels into tiles.
+            // Tries to find the largest number of virtual columns that will evenly divide the number of channels into
+            // tiles.
             int num_virtual_cols = std::min(static_cast<int>(core_grid.value().x), num_groups);
             while ((num_virtual_cols > 0) && (num_channel / num_virtual_cols) % ttnn::types::TILE_SIZE != 0) {
                 num_virtual_cols -= 1;
@@ -148,28 +153,27 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             mask,
             negative_mask,
             reciprocals);
-    } else {
-        const ttnn::operations::normalization::group_norm::GroupNormMultiCoreProgramConfig program_config = {
-            .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .im_data_format = DataType::BFLOAT16,
-            .out_data_format = DataType::BFLOAT16,
-            .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.layout()),
-            .num_out_blocks = num_out_blocks.value_or(1)};
-        return ttnn::prim::group_norm(
-            input_tensor,
-            epsilon,
-            static_cast<uint32_t>(num_groups),
-            output_mem_config,
-            program_config,
-            kernel_config_val,
-            use_welford,
-            gamma,
-            beta,
-            mask,
-            negative_mask,
-            reciprocals);
     }
+    const ttnn::operations::normalization::group_norm::GroupNormMultiCoreProgramConfig program_config = {
+        .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
+        .im_data_format = DataType::BFLOAT16,
+        .out_data_format = DataType::BFLOAT16,
+        .inplace = inplace.value_or(false),
+        .output_layout = output_layout.value_or(input_tensor.layout()),
+        .num_out_blocks = num_out_blocks.value_or(1)};
+    return ttnn::prim::group_norm(
+        input_tensor,
+        epsilon,
+        static_cast<uint32_t>(num_groups),
+        output_mem_config,
+        program_config,
+        kernel_config_val,
+        use_welford,
+        gamma,
+        beta,
+        mask,
+        negative_mask,
+        reciprocals);
 }
 
 }  // namespace ttnn::operations::normalization

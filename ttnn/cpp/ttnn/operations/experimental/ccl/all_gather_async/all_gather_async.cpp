@@ -27,8 +27,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
@@ -39,28 +39,27 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             memory_config,
             subdevice_id,
             /*cluster_axis*/ std::nullopt);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        return ttnn::prim::all_gather_async(
-            input_tensor,
-            /*persistent_output_buffer*/ std::nullopt,
-            dim,
-            multi_device_global_semaphore,
-            num_links,
-            memory_config,
-            usable_topology,
-            subdevice_id,
-            /*cluster_axis*/ std::nullopt,
-            use_optimal_ccl_for_llama,
-            all_gather_async_llama_sharded_case,
-            barrier_semaphore,
-            /*chunks_per_sync*/ std::nullopt,
-            /*num_workers_per_link*/ std::nullopt,
-            /*num_buffers_per_channel*/ std::nullopt,
-            reverse_order,
-            sub_core_grid,
-            /*mesh_device*/ nullptr);
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    return ttnn::prim::all_gather_async(
+        input_tensor,
+        /*persistent_output_buffer*/ std::nullopt,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        usable_topology,
+        subdevice_id,
+        /*cluster_axis*/ std::nullopt,
+        use_optimal_ccl_for_llama,
+        all_gather_async_llama_sharded_case,
+        barrier_semaphore,
+        /*chunks_per_sync*/ std::nullopt,
+        /*num_workers_per_link*/ std::nullopt,
+        /*num_buffers_per_channel*/ std::nullopt,
+        reverse_order,
+        sub_core_grid,
+        /*mesh_device*/ nullptr);
 }
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
@@ -82,35 +81,34 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        return ttnn::prim::all_gather_async(
-            input_tensor,
-            persistent_output_buffer,
-            dim,
-            multi_device_global_semaphore,
-            num_links,
-            memory_config,
-            usable_topology,
-            subdevice_id,
-            cluster_axis,
-            use_optimal_ccl_for_llama,
-            all_gather_async_llama_sharded_case,
-            barrier_semaphore,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel,
-            reverse_order,
-            sub_core_grid,
-            /*mesh_device*/ nullptr);
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    return ttnn::prim::all_gather_async(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        usable_topology,
+        subdevice_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        all_gather_async_llama_sharded_case,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel,
+        reverse_order,
+        sub_core_grid,
+        /*mesh_device*/ nullptr);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
@@ -140,38 +138,36 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensors, dim, num_links, memory_config, subdevice_id, cluster_axis);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        std::vector<Tensor> output_tensors;
-        output_tensors.reserve(input_tensors.size());
-        for (size_t i = 0; i < input_tensors.size(); ++i) {
-            // 0 = forward link, 1 = backward link, i = device index
-            std::vector global_semaphores = {
-                multi_device_global_semaphore.at(0).global_semaphores.at(i),
-                multi_device_global_semaphore.at(1).global_semaphores.at(i)};
-            output_tensors.push_back(ttnn::prim::all_gather_async(
-                input_tensors[i],
-                persistent_output_buffer,
-                dim,
-                global_semaphores,
-                num_links,
-                memory_config,
-                usable_topology,
-                subdevice_id,
-                cluster_axis,
-                use_optimal_ccl_for_llama,
-                all_gather_async_llama_sharded_case,
-                barrier_semaphore.has_value() ? std::optional<GlobalSemaphore>(barrier_semaphore.value()[i])
-                                              : std::nullopt,
-                chunks_per_sync,
-                num_workers_per_link,
-                num_buffers_per_channel,
-                /*reverse_order*/ false,
-                sub_core_grid,
-                /*mesh_device*/ nullptr));
-        }
-        return output_tensors;
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        // 0 = forward link, 1 = backward link, i = device index
+        std::vector global_semaphores = {
+            multi_device_global_semaphore.at(0).global_semaphores.at(i),
+            multi_device_global_semaphore.at(1).global_semaphores.at(i)};
+        output_tensors.push_back(ttnn::prim::all_gather_async(
+            input_tensors[i],
+            persistent_output_buffer,
+            dim,
+            global_semaphores,
+            num_links,
+            memory_config,
+            usable_topology,
+            subdevice_id,
+            cluster_axis,
+            use_optimal_ccl_for_llama,
+            all_gather_async_llama_sharded_case,
+            barrier_semaphore.has_value() ? std::optional<GlobalSemaphore>(barrier_semaphore.value()[i]) : std::nullopt,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            /*reverse_order*/ false,
+            sub_core_grid,
+            /*mesh_device*/ nullptr));
+    }
+    return output_tensors;
 }
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
@@ -191,35 +187,34 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        return ttnn::prim::all_gather_async(
-            input_tensor,
-            persistent_output_tensor,
-            dim,
-            multi_device_global_semaphore,
-            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-            memory_config,
-            usable_topology,
-            subdevice_id,
-            cluster_axis,
-            use_optimal_ccl_for_llama,
-            all_gather_async_llama_sharded_case,
-            barrier_semaphore,
-            /*chunks_per_sync*/ std::nullopt,
-            /*num_workers_per_link*/ std::nullopt,
-            /*num_buffers_per_channel*/ std::nullopt,
-            reverse_order,
-            sub_core_grid,
-            &mesh_device);
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    return ttnn::prim::all_gather_async(
+        input_tensor,
+        persistent_output_tensor,
+        dim,
+        multi_device_global_semaphore,
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        memory_config,
+        usable_topology,
+        subdevice_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        all_gather_async_llama_sharded_case,
+        barrier_semaphore,
+        /*chunks_per_sync*/ std::nullopt,
+        /*num_workers_per_link*/ std::nullopt,
+        /*num_buffers_per_channel*/ std::nullopt,
+        reverse_order,
+        sub_core_grid,
+        &mesh_device);
 }
 
 ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
@@ -237,8 +232,8 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     // NOTE: reverse_order parameter is ignored, always use true for reversed API
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
@@ -249,28 +244,27 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
             memory_config,
             subdevice_id,
             /*cluster_axis*/ std::nullopt);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        return ttnn::prim::all_gather_async(
-            input_tensor,
-            /*persistent_output_buffer*/ std::nullopt,
-            dim,
-            multi_device_global_semaphore,
-            num_links,
-            memory_config,
-            usable_topology,
-            subdevice_id,
-            /*cluster_axis*/ std::nullopt,
-            use_optimal_ccl_for_llama,
-            all_gather_async_llama_sharded_case,
-            barrier_semaphore,
-            /*chunks_per_sync*/ std::nullopt,
-            /*num_workers_per_link*/ std::nullopt,
-            /*num_buffers_per_channel*/ std::nullopt,
-            /*reverse_order*/ true,
-            sub_core_grid,
-            /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    return ttnn::prim::all_gather_async(
+        input_tensor,
+        /*persistent_output_buffer*/ std::nullopt,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        usable_topology,
+        subdevice_id,
+        /*cluster_axis*/ std::nullopt,
+        use_optimal_ccl_for_llama,
+        all_gather_async_llama_sharded_case,
+        barrier_semaphore,
+        /*chunks_per_sync*/ std::nullopt,
+        /*num_workers_per_link*/ std::nullopt,
+        /*num_buffers_per_channel*/ std::nullopt,
+        /*reverse_order*/ true,
+        sub_core_grid,
+        /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
 }
 
 ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
@@ -292,34 +286,34 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
-        return composite_common::composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        return ttnn::prim::all_gather_async(
-            input_tensor,
-            persistent_output_buffer,
-            dim,
-            multi_device_global_semaphore,
-            num_links,
-            memory_config,
-            usable_topology,
-            subdevice_id,
-            cluster_axis,
-            use_optimal_ccl_for_llama,
-            all_gather_async_llama_sharded_case,
-            barrier_semaphore,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel,
-            /*reverse_order*/ true,
-            sub_core_grid,
-            /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
+        return composite_common::composite_all_gather(
+            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    return ttnn::prim::all_gather_async(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        usable_topology,
+        subdevice_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        all_gather_async_llama_sharded_case,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel,
+        /*reverse_order*/ true,
+        sub_core_grid,
+        /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
 }
 
 ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
@@ -339,35 +333,34 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     bool composite_all_gather_case = composite_common::use_composite_all_gather(input_tensor, dim, memory_config);
-    bool all_gather_async_llama_sharded_case =
-        composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
-    } else {
-        log_debug(tt::LogOp, "Using minimal_all_gather_async");
-        return ttnn::prim::all_gather_async(
-            input_tensor,
-            persistent_output_tensor,
-            dim,
-            multi_device_global_semaphore,
-            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-            memory_config,
-            usable_topology,
-            subdevice_id,
-            cluster_axis,
-            use_optimal_ccl_for_llama,
-            all_gather_async_llama_sharded_case,
-            barrier_semaphore,
-            /*chunks_per_sync*/ std::nullopt,
-            /*num_workers_per_link*/ std::nullopt,
-            /*num_buffers_per_channel*/ std::nullopt,
-            /*reverse_order*/ true,
-            sub_core_grid,
-            &mesh_device);  // reverse_order=true for reversed API
     }
+    log_debug(tt::LogOp, "Using minimal_all_gather_async");
+    return ttnn::prim::all_gather_async(
+        input_tensor,
+        persistent_output_tensor,
+        dim,
+        multi_device_global_semaphore,
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        memory_config,
+        usable_topology,
+        subdevice_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        all_gather_async_llama_sharded_case,
+        barrier_semaphore,
+        /*chunks_per_sync*/ std::nullopt,
+        /*num_workers_per_link*/ std::nullopt,
+        /*num_buffers_per_channel*/ std::nullopt,
+        /*reverse_order*/ true,
+        sub_core_grid,
+        &mesh_device);  // reverse_order=true for reversed API
 }
 
 }  // namespace ttnn::operations::experimental::ccl

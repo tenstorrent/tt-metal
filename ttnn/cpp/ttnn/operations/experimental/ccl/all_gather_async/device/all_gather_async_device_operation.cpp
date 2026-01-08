@@ -24,10 +24,9 @@ AllGatherAsyncVersion select_version(const operation_attributes_t& operation_att
             "(use_all_gather_async_llama_sharded=true). Please use the regular all_gather_async API instead of "
             "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
-    } else {
-        TT_FATAL(operation_attributes.semaphore.size() == 2, "Default implementation requires 2 semaphores");
-        return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
+    TT_FATAL(operation_attributes.semaphore.size() == 2, "Default implementation requires 2 semaphores");
+    return AllGatherAsyncVersion::MINIMAL_DEFAULT;
 }
 
 AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::select_program_factory(
