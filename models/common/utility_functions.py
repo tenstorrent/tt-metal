@@ -1047,7 +1047,9 @@ def is_n300():
 
 
 def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") == "1"
+    watcher = os.environ.get("TT_METAL_WATCHER")
+    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
+    return (watcher is not None and watcher != "") or lightweight_asserts == "1"
 
 
 def is_n300():
