@@ -191,7 +191,7 @@ jobs:
               "model": "gpt-oss",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_gpt_oss_unit_tests",
-              "timeout": 10,
+              "timeout": 15,
               "owner_id": "U08TJ70UFRT" # Harry Andrews
             }
           ]')
