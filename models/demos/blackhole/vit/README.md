@@ -64,7 +64,6 @@ This folder also contains `ttnn_optimized_sharded_vit_hiRes_bh.py`, which target
 | **Batch size** | 10+ (throughput-optimized) | 1 (latency-optimized) |
 | **Sequence length** | 196 patches (fixed, 14×14 from 224px) | 1024 / 2048 / 3072 (variable) |
 | **Hidden dimension** | 768 (fixed) | 512 / 1024 / 1536 / 2304 (variable) |
-| **Core grid** | 10×12 | 8×8 |
 
 The standard ViT processes many images in parallel for maximum throughput (images/sec). The high-res variant handles larger sequence lengths from higher resolution inputs, optimized for batch=1 inference where you need more detail per image rather than more images per second.
 
@@ -75,5 +74,7 @@ pytest --disable-warnings models/demos/blackhole/vit/tests/test_ttnn_optimized_s
 ```
 
 This runs a sweep over sequence sizes (1024, 2048, 3072) and hidden dimensions (512, 1024, 1536, 2304) at batch=1.
+
+The current high-res test is meant for device profiling only. The trace-enabled test will be coming soon for optimized end to end performance.
 
 For a deeper dive into ViT implementation details (sharding strategies, matmul configs, encoder layer breakdown), see the [ViT Tech Report](../../../../tech_reports/ViT-TTNN/vit.md).
