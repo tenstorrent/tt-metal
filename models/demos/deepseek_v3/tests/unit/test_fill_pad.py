@@ -33,7 +33,7 @@ DEEPSEEK_SHAPE_DTYPE_FILL_LIST = [
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}], indirect=True
 )
 @pytest.mark.parametrize("shape_dtype_fill", DEEPSEEK_SHAPE_DTYPE_FILL_LIST)
 @pytest.mark.parametrize("mem_config", [ttnn.L1_MEMORY_CONFIG])
