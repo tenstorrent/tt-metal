@@ -142,25 +142,7 @@ struct ProgramDescriptor {
     CBDescriptors cbs;
     std::optional<ttsl::hash::hash_t> custom_program_hash;
 
-    std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const {
-        constexpr uint32_t NUM_SEMAPHORES = 16;  // same as impl/buffers/semaphore.hpp
-        std::bitset<NUM_SEMAPHORES> used_semaphores;
-
-        // check existing semaphores
-        for (const auto& sem_desc : semaphores) {
-            if (sem_desc.core_type == core_type && sem_desc.core_ranges.contains(core)) {
-                used_semaphores.set(sem_desc.id);
-            }
-        }
-
-        // find first available semaphore ID
-        for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
-            if (!used_semaphores.test(i)) {
-                return i;
-            }
-        }
-        return std::nullopt;
-    }
+    std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
 
 }  // namespace tt::tt_metal

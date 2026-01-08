@@ -10,14 +10,13 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include "generic_op_device_operation.hpp"
+#include "generic_op_program_factory.hpp"
 
-namespace ttnn::operations::generic {
+namespace ttnn::operations::generic::program {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-GenericOpDeviceOperation::GenericMeshProgram::cached_mesh_workload_t
-GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
+GenericMeshProgramFactory::cached_mesh_workload_t GenericMeshProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const tensor_args_t& tensor_args,
@@ -34,8 +33,7 @@ GenericOpDeviceOperation::GenericMeshProgram::create_mesh_workload(
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(mesh_shared_variables)};
 }
 
-ttnn::device_operation::CachedProgram<GenericOpDeviceOperation::GenericMeshProgram::shared_variables_t>
-GenericOpDeviceOperation::GenericMeshProgram::create_at(
+GenericMeshProgramFactory::cached_program_t GenericMeshProgramFactory::create_at(
     const tt::tt_metal::ProgramDescriptor& program_descriptor,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -54,7 +52,7 @@ GenericOpDeviceOperation::GenericMeshProgram::create_at(
 
 void override_program_runtime_arguments(
     Program& program,
-    GenericOpDeviceOperation::GenericMeshProgram::shared_variables_t& shared_vars,
+    GenericMeshProgramFactory::shared_variables_t& shared_vars,
     const ProgramDescriptor& program_descriptor) {
     // Update kernel runtime args.
     TT_ASSERT(
@@ -115,7 +113,7 @@ void override_program_runtime_arguments(
     }
 }
 
-void GenericOpDeviceOperation::GenericMeshProgram::override_runtime_arguments(
+void GenericMeshProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_mesh_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -141,4 +139,4 @@ void GenericOpDeviceOperation::GenericMeshProgram::override_runtime_arguments(
             program_it->second, shared_vars.program_shared_variables, program_descriptor);
     }
 }
-}  // namespace ttnn::operations::generic
+}  // namespace ttnn::operations::generic::program

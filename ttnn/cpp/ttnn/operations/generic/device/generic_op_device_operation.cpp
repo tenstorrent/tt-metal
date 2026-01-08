@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "generic_op_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "generic_op_device_operation.hpp"
+#include "generic_op_device_operation_types.hpp"
 
 #include <tt_stl/reflection.hpp>
 #include <unordered_set>
@@ -23,8 +24,8 @@ void verify_no_duplicate_mesh_coord_ranges(
 }
 
 GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return GenericMeshProgram{};
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return program::GenericMeshProgramFactory{};
 }
 
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
@@ -37,14 +38,14 @@ void GenericOpDeviceOperation::validate_on_program_cache_hit(
     verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
 }
 
-GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
+spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // User has to do this. Just referencing last element (preallocated output tensor).
     return tensor_args.output_tensor.tensor_spec();
 }
 
-GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
     return tensor_args.output_tensor;
 }
@@ -124,9 +125,9 @@ tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
 }  // namespace ttnn::operations::generic
 
 namespace ttnn::prim {
-ttnn::operations::generic::GenericOpDeviceOperation::tensor_return_value_t generic_op(
+ttnn::operations::generic::tensor_return_value_t generic_op(
     const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t& operation_attributes) {
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
     using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
     TT_FATAL(
         io_tensors.size() >= 2,
