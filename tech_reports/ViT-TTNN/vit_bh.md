@@ -37,8 +37,12 @@ Authors: Vishal Shenoy, Mohamed Bahnas (Original), Updated for Blackhole Archite
       - [5.6.2 FF2 (Output + Residual)](#562-ff2-output--residual)
       - [5.6.3 FFN Wrapper](#563-ffn-wrapper)
     - [5.7 Output](#57-output)
-  - [6. Conclusion](#6-conclusion)
-  - [7. References](#7-references)
+  - [6. High Resolution ViT Optimizations on Blackhole](#6-high-resolution-vit-optimizations-on-blackhole)
+    - [6.1 Sharding Across the Sequence Length Dimension](#61-sharding-across-the-sequence-length-dimension)
+    - [6.2 Width Shard and Block Sharding Mix](#62-width-shard-and-block-sharding-mix)
+    - [6.3 Scaled Dot-Product Attention (SDPA)](#63-scaled-dot-product-attention-sdpa)
+  - [7. Conclusion](#7-conclusion)
+  - [8. References](#8-references)
 
 ## 1. Overview
 
@@ -847,7 +851,291 @@ The final result after the feed-forward network and the second normalization ste
 
 The output can either be passed to the next layer in the Transformer encoder or to the classification head, depending on the specific task.
 
-## 6. Conclusion
+## 6. High Resolution ViT Optimizations on Blackhole
+
+When processing higher resolution images with ViT on Blackhole, the sequence length increases significantly (e.g., 512×512 produces 1024 patches, 768×768 produces 2304 patches). This section covers three key optimization techniques implemented in the high-resolution ViT for efficient inference.
+
+### 6.1 Sharding Across the Sequence Length Dimension
+
+For high-resolution ViT, the sequence length becomes a dominant factor in memory and compute distribution. The implementation uses block sharding that distributes **both batch and sequence length** across the core grid's y-dimension.
+
+**Dynamic Sequence Length Configuration:**
+
+The high-resolution implementation accepts variable sequence lengths (1024, 2048, 3072, etc.) and calculates sharding parameters dynamically:
+
+```python
+def update_model_config(config, batch_size, sequence_size):
+    wh_core_grid_y = 10
+
+    # Grid selection based on batch size
+    if batch_size == 1:
+        grid_y = 8
+        grid_x = 8
+    else:
+        grid_y = 10
+        grid_x = 12
+
+    # INPUTS
+    TILE_HEIGHT = 32
+    seqL = sequence_size  # 1024, 2048, 3072
+    dim_t = config.hidden_size // TILE_HEIGHT  # 24, 36, 48, 72
+
+    # Block sharded grid - avoiding padding on hidden_size and seqL
+    if config.hidden_size <= 1024:
+        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=8)
+    else:
+        core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=12)
+
+    # Key calculation: distribute (batch × seqL) across y-dimension
+    seqL_t = seqL // TILE_HEIGHT  # 32, 64, 96 tiles
+    seqL_t__y = (batch_size * seqL_t) // core_grid_BLOCK_SHARDED.y  # tiles per y-core
+    dim_t__x = dim_t // core_grid_BLOCK_SHARDED.x  # tiles per x-core
+```
+
+**Sequence-Aware LayerNorm Configuration:**
+
+The LayerNorm program config uses `seqL_t__y` to specify the block height per core, ensuring even distribution of the sequence dimension:
+
+```python
+"layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
+    subblock_w=dim_t__x,       # Tiles of hidden_dim per x-core
+    block_h=seqL_t__y,         # (batch × seqL_tiles) / grid_y
+    block_w=dim_t__x,
+    inplace=False,
+),
+```
+
+**Example calculations for different resolutions:**
+
+| Resolution | Sequence | seqL_t | batch=1, 8×8 grid | seqL_t__y |
+|------------|----------|--------|-------------------|-----------|
+| 512×512    | 1024     | 32     | 32 / 8            | 4         |
+| 768×768    | 2304     | 72     | 72 / 8            | 9         |
+| 1024×1024  | 4096     | 128    | 128 / 8           | 16        |
+
+**Benefits of sequence-length sharding:**
+- Distributes large sequence workloads evenly across cores
+- Maintains per-core memory constraints as resolution scales
+- Enables processing of arbitrary sequence lengths without code changes
+
+### 6.2 Width Shard and Block Sharding Mix
+
+High-resolution ViT uses a **multi-grid strategy** with different core grid configurations optimized for each operation type. This approach balances memory constraints, compute utilization, and avoids padding overhead.
+
+**Multiple Core Grid Definitions:**
+
+The implementation defines specialized core grids for different sharding strategies:
+
+```python
+# Block sharded grid - sized to avoid padding on hidden_size and seqL
+if config.hidden_size <= 1024:
+    core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=8)  # 64 cores
+else:
+    core_grid_BLOCK_SHARDED = ttnn.CoreGrid(y=8, x=12)  # 96 cores
+
+# Split heads grid - x=8 ensures 2 heads per core for 16-head models
+core_grid_SPLIT_HEADS_SHARDED = ttnn.CoreGrid(y=batch_size, x=8)
+
+# Height sharded grid for attention BMMs
+H_x = 8
+H_y = min(batch_size * head_num // H_x, 8)
+core_grid_HEIGHT_SHARDED = ttnn.CoreGrid(y=H_y, x=H_x)
+
+# Full grid for initial embedding and SDPA
+core_grid_12x10 = ttnn.CoreGrid(y=10, x=12)  # 120 cores
+```
+
+**Sharding Strategy by Operation:**
+
+| Operation | Core Grid | Sharding Type | Rationale |
+|-----------|-----------|---------------|-----------|
+| Encoder input | 12×10 | Block | Maximize parallelism for initial sharding |
+| LayerNorm | BLOCK_SHARDED (8×8/8×12) | Block | Avoids hidden_size padding |
+| QKV Linear | BLOCK_SHARDED | Block | 2D distribution for 3×dim output |
+| Split Heads | SPLIT_HEADS_SHARDED | Height | batch_size × 8 for head distribution |
+| Q×K, P×V BMMs | HEIGHT_SHARDED | Height | Per-head independent computation |
+| Self-Output | BLOCK_SHARDED | Block | Return to block sharding for FFN |
+| FF1, FF2 | BLOCK_SHARDED | Block | Large intermediate fits with mcast |
+
+**FFN with Block Sharding (High-Resolution Optimized):**
+
+For high-resolution inputs, the FFN uses block sharding with adjusted `in0_block_w` to manage the larger intermediate dimension:
+
+```python
+"ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
+    in0_block_w=dim_t__x // 2,  # Halved to fit L1 constraints
+    out_subblock_h=1,
+    out_subblock_w=min(4, (dim_t__x * 4) // 2),  # Capped at 4
+    per_core_M=seqL_t__y,       # Sequence tiles per y-core
+    per_core_N=dim_t__x * 4,    # 4× expansion per x-core
+    transpose_mcast=False,
+    fused_activation=(ttnn.UnaryOpType.GELU, True),  # Fused GELU
+),
+
+"ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
+    in0_block_w=dim_t__x * 2,   # Handle 4×dim input in chunks
+    out_subblock_h=1,
+    out_subblock_w=dim_t__x,
+    per_core_M=seqL_t__y,
+    per_core_N=dim_t__x,        # Project back to hidden_dim
+    transpose_mcast=False,
+    fused_activation=None,
+),
+```
+
+**Resharding Between Operations:**
+
+The implementation includes explicit resharding when transitioning between core grids:
+
+```python
+# After concatenating heads, reshard to BLOCK_SHARDED grid for self-output
+block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
+    context_layer.padded_shape,
+    core_grid=config.core_grid_BLOCK_SHARDED,  # 64 cores
+    strategy=ttnn.ShardStrategy.BLOCK,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+)
+
+context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
+context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
+```
+
+### 6.3 Scaled Dot-Product Attention (SDPA)
+
+For high-resolution ViT, the implementation uses `ttnn.transformer.scaled_dot_product_attention` (SDPA), which fuses the attention computation into a single optimized kernel. This is critical for high-resolution inputs where the O(seqL²) attention matrix would otherwise exceed L1 memory limits.
+
+**SDPA vs. Manual Attention:**
+
+| Aspect | Manual Attention | SDPA |
+|--------|------------------|------|
+| Memory | Stores full attention matrix | Flash-attention style chunking |
+| Kernels | 4+ separate ops (Q×K, scale, softmax, P×V) | Single fused kernel |
+| Precision | Configurable per-op | HiFi4 with FP32 accumulation |
+| High-res scaling | O(seqL²) memory | O(seqL) memory with chunking |
+
+**High-Resolution Attention Implementation:**
+
+The actual implementation uses `ttnn.experimental.nlp_create_qkv_heads` for head splitting and moves Q, K, V to DRAM before SDPA to manage L1 pressure:
+
+```python
+def vit_attention(
+    config,
+    hidden_states,
+    parameters,
+):
+    num_heads = config.num_attention_heads  # num_heads = 16
+    *_, hidden_size = hidden_states.shape
+    head_size = hidden_size // num_heads
+
+    # Fused QKV projection
+    query_key_value = ttnn.linear(
+        hidden_states,
+        parameters.attention.query_key_value.weight,
+        bias=parameters.attention.query_key_value.bias,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=config.program_configs["query_key_value_matmul_program_config"],
+    )
+    query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
+
+    # Use nlp_create_qkv_heads for efficient head splitting
+    query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+        query_key_value,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_heads=num_heads,
+        num_kv_heads=num_heads,
+        transpose_k_heads=False,
+    )
+
+    ttnn.deallocate(query_key_value)
+    ttnn.deallocate(hidden_states)
+    if config.should_reallocate_in_attention:
+        value = ttnn.reallocate(value)
+
+    # Move Q, K, V to DRAM for SDPA (manages L1 pressure for large sequences)
+    query = ttnn.to_memory_config(query, ttnn.DRAM_MEMORY_CONFIG)
+    key = ttnn.to_memory_config(key, ttnn.DRAM_MEMORY_CONFIG)
+    value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+
+    # SDPA with 256-tile chunks for high-resolution sequences
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(config.core_grid_12x10.x, config.core_grid_12x10.y),
+        q_chunk_size=256,
+        k_chunk_size=256,
+        exp_approx_mode=False,  # More accurate exponential computation
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity for attention
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,   # FP32 accumulation for numerical stability
+        packer_l1_acc=True,
+    )
+
+    context_layer = ttnn.transformer.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        is_causal=False,  # ViT uses bidirectional attention (no causal mask)
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # Concatenate heads
+    context_layer = ttnn.transformer.concatenate_heads(context_layer)
+
+    # Reshard back to block sharded for self-output projection
+    block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
+        context_layer.padded_shape,
+        core_grid=config.core_grid_BLOCK_SHARDED,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
+    context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
+
+    # Self-output projection
+    self_output = ttnn.linear(
+        context_layer,
+        parameters.output.dense.weight,
+        bias=parameters.output.dense.bias,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=config.program_configs["self_output_matmul_program_config"],
+    )
+    ttnn.deallocate(context_layer)
+
+    return self_output
+```
+
+**SDPA Configuration Details:**
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `q_chunk_size` | 256 | Larger chunks for high-res sequences |
+| `k_chunk_size` | 256 | Matches Q chunking for efficiency |
+| `exp_approx_mode` | False | Accurate exponential for softmax precision |
+| `math_fidelity` | HiFi4 | Maximum precision for attention scores |
+| `fp32_dest_acc_en` | True | FP32 accumulation prevents overflow in long sequences |
+
+**Memory Comparison for High-Resolution:**
+
+For a 768×768 image (seqL = 2304, 16 heads):
+
+| Approach | Peak Attention Memory (per batch) |
+|----------|-----------------------------------|
+| Manual (full matrix) | 16 × 2304 × 2304 × 2 = 169.9 MB |
+| SDPA (chunk=256) | 16 × 256 × 2304 × 2 = 18.9 MB |
+
+This ~9× memory reduction is essential for processing high-resolution images on Blackhole.
+
+> **Note:** The use of DRAM for Q, K, V storage before SDPA (`ttnn.DRAM_MEMORY_CONFIG`) is intentional—it frees L1 for the SDPA kernel's internal working memory, enabling larger chunk sizes and better throughput.
+
+## 7. Conclusion
 
 This walkthrough provided an in-depth explanation of the Vision Transformer (ViT) encoder implementation optimized for the Tenstorrent Blackhole (P150) architecture. Key optimizations for Blackhole include:
 
@@ -860,7 +1148,7 @@ This walkthrough provided an in-depth explanation of the Vision Transformer (ViT
 
 From patch embedding to self-attention and feed-forward networks, the ViT model effectively applies the principles of attention-based mechanisms to image processing with architecture-specific optimizations for Blackhole.
 
-## 7. References
+## 8. References
   - ViT paper: https://arxiv.org/pdf/2010.11929
   - HuggingFace ViT docs: https://huggingface.co/docs/transformers/en/model_doc/vit
   - https://medium.com/@hansahettiarachchi/unveiling-vision-transformers-revolutionizing-computer-vision-beyond-convolution-c410110ef061
