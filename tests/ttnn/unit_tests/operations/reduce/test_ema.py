@@ -19,9 +19,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
-    # Skip specific test case with watcher enabled
-    if T == 2048 and B == 2 and C == 4096 and cores_y == 0 and cores_x == 0 and is_watcher_enabled():
-        pytest.skip("Skipping test_ema[T=2048-B=2-C=4096-cores_y=0-cores_x=0] due to watcher being enabled")
+    if T == 2048 and B == 2 and C == 4096 and is_watcher_enabled():
+        pytest.skip("Skipping test_ema[T=2048-B=2-C=4096] due to watcher being enabled, github issue #29024")
 
     torch.manual_seed(0)
 
