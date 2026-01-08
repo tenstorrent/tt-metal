@@ -50,7 +50,7 @@ runs:
               echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
               echo "version=22.04" >> "$GITHUB_OUTPUT"
               echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
-              echo "enable-lto=false" >> "$GITHUB_OUTPUT"
+              echo "enable-lto=true" >> "$GITHUB_OUTPUT"
               ;;
             "Ubuntu 24.04")
               echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
@@ -86,9 +86,14 @@ runs:
           if [ "$DISTRO" = "fedora" ]; then
             echo "toolchain=cmake/x86_64-linux-clang-21-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
             echo "enable-lto=true" >> "$GITHUB_OUTPUT"
-          elif [ "$VERSION" = "24.04" ]; then
-            echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
-            echo "enable-lto=true" >> "$GITHUB_OUTPUT"
+          elif [ "$DISTRO" = "ubuntu" ]; then
+            if [ "$VERSION" = "24.04" ] || [ "$VERSION" = "22.04" ]; then
+              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              echo "enable-lto=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              echo "enable-lto=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
             echo "enable-lto=false" >> "$GITHUB_OUTPUT"

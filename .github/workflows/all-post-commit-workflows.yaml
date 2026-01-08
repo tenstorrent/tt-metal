@@ -89,6 +89,7 @@ jobs:
       distro: ${{ needs.parse-platform.outputs.distro || inputs.distro || 'ubuntu' }}
       version: ${{ needs.parse-platform.outputs.version || inputs.version || '22.04' }}
       skip-tt-train: false
+      enable-lto: ${{ needs.parse-platform.outputs.enable-lto == 'true' }}
 
   find-changed-files:
     runs-on: ubuntu-latest
