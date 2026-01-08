@@ -49,7 +49,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'n150' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'n150'
       runner-label: 'N150'
@@ -64,7 +64,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'n300' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'n300'
       runner-label: 'N300'
@@ -79,7 +79,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'p100' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'p100'
       runner-label: 'P100'
@@ -94,7 +94,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'p150' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'p150'
       runner-label: 'P150'
@@ -109,7 +109,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'wh-qb' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'WH-QB'
       runner-label: 'config-t3000'
@@ -124,7 +124,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'bh-qb' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'BH-QB'
       runner-label: 'BH-QB-GE'
@@ -139,7 +139,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'wh-6u' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'WH-6U'
       runner-label: 'topology-6u'
@@ -155,7 +155,7 @@ jobs:
     if: ${{ inputs.device == 'all' || inputs.device == 'bh-6u' }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
       device-type: 'BH-6U'
       runner-label: 'topology-6u'
