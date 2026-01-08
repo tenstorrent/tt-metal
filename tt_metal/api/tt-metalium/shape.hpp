@@ -57,6 +57,22 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
 tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
 
+/**
+ * @brief Computes a flat (linear) index from multi-dimensional indices and strides.
+ *
+ * This function converts a set of multi-dimensional indices into a single
+ * linear index using the provided strides. The computation is equivalent to
+ * a dot product between the indices and their corresponding strides
+ *
+ * @param indices  A span of per-dimension indices.
+ * @param strides  A span of per-dimension strides corresponding to the layout.
+ *
+ * @return The computed flat (linear) index.
+ *
+ * @note The `indices` and `strides` spans must have the same length.
+ */
+std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides);
+
 }  // namespace tt::tt_metal
 
 template <>
