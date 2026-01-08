@@ -715,77 +715,67 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: 🔌 Setup Database Connection
-        timeout-minutes: 3
+      - name: 🔌 Setup Local Database
+        timeout-minutes: 5
         run: |
-          echo "::group::🔧 Database Connection Setup"
-          echo "Setting up PostgreSQL database connection for sweep parameter generation..."
+          echo "::group::🔧 Database Setup"
+          echo "Setting up local PostgreSQL database for sweep parameter generation..."
 
           # Install psycopg2 if not present
           echo "Checking for psycopg2..."
           if ! python3 -c "import psycopg2" 2>/dev/null; then
             echo "Installing psycopg2-binary..."
-            pip install psycopg2-binary
+            pip install -q psycopg2-binary
             echo "✅ psycopg2 installed"
           else
             echo "✅ psycopg2 already available"
           fi
 
-          # Try to install and setup cloudflared
-          echo "Setting up cloudflared tunnel..."
-          if ! command -v cloudflared &> /dev/null; then
-            echo "Installing cloudflared..."
-            # Download and install cloudflared
-            wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared
-            chmod +x /tmp/cloudflared
-            sudo mv /tmp/cloudflared /usr/local/bin/cloudflared
-            echo "✅ cloudflared installed"
+          # Install PostgreSQL client tools if not present
+          if ! command -v psql &> /dev/null; then
+            echo "Installing PostgreSQL client..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+            echo "✅ PostgreSQL client installed"
           else
-            echo "✅ cloudflared already available"
+            echo "✅ PostgreSQL client already available"
           fi
 
-          # Start cloudflared tunnel in background
-          echo "Starting cloudflared tunnel to database..."
-          nohup cloudflared access tcp \
-            --hostname tt-sweeps.aswincloud.com \
-            --url localhost:15432 \
-            > /tmp/cloudflared.log 2>&1 &
-          CLOUDFLARED_PID=$!
-          echo "Cloudflared tunnel started (PID: $CLOUDFLARED_PID)"
+          # Start local PostgreSQL instance
+          echo "Starting local PostgreSQL instance..."
+          sudo service postgresql start
+          sleep 3
 
-          # Wait for tunnel to be ready (max 60 seconds)
-          echo "Waiting for database tunnel to be ready..."
-          for i in {1..30}; do
-            if nc -z localhost 15432 2>/dev/null; then
-              echo "✅ Database tunnel ready on localhost:15432"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "❌ Database tunnel failed to start after 60 seconds"
-              echo "Cloudflared logs:"
-              cat /tmp/cloudflared.log || true
-              exit 1
-            fi
-            sleep 2
-          done
+          # Create database and user
+          echo "Setting up database..."
+          sudo -u postgres psql -c "CREATE USER \"tt-sweeps\" WITH PASSWORD 'tt.sweeps';" || echo "User already exists"
+          sudo -u postgres psql -c "CREATE DATABASE \"tt-model-traces\" OWNER \"tt-sweeps\";" || echo "Database already exists"
+          sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"tt-model-traces\" TO \"tt-sweeps\";" || true
 
-          # Verify database connection
-          echo "Verifying database connection and schema..."
+          # Restore database from dump
+          echo "Restoring database from dump (963KB compressed)..."
+          PGPASSWORD=tt.sweeps pg_restore \
+            -h localhost -p 5432 -U tt-sweeps -d tt-model-traces \
+            --no-owner --no-privileges --clean --if-exists \
+            model_tracer/ttnn_operations_db.dump 2>&1 | grep -v "^pg_restore: warning:" || true
+
+          # Verify database
+          echo "Verifying database..."
           python3 -c "
           import sys
           import psycopg2
           from psycopg2.extras import RealDictCursor
 
           try:
-              # Connect to database
+              # Connect to local database
               conn = psycopg2.connect(
-                  'postgresql://tt-sweeps:tt.sweeps@localhost:15432/tt-model-traces',
+                  'postgresql://tt-sweeps:tt.sweeps@localhost:5432/tt-model-traces',
                   cursor_factory=RealDictCursor,
                   connect_timeout=10
               )
               cursor = conn.cursor()
 
-              # Verify schema exists
+              # Verify schema and data
               cursor.execute('SELECT COUNT(*) as count FROM operations')
               op_count = cursor.fetchone()['count']
 
@@ -795,19 +785,15 @@ jobs:
               cursor.close()
               conn.close()
 
-              print(f'✅ Database connection verified successfully')
+              print(f'✅ Database restored and verified successfully')
               print(f'   - Operations: {op_count}')
               print(f'   - Configurations: {config_count}')
               print(f'   - Ready for sweep parameter generation')
 
           except Exception as e:
-              print(f'❌ Database connection failed: {e}', file=sys.stderr)
-              print('', file=sys.stderr)
-              print('Database connection is required for sweep parameter generation.', file=sys.stderr)
-              print('Please ensure:', file=sys.stderr)
-              print('  1. Cloudflared tunnel is accessible', file=sys.stderr)
-              print('  2. Database is running at tt-sweeps.aswincloud.com', file=sys.stderr)
-              print('  3. Network connectivity is available', file=sys.stderr)
+              print(f'❌ Database setup failed: {e}', file=sys.stderr)
+              import traceback
+              traceback.print_exc(file=sys.stderr)
               sys.exit(1)
           "
           echo "::endgroup::"

@@ -73,8 +73,20 @@ except ImportError:
 
 BASE_DIR = get_base_dir()
 
+
 # Database connection configuration
-DEFAULT_DB_CONFIG = "postgresql://tt-sweeps:tt.sweeps@localhost:15432/tt-model-traces"
+# Auto-detect: CI uses local PostgreSQL (5432), local dev uses cloudflared (15432)
+def _get_default_db_config():
+    """Determine database connection based on environment"""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # CI: Use local PostgreSQL with restored dump
+        return "postgresql://tt-sweeps:tt.sweeps@localhost:5432/tt-model-traces"
+    else:
+        # Local dev: Use cloudflared tunnel
+        return "postgresql://tt-sweeps:tt.sweeps@localhost:15432/tt-model-traces"
+
+
+DEFAULT_DB_CONFIG = _get_default_db_config()
 
 
 @dataclass
