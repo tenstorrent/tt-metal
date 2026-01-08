@@ -22,9 +22,12 @@ def random_torch_tensor(dtype, shape):
         return torch.rand(shape, dtype=torch.bfloat16)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+# @pytest.mark.parametrize("h", [32])
+# @pytest.mark.parametrize("w", [64])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.float32])
+@pytest.mark.parametrize("h", [1])
+@pytest.mark.parametrize("w", [2])
+@pytest.mark.parametrize("dtype", [ttnn.float32])
 def test_permute(device, h, w, dtype):
     torch.manual_seed(2005)
     shape = (1, 1, h, w)

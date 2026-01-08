@@ -12,8 +12,8 @@
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
-    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
+    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");  // 32
+    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");  // 32
 
     // constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
     // constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
@@ -26,14 +26,25 @@ void MAIN {
 
     unary_op_init_common(cb_in, cb_out);
 
+    DPRINT_MATH(DPRINT << "this is the math kernel" << ENDL());
+    DPRINT_PACK(DPRINT << "this is the pack kernel" << ENDL());
+    DPRINT_UNPACK(DPRINT << "this is the unpack kernel" << ENDL());
+    DPRINT_DATA0(DPRINT << "this is the data movement kernel on noc 0" << ENDL());
+    DPRINT_DATA1(DPRINT << "this is the data movement kernel on noc 1" << ENDL());
+
     for (uint32_t n = 0; n < num_blocks; n++) {
+        DPRINT << "Processing block " << n << ENDL();
         // tilize input via unpack and then pack
         tilize_init(cb_in, 1, cb_tilize);
 
         cb_wait_front(cb_in, x_block_size);
         cb_reserve_back(cb_tilize, 1);
 
+        DPRINT_UNPACK({ DPRINT << "cb_in is: " << TSLICE(cb_in, 0, SliceRange::h0_w0_32()) << ENDL(); });
+
         tilize_block(cb_in, 1, cb_tilize);  // tilize and pack into cb_tilize
+
+        DPRINT_UNPACK({ DPRINT << "cb_tilize is" << TSLICE(cb_tilize, 0, SliceRange::h0_w0_32()) << ENDL(); });
 
         cb_push_back(cb_tilize, 1);
         cb_pop_front(cb_in, x_block_size);
@@ -46,7 +57,9 @@ void MAIN {
         pack_untilize_dest_init<1>(cb_out);
 
         tile_regs_acquire();
+
         transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
+
         tile_regs_commit();
 
         // pack and untilize
@@ -55,6 +68,8 @@ void MAIN {
         tile_regs_wait();
         pack_untilize_dest<1>(cb_out);  // pack call
         tile_regs_release();
+
+        DPRINT_PACK({ DPRINT << "cb_out is" << TSLICE(cb_out, 0, SliceRange::h0_32_w0()) << ENDL(); });
 
         cb_push_back(cb_out, w_block_size);
 
