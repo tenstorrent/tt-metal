@@ -105,9 +105,52 @@ TileShape::single()          // Single tile: 1 × 1 × 1
 TileLayout::contiguous()              // Default row-major
 TileLayout::with_row_stride(stride)   // Custom stride between rows
 
+// Accumulation types (for multi-block accumulation):
+NoAccumulation{}                      // Default - no accumulation (zero overhead)
+Accumulate(cfg, iteration)            // Enable accumulation with iteration index
+AccumulationConfig::with_cb(cb, dst)  // Configuration: accumulator CB and DST index
+
 // Full signature:
-compute_kernel_lib::reduce<PoolType, ReduceDim, ReduceInputMode, ReduceDataFormatReconfig>(
-    cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC), TileLayout::contiguous());
+compute_kernel_lib::reduce<PoolType, ReduceDim, ReduceInputMode, ReduceDataFormatReconfig,
+                           init, uninit, AccumT, PostReduceOp>(
+    cb_in, cb_scaler, cb_out, TileShape, TileLayout, AccumT, PostReduceOp);
+
+// Common usage (defaults handle most cases):
+compute_kernel_lib::reduce<PoolType, ReduceDim, ReduceInputMode>(
+    cb_in, cb_scaler, cb_out, TileShape::grid(Ht, Wt, NC));
+```
+
+### Accumulation Support
+
+For operations requiring multi-block accumulation (e.g., large tensor reductions):
+
+```cpp
+// Configure accumulator CB
+const auto cfg = AccumulationConfig::with_cb(cb_accumulator);
+
+// Process blocks with accumulation
+for (uint32_t i = 0; i < num_blocks; ++i) {
+    compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+        cb_in, cb_scaler, cb_out, TileShape::row(Wt),
+        TileLayout::contiguous(), Accumulate(cfg, i));
+}
+```
+
+When `AccumT` is `NoAccumulation` (default), all accumulation code is eliminated at compile-time.
+
+### Post-Reduce Operations
+
+The `post_reduce_op` callback receives a `dst_idx` parameter indicating which DEST register to operate on:
+
+```cpp
+// Post-reduce operation signature (REQUIRED format):
+[](uint32_t dst_idx) {
+    recip_tile_init();
+    recip_tile(dst_idx);  // Use dst_idx, not hardcoded 0
+}
+
+// DEPRECATED (will not compile):
+// []() { recip_tile(0); }  // Missing dst_idx parameter
 ```
 
 ### Phase 1: {phase_name}

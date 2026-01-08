@@ -158,6 +158,30 @@ cb_pop_front(cb_out, 1);  // Release the tile
 
 **Common mistake**: `#include "dataflow_api.h"` → Use `"api/dataflow/dataflow_api.h"`
 
+### Reduce Helper: Accumulation Types
+
+The reduce helper supports iterative accumulation across blocks. Key types:
+
+| Type | Purpose | Usage |
+|------|---------|-------|
+| `NoAccumulation` | Default, no accumulation | Zero overhead (code eliminated at compile-time) |
+| `AccumulationConfig` | Configuration holder | `AccumulationConfig::with_cb(cb_accum, dst_idx)` |
+| `Accumulate` | Active accumulation | `Accumulate(cfg, iteration_index)` |
+
+**Multi-block accumulation pattern:**
+```cpp
+const auto cfg = AccumulationConfig::with_cb(cb_accumulator);
+for (uint32_t i = 0; i < num_blocks; ++i) {
+    reduce<SUM, REDUCE_ROW>(..., Accumulate(cfg, i));
+}
+```
+
+**Note**: The `post_reduce_op` callback signature now requires a `uint32_t dst_idx` parameter:
+```cpp
+// Required format:
+[](uint32_t dst_idx) { recip_tile_init(); recip_tile(dst_idx); }
+```
+
 ---
 
 ## TensorAccessor Pattern

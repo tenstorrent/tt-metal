@@ -207,6 +207,14 @@ void MAIN {
     //     cb_in, cb_scaler, cb_out,
     //     compute_kernel_lib::TileShape::grid(Ht, Wt, NC),
     //     compute_kernel_lib::TileLayout::with_row_stride(input_stride));
+
+    // For multi-block accumulation:
+    // const auto cfg = AccumulationConfig::with_cb(cb_accumulator);
+    // for (uint32_t i = 0; i < num_blocks; ++i) {
+    //     compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+    //         cb_in, cb_scaler, cb_out, TileShape::row(Wt),
+    //         TileLayout::contiguous(), Accumulate(cfg, i));
+    // }
 }
 }
 ```
@@ -227,6 +235,24 @@ void kernel_main() {
         cb_push_back(cb_out, num_pages);
     }
 }
+```
+
+### Post-Reduce Operations (Important API Note)
+
+If the design specifies a `post_reduce_op` callback, it MUST receive a `dst_idx` parameter:
+
+```cpp
+// CORRECT - Required signature:
+compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
+    cb_in, cb_scaler, cb_out, TileShape::row(Wt),
+    TileLayout::contiguous(), NoAccumulation{},
+    [](uint32_t dst_idx) {  // dst_idx parameter is REQUIRED
+        recip_tile_init();
+        recip_tile(dst_idx);  // Use dst_idx, not hardcoded 0
+    });
+
+// WRONG - Will not compile:
+// [](){ recip_tile(0); }  // Missing dst_idx parameter
 ```
 
 ## Violation Detection
