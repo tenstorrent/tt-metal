@@ -59,17 +59,15 @@ target_link_libraries(metal_common_pch PRIVATE tt_stl)
 # Set BUILD_RPATH to ensure tt_stl can find its dependencies during build
 tt_set_library_rpath(tt_stl)
 
-# Copy library to build/lib (not build/lib64) for CI tar artifacts
+# Output library directly to build/lib (not build/lib64) for CI tar artifacts
+# This prevents ODR violations in multiprocess tests where different processes
+# might load the library from different locations (original vs copied)
 # CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
-# Use POST_BUILD instead of LIBRARY_OUTPUT_DIRECTORY to avoid install() path resolution issues
-add_custom_command(
-    TARGET tt_stl
-    POST_BUILD
-    COMMAND
-        ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib
-    COMMAND
-        ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tt_stl> ${CMAKE_BINARY_DIR}/lib/
-    COMMENT "Copying tt_stl library to build/lib"
+set_target_properties(
+    tt_stl
+    PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY
+            "${CMAKE_BINARY_DIR}/lib"
 )
 
 install(

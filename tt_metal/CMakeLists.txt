@@ -309,17 +309,15 @@ add_subdirectory(distributed)
 # Set BUILD_RPATH for build-time linking (crucial for Fedora RUNPATH behavior)
 tt_set_library_rpath(tt_metal)
 
-# Copy library to build/lib (not build/lib64) for CI tar artifacts
+# Output library directly to build/lib (not build/lib64) for CI tar artifacts
+# This prevents ODR violations in multiprocess tests where different processes
+# might load the library from different locations (original vs copied)
 # CI tar artifacts expect libraries in build/lib regardless of CMAKE_INSTALL_LIBDIR
-# Use POST_BUILD instead of LIBRARY_OUTPUT_DIRECTORY to avoid install() path resolution issues
-add_custom_command(
-    TARGET tt_metal
-    POST_BUILD
-    COMMAND
-        ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/lib
-    COMMAND
-        ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tt_metal> ${CMAKE_BINARY_DIR}/lib/
-    COMMENT "Copying tt_metal library to build/lib"
+set_target_properties(
+    tt_metal
+    PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY
+            "${CMAKE_BINARY_DIR}/lib"
 )
 
 # Set INSTALL_RPATH after distributed subdirectory is processed
