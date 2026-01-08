@@ -13,18 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
-
-
-def fa_rand(*shape):
-    normal_1 = torch.randn(shape)
-    normal_2 = torch.randn(shape) * 10
-    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
-    return normal_1 + normal_2 * bernoulli
-
-
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole, is_watcher_enabled
 
 
 def fa_rand(*shape):
