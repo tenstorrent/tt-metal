@@ -315,9 +315,12 @@ extern "C" uint32_t _start1() {
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+        // DPRINT << "hartid: " << hartid << ENDL();
         int index = hartid;
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+        // DPRINT << "kernel_lma: " << kernel_lma << ENDL();
+        // DPRINT << "kernel text offset: " << launch_msg->kernel_config.kernel_text_offset[index] << ENDL();
 
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
