@@ -14,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(4);
     constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(5);
+    constexpr uint32_t same_axis = get_compile_time_arg_val(6);
 
     // Runtime arguments
     uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
@@ -32,7 +33,7 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Test id", test_id);
-
+    DeviceTimestampedData("Same axis", same_axis);
     DeviceTimestampedData("NoC Index", noc_index);
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);

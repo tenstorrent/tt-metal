@@ -67,13 +67,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_address = master_l1_info.base_address;
 
+    // Calculate same-axis: true if src and dst share x or y coordinate
+    bool same_axis = (test_config.master_core_coord.x == test_config.subordinate_core_coord.x) ||
+                     (test_config.master_core_coord.y == test_config.subordinate_core_coord.y);
+
     // Compile-time arguments for kernels
     vector<uint32_t> requestor_compile_args = {
         (uint32_t)l1_base_address,
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)transaction_size_bytes,
         (uint32_t)test_config.test_id,
-        (uint32_t)test_config.num_virtual_channels};
+        (uint32_t)test_config.num_virtual_channels,
+        (uint32_t)same_axis};
 
     // Kernels
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/";
@@ -195,7 +200,6 @@ void packet_sizes_test(
             if (transaction_size_pages > max_transmittable_pages) {
                 continue;
             }
-
             // Test config
             OneFromOneConfig test_config = {
                 .test_id = test_id,
@@ -304,6 +308,15 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     uint32_t test_id = 5;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
+
+    unit_tests::dm::core_from_core::packet_sizes_test(
+        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizesSameAxis) {
+    uint32_t test_id = 162;
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
 
     unit_tests::dm::core_from_core::packet_sizes_test(
         get_mesh_device(), test_id, master_core_coord, subordinate_core_coord);
