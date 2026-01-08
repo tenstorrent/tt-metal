@@ -208,7 +208,7 @@ void write_program_runtime_args_to_device(
 // 2. Host read the results from eltwise binary
 // 3. Second program runs matmul, using results from step 2 as input activation
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int /*argc*/, char** /*argv*/) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");

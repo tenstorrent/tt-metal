@@ -336,7 +336,7 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::IDevice* device) {
     return pass;
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main() {
     bool pass = true;
 
     auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");

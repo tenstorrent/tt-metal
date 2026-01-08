@@ -398,7 +398,7 @@ bool test_compile_program_with_modified_program(IDevice* device) {
     return pass;
 }
 
-int main(int /*argc*/, char** /*argv*/) {
+int main() {
     bool pass = true;
 
     try {
