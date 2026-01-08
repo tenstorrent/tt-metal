@@ -1100,26 +1100,40 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
         auto start_core = virtual_core;
-        auto core_start = tt_cxy_pair(device_id, start_core);
-        auto core_end = tt_cxy_pair(device_id, end_core.value());
         cluster_->noc_multicast_write(
             dram_bank_to_noc_xy_[device_id].data(),
             dram_to_noc_sz_in_bytes,
-            core_start,
-            core_end,
+            device_id,
+            start_core,
+            end_core.value(),
             mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
         cluster_->noc_multicast_write(
-            l1_bank_to_noc_xy_[device_id].data(), l1_to_noc_sz_in_bytes, core_start, core_end, l1_noc_addr);
+            l1_bank_to_noc_xy_[device_id].data(),
+            l1_to_noc_sz_in_bytes,
+            device_id,
+            start_core,
+            end_core.value(),
+            l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_->noc_multicast_write(
-            dram_bank_offset_map_[device_id].data(), dram_offset_sz_in_bytes, core_start, core_end, dram_offset_addr);
+            dram_bank_offset_map_[device_id].data(),
+            dram_offset_sz_in_bytes,
+            device_id,
+            start_core,
+            end_core.value(),
+            dram_offset_addr);
 
         uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
         cluster_->noc_multicast_write(
-            l1_bank_offset_map_[device_id].data(), l1_offset_sz_in_bytes, core_start, core_end, l1_offset_addr);
+            l1_bank_offset_map_[device_id].data(),
+            l1_offset_sz_in_bytes,
+            device_id,
+            start_core,
+            end_core.value(),
+            l1_offset_addr);
     } else {
         // Unicast to single core
         cluster_->write_core(
@@ -1171,13 +1185,12 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
         "Size of logical to virtual map is greater than available space");
 
     uint64_t logical_col_to_virtual_col_addr = logical_to_virtual_map_addr;
-    auto core_start = tt_cxy_pair(device_id, start_core);
-    auto core_end = tt_cxy_pair(device_id, end_core);
     cluster_->noc_multicast_write(
         worker_logical_col_to_virtual_col_[device_id].data(),
         logical_col_to_virtual_col_sz_in_bytes,
-        core_start,
-        core_end,
+        device_id,
+        start_core,
+        end_core,
         logical_col_to_virtual_col_addr);
 
     // Size of the data in the firmware is the full size of the grid, not the harvested size.
@@ -1186,8 +1199,9 @@ void MetalContext::initialize_worker_logical_to_virtual_tables(
     cluster_->noc_multicast_write(
         worker_logical_row_to_virtual_row_[device_id].data(),
         logical_row_to_virtual_row_sz_in_bytes,
-        core_start,
-        core_end,
+        device_id,
+        start_core,
+        end_core,
         logical_row_to_virtual_row_addr);
 }
 
@@ -1259,16 +1273,21 @@ void MetalContext::initialize_firmware(
                 &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
             cluster_->write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
         } else {
-            auto core_start = tt_cxy_pair(device_id, start_core);
-            auto core_end = tt_cxy_pair(device_id, end_core.value());
             // Multicast to all tensix cores in the range [start_core, tensix_end_core]
             cluster_->noc_multicast_write(
-                init_launch_msg_data.data(), init_launch_msg_data.size(), core_start, core_end, launch_addr);
-            cluster_->noc_multicast_write(go_msg.data(), go_msg.size(), core_start, core_end, go_addr);
+                init_launch_msg_data.data(),
+                init_launch_msg_data.size(),
+                device_id,
+                start_core,
+                end_core.value(),
+                launch_addr);
+            cluster_->noc_multicast_write(
+                go_msg.data(), go_msg.size(), device_id, start_core, end_core.value(), go_addr);
             uint32_t zero = 0;
             cluster_->noc_multicast_write(
-                &zero, sizeof(uint32_t), core_start, core_end, launch_msg_buffer_read_ptr_addr);
-            cluster_->noc_multicast_write(&zero, sizeof(uint32_t), core_start, core_end, go_message_index_addr);
+                &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), launch_msg_buffer_read_ptr_addr);
+            cluster_->noc_multicast_write(
+                &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
         }
     };
 
@@ -1331,14 +1350,13 @@ void MetalContext::initialize_firmware(
                         hal_->get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
                 }
             }
-            auto core_start = tt_cxy_pair(device_id, start_core);
-            auto core_end = tt_cxy_pair(device_id, end_core.value());
 
             cluster_->noc_multicast_write(
                 &jit_build_config.fw_launch_addr_value,
                 sizeof(uint32_t),
-                core_start,
-                core_end,
+                device_id,
+                start_core,
+                end_core.value(),
                 jit_build_config.fw_launch_addr);
 
             break;

@@ -250,11 +250,7 @@ bool test_multicast_write_risc_binary(
             tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, false);
 
         tt::tt_metal::MetalContext::instance().get_cluster().noc_multicast_write(
-            &*mem_ptr,
-            len_words * sizeof(uint32_t),
-            tt_cxy_pair(chip_id, start_core),
-            tt_cxy_pair(chip_id, end_core),
-            relo_addr);
+            &*mem_ptr, len_words * sizeof(uint32_t), chip_id, start_core, end_core, relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "multicast hex to cores {} - {}", start_core.str().c_str(), end_core.str().c_str());
