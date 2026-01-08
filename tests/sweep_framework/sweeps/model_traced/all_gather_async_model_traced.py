@@ -255,7 +255,6 @@ def run(
             raise ValueError("output_memory_config is None - required parameter missing")
         elif isinstance(output_memory_config, str):
             # Parse the string representation back to a MemoryConfig
-            import json
             import ast
 
             # Try to parse as dict (might be a string representation of dict)

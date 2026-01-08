@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -46,7 +45,6 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
-    traced_config_name=None,
     storage_type="StorageType::DEVICE",
     *,
     device,

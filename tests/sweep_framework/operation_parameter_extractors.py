@@ -1873,6 +1873,42 @@ class OperationParameterExtractors:
 
         return transformed_configs
 
+    @staticmethod
+    def _extract_split_query_key_value_and_split_heads_parameters(config: List) -> Optional[Dict]:
+        """Extract parameters for split_query_key_value_and_split_heads operation
+
+        Extracts from JSON:
+        - arg1: CoreCoord (compute_with_storage_grid_size) - unsupported type, try to extract from string
+        - arg3: num_heads (integer)
+        """
+        try:
+            params = {}
+            for arg in config:
+                if not isinstance(arg, dict):
+                    continue
+
+                # Extract num_heads from arg3
+                if "arg3" in arg:
+                    num_heads_val = arg["arg3"]
+                    if isinstance(num_heads_val, (int, str)) and num_heads_val != "nullopt":
+                        try:
+                            params["num_heads"] = int(num_heads_val)
+                        except (ValueError, TypeError):
+                            pass
+
+                # Extract CoreCoord from arg1 (kv_input_height)
+                # This is often represented as "[ unsupported type , std::reference_wrapper<tt::xy_pair const>]"
+                # We cannot reliably extract it from this format, so we'll skip it
+                # The sweep test will need to calculate a default grid based on num_heads if not provided
+
+            return params if params else None
+        except Exception as e:
+            import traceback
+
+            print(f"Error extracting split_query_key_value_and_split_heads parameters: {e}")
+            traceback.print_exc()
+            return None
+
 
 # Register the built-in extractors
 OperationParameterExtractors.register_extractor(
@@ -2029,6 +2065,20 @@ OperationParameterExtractors.register_extractor(
 OperationParameterExtractors.register_extractor(
     "ttnn::upsample",
     extract_func=OperationParameterExtractors._extract_upsample_parameters,
+)
+
+# Register split_query_key_value_and_split_heads extractor
+OperationParameterExtractors.register_extractor(
+    "split_query_key_value_and_split_heads",
+    extract_func=OperationParameterExtractors._extract_split_query_key_value_and_split_heads_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "experimental::split_query_key_value_and_split_heads",
+    extract_func=OperationParameterExtractors._extract_split_query_key_value_and_split_heads_parameters,
+)
+OperationParameterExtractors.register_extractor(
+    "ttnn::experimental::split_query_key_value_and_split_heads",
+    extract_func=OperationParameterExtractors._extract_split_query_key_value_and_split_heads_parameters,
 )
 
 

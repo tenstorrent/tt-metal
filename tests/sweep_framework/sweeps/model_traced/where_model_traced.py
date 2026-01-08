@@ -44,7 +44,6 @@ def run(
     input_c_memory_config=None,
     scalar_if_true=None,
     scalar_if_false=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
