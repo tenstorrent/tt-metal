@@ -96,6 +96,22 @@ def create_optimizer(model, yaml_config: dict):
         return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
 
+def get_loss_over_devices(loss):
+    """Aggregate loss over all devices and return mean."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+    loss_numpy = loss.to_numpy(composer=composer)
+    return loss_numpy.mean()
+
+
+def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
+    logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
+    logits_mask[:, :, :, vocab_size:] = 1e4
+    return ttml.autograd.Tensor.from_numpy(
+        logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+    )  # [1,1,1,T], bfloat16"
+
+
 class PerformanceMeter:
     def __init__(self, cfg, window_size=10):
         self.cfg = cfg
