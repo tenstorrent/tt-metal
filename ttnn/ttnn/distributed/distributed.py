@@ -421,7 +421,7 @@ def _get_rich_table(
 
                 locality = "" if fully_local else locality
                 coords = f"({row_idx}, {col_idx})\n"
-                if annotate_cell:
+                if annotate_cell and device_id is not None:
                     try:
                         annotation = annotate_cell(device_id, coord)
                     except TypeError:
