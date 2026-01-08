@@ -281,6 +281,16 @@ def test_flux1_pipeline_performance(
             "vae_decoding_time": 1.6,
             "total_time": 29.0,
         }
+    elif tuple(mesh_device.shape) == (4, 2):
+        assert is_blackhole(), "4x2 is only supported for blackhole"
+        expected_metrics = {
+            "clip_encoding_time": 10000,
+            "t5_encoding_time": 10000,
+            "total_encoding_time": 10000,
+            "denoising_steps_time": 1000 * num_inference_steps,
+            "vae_decoding_time": 10000,
+            "total_time": 10000,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 

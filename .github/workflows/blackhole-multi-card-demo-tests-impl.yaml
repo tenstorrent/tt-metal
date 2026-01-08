@@ -358,6 +358,15 @@ jobs:
               "owner_name": "Samuel Adesoye"
             },
             {
+              "name": "Flux.1-dev BH-LoudBox performance (4x2sp0tp1)",
+              "model": "flux.1-dev",
+              "arch": "blackhole",
+              "runner-label": "BH-LoudBox",
+              "cmd": "HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k \"4x2sp0tp1\"",
+              "owner_id": "U08TED0JM9D",
+              "owner_name": "Samuel Adesoye"
+            },
+            {
               "name": "Wan2.2-T2V-A14B BH-QB-GE performance",
               "model": "wan2.2-t2v-a14b",
               "arch": "blackhole",
