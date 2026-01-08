@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -364,8 +364,6 @@ int main() {
     } else {
         TT_THROW("Test Failed");
     }
-
-    TT_ASSERT(pass);
 
     return 0;
 }
