@@ -6,7 +6,7 @@ on:
       device-type:
         required: true
         type: string
-        description: "Device type: n150, n300, p150, p300, wh-qb, bh-qb, wh-glx, bh-blx"
+        description: "Device type: n150, n300, p150, p300, wh-qb, bh-qb, wh-6u, bh-6u"
       runner-label:
         required: true
         type: string
@@ -19,10 +19,6 @@ on:
         required: true
         type: string
         description: "MESH_DEVICE environment variable value"
-      model:
-        required: true
-        type: string
-        description: "Model to test"
       docker-image:
         required: true
         type: string
@@ -51,75 +47,51 @@ jobs:
       - name: Generate test matrix
         id: generate
         run: |
-          # Define model-specific HuggingFace paths and cache paths
-          case "${{ inputs.model }}" in
-            llama3.1-8b)
-              HF_MODEL="meta-llama/Llama-3.1-8B-Instruct"
-              CACHE_DIR="meta-llama/Llama-3.1-8B-Instruct"
+          # Define device-compatible models based on hardware compatibility
+          case "${{ inputs.device-type }}" in
+            n150)
+              models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "phi-3-mini-128k"]'
               ;;
-            llama3.1-70b)
-              HF_MODEL="meta-llama/Llama-3.1-70B-Instruct"
-              CACHE_DIR="meta-llama/Llama-3.1-70B-Instruct"
+            n300)
+              models='["llama3.2-11b-vision", "qwen2.5-7b", "phi-3-mini-128k"]'
               ;;
-            llama3.2-1b)
-              HF_MODEL="meta-llama/Llama-3.2-1B"
-              CACHE_DIR="meta-llama/Llama-3.2-1B"
+            p150)
+              models='["llama3.1-8b"]'
               ;;
-            llama3.2-3b)
-              HF_MODEL="meta-llama/Llama-3.2-3B"
-              CACHE_DIR="meta-llama/Llama-3.2-3B"
+            p300)
+              models='["llama3.1-8b"]'
               ;;
-            llama3.2-11b-vision)
-              HF_MODEL="meta-llama/Llama-3.2-11B-Vision"
-              CACHE_DIR="meta-llama/Llama-3.2-11B-Vision"
+            WH-QB)
+              models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
               ;;
-            llama3.2-90b-vision)
-              HF_MODEL="meta-llama/Llama-3.2-90B-Vision"
-              CACHE_DIR="meta-llama/Llama-3.2-90B-Vision"
+            BH-QB)
+              models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
               ;;
-            mistral-7b)
-              HF_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
-              CACHE_DIR="mistralai/Mistral-7B-Instruct-v0.3"
+            WH-6U)
+              models='["deepseek-r1-distill-llama-70b", "llama3.1-70b"]'
               ;;
-            qwen2.5-7b)
-              HF_MODEL="Qwen/Qwen2.5-7B"
-              CACHE_DIR="Qwen/Qwen2.5-7B"
-              ;;
-            qwen2.5-coder-32b)
-              HF_MODEL="Qwen/Qwen2.5-Coder-32B"
-              CACHE_DIR="Qwen/Qwen2.5-Coder-32B"
-              ;;
-            qwen2.5-72b)
-              HF_MODEL="Qwen/Qwen2.5-72B"
-              CACHE_DIR="Qwen/Qwen2.5-72B"
-              ;;
-            qwen3-32b)
-              HF_MODEL="Qwen/Qwen3-32B"
-              CACHE_DIR="Qwen/Qwen3-32B"
-              ;;
-            phi-3-mini-128k)
-              HF_MODEL="microsoft/Phi-3-mini-128k-instruct"
-              CACHE_DIR="microsoft/Phi-3-mini-128k-instruct"
-              ;;
-            deepseek-r1-distill-llama-70b)
-              HF_MODEL="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
-              CACHE_DIR="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
-              ;;
-            *)
-              echo "Unknown model: ${{ inputs.model }}"
-              exit 1
+            BH-6U)
+              models='["deepseek-r1-distill-llama-70b", "llama3.1-70b"]'
               ;;
           esac
 
-          # Determine cache path based on device type
-          if [[ "${{ inputs.arch }}" == "blackhole" ]]; then
-            CACHE_PATH="/localdev/blackhole_demos/huggingface_data/${CACHE_DIR}"
-          else
-            CACHE_PATH="/mnt/MLPerf/huggingface/tt_cache/${CACHE_DIR}"
-          fi
+          # Define model HuggingFace paths mapping
+          declare -A model_paths
+          model_paths["llama3.1-8b"]="meta-llama/Llama-3.1-8B-Instruct"
+          model_paths["llama3.1-70b"]="meta-llama/Llama-3.1-70B-Instruct"
+          model_paths["llama3.2-1b"]="meta-llama/Llama-3.2-1B"
+          model_paths["llama3.2-3b"]="meta-llama/Llama-3.2-3B"
+          model_paths["llama3.2-11b-vision"]="meta-llama/Llama-3.2-11B-Vision"
+          model_paths["llama3.2-90b-vision"]="meta-llama/Llama-3.2-90B-Vision"
+          model_paths["mistral-7b"]="mistralai/Mistral-7B-Instruct-v0.3"
+          model_paths["qwen2.5-7b"]="Qwen/Qwen2.5-7B"
+          model_paths["qwen2.5-coder-32b"]="Qwen/Qwen2.5-Coder-32B"
+          model_paths["qwen2.5-72b"]="Qwen/Qwen2.5-72B"
+          model_paths["qwen3-32b"]="Qwen/Qwen3-32B"
+          model_paths["phi-3-mini-128k"]="microsoft/Phi-3-mini-128k-instruct"
+          model_paths["deepseek-r1-distill-llama-70b"]="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 
           # Define test configurations
-          # Each test includes: name, test_key, extra_args, timeout, owner_id
           tests='[
             {
               "name": "Batch-1 Performance",
@@ -151,9 +123,24 @@ jobs:
             }
           ]'
 
-          # Add HF_MODEL and CACHE_PATH to each test
-          matrix=$(echo "$tests" | jq -c --arg hf "$HF_MODEL" --arg cache "$CACHE_PATH" \
-            '[.[] | . + {"hf_model": $hf, "cache_path": $cache}]')
+          # Generate matrix combining models and tests
+          matrix='[]'
+          for model in $(echo "$models" | jq -r '.[]'); do
+            HF_MODEL="${model_paths[$model]}"
+
+            # Determine cache path based on architecture
+            if [[ "${{ inputs.arch }}" == "blackhole" ]]; then
+              CACHE_PATH="/localdev/blackhole_demos/huggingface_data/${HF_MODEL}"
+            else
+              CACHE_PATH="/mnt/MLPerf/huggingface/tt_cache/${HF_MODEL}"
+            fi
+
+            # Add each test for this model to the matrix
+            model_tests=$(echo "$tests" | jq -c --arg model "$model" --arg hf "$HF_MODEL" --arg cache "$CACHE_PATH" \
+              '[.[] | . + {"model": $model, "hf_model": $hf, "cache_path": $cache}]')
+
+            matrix=$(echo "$matrix" | jq -c --argjson new "$model_tests" '. + $new')
+          done
 
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
@@ -163,7 +150,7 @@ jobs:
       fail-fast: false
       matrix:
         test: ${{ fromJson(needs.generate-test-matrix.outputs.matrix) }}
-    name: "${{ inputs.device-type }} - ${{ inputs.model }} - ${{ matrix.test.name }}"
+    name: "${{ inputs.device-type }} - ${{ matrix.test.model }} - ${{ matrix.test.name }}"
     runs-on: >-
       ${{
         inputs.runner-label == 'topology-6u'
@@ -213,7 +200,7 @@ jobs:
           echo "=========================================="
           echo "Running: ${{ matrix.test.name }}"
           echo "Device: ${{ inputs.device-type }}"
-          echo "Model: ${{ inputs.model }}"
+          echo "Model: ${{ matrix.test.model }}"
           echo "HF_MODEL: ${{ matrix.test.hf_model }}"
           echo "TT_CACHE_PATH: ${{ matrix.test.cache_path }}"
           echo "MESH_DEVICE: ${{ inputs.mesh-device-env }}"
@@ -242,26 +229,5 @@ jobs:
         if: ${{ !cancelled() && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-data-${{ inputs.device-type }}-${{ inputs.model }}-${{ matrix.test.name }}-${{ github.run_id }}
+          name: benchmark-data-${{ inputs.device-type }}-${{ matrix.test.model }}-${{ matrix.test.name }}-${{ github.run_id }}
           path: generated/benchmark_data
-
-      - name: Notify Slack on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.0.0
-        with:
-          payload: |
-            {
-              "text": "❌ TT-Transformers Test Failed",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*TT-Transformers Demo Test Failed*\n*Device:* ${{ inputs.device-type }}\n*Model:* ${{ inputs.model }}\n*Test:* ${{ matrix.test.name }}\n*Branch:* ${{ github.ref }}\n*Commit:* ${{ github.sha }}\n*Actor:* ${{ github.actor }}\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

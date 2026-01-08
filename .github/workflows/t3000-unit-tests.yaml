@@ -16,27 +16,8 @@ on:
           - p300
           - wh-qb
           - bh-qb
-          - wh-glx
-          - bh-blx
-      model:
-        description: 'Select model to test'
-        required: false
-        default: 'llama3.1-8b'
-        type: choice
-        options:
-          - llama3.1-8b
-          - llama3.1-70b
-          - llama3.2-1b
-          - llama3.2-3b
-          - llama3.2-11b-vision
-          - llama3.2-90b-vision
-          - mistral-7b
-          - qwen2.5-7b
-          - qwen2.5-coder-32b
-          - qwen2.5-72b
-          - qwen3-32b
-          - phi-3-mini-128k
-          - deepseek-r1-distill-llama-70b
+          - wh-6u
+          - bh-6u
       regenerate-ttnn-cache:
         description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
         required: false
@@ -48,10 +29,6 @@ on:
         required: false
         type: string
         default: 'all'
-      model:
-        required: false
-        type: string
-        default: 'llama3.1-8b'
       regenerate-ttnn-cache:
         required: false
         type: boolean
@@ -78,7 +55,6 @@ jobs:
       runner-label: 'N150'
       arch: 'wormhole_b0'
       mesh-device-env: 'N150'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -95,7 +71,6 @@ jobs:
       runner-label: 'N300'
       arch: 'wormhole_b0'
       mesh-device-env: 'N300'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -112,7 +87,6 @@ jobs:
       runner-label: 'P150'
       arch: 'blackhole'
       mesh-device-env: 'P150'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -129,7 +103,6 @@ jobs:
       runner-label: 'P300-viommu'
       arch: 'blackhole'
       mesh-device-env: 'P300'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -137,7 +110,7 @@ jobs:
 
   # WH QuietBox Tests (T3K - Wormhole 8 chips)
   wh-quietbox-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'wh-quietbox' }}
+    if: ${{ inputs.device == 'all' || inputs.device == 'wh-qb' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
@@ -146,7 +119,6 @@ jobs:
       runner-label: 'config-t3000'
       arch: 'wormhole_b0'
       mesh-device-env: 'T3K'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -163,7 +135,6 @@ jobs:
       runner-label: 'BH-QB-GE'
       arch: 'blackhole'
       mesh-device-env: 'P150x8'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -171,16 +142,15 @@ jobs:
 
   # WH Galaxy Tests (Wormhole Galaxy 32 chips)
   wh-galaxy-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'wh-glx' }}
+    if: ${{ inputs.device == 'all' || inputs.device == 'wh-6u' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
     with:
-      device-type: 'WH-GLX'
+      device-type: 'WH-6U'
       runner-label: 'topology-6u'
       arch: 'wormhole_b0'
       mesh-device-env: 'TG'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -189,16 +159,15 @@ jobs:
 
   # BH Galaxy Tests (Blackhole Galaxy 32 chips)
   bh-galaxy-tests:
-    if: ${{ inputs.device == 'all' || inputs.device == 'bh-blx' }}
+    if: ${{ inputs.device == 'all' || inputs.device == 'bh-6u' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-transformers-demo-tests-impl.yaml
     with:
-      device-type: 'BH-BLX'
+      device-type: 'BH-6U'
       runner-label: 'topology-6u'
       arch: 'blackhole'
       mesh-device-env: 'TG'
-      model: ${{ inputs.model || 'llama3.1-8b' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
