@@ -31,21 +31,49 @@ def get_accuracy_metrics(torch_output, tt_output):
 def run_test_moe(device, M, K, N, check_accuracy):
     logger.info(f"Running test_moe with M={M}, K={K}, N={N}, check_accuracy={check_accuracy}")
 
+    NUM_EXPERTS = 64  # 8x8 core grid
+
     if check_accuracy:
         torch_input = torch.randn((M, K), dtype=torch.float32)
         torch_w0 = torch.randn((K, N), dtype=torch.float32)
         torch_w1 = torch.randn((K, N), dtype=torch.float32)
         torch_w2 = torch.randn((N, K), dtype=torch.float32)
 
+    # Create HEIGHT_SHARDED memory config for input
+    # Each core (expert) gets a copy of the original (M, K) input
+    input_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K),  # Shard shape - each core gets (M, K)
+        core_grid=ttnn.CoreGrid(x=8, y=8),  # 64 cores
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
     # Prepare TT tensors
     if check_accuracy:
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        # Replicate input 64 times so each core gets a copy
+        torch_input_replicated = torch_input.repeat(NUM_EXPERTS, 1)  # Shape: (64*M, K)
+        tt_input = ttnn.from_torch(
+            torch_input_replicated,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=input_sharded_mem_config,
+        )
         tt_weight0 = ttnn.from_torch(torch_w0, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight1 = ttnn.from_torch(torch_w1, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight2 = ttnn.from_torch(torch_w2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_output = ttnn.empty((M, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     else:
-        tt_input = ttnn.empty((M, K), dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        # Replicate empty input 64 times for performance testing
+        torch_input_replicated = torch.empty((NUM_EXPERTS * M, K), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input_replicated,
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=input_sharded_mem_config,
+        )
         tt_weight0 = ttnn.empty((K, N), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight1 = ttnn.empty((K, N), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         tt_weight2 = ttnn.empty((N, K), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
@@ -90,9 +118,9 @@ def test_moe(device, M, K, N, check_accuracy):
         check_accuracy,
     )
 
-    # if check_accuracy:
-    #     assert accuracy_metrics["pcc"] > 0.999_500
-    #     assert accuracy_metrics["relative_rmse"] < 0.02
+    if check_accuracy:
+        assert accuracy_metrics["pcc"] > 0.999_500
+        assert accuracy_metrics["relative_rmse"] < 0.02
 
 
 # @pytest.mark.skip()

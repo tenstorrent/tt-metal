@@ -25,6 +25,21 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Get the cores for the program
     auto cores = tt::tt_metal::CoreRangeSet({tt::tt_metal::CoreRange({0, 0}, {7, 7})});
 
+    // Get input tensor info for sharded CB configuration
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_shard_spec = input_tensor.shard_spec().value();
+    const auto& shard_shape = input_shard_spec.shape;
+
+    // Calculate tiles per core for sharded input
+    // shard_shape is [height, width] in elements
+    uint32_t shard_height_tiles = shard_shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t shard_width_tiles = shard_shape[1] / tt::constants::TILE_WIDTH;
+    uint32_t input_tiles_per_core = shard_height_tiles * shard_width_tiles;
+
+    // Get input data format and tile size
+    tt::DataFormat input_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t input_tile_size = tt::tile_size(input_df);
+
     // Create CBs for the program
     // CBs used in the MOE operation
     /*
@@ -32,7 +47,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         |     Name      |   CB Index    |   Dtype    | Bytes/tile | Tiles/CB |  Total size (B) |
         ----------------------------------------------------------------------------------------
         | cb_r2c_w0     | CBIndex::c_0  | bfloat16   |    2048    |    2     |      4096       |
-        | cb_s2c_in     | CBIndex::c_1  | bfloat8_b  |    1024    |    2     |      2048       |
+        | cb_s2c_in     | CBIndex::c_1  | sharded    |    var     |    var   |      var        |
         | cb_c2c_mm0    | CBIndex::c_2  | bfloat16   |    2048    |    1     |      2048       |
         | cb_c2c_mm1    | CBIndex::c_3  | bfloat16   |    2048    |    1     |      2048       |
         | cb_c2w_elt    | CBIndex::c_4  | bfloat16   |    2048    |    1     |      2048       |
@@ -42,9 +57,9 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     */
 
     // Define the CB configuration as a map: name -> tuple<CBIndex, DataFormat, bytes_per_tile, tiles_per_cb>
+    // Note: cb_s2c_in is handled separately as it's a sharded CB
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, uint32_t, uint32_t>> cb_specs = {
         {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Float16_b, 2048, 2},
-        {"cb_s2c_in", tt::CBIndex::c_1, tt::DataFormat::Bfp8_b, 1024, 2},
         {"cb_c2c_mm0", tt::CBIndex::c_2, tt::DataFormat::Float16_b, 2048, 1},
         {"cb_c2c_mm1", tt::CBIndex::c_3, tt::DataFormat::Float16_b, 2048, 1},
         {"cb_c2w_elt", tt::CBIndex::c_4, tt::DataFormat::Float16_b, 2048, 1},
@@ -52,6 +67,16 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         {"cb_c2w_mm2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, 2048, 1}};
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles;
+
+    // Create sharded CB for input (cb_s2c_in at CBIndex::c_1)
+    // This CB points directly to the sharded input tensor's L1 buffer
+    auto cb_s2c_in_config =
+        tt::tt_metal::CircularBufferConfig(input_tiles_per_core * input_tile_size, {{tt::CBIndex::c_1, input_df}})
+            .set_page_size(tt::CBIndex::c_1, input_tile_size)
+            .set_globally_allocated_address(*input_tensor.buffer());
+    cb_handles["cb_s2c_in"] = tt::tt_metal::CreateCircularBuffer(program, cores, cb_s2c_in_config);
+
+    // Create other CBs
     for (const auto& [name, index, dtype, bytes_per_tile, tiles_per_cb] : cb_specs) {
         auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, dtype}})
                              .set_page_size(index, bytes_per_tile);
