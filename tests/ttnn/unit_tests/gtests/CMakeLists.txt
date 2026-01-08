@@ -207,3 +207,4 @@ target_sources(unit_tests_ttnn_emitc PRIVATE emitc/test_sanity.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_emitc)
 
 add_subdirectory(multiprocess)
+add_subdirectory(udm)
