@@ -245,6 +245,8 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
     the large kernel=(2, 14, 14) in L1 memory. This is a full-spatial convolution
     that reduces 2×14×14 input to 1×1×1 output with 1280 output channels.
     """
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_conv3d_qwen_shapes due to watcher being enabled, github issue #29024")
     C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
 
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
