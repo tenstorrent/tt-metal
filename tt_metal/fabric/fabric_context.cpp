@@ -182,11 +182,10 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
 
 size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
     // Use explicit template instantiation for compile-time type safety
+    // Only max-capacity tiers per header size (19, 35) to avoid switch bloat
     switch (route_buffer_size) {
-        case 8: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<8>);
-        case 16: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<16>);
-        case 24: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<24>);
-        case 32: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<32>);
+        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header max
+        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header max
         default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
     }
 }

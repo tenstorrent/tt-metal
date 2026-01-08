@@ -893,11 +893,11 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 } __attribute__((packed, aligned(16)));
 
-// Validate expected sizes for all discrete route buffer sizes
-static_assert(sizeof(HybridMeshPacketHeaderT<32>) == 96, "32B buffer must result in 96B header");
-static_assert(sizeof(HybridMeshPacketHeaderT<24>) == 96, "24B buffer must result in 96B header");
-static_assert(sizeof(HybridMeshPacketHeaderT<16>) == 80, "16B buffer must result in 80B header");
-static_assert(sizeof(HybridMeshPacketHeaderT<8>) == 80, "8B buffer must result in 80B header");
+// Validate expected sizes for max-capacity tiers only (one per header size)
+// Base size = 61B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
+//              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
+static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
 
 // Conditional type selection based on injected define
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
