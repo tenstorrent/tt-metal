@@ -715,6 +715,84 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 🔌 Setup Database Connection
+        timeout-minutes: 3
+        run: |
+          echo "::group::🔧 Database Connection Setup"
+          echo "Setting up PostgreSQL database connection for sweep parameter generation..."
+
+          # Check if cloudflared is available
+          if command -v cloudflared &> /dev/null; then
+            echo "✅ cloudflared found, starting tunnel..."
+            # Start cloudflared tunnel in background
+            nohup cloudflared access tcp \
+              --hostname tt-sweeps.aswincloud.com \
+              --url localhost:15432 \
+              > /tmp/cloudflared.log 2>&1 &
+            CLOUDFLARED_PID=$!
+            echo "Cloudflared tunnel started (PID: $CLOUDFLARED_PID)"
+
+            # Wait for tunnel to be ready (max 60 seconds)
+            echo "Waiting for database tunnel to be ready..."
+            for i in {1..30}; do
+              if nc -z localhost 15432 2>/dev/null; then
+                echo "✅ Database tunnel ready on localhost:15432"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "❌ Database tunnel failed to start after 60 seconds"
+                cat /tmp/cloudflared.log || true
+                exit 1
+              fi
+              sleep 2
+            done
+          else
+            echo "⚠️  cloudflared not found, assuming direct database access"
+            echo "Checking if database is directly accessible..."
+          fi
+
+          # Verify database connection
+          echo "Verifying database connection and schema..."
+          python3 -c "
+          import sys
+          import psycopg2
+          from psycopg2.extras import RealDictCursor
+
+          try:
+              # Connect to database
+              conn = psycopg2.connect(
+                  'postgresql://tt-sweeps:tt.sweeps@localhost:15432/tt-model-traces',
+                  cursor_factory=RealDictCursor,
+                  connect_timeout=10
+              )
+              cursor = conn.cursor()
+
+              # Verify schema exists
+              cursor.execute('SELECT COUNT(*) as count FROM operations')
+              op_count = cursor.fetchone()['count']
+
+              cursor.execute('SELECT COUNT(*) as count FROM configurations')
+              config_count = cursor.fetchone()['count']
+
+              cursor.close()
+              conn.close()
+
+              print(f'✅ Database connection verified successfully')
+              print(f'   - Operations: {op_count}')
+              print(f'   - Configurations: {config_count}')
+              print(f'   - Ready for sweep parameter generation')
+
+          except Exception as e:
+              print(f'❌ Database connection failed: {e}', file=sys.stderr)
+              print('', file=sys.stderr)
+              print('Database connection is required for sweep parameter generation.', file=sys.stderr)
+              print('Please ensure:', file=sys.stderr)
+              print('  1. Cloudflared tunnel is accessible', file=sys.stderr)
+              print('  2. Database is running at tt-sweeps.aswincloud.com', file=sys.stderr)
+              print('  3. Network connectivity is available', file=sys.stderr)
+              sys.exit(1)
+          "
+          echo "::endgroup::"
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&
