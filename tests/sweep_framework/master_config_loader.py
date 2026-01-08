@@ -75,12 +75,13 @@ BASE_DIR = get_base_dir()
 
 
 # Database connection configuration
-# Auto-detect: CI uses local PostgreSQL (5432), local dev uses cloudflared (15432)
+# Auto-detect: CI uses GitHub Actions service (postgres:5432), local dev uses cloudflared (localhost:15432)
 def _get_default_db_config():
     """Determine database connection based on environment"""
     if os.environ.get("GITHUB_ACTIONS") == "true":
-        # CI: Use local PostgreSQL with restored dump
-        return "postgresql://tt-sweeps:tt.sweeps@localhost:5432/tt-model-traces"
+        # CI: Use GitHub Actions PostgreSQL service
+        # Service containers are accessible via their service name as hostname
+        return "postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces"
     else:
         # Local dev: Use cloudflared tunnel
         return "postgresql://tt-sweeps:tt.sweeps@localhost:15432/tt-model-traces"

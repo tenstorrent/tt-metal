@@ -679,6 +679,18 @@ jobs:
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: tt-sweeps
+          POSTGRES_PASSWORD: tt.sweeps
+          POSTGRES_DB: tt-model-traces
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -731,34 +743,11 @@ jobs:
             echo "✅ psycopg2 already available"
           fi
 
-          # Start PostgreSQL in Docker container
-          echo "Starting PostgreSQL container..."
-          docker run -d --name sweep-db \
-            -e POSTGRES_USER=tt-sweeps \
-            -e POSTGRES_PASSWORD=tt.sweeps \
-            -e POSTGRES_DB=tt-model-traces \
-            -p 5432:5432 \
-            postgres:18
-
-          # Wait for PostgreSQL to be ready
-          echo "Waiting for PostgreSQL to be ready..."
-          for i in {1..30}; do
-            if docker exec sweep-db pg_isready -U tt-sweeps 2>/dev/null; then
-              echo "✅ PostgreSQL is ready"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "❌ PostgreSQL failed to start after 60 seconds"
-              docker logs sweep-db
-              exit 1
-            fi
-            sleep 2
-          done
-
-          # Restore database from compressed SQL dump
+          # PostgreSQL service is already running, just restore the dump
           echo "Restoring database from SQL dump (963KB)..."
-          docker exec -i sweep-db psql -U tt-sweeps -d tt-model-traces \
-            < model_tracer/ttnn_operations_db.sql 2>&1 | grep -v "^NOTICE:" || true
+          PGPASSWORD=tt.sweeps psql -h postgres -p 5432 -U tt-sweeps -d tt-model-traces \
+            -f model_tracer/ttnn_operations_db.sql \
+            -q 2>&1 | grep -v "^NOTICE:" || true
           echo "✅ Database restored"
 
           # Verify database
@@ -769,9 +758,9 @@ jobs:
           from psycopg2.extras import RealDictCursor
 
           try:
-              # Connect to local database
+              # Connect to database service (hostname 'postgres' in GitHub Actions services)
               conn = psycopg2.connect(
-                  'postgresql://tt-sweeps:tt.sweeps@localhost:5432/tt-model-traces',
+                  'postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces',
                   cursor_factory=RealDictCursor,
                   connect_timeout=10
               )
