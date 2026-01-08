@@ -32,7 +32,7 @@ on:
 jobs:
   build-wheel:
     name: 🐍 Build wheel (Python ${{ inputs.python-version }})
-    timeout-minutes: 100
+    timeout-minutes: 45
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
