@@ -108,6 +108,11 @@ jobs:
       #     sudo apt update
       #     sudo apt install -y ./packages/*.deb
 
+      - name: Install pip
+        run: |
+          apt-get update
+          apt-get install -y python3-pip
+
       - name: Install Python dependencies
         run: |
           python3 -m pip install pytest torch loguru transformers
