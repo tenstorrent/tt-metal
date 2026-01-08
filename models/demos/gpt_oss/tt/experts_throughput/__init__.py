@@ -46,7 +46,7 @@ from .config import (
     create_remap_topk_mask,
 )
 from .decode import decode_forward
-from .prefill import prefill_forward, prefill_forward_chunked
+from .prefill import prefill_forward_chunked
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
@@ -200,7 +200,7 @@ class ThroughputExperts:
         Returns:
             Expert output tensor [batch/seq, 1, 1, hidden_size]
         """
-        is_decode = True
+
         if is_decode:
             return self.forward_decode(
                 hidden_states,
