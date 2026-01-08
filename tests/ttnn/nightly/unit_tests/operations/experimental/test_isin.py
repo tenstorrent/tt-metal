@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal
 
 
 def select_torch_dtype(ttnn_dtype):
