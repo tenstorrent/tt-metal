@@ -45,6 +45,9 @@ class ModelOptimisations:
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
 
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
+
         # Default overrides applied to all layers
         self.default_overrides = {
             "weights_dtype": conv_w_dtype,
@@ -241,13 +244,22 @@ class ModelOptimisations:
 
     def setup_resnet_backbone(self):
         """Setup ResNet50 backbone configurations (stem + res2-5 stages)."""
-        self._setup_stem()
-        self._setup_res2_stage()
-        self._setup_res3_stage()
-        self._setup_res4_stage()
-        self._setup_res5_stage()
-        self._setup_resnet_activation_fusion()
-        self._setup_resnet_conv1_deallocation()
+        if self.is_20_core:
+            self._setup_stem()
+            self._setup_res2_stage()
+            self._setup_res3_stage()
+            self._setup_res4_stage()
+            self._setup_res5_stage()
+            self._setup_resnet_activation_fusion()
+            self._setup_resnet_conv1_deallocation()
+        else:
+            self._setup_stem_110_cores()
+            self._setup_res2_stage_110_cores()
+            self._setup_res3_stage_110_cores()
+            self._setup_res4_stage_110_cores()
+            self._setup_res5_stage_110_cores()
+            self._setup_resnet_activation_fusion()
+            self._setup_resnet_conv1_deallocation_110_cores()
 
     def _setup_stem(self):
         """
@@ -271,6 +283,29 @@ class ModelOptimisations:
             output_layout=ttnn.TILE_LAYOUT,
         )
 
+    def _setup_stem_110_cores(self):
+        """
+        Stem: 3 convolutions that downsample 512x1024 -> 128x256
+        - conv1: 3->64, stride=2, needs height sharding with large act_block_h
+        - conv2, conv3: Use width slicing
+        """
+        self.register_layer_override(
+            "stem.conv1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1024),
+        )
+        self._register_multiple_layers(
+            ["stem.conv2", "stem.conv3"],
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=512),
+        )
+        self.register_layer_override(
+            "stem.maxpool",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+
     def _setup_res2_stage(self):
         """
         Res2 (128x256): 3 bottleneck blocks, 256 output channels
@@ -284,6 +319,12 @@ class ModelOptimisations:
             "conv2",
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
         )
+
+    def _setup_res2_stage_110_cores(self):
+        """
+        Res2 (128x256): 3 bottleneck blocks, 256 output channels
+        Placeholder for 110-core specific optimizations.
+        """
 
     def _setup_res3_stage(self):
         """
@@ -319,6 +360,18 @@ class ModelOptimisations:
             sharding_strategy=HeightShardedStrategyConfiguration(),
         )
 
+    def _setup_res3_stage_110_cores(self):
+        """
+        Res3 (128x256->64x128): 4 bottleneck blocks, 512 output channels
+        - First block has stride=2 downsample
+        """
+        # Conv1: First block takes res2 output as input, must not deallocate it
+        self.register_layer_override(
+            "res3.0.shortcut",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(),
+        )
+
     def _setup_res4_stage(self):
         """
         Res4 (64x128->32x64): 6 bottleneck blocks, 1024 output channels
@@ -346,6 +399,34 @@ class ModelOptimisations:
             enable_weights_double_buffer=True,
         )
 
+    def _setup_res4_stage_110_cores(self):
+        """
+        Res4 (64x128->32x64): 6 bottleneck blocks, 1024 output channels
+        - First block has stride=2 downsample
+        - conv2: 3x3 convs with height sharding
+        - shortcut: override_output_sharding_config forcing to use the same core grid as convs
+        """
+        target_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))})  # 8x10 = 80 cores
+        # # Shortcut: Downsample layer in first block
+        self.register_layer_override(
+            "res4.0.shortcut",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=BlockShardedStrategyConfiguration(
+                act_block_h_override=224,
+                override_core_grid=target_grid,
+                override_output_sharding_config=True,
+            ),
+        )
+
+        self.register_layer_override(
+            "res4.0.conv1",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=BlockShardedStrategyConfiguration(
+                override_core_grid=target_grid,
+                act_block_h_override=224,
+            ),
+        )
+
     def _setup_res5_stage(self):
         """
         Res5 (32x64): 3 bottleneck blocks with dilation=2, 2048 output channels
@@ -357,6 +438,26 @@ class ModelOptimisations:
                 sharding_strategy=BlockShardedStrategyConfiguration(),
                 slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
                 enable_weights_double_buffer=True,
+            )
+
+    def _setup_res5_stage_110_cores(self):
+        """
+        Res5 (32x64): 3 bottleneck blocks with dilation=2, 2048 output channels
+        """
+        # # Shortcut: Downsample layer in first block
+        self.register_layer_override(
+            "res5.0.shortcut",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=224),
+        )
+
+        for i in range(3):
+            self.register_layer_override(
+                f"res5.{i}.conv2",
+                slice_strategy=L1FullSliceStrategyConfiguration(),
+                sharding_strategy=BlockShardedStrategyConfiguration(
+                    act_block_h_override=224,
+                ),
             )
 
     def _setup_resnet_activation_fusion(self):
@@ -404,6 +505,28 @@ class ModelOptimisations:
                 # Also, res4 and res5 blocks always need this (even block 0)
                 # Exception: res3.3 needs deallocate_activation=True to avoid L1 memory issues
                 if (i > 0 or stage in ["res4", "res5"]) and not (stage == "res3" and i == 3):
+                    self.register_layer_override(
+                        f"{stage}.{i}.conv1",
+                        deallocate_activation=False,
+                    )
+
+    def _setup_resnet_conv1_deallocation_110_cores(self):
+        """
+        Set deallocate_activation=False for conv1 in blocks that need to preserve
+        the input tensor for residual connections, allowing us to avoid ttnn.clone().
+
+        Blocks that need this:
+        - All blocks without shortcuts (i > 0 in each stage)
+        - All res4 blocks
+        - All res5 blocks
+        """
+        stage_configs = [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]
+
+        for stage, num_blocks in stage_configs:
+            for i in range(num_blocks):
+                # Blocks without shortcuts (i > 0) need conv1 to not deallocate input
+                # Also, res4 and res5 blocks always need this (even block 0)
+                if i > 0 or stage in ["res4", "res5"]:
                     self.register_layer_override(
                         f"{stage}.{i}.conv1",
                         deallocate_activation=False,
