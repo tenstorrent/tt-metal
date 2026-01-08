@@ -30,6 +30,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpu_eltwise_chain)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_add)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_smoothstep)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/learn_ccl)
 
 add_custom_target(
     programming_examples
