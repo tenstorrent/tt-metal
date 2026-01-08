@@ -33,7 +33,7 @@ struct ExecuteChunkedScaledDotProductAttention {
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
         const ttnn::Tensor& page_table_tensor,
-        int64_t chunk_start_idx,
+        int64_t chunk_start_idx,  // Must be a multiple of program_config.q_chunk_size
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
