@@ -15,10 +15,6 @@ on:
         required: true
         type: string
         description: "Architecture: wormhole_b0 or blackhole"
-      mesh-device-env:
-        required: true
-        type: string
-        description: "MESH_DEVICE environment variable value"
       docker-image:
         required: true
         type: string
@@ -54,6 +50,9 @@ jobs:
               ;;
             n300)
               models='["llama3.2-11b-vision", "qwen2.5-7b", "phi-3-mini-128k"]'
+              ;;
+            p100)
+              models='["llama3.1-8b"]'
               ;;
             p150)
               models='["llama3.1-8b"]'
@@ -162,7 +161,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ inputs.arch }}
-        MESH_DEVICE: ${{ inputs.mesh-device-env }}
         HF_MODEL: ${{ matrix.test.hf_model }}
         TT_CACHE_PATH: ${{ matrix.test.cache_path }}
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
@@ -200,7 +198,6 @@ jobs:
           echo "Model: ${{ matrix.test.model }}"
           echo "HF_MODEL: ${{ matrix.test.hf_model }}"
           echo "TT_CACHE_PATH: ${{ matrix.test.cache_path }}"
-          echo "MESH_DEVICE: ${{ inputs.mesh-device-env }}"
           echo "Test Key: ${{ matrix.test.test_key }}"
           echo "Extra Args: ${{ matrix.test.extra_args }}"
           echo "=========================================="
@@ -208,7 +205,16 @@ jobs:
           pytest models/tt_transformers/demo/simple_text_demo.py \
             -k "${{ matrix.test.test_key }}" \
             ${{ matrix.test.extra_args }} \
-            --timeout 1000
+            --timeout 1000 \
+            --junitxml=generated/test_results/results-${{ inputs.device-type }}-${{ matrix.test.model }}-${{ matrix.test.name }}.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ inputs.device-type }}-${{ matrix.test.model }}-${{ matrix.test.name }}-${{ github.run_id }}
+          path: generated/test_results/*.xml
+          if-no-files-found: ignore
 
       - name: Save environment data
         id: save-environment-data
