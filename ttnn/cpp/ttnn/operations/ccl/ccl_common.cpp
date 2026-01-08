@@ -42,6 +42,12 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     if (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Mesh) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
     }
+
+    log_info(
+        tt::LogOp,
+        "Determining boundary mode for topology {} with cluster_axis {}",
+        static_cast<int>(topology),
+        cluster_axis.has_value() ? std::to_string(cluster_axis.value()) : "nullopt");
     // ring is possible if device coordinates along our cluster axis are the same as the last coordinate in the mesh
     // shape first_index = 0 last index = mesh_shape[cluster_axis] - 1
     if (cluster_axis.has_value()) {
@@ -163,6 +169,8 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
     const auto& device_coords = tensor.device_storage().coords;
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     auto boundary_mode = get_boundary_mode(tensor, topology, cluster_axis);
+    log_info(tt::LogOp, "boundary mode : {}", enchantum::to_string(boundary_mode));
+
     if (cluster_axis.has_value()) {
         TT_FATAL(
             device_coords.at(0)[cluster_axis.value()] == 0,
@@ -1867,10 +1875,12 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
         set_mcast_args(backward_args, backward_device_coord, num_targets_backward, mesh_device);
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
         if (forward_device_coord) {
+            log_info(tt::LogTest, "Setting forward line mcast args");
             forward_args[0] = 1;                    // start_distance_in_hops
             forward_args[1] = num_targets_forward;  // range_hops
         }
         if (backward_device_coord) {
+            log_info(tt::LogTest, "Setting backward line mcast args");
             backward_args[0] = 1;                     // start_distance_in_hops
             backward_args[1] = num_targets_backward;  // range_hops
         }

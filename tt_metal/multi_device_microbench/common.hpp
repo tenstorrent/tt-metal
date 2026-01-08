@@ -48,7 +48,7 @@ inline distributed::ShardedBufferConfig create_sharded_buffer_config(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const Shape2D& global_shape,
     uint32_t element_size_bytes,
-    int cluster_axis = 0) {
+    int cluster_axis = 1) {
     // Calculate shard shape based on cluster_axis
     Shape2D shard_shape(0, 0);
     if (cluster_axis == 0) {
@@ -129,9 +129,9 @@ inline double run_recv_send_workload_once(
     return std::chrono::duration<double>(t1 - t0).count();
 }
 
-inline std::vector<uint32_t> make_src_data(size_t num_words) {
+inline std::vector<uint32_t> make_src_data(size_t num_words, uint32_t seed = 0) {
     std::vector<uint32_t> tx(num_words);
-    for (size_t i = 0; i < num_words; ++i) {
+    for (size_t i = seed; i < num_words + seed; ++i) {
         tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
     }
     return tx;

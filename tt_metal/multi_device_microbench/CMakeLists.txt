@@ -9,6 +9,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/multi_device_microbench")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/fabric_api_tests)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ccl_examples)
 
 add_custom_target(
     multi_device_microbench
@@ -30,6 +31,26 @@ install(
 install(
     DIRECTORY
         fabric_api_tests
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/microbenchmarks"
+    COMPONENT metalium-microbenchmarks
+    FILES_MATCHING
+    REGEX
+    "/kernels/"
+)
+
+install(
+    DIRECTORY
+        ccl_examples
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/microbenchmarks"
+    COMPONENT metalium-microbenchmarks
+    REGEX
+    "/kernels/"
+        EXCLUDE
+)
+
+install(
+    DIRECTORY
+        ccl_examples
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/microbenchmarks"
     COMPONENT metalium-microbenchmarks
     FILES_MATCHING

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.hpp"
+#include "multi_device_microbench/common.hpp"
 
 void execute_default_intra_mesh_routing_bench(
     const tt::tt_metal::FabricTestDescriptor& fabric_desc,
