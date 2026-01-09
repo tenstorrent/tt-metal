@@ -265,9 +265,9 @@ jobs:
           path: /work/generated/test_reports/
           prefix: "ttnn_test_reports_"
 
-  tt-train-test-run-1:
+  tt-train-ccache-test:
     needs: build-artifact
-    name: tt-train Run 1 (First ccache population)
+    name: tt-train CCache Test (3 runs on same machine)
     runs-on: tt-ubuntu-2204-N150-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
@@ -450,79 +450,12 @@ jobs:
           du -sh /github/home/.ccache 2>/dev/null || echo "/github/home/.ccache not found"
           ls -la /github/home/.ccache 2>/dev/null | head -20 || echo "Cannot list /github/home/.ccache"
 
-      - name: Upload Run 1 artifacts
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: /work/build/tt-train/generated/test_reports/
-          prefix: "run1_test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07ASPTGJTS
-
-  tt-train-test-run-2:
-    needs: [tt-train-test-run-1, build-artifact]
-    name: tt-train Run 2 (Test ccache hits)
-    runs-on: tt-ubuntu-2204-N150-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-        CCACHE_REMOTE_ONLY: "true"
-        CCACHE_TEMPDIR: /tmp/ccache
-        CCACHE_DEBUG: "true"
-        CCACHE_LOGFILE: /tmp/ccache_run2.log
-        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
-        TT_METAL_LOGGER_LEVEL: Debug
-        TT_METAL_LOGGER_TYPES: BuildKernels
-        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    steps:
-      - name: Check Redis credentials
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+      - name: Clear kernel caches for Run 2 (but keep ccache)
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-
-      - name: Create ccache tmpdir
-        run: mkdir -p /tmp/ccache
-
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-
-      - name: ⬇️ Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          enable-watcher: false
-
-      - name: Initial ccache stats (Run 2)
-        run: |
+          echo ""
+          echo "========================================="
+          echo "=== Preparing tt-train RUN 2: Test ccache hits ==="
+          echo "========================================="
           echo "=== RUN 2: ccache configuration ==="
           ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
           echo ""
@@ -558,18 +491,16 @@ jobs:
             fi
           fi
           echo ""
-          echo "=== Zeroing ccache stats for Run 2 ==="
-          ccache -z
-          echo "=== Initial stats ==="
-          ccache -s
-
-      - name: Clear kernel caches (but keep ccache)
-        run: |
-          echo "=== Clearing kernel binaries to force recompilation (ccache should provide hits) ==="
+          echo "Clearing kernel binaries to force recompilation (ccache should provide hits)"
           rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo "Kernel binaries cleared, ccache intact"
+          echo ""
+          echo "=== Zeroing ccache stats for Run 2 ==="
+          ccache -z
+          ccache -s
+
 
       - name: Run tt-train tests (Second run - expect ccache hits)
         timeout-minutes: 30
@@ -577,49 +508,14 @@ jobs:
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           echo "=== Running tt-train tests (RUN 2 - should hit ccache) ==="
-          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml
+          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml 2>&1 | tee /tmp/tt_train_second_run.log
 
-      - name: Analyze ccache debug logs (Run 2)
+      - name: Analyze ccache after Run 2
         run: |
-          echo "=== RUN 2: Analyzing ccache debug log ==="
-          if [ -f /tmp/ccache_run2.log ]; then
-            echo "Log file size: $(wc -l /tmp/ccache_run2.log | awk '{print $1}') lines"
-            echo ""
-            echo "=== Sample cache MISS operations (first 30 lines) ==="
-            head -30 /tmp/ccache_run2.log
-            echo ""
-            echo "=== Looking for cache key lookups ==="
-            grep -E "(Hash|Result key|Looking for|GET)" /tmp/ccache_run2.log | head -30 || echo "No lookup patterns found"
-            echo ""
-            echo "=== Checking why cache missed ==="
-            grep -iE "(miss|not found|no entry)" /tmp/ccache_run2.log | head -20 || echo "No miss reasons found"
-            echo ""
-            echo "=== Checking for remote storage operations ==="
-            grep -iE "(redis|remote)" /tmp/ccache_run2.log | head -20 || echo "No remote storage operations logged"
-            echo ""
-            echo "=== KEY DIFFERENCE ANALYSIS ==="
-            echo "This will help identify why Run 1 keys don't match Run 2 lookups"
-            echo "Comparing hash patterns between runs..."
-            if [ -f /tmp/ccache_run1.log ]; then
-              echo "Run 1 sample hashes:"
-              grep -oE "[0-9a-f]{32,64}" /tmp/ccache_run1.log 2>/dev/null | head -5 || echo "No hashes found in Run 1"
-              echo "Run 2 sample hashes:"
-              grep -oE "[0-9a-f]{32,64}" /tmp/ccache_run2.log 2>/dev/null | head -5 || echo "No hashes found in Run 2"
-            fi
-          else
-            echo "⚠️  WARNING: ccache debug log not found at /tmp/ccache_run2.log"
-          fi
-
-      - name: Analyze ccache and kernel cache locations (Run 2)
-        run: |
-          echo "=== RUN 2: ccache statistics after test ==="
+          echo "=== tt-train RUN 2: ccache statistics after test ==="
           ccache -s
           echo ""
-          echo "=== Redis Cache Hit Analysis ==="
           STATS=$(ccache -s)
-          echo "Looking for remote hits from Redis..."
-          echo "$STATS" | grep -E "(hit|miss|remote)" || echo "$STATS"
-          echo ""
           CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
           CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
           TOTAL=$((CACHE_HITS + CACHE_MISS))
@@ -630,97 +526,88 @@ jobs:
             echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS} hits / ${TOTAL} total)"
 
             if [ "$CACHE_HITS" -eq 0 ]; then
-              echo "🔴 ZERO CACHE HITS - Investigating why..."
-              echo ""
-              echo "=== Debugging ccache configuration ==="
-              ccache --show-config | grep -E "(hash|sloppiness|compiler_check|debug|remote)" || ccache --show-config | head -40
-              echo ""
-              echo "=== Environment variables ==="
-              env | grep -E "(CCACHE|TT_METAL)" | sort
-              echo ""
-              echo "=== Checking Redis keys again ==="
-              REDIS_HOST="${{ vars.REDIS_HOST }}"
-              REDIS_PORT="${{ vars.REDIS_PORT }}"
-              REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
-
-              if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
-                if ! command -v redis-cli &> /dev/null; then
-                  apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
-                fi
-
-                TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
-                echo "Total keys in Redis after Run 2: ${TOTAL_KEYS}"
-
-                if [ "$TOTAL_KEYS" -gt 0 ]; then
-                  echo "Redis keys exist but ccache didn't hit them - possible reasons:"
-                  echo "  1. Build keys changed between runs (different compiler flags, defines, etc.)"
-                  echo "  2. ccache hash function includes something that varies (timestamps, paths, etc.)"
-                  echo "  3. ccache is not correctly configured to use Redis"
-                  echo ""
-                  echo "Sample keys from Redis:"
-                  redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" --scan --count 20 2>/dev/null | head -20
-                else
-                  echo "Redis is still empty - ccache is NOT writing to Redis at all!"
-                fi
-              fi
+              echo "🔴 ZERO CACHE HITS - ccache not working for tt-train tests!"
             elif [ "$HIT_RATE" -gt 70 ]; then
-              echo "✅ Good cache hit rate from Redis!"
+              echo "✅ Good cache hit rate!"
             else
-              echo "⚠️  Lower than expected cache hit rate from Redis"
+              echo "⚠️  Lower than expected cache hit rate"
             fi
           else
             echo "ℹ️  No cache activity detected"
           fi
+
+      - name: Clear kernel caches for Run 3
+        run: |
           echo ""
-          echo "=== Kernel cache locations ==="
-          echo "Checking ~/.cache/tt-metal-cache/:"
-          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
+          echo "========================================="
+          echo "=== Preparing tt-train RUN 3: Verify consistency ==="
+          echo "========================================="
+          echo "Clearing kernel binaries for third test"
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
           echo ""
-          echo "Checking /tmp/tt-metal-cache/:"
-          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in /tmp/tt-metal-cache/"
+          echo "=== Zeroing ccache stats for Run 3 ==="
+          ccache -z
+          ccache -s
+
+      - name: Run tt-train tests (Third run)
+        timeout-minutes: 30
+        run: |
+          cd /work/build/tt-train
+          echo "=== Running tt-train tests (RUN 3) ==="
+          ctest -E NIGHTLY --no-tests=error --output-on-failure --output-junit generated/test_reports/ctest_report.xml 2>&1 | tee /tmp/tt_train_third_run.log
+
+      - name: Analyze final ccache stats
+        run: |
+          echo "=== tt-train RUN 3: Final ccache statistics ==="
+          ccache -s
+
+      - name: Publish ccache summary
+        run: |
+          echo '## CCache tt-train Tests Results' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks if ccache works consistently for tt-train tests across rebuilds from the same commit using Redis as the remote storage backend.' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          STATS=$(ccache -s)
+          echo '### Final CCache Stats (tt-train Run 3)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$STATS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
+          CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
+          TOTAL=$((CACHE_HITS + CACHE_MISS))
+
           if [ "$TOTAL" -gt 0 ]; then
             HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
-            echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS}/${TOTAL})"
-            if [ "$HIT_RATE" -gt 70 ]; then
-              echo "✅ Good cache hit rate from Redis!"
+            echo "- Cache hits: ${CACHE_HITS}" >> $GITHUB_STEP_SUMMARY
+            echo "- Cache misses: ${CACHE_MISS}" >> $GITHUB_STEP_SUMMARY
+            echo "- Hit rate: ${HIT_RATE}%" >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+
+            if [ "$HIT_RATE" -lt 30 ]; then
+              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for tt-train tests with Redis.' >> $GITHUB_STEP_SUMMARY
+            elif [ "$HIT_RATE" -lt 70 ]; then
+              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring with Redis backend.' >> $GITHUB_STEP_SUMMARY
             else
-              echo "⚠️  Lower than expected cache hit rate from Redis"
+              echo '🟢 **GOOD**: High cache hit rate indicates ccache with Redis is working well for tt-train tests.' >> $GITHUB_STEP_SUMMARY
             fi
           else
-            echo "⚠️  No cache activity detected"
+            echo '⚪ **NO DATA**: No cache activity detected. Redis remote storage may not be configured properly.' >> $GITHUB_STEP_SUMMARY
           fi
-          echo ""
-          echo "=== Kernel cache locations ==="
-          echo "Checking ~/.cache/tt-metal-cache/:"
-          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in ~/.cache/tt-metal-cache/"
-          echo ""
-          echo "Checking /tmp/tt-metal-cache/:"
-          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -20 || echo "No kernel files in /tmp/tt-metal-cache/"
-          echo ""
-          echo "=== Disk usage of kernel caches ==="
-          du -sh ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ not found"
-          du -sh /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ not found"
-          echo ""
-          echo "=== Local ccache directory (should be minimal with REMOTE_ONLY) ==="
-          du -sh /github/home/.ccache 2>/dev/null || echo "/github/home/.ccache not found"
-          ls -la /github/home/.ccache 2>/dev/null | head -20 || echo "Cannot list /github/home/.ccache"
 
-      - name: Upload Run 2 artifacts
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: /work/build/tt-train/generated/test_reports/
-          prefix: "run2_test_reports_"
-
-      - name: Upload ccache debug logs
+      - name: Upload tt-train debug logs
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ccache-debug-logs-${{ github.run_id }}
+          name: tt-train-ccache-debug-logs-${{ github.run_id }}
           path: |
-            /tmp/ccache_run2.log
-          retention-days: 7
+            /tmp/tt_train_first_run.log
+            /tmp/tt_train_second_run.log
+            /tmp/tt_train_third_run.log
+          retention-days: 14
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
@@ -728,458 +615,9 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U07ASPTGJTS
 
-  tt-train-test-run-3:
-    needs: [tt-train-test-run-2, build-artifact]
-    name: tt-train Run 3 (Verify ccache consistency)
-    runs-on: tt-ubuntu-2204-N150-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-        CCACHE_REMOTE_ONLY: "true"
-        CCACHE_TEMPDIR: /tmp/ccache
-        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
-        # Force JIT compilation and enable debug logging
-        TT_METAL_LOGGER_LEVEL: Debug
-        TT_METAL_LOGGER_TYPES: BuildKernels
-        TT_METAL_SKIP_KERNELS_CACHE: 1
-        TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS: 1
-        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Check Redis credentials
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-
-      - name: Create ccache tmpdir
-        run: |
-          mkdir -p /tmp/ccache
-
-      - name: Prepare ccache summary
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          echo "=== RUN 3: Initial ccache configuration ==="
-          ccache --show-config | head -30
-          echo ""
-          echo "=== Redis Remote Storage Configuration ==="
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
-          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
-          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
-          echo ""
-          echo "=== Redis Connection Verification ==="
-          ccache --show-config | grep -E "(remote_storage|remote_only|redis)" || true
-          echo "Redis URL pattern check:"
-          echo "${CCACHE_REMOTE_STORAGE}" | grep -o "redis://" && echo "✅ Redis URL detected" || echo "⚠️  Redis URL not found"
-          echo ""
-          echo "=== Git commit info ==="
-          echo "Git commit: $(git rev-parse HEAD)"
-          echo "Git commit short: $(git rev-parse --short=10 HEAD)"
-          echo ""
-          echo "=== Zeroing ccache stats for Run 3 ==="
-          ccache -z
-          echo "=== Current stats ==="
-          ccache -s
-
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          enable-watcher: false
-
-      - name: Force kernel compilation to trigger JIT and test debug logging
-        timeout-minutes: 15
-        run: |
-          echo "=== Testing kernel compilation to trigger JIT and verify debug logging ==="
-          cd /work
-
-          # Verify Redis ccache configuration is active
-          echo "=== Verifying ccache Redis configuration ==="
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
-          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
-          ccache --show-config | grep -E "(remote_storage|remote_only|cache_dir)" || true
-
-          # Set debug environment
-          export TT_METAL_LOGGER_LEVEL=Debug
-          export TT_METAL_LOGGER_TYPES=BuildKernels
-          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
-
-          # Set debug environment
-          export TT_METAL_LOGGER_LEVEL=Debug
-          export TT_METAL_LOGGER_TYPES=BuildKernels
-          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
-
-          # Create a test that forces kernel compilation
-          cat > /tmp/test_kernel_compile.py << 'EOF'
-          import os
-          import sys
-          import torch
-          import ttnn
-
-          print("Testing kernel compilation with debug logging...")
-
-          try:
-              # Initialize device
-              device_id = 0
-              device = ttnn.open_device(device_id=device_id)
-
-              # Create tensors that will trigger kernel compilation
-              shape = [1, 1, 32, 32]
-              torch_tensor = torch.randn(shape)
-
-              # Convert to ttnn tensor (should trigger some kernel compilation)
-              ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn.bfloat16)
-
-              # Perform operations that definitely require kernel compilation
-              result = ttnn.relu(ttnn_tensor)
-              result = ttnn.add(result, ttnn_tensor)
-              result = ttnn.mul(result, 2.0)
-
-              # Convert back to check result
-              output = ttnn.to_torch(result)
-
-              ttnn.close_device(device)
-              print(f"SUCCESS: Kernel compilation test completed. Output shape: {output.shape}")
-
-          except Exception as e:
-              print(f"Kernel compilation test failed: {e}")
-              import traceback
-              traceback.print_exc()
-              print("This may indicate missing debug logging or other issues...")
-          EOF
-
-          # Run the test and capture all output
-          python /tmp/test_kernel_compile.py 2>&1 | tee /tmp/kernel_test.log || true
-
-          echo "=== Kernel Test Analysis ==="
-          echo "Checking for JIT/compilation activity:"
-          grep -iE "(compiling|compile|jit|build.*kernel|CCACHE_DEBUG)" /tmp/kernel_test.log || echo "No JIT compilation detected in kernel test"
-
-          echo "Checking for ttnn operations:"
-          grep -iE "(ttnn|tensor|relu|add|mul)" /tmp/kernel_test.log || echo "No ttnn operations logged"
-
-          # Store initial stats
-          echo "=== Initial ccache stats ==="
-          ccache -s
-
-          echo ""
-          echo "=== Verifying Redis remote storage is active ==="
-          ccache --show-config | grep -A 5 "remote_storage"
-          echo "CCACHE_REMOTE_STORAGE env: ${CCACHE_REMOTE_STORAGE:-not set}"
-          echo "CCACHE_REMOTE_ONLY env: ${CCACHE_REMOTE_ONLY:-not set}"
-
-          echo ""
-          echo "=== First TT-Train test run (should compile and cache kernels to Redis) ==="
-          # Store initial stats
-          echo "=== Initial ccache stats ==="
-          ccache -s
-
-          echo ""
-          echo "=== First TT-Train test run (should compile and cache kernels) ==="
-          cd /work/build/tt-train
-          mkdir -p generated/test_reports
-          ldd tests/ttml_tests || true
-
-          # Clear any existing JIT cache to start fresh and force recompilation
-          echo "Clearing all caches to force JIT kernel compilation..."
-          rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
-          rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
-          rm -rf /work/.cpmcache/ || true
-          # Also clear any kernels in work directory
-          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
-          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
-
-          # Set environment to force debug output
-          export TT_METAL_LOGGER_LEVEL=Debug
-          export TT_METAL_LOGGER_TYPES=BuildKernels
-          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
-
-          # Run first test and capture debug output
-          echo "Running first test to populate JIT kernel cache..."
-          echo "Test command: ${{ matrix.test-group.cmd }}"
-          echo "Test name: ${{ matrix.test-group.name }}"
-          echo "Environment check:"
-          echo "TT_METAL_CCACHE_KERNEL_SUPPORT=$TT_METAL_CCACHE_KERNEL_SUPPORT"
-          echo "TT_METAL_LOGGER_LEVEL=$TT_METAL_LOGGER_LEVEL"
-          echo "TT_METAL_LOGGER_TYPES=$TT_METAL_LOGGER_TYPES"
-
-          echo "Checking if debug logging is compiled in..."
-          # Look for our debug strings
-          strings /work/build/lib/libtt_metal.so | grep -E "(CCACHE_DEBUG|Full compile command|build_key)" || echo "Debug strings not found in library"
-
-          echo "Checking for git hash in library..."
-          strings /work/build/lib/libtt_metal.so | grep -E "[0-9a-f]{10}" | head -3 || echo "No git hashes found"
-
-          echo "Checking if JIT build is enabled..."
-          # Check if the JIT build symbols are present
-          nm -D /work/build/lib/libtt_metal.so | grep -i jit || objdump -t /work/build/lib/libtt_metal.so | grep -i jit || echo "No JIT symbols found"
-          echo ""
-          echo "Checking cache directory structure before test..."
-          echo "HOME/.cache/tt-metal-cache/:"
-          ls -la ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ does not exist"
-          echo "/tmp/tt-metal-cache/:"
-          ls -la /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ does not exist"
-
-          echo "Running manual TTNN test to force JIT compilation..."
-          # Run a simple TTNN operation that should trigger JIT
-          python3 -c "
-          import ttnn
-          device = ttnn.open_device(0)
-          x = ttnn.ones((32, 32), device=device, dtype=ttnn.bfloat16)
-          y = ttnn.relu(x)
-          ttnn.close_device(device)
-          print('Manual JIT test completed')
-          " 2>&1 | tee -a /tmp/manual_jit.log || echo "Manual JIT test failed"
-
-          echo "Manual JIT test output analysis:"
-          grep -iE "(CCACHE_DEBUG|compiling|compile|jit|build.*kernel)" /tmp/manual_jit.log || echo "No JIT activity in manual test"
-
-          echo "Running main test..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/first_run.log
-      - name: Second test run - test kernel cache hits from Redis
-        timeout-minutes: 25
-        run: |
-          echo "=== Second TT-Train test run (should hit JIT kernel cache from Redis) ==="
-
-          echo "=== Verifying Redis connection before second run ==="
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
-          ccache --show-config | grep -E "(remote_storage|remote_only)" || true
-
-          cd /work/build/tt-train
-          echo "=== Cache directory structure after first run ==="
-          echo "HOME/.cache/tt-metal-cache/:"
-          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files in ~/.cache/tt-metal-cache/"
-          echo "/tmp/tt-metal-cache/:"
-          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files in /tmp/tt-metal-cache/"
-
-      - name: Second test run - test kernel cache hits
-        timeout-minutes: 25
-        run: |
-          echo "=== Second TT-Train test run (should hit JIT kernel cache) ==="
-
-          cd /work/build/tt-train
-
-          # Force another compilation by clearing just the kernel binaries but keeping ccache
-          echo "Clearing kernel binaries to force recompilation (but keeping ccache)..."
-          # Clear from the actual JIT cache locations
-          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
-          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
-          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
-
-          # Set environment again
-          export TT_METAL_LOGGER_LEVEL=Debug
-          export TT_METAL_LOGGER_TYPES=BuildKernels
-          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
-
-          # Run the same tests again - JIT kernels should hit ccache now
-          echo "Running second test - should hit cached kernels..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log
-      - name: Third test run with Redis cache analysis
-        timeout-minutes: 25
-        run: |
-          echo "=== Third TT-Train test run for Redis cache analysis ==="
-
-          echo "=== Verifying Redis is still configured ==="
-          ccache --show-config | grep -E "(remote_storage|remote_only)" || true
-
-          cd /work/build/tt-train
-          echo "=== Cache directory structure after second run ==="
-          echo "Kernel files generated:"
-          find ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files found"
-
-      - name: Third test run with cache analysis
-        timeout-minutes: 25
-        run: |
-          echo "=== Third TT-Train test run for additional cache analysis ==="
-
-          cd /work/build/tt-train
-
-          # Force compilation one more time
-          echo "Clearing kernel binaries again for third test..."
-          # Clear from the actual JIT cache locations
-          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
-          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
-          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
-
-          # Set environment again
-          export TT_METAL_LOGGER_LEVEL=Debug
-          export TT_METAL_LOGGER_TYPES=BuildKernels
-          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
-
-          # Run tests a third time to gather more cache data
-          echo "Running third test for cache pattern analysis..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/third_run.log
-
-          echo ""
-          echo "=== Final ccache stats ==="
-          ccache -s
-
-      - name: Analyze ccache and JIT debug output
-        run: |
-          echo "=== ccache and JIT Kernel Debug Analysis ==="
-
-          echo "=== JIT Build Debug Info from First Run ==="
-          if [ -f /tmp/first_run.log ]; then
-            echo "Log file size: $(wc -l /tmp/first_run.log)"
-            echo "CCACHE_DEBUG lines from first run:"
-            grep "CCACHE_DEBUG:" /tmp/first_run.log | head -30 || echo "No CCACHE_DEBUG output found in first run"
-            echo ""
-            echo "JIT compilation evidence from first run:"
-            grep -iE "(compiling|compile_one|g\+\+ compile cmd|jit|build.*kernel)" /tmp/first_run.log | head -20 || echo "No compilation output found"
-            echo ""
-            echo "Python/TTNN activity from first run:"
-            grep -iE "(python|ttnn|tt_lib|tensor|device)" /tmp/first_run.log | head -10 || echo "No Python/TTNN activity found"
-            echo ""
-            echo "Any error messages:"
-            grep -iE "(error|exception|failed|traceback)" /tmp/first_run.log | head -10 || echo "No errors found"
-            echo ""
-            echo "Test execution pattern:"
-            grep -E "(Test project|Running|Executing|START|PASS|FAIL)" /tmp/first_run.log | head -20 || echo "No test execution pattern found"
-          else
-            echo "First run log not found"
-          fi
-
-          echo ""
-          echo "=== JIT Build Debug Info from Second Run ==="
-          if [ -f /tmp/second_run.log ]; then
-            echo "CCACHE_DEBUG lines from second run:"
-            grep "CCACHE_DEBUG:" /tmp/second_run.log | head -30 || echo "No CCACHE_DEBUG output found in second run"
-            echo ""
-            echo "JIT compilation evidence from second run:"
-            grep -iE "(compiling|compile_one|g\+\+ compile cmd|jit|build|kernel)" /tmp/second_run.log | head -20 || echo "No compilation output found"
-            echo ""
-            echo "Debug/Build log lines from second run:"
-            grep -iE "(debug|build|info.*build)" /tmp/second_run.log | head -15 || echo "No debug build lines found"
-          else
-            echo "Second run log not found"
-          fi
-
-          echo ""
-          echo "=== JIT Build Debug Info from Third Run ==="
-          if [ -f /tmp/third_run.log ]; then
-            echo "CCACHE_DEBUG lines from third run:"
-            grep "CCACHE_DEBUG:" /tmp/third_run.log | head -30 || echo "No CCACHE_DEBUG output found in third run"
-          else
-            echo "Third run log not found"
-          fi
-
-          echo ""
-          echo "=== Comparing key debug values between runs ==="
-          if [ -f /tmp/first_run.log ] && [ -f /tmp/second_run.log ]; then
-            echo "Build key and hash differences:"
-            echo "--- First Run Build Keys ---"
-            grep -E "(build_key|git_hash|out_root)" /tmp/first_run.log | head -10 || echo "No build key info found"
-            echo "--- Second Run Build Keys ---"
-            grep -E "(build_key|git_hash|out_root)" /tmp/second_run.log | head -10 || echo "No build key info found"
-
-          echo '## CCache Kernel Consistency Test Results (with Redis Remote Storage)' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo 'This test checks if ccache works consistently for JIT kernel compilation across rebuilds from the same commit using Redis as the remote storage backend.' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '### Redis Configuration' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not configured}" >> $GITHUB_STEP_SUMMARY
-          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}" >> $GITHUB_STEP_SUMMARY
-          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARYtmp/first_run.log | head -5 || echo "No compile commands found"
-            echo "--- Second Run Commands ---"
-            grep "Full compile command" /tmp/second_run.log | head -5 || echo "No compile commands found"
-          else
-            echo "Cannot compare - missing log files"
-          fi
-        continue-on-error: true
-
-      - name: Publish ccache summary
-        run: |
-          echo '## CCache Kernel Consistency Test Results' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo 'This test checks if ccache works consistently for JIT kernel compilation across rebuilds from the same commit.' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-
-          # Get final stats
-          STATS=$(ccache -s)
-          echo '### Final CCache Stats' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$STATS" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          # Parse and analyze the stats
-            if [ "$HIT_RATE" -lt 30 ]; then
-              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for kernel compilation across rebuilds with Redis.' >> $GITHUB_STEP_SUMMARY
-              echo 'This confirms the suspected cache-busting issue in JIT kernel builds even with remote Redis storage.' >> $GITHUB_STEP_SUMMARY
-            elif [ "$HIT_RATE" -lt 70 ]; then
-              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring with Redis backend.' >> $GITHUB_STEP_SUMMARY
-            else
-              echo '🟢 **GOOD**: High cache hit rate indicates ccache with Redis is working well for kernel compilation.' >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo '⚪ **NO DATA**: No cache activity detected. Redis remote storage may not be configured properly.' >> $GITHUB_STEP_SUMMARY
-          fiHIT_RATE=$((CACHE_HITS * 100 / TOTAL))
-            echo "- Hit rate: ${HIT_RATE}%" >> $GITHUB_STEP_SUMMARY
-            echo '' >> $GITHUB_STEP_SUMMARY
-
-            if [ "$HIT_RATE" -lt 30 ]; then
-              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for kernel compilation across rebuilds.' >> $GITHUB_STEP_SUMMARY
-              echo 'This confirms the suspected cache-busting issue in JIT kernel builds.' >> $GITHUB_STEP_SUMMARY
-            elif [ "$HIT_RATE" -lt 70 ]; then
-              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring.' >> $GITHUB_STEP_SUMMARY
-            else
-              echo '🟢 **GOOD**: High cache hit rate indicates ccache is working well for kernel compilation.' >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo '⚪ **NO DATA**: No cache activity detected.' >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload debug logs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ccache-debug-logs-${{ github.run_id }}
-          path: |
-            /tmp/first_run.log
-            /tmp/second_run.log
-            /tmp/third_run.log
-          retention-days: 14
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07ASPTGJTS # Denys
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: /work/build/tt-train/generated/test_reports/
-          prefix: "test_reports_"
+          prefix: "tt_train_test_reports_"
