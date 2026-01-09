@@ -543,11 +543,16 @@ class TTNNViTEmbeddings(TTNNModule):
 
     def forward(self, pixel_values, **kwargs):
         patch_embedding_output = self.patch_embeddings(pixel_values, **kwargs)
+        batch = pixel_values.shape[0]
+        # expand the cls token to the batch size
         patch_embedding_output = patch_embedding_output.to_ttnn
         if patch_embedding_output.layout != ttnn.TILE_LAYOUT:
             patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.TILE_LAYOUT)
         # add the [CLS] token to the embedded patch tokens
-        embedding_output = ttnn.concat([self.cls_token, patch_embedding_output], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cls_token = ttnn.reshape(self.cls_token, [1, 1, patch_embedding_output.shape[-1]])
+        if batch > 1:
+            cls_token = ttnn.repeat(cls_token, [batch, 1, 1])
+        embedding_output = ttnn.concat([cls_token, patch_embedding_output], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
         embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
         embedding_output = ttnn.add(
             embedding_output, self.position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
