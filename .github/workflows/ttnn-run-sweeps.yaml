@@ -751,14 +751,33 @@ jobs:
           done
 
           echo "♻ Restoring database from SQL dump..."
-          # Use docker exec to run psql in the postgres container (has all the tools)
-          # The dump file is available at /work via the volume mount on postgres service
-          POSTGRES_CONTAINER=$(docker ps --filter "ancestor=postgres:18" --format "{{.Names}}" | head -1)
-          echo "Found postgres container: $POSTGRES_CONTAINER"
-          docker exec -e PGPASSWORD=tt.sweeps "$POSTGRES_CONTAINER" \
-            psql -h localhost -U tt-sweeps -d tt-model-traces \
-              -f /work/model_tracer/ttnn_operations_db.sql
-          echo "✅ Database restored successfully"
+          # Use Python docker SDK to exec psql in the postgres container
+          pip install -q docker
+          python3 << 'EOF'
+          import docker
+
+          client = docker.from_env()
+
+          # Find postgres container
+          containers = client.containers.list(filters={"ancestor": "postgres:18"})
+          if not containers:
+              raise Exception("Postgres container not found")
+          postgres = containers[0]
+          print(f"Found postgres container: {postgres.name}")
+
+          # Run psql to restore the dump
+          exit_code, output = postgres.exec_run(
+              cmd=["psql", "-h", "localhost", "-U", "tt-sweeps", "-d", "tt-model-traces",
+                   "-f", "/work/model_tracer/ttnn_operations_db.sql"],
+              environment={"PGPASSWORD": "tt.sweeps"}
+          )
+
+          print(output.decode() if output else "")
+          if exit_code != 0:
+              raise Exception(f"psql failed with exit code {exit_code}")
+
+          print("✅ Database restored successfully")
+          EOF
 
           echo "🔍 Verifying schema..."
           python3 << 'EOF'
