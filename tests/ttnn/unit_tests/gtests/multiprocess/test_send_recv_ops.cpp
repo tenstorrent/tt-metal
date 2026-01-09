@@ -102,7 +102,7 @@ void test_send_recv_async_(
             receiver_rank,  // send to receiver host
             tag             // exchange test results over tag 0
         );
-        auto output_tensor = tt::tt_metal::allocate_tensor_on_device(
+        auto output_tensor = tt::tt_metal::create_device_tensor(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, backward_socket);
@@ -117,7 +117,7 @@ void test_send_recv_async_(
         );
         EXPECT_EQ(output_data, inc_output_data);
     } else {
-        auto output_tensor = tt::tt_metal::allocate_tensor_on_device(
+        auto output_tensor = tt::tt_metal::create_device_tensor(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, forward_socket);

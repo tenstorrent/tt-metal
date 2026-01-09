@@ -8,7 +8,7 @@
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/operations/matmul/device/matmul_op.hpp"  //TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 #include <optional>
 #include <tuple>
@@ -21,8 +21,9 @@ namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
 
 struct operation_attributes_t {
     /* All Gather Params */
-    ttnn::AllGatherAsync all_gather_async;  // TODO: migrate this code to use new all_gather_async API. This code relies
-                                            // on the old all_gather_async struct
+    all_gather_async::AllGatherAsyncDeviceOperation::operation_attributes_t all_gather_async_attributes;
+    all_gather_async::AllGatherAsyncDeviceOperation::tensor_args_t all_gather_async_tensor_args;
+
     /* Matmul Params */
     operations::matmul::Matmul
         matmul{};  // TODO: migrate this code to use new matmul API. This code relies on the old matmul struct

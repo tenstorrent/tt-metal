@@ -1754,11 +1754,13 @@ detail::ProgramCompileGroup::~ProgramCompileGroup() { program_device_map_.clear(
 
 void detail::ProgramCompileGroup::add_program(
     tt::tt_metal::IDevice* device, std::unique_ptr<tt::tt_metal::Program> program) {
+    std::lock_guard lock(mutex_);
     TT_FATAL(!program_device_map_.contains(device), "Program already exists in the compile group.");
     program_device_map_[device] = std::move(program);
 }
 
 void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
+    std::lock_guard lock(mutex_);
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
         auto* pgm = program.get();
@@ -1769,21 +1771,27 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
 }
 
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
+    std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
         detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
     }
 }
 
 std::unique_ptr<Program> detail::ProgramCompileGroup::remove_program(tt::tt_metal::IDevice* device) {
+    std::lock_guard lock(mutex_);
     TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
     std::unique_ptr<Program> program = std::move(program_device_map_[device]);
     program_device_map_.erase(device);
     return program;
 }
 
-void detail::ProgramCompileGroup::clear() { program_device_map_.clear(); }
+void detail::ProgramCompileGroup::clear() {
+    std::lock_guard lock(mutex_);
+    program_device_map_.clear();
+}
 
 bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
+    std::lock_guard lock(mutex_);
     return program_device_map_.contains(device);
 }
 
