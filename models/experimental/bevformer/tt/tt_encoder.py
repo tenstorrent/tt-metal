@@ -9,8 +9,6 @@ combines spatial cross-attention and temporal self-attention to learn Bird's-Eye
 representations from multi-camera images. The encoder processes BEV queries through
 multiple transformer layers that enable both spatial feature extraction from camera
 views and temporal modeling.
-
-Based on the PyTorch reference implementation but optimized for TTNN operations.
 """
 
 import ttnn
@@ -193,6 +191,11 @@ class TTBEVFormerLayer:
                 bev_reference_points, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
             )
 
+        if use_signpost:
+            signpost(header="BEVLayer Tensor Setup Complete")
+
+        if use_signpost:
+            signpost(header="BEVLayer TSA Start")
         # Combine current BEV with history for temporal modeling
         temp_query = self.temporal_self_attention(
             query=bev_query,
@@ -204,9 +207,15 @@ class TTBEVFormerLayer:
             **kwargs,
         )
 
+        if use_signpost:
+            signpost(header="BEVLayer TSA Complete")
+
         # Layer normalization (norm1)
         temp_query = ttnn.layer_norm(temp_query, weight=self.params.norm1.weight, bias=self.params.norm1.bias)
         bev_query = temp_query
+
+        if use_signpost:
+            signpost(header="BEVLayer SCA Start")
 
         # Spatial Cross-Attention
         if value is None:
@@ -225,12 +234,21 @@ class TTBEVFormerLayer:
             **kwargs,
         )
 
+        if use_signpost:
+            signpost(header="BEVLayer SCA Complete")
+
         # Layer normalization (norm2)
         spatial_query = ttnn.layer_norm(spatial_query, weight=self.params.norm2.weight, bias=self.params.norm2.bias)
         bev_query = spatial_query
 
+        if use_signpost:
+            signpost(header="BEVLayer FFN Start")
+
         # Feed-Forward Network
         ffn_output = self._forward_ffn(bev_query)
+
+        if use_signpost:
+            signpost(header="BEVLayer FFN Complete")
 
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
@@ -432,6 +450,9 @@ class TTBEVFormerEncoder:
         # Get batch size and number of queries for reference point generation
         bs, num_query, _ = bev_query.shape
 
+        if use_signpost:
+            signpost(header="BEVEncoder Reference Points Generation Start")
+
         # Generate reference points for spatial cross-attention
         reference_points_cam = None
         bev_mask = None
@@ -473,8 +494,14 @@ class TTBEVFormerEncoder:
                 device=self.device,
             )
 
+        if use_signpost:
+            signpost(header="BEVEncoder Reference Points Complete")
+
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
+            if use_signpost:
+                signpost(header=f"BEVEncoder Layer {lid} Start")
+
             # Create bev_shape tensor like the reference implementation
             bev_shape = torch.tensor([[bev_h, bev_w]])
 
@@ -494,6 +521,8 @@ class TTBEVFormerEncoder:
                 bev_mask=bev_mask,
                 **kwargs,
             )
+            if use_signpost:
+                signpost(header=f"BEVEncoder Layer {lid} Complete")
 
             if self.return_intermediate:
                 intermediate.append(output)
