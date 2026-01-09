@@ -18,7 +18,9 @@ rank_bindings:
     env_overrides:
       TT_VISIBLE_DEVICES: "0"  # First N300 device
       HF_MODEL: "meta-llama/Llama-3.1-8B-Instruct"
-      PROMPT: "What is the capital of France?"
+      MAX_NEW_TOKENS: "20"
+      TARGET_SEQ_LEN: "8192"  # Force 8192 token sequence for max stress testing
+      PROMPT: "Explain the concept of machine learning in detail:"
 
   - rank: 1
     mesh_id: 1
@@ -26,6 +28,8 @@ rank_bindings:
     env_overrides:
       TT_VISIBLE_DEVICES: "1"  # Second N300 device
       HF_MODEL: "meta-llama/Llama-3.1-8B-Instruct"
-      PROMPT: "What is the capital of France?"
+      MAX_NEW_TOKENS: "20"
+      TARGET_SEQ_LEN: "8192"
+      PROMPT: "Explain the concept of machine learning in detail:"
 
 mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/n300_dual_mesh_graph_descriptor.textproto"

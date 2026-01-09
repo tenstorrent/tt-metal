@@ -57,7 +57,7 @@ def setup_kv_cache_sockets(device, mesh_shape, num_layers):
     return socket_config
 
 
-def create_model_and_cache(device, max_batch_size=1, max_seq_len=2048):
+def create_model_and_cache(device, max_batch_size=1, max_seq_len=8192):
     """
     Create model and get KV cache.
 
@@ -364,9 +364,18 @@ def run_disaggregated_prefill_decode():
         logger.info(f"Tokenized: {tokens.tolist()}")
 
         # Pad tokens to be divisible by 128 (model requirement)
+        # TARGET_SEQ_LEN env var can force a specific sequence length for stress testing
         actual_seq_len = tokens.shape[1]
         pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-        padded_len = ((actual_seq_len + 127) // 128) * 128  # Round up to nearest multiple of 128
+
+        target_seq_len = int(os.environ.get("TARGET_SEQ_LEN", "0"))
+        if target_seq_len > 0:
+            # Force specific sequence length for stress testing
+            padded_len = target_seq_len
+        else:
+            # Round up to nearest multiple of 128
+            padded_len = ((actual_seq_len + 127) // 128) * 128
+
         if padded_len > actual_seq_len:
             padding = torch.full((1, padded_len - actual_seq_len), pad_token_id, dtype=tokens.dtype)
             tokens = torch.cat([tokens, padding], dim=1)
@@ -378,8 +387,10 @@ def run_disaggregated_prefill_decode():
         logger.info(f"Prefill node complete. First generated token: {tokenizer.decode([next_token.item()])}")
     else:
         # === DECODE NODE ===
+        # Get max_new_tokens from env, default to 50 for longer generation tests
+        max_new_tokens = int(os.environ.get("MAX_NEW_TOKENS", "50"))
         generated_tokens, generated_text = run_decode_node(
-            device, model, model_args, kv_cache, socket, tokenizer, max_new_tokens=20
+            device, model, model_args, kv_cache, socket, tokenizer, max_new_tokens=max_new_tokens
         )
         logger.info("Decode node complete.")
         logger.info(f"Full output: {prompt}{generated_text}")
