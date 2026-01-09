@@ -39,7 +39,6 @@ message(STATUS "Building Unified Library for all architectures, thanks to blozan
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # FIXME: Why are we setting these ourselves?
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 
