@@ -56,7 +56,7 @@ jobs:
 
       - name: 🔧 CMake configure
         run: |
-          ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-metal-tests --build-ttnn-tests --build-programming-examples --enable-ccache --configure-only --enable-profiler
+          ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-metal-tests --build-ttnn-tests --build-programming-examples --enable-ccache --configure-only
 
       - name: 🛠️ Compile
         run: cmake --build build --target install
