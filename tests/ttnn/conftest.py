@@ -18,6 +18,9 @@ import pytest
 import ttnn
 import ttnn.database
 
+# Enable persistent kernel cache for better ccache effectiveness across test runs
+ttnn.device.EnablePersistentKernelCache()
+
 
 def pytest_addoption(parser):
     parser.addoption("--runslow", action="store_true", default=False, help="run tests marked as slow")
