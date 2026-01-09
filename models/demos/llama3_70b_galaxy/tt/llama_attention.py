@@ -837,7 +837,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=0,
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO",
+            buffer_key="WO_AG",
         )
 
         return output_11SH
