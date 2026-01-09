@@ -580,15 +580,15 @@ void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arg
     const std::vector<Tensor>& output_tensors,
     const std::vector<GlobalSemaphore>& semaphore) {
     // Extract shared variables
-    auto& worker_sender_reader_forward_kernel_id = shared_variables.worker_sender_reader_forward_kernel_id;
-    auto& worker_sender_writer_forward_kernel_id = shared_variables.worker_sender_writer_forward_kernel_id;
-    auto& worker_sender_reader_backward_kernel_id = shared_variables.worker_sender_reader_backward_kernel_id;
-    auto& worker_sender_writer_backward_kernel_id = shared_variables.worker_sender_writer_backward_kernel_id;
-    auto& sender_worker_cores = shared_variables.sender_worker_cores;
-    auto& num_inputs = shared_variables.num_inputs;
-    auto& reader_sender_rt_offset = shared_variables.reader_sender_rt_offset;
-    auto& writer_sender_rt_offset = shared_variables.writer_sender_rt_offset;
-    auto& num_links = shared_variables.num_links;
+    const auto& worker_sender_reader_forward_kernel_id = shared_variables.worker_sender_reader_forward_kernel_id;
+    const auto& worker_sender_writer_forward_kernel_id = shared_variables.worker_sender_writer_forward_kernel_id;
+    const auto& worker_sender_reader_backward_kernel_id = shared_variables.worker_sender_reader_backward_kernel_id;
+    const auto& worker_sender_writer_backward_kernel_id = shared_variables.worker_sender_writer_backward_kernel_id;
+    const auto& sender_worker_cores = shared_variables.sender_worker_cores;
+    const auto& num_inputs = shared_variables.num_inputs;
+    const auto& reader_sender_rt_offset = shared_variables.reader_sender_rt_offset;
+    const auto& writer_sender_rt_offset = shared_variables.writer_sender_rt_offset;
+    const auto& num_links = shared_variables.num_links;
 
     // update senders
     auto& worker_reader_sender_forward_runtime_args_by_core =

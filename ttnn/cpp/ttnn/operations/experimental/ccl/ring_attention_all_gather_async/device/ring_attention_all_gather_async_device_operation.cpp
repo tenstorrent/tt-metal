@@ -143,9 +143,9 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
     const auto& persistent_output_buffer = tensor_args.persistent_output_buffer;
     if (!persistent_output_buffer.empty()) {
         output_tensors.reserve(persistent_output_buffer.size());
-        for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-            if (persistent_output_buffer[i].has_value()) {
-                output_tensors.push_back(persistent_output_buffer[i].value());
+        for (const auto& buffer : persistent_output_buffer) {
+            if (buffer.has_value()) {
+                output_tensors.push_back(buffer.value());
             }
         }
     } else {
@@ -215,8 +215,8 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
     optional_output_tensors.reserve(persistent_output_buffer.size());
-    for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-        optional_output_tensors.push_back(persistent_output_buffer[i]);
+    for (const auto& buffer : persistent_output_buffer) {
+        optional_output_tensors.push_back(buffer);
     }
 
     return {
