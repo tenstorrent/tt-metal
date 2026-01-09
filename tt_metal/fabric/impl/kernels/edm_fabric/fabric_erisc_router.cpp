@@ -1269,6 +1269,32 @@ bool any_sender_channels_active(
     return false;
 }
 
+constexpr bool IS_RETRAIN_SYNC_MASTER() { return MY_ERISC_ID == 0; }
+void run_routing_with_noc_sync() {
+    // Master
+    if (IS_RETRAIN_SYNC_MASTER()) {
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(1);
+        // Wait for erisc1 to ack
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 2) {
+        }
+        run_routing_without_noc_sync();
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(3);
+        // Wait for erisc1 to ack
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 4) {
+        }
+        // Resume normal operation
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(0);
+    } else {
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 1) {
+        }
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(2);
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 3) {
+        }
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(4);
+        while (read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>() != 0) {
+        }
+    }
+}
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_telemetry(
     const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
@@ -2048,13 +2074,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 } else {
                     if (did_nothing_count++ > SWITCH_INTERVAL) {
                         did_nothing_count = 0;
-                        run_routing_without_noc_sync();
+
+                        run_routing_with_noc_sync();
+                        // run_routing_without_noc_sync();
                     }
                 }
             } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
                     did_nothing_count = 0;
-                    run_routing_without_noc_sync();
+                    run_routing_with_noc_sync();
+                    // run_routing_without_noc_sync();
                 }
             }
         }
@@ -2330,6 +2359,11 @@ void kernel_main() {
     // The first sender channel in the array is always for the transient/worker connection
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
+
+    // Init retrain sync reg
+    if (IS_RETRAIN_SYNC_MASTER()) {
+        write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(0);
+    }
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
