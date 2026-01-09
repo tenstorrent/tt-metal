@@ -679,6 +679,20 @@ jobs:
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: tt-sweeps
+          POSTGRES_PASSWORD: tt.sweeps
+          POSTGRES_DB: tt-model-traces
+        volumes:
+          - ${{ github.workspace }}/docker-job:/work
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -739,6 +753,28 @@ jobs:
           done
 
           echo "♻ Restoring database from SQL dump..."
+
+          # Check if gzipped file exists, decompress if needed
+          SQL_FILE="/work/model_tracer/ttnn_operations_db.sql"
+          if [ -f "${SQL_FILE}.gz" ]; then
+            echo "📦 Found compressed SQL file, decompressing..."
+            if ! command -v gunzip &> /dev/null; then
+              echo "❌ Error: gunzip not found, installing gzip..."
+              apt-get update -qq && apt-get install -y -qq gzip
+            fi
+            gunzip -f "${SQL_FILE}.gz"
+            echo "✅ Decompression complete"
+          fi
+
+          if [ ! -f "$SQL_FILE" ]; then
+            echo "❌ Error: SQL file not found at $SQL_FILE"
+            exit 1
+          fi
+
+          # Get file size for logging
+          SQL_SIZE=$(du -h "$SQL_FILE" | cut -f1)
+          echo "📊 SQL file size: $SQL_SIZE"
+
           # Use Python docker SDK to exec psql in the postgres container
           pip install -q docker
           python3 << 'EOF'
