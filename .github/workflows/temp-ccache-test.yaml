@@ -102,16 +102,66 @@ jobs:
 
       - name: Run TTNN tests (First run)
         timeout-minutes: 30
+        env:
+          CCACHE_DEBUG: "true"
+          CCACHE_LOGFILE: /tmp/ttnn_ccache_run1.log
         run: |
           echo "========================================="
           echo "=== TTNN RUN 1: First ccache population ===="
           echo "========================================="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_first_run.log
 
+      - name: Capture ccache hash keys after Run 1
+        run: |
+          echo "=== TTNN RUN 1: Capturing ccache hash information ==="
+          echo ""
+          echo "=== Checking if ccache debug log was created ==="
+          ls -lh /tmp/ttnn_ccache_run1.log 2>&1 || echo "❌ Log file not found at /tmp/ttnn_ccache_run1.log"
+          echo ""
+          echo "=== Checking ccache config (debug settings) ==="
+          ccache --show-config | grep -i "debug\|log" || echo "No debug config found"
+          echo ""
+          echo "=== Looking for ccache logs in common locations ==="
+          find /tmp -name "*ccache*.log" -type f 2>/dev/null | head -10 || echo "No ccache log files found in /tmp"
+          find ~/.cache/ccache -name "*.log" -type f 2>/dev/null | head -10 || echo "No log files in ~/.cache/ccache"
+          echo ""
+          echo "=== Analyzing ccache debug log for cache keys ==="
+          if [ -f /tmp/ttnn_ccache_run1.log ]; then
+            echo "✅ Log file exists!"
+            echo "Log size: $(wc -l /tmp/ttnn_ccache_run1.log | awk '{print $1}') lines"
+            echo ""
+            echo "=== First 50 lines of ccache debug log ==="
+            head -50 /tmp/ttnn_ccache_run1.log
+            echo ""
+            echo "=== Result keys (ccache primary hash) - first 30 ==="
+            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run1.log | head -30 | tee /tmp/ttnn_run1_ccache_keys.txt
+            echo ""
+            echo "=== Files included in hash - sample ==="
+            grep -E "Hashing.*\.(cpp|hpp|h):" /tmp/ttnn_ccache_run1.log | head -20
+            echo ""
+            echo "=== Compiler command lines - sample ==="
+            grep -E "Command line|Compiler:" /tmp/ttnn_ccache_run1.log | head -10
+          else
+            echo "⚠️  ccache debug log not found - CCACHE_DEBUG and CCACHE_LOGFILE may not be working"
+            echo "This could mean:"
+            echo "  1. Ccache is not being invoked during kernel compilation"
+            echo "  2. Environment variables are not propagated to subprocess"
+            echo "  3. Ccache debug logging is not enabled properly"
+          fi
+          echo ""
+          echo "=== Git commit information ==="
+          git rev-parse HEAD | tee /tmp/ttnn_run1_git_commit.txt
+          echo ""
+          echo "=== Environment variables affecting cache ==="
+          env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run1_env.txt
+
       - name: Analyze ccache after Run 1
         run: |
           echo "=== TTNN RUN 1: ccache statistics after test ==="
           ccache -s
+          echo ""
+          echo "=== Detailed ccache statistics (verbose) ==="
+          ccache --print-stats --verbose 2>&1 | head -100
           echo ""
           echo "=== Kernel cache locations ==="
           echo "Checking ~/.cache/tt-metal-cache/:"
@@ -150,9 +200,56 @@ jobs:
 
       - name: Run TTNN tests (Second run - expect ccache hits)
         timeout-minutes: 30
+        env:
+          CCACHE_DEBUG: "true"
+          CCACHE_LOGFILE: /tmp/ttnn_ccache_run2.log
         run: |
           echo "=== Running TTNN unit tests (RUN 2 - should hit ccache) ==="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_second_run.log
+
+      - name: Capture kernel hashes after Run 2 and compare
+        run: |
+          echo "=== TTNN RUN 2: Capturing ccache hash information ==="
+          echo ""
+          echo "=== Analyzing ccache debug log for cache keys ==="
+          if [ -f /tmp/ttnn_ccache_run2.log ]; then
+            echo "Log size: $(wc -l /tmp/ttnn_ccache_run2.log | awk '{print $1}') lines"
+            echo ""
+            echo "=== Result keys (ccache primary hash) - first 30 ==="
+            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run2.log | head -30 | tee /tmp/ttnn_run2_ccache_keys.txt
+          fi
+          echo ""
+          echo "=== Git commit information ==="
+          git rev-parse HEAD | tee /tmp/ttnn_run2_git_commit.txt
+          echo ""
+          echo "=== Build environment that affects cache keys ==="
+          env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run2_env.txt
+          echo ""
+          echo "=== Comparing Run 1 vs Run 2 ==="
+          echo "--- Git commits ---"
+          if diff -u /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt; then
+            echo "✅ Git commits are identical"
+          else
+            echo "🔴 Git commits differ!"
+          fi
+          echo ""
+          echo "--- Build environment ---"
+          if diff -u /tmp/ttnn_run1_env.txt /tmp/ttnn_run2_env.txt; then
+            echo "✅ Build environment is identical"
+          else
+            echo "🔴 Build environment differs!"
+          fi
+          echo ""
+          echo "--- Ccache keys (first 30) ---"
+          if [ -f /tmp/ttnn_run1_ccache_keys.txt ] && [ -f /tmp/ttnn_run2_ccache_keys.txt ]; then
+            if diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt; then
+              echo "✅ Ccache keys are identical"
+            else
+              echo "🔴 Ccache keys differ! Cache keys changed between runs!"
+            fi
+          else
+            echo "⚠️  Cannot compare ccache keys - files not found"
+          fi
 
       - name: Analyze ccache after Run 2
         run: |
@@ -197,9 +294,69 @@ jobs:
 
       - name: Run TTNN tests (Third run)
         timeout-minutes: 30
+        env:
+          CCACHE_DEBUG: "true"
+          CCACHE_LOGFILE: /tmp/ttnn_ccache_run3.log
         run: |
           echo "=== Running TTNN unit tests (RUN 3) ==="
           pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_third_run.log
+
+      - name: Capture kernel hashes after Run 3 and final comparison
+        run: |
+          echo "=== TTNN RUN 3: Final ccache analysis and three-way comparison ==="
+          echo ""
+          echo "=== Analyzing ccache debug log for cache keys ==="
+          if [ -f /tmp/ttnn_ccache_run3.log ]; then
+            echo "Log size: $(wc -l /tmp/ttnn_ccache_run3.log | awk '{print $1}') lines"
+            echo ""
+            echo "=== Result keys (ccache primary hash) - first 30 ==="
+            grep -E "(Result key|Primary hash|Hash key)" /tmp/ttnn_ccache_run3.log | head -30 | tee /tmp/ttnn_run3_ccache_keys.txt
+          fi
+          echo ""
+          echo "=== Git commit information ==="
+          git rev-parse HEAD | tee /tmp/ttnn_run3_git_commit.txt
+          echo ""
+          echo "=== Build environment that affects cache keys ==="
+          env | grep -E "(TT_METAL|ARCH_NAME|CCACHE)" | sort | tee /tmp/ttnn_run3_env.txt
+          echo ""
+          echo "=== Final Comparison: Run 1 vs Run 2 vs Run 3 ==="
+          echo "--- Git commits consistency ---"
+          if diff -q /tmp/ttnn_run1_git_commit.txt /tmp/ttnn_run2_git_commit.txt /tmp/ttnn_run3_git_commit.txt >/dev/null 2>&1; then
+            echo "✅ All git commits are identical across 3 runs"
+          else
+            echo "🔴 Git commits differ between runs!"
+            echo "Run 1 commit:"
+            cat /tmp/ttnn_run1_git_commit.txt
+            echo "Run 2 commit:"
+            cat /tmp/ttnn_run2_git_commit.txt
+            echo "Run 3 commit:"
+            cat /tmp/ttnn_run3_git_commit.txt
+          fi
+          echo ""
+          echo "--- Build environment consistency ---"
+          if diff -q /tmp/ttnn_run1_env.txt /tmp/ttnn_run2_env.txt /tmp/ttnn_run3_env.txt >/dev/null 2>&1; then
+            echo "✅ Build environment is identical across 3 runs"
+          else
+            echo "🔴 Build environment differs between runs!"
+            echo "Diff Run1 vs Run2:"
+            diff -u /tmp/ttnn_run1_env.txt /tmp/ttnn_run2_env.txt || true
+            echo "Diff Run2 vs Run3:"
+            diff -u /tmp/ttnn_run2_env.txt /tmp/ttnn_run3_env.txt || true
+          fi
+          echo ""
+          echo "--- Ccache key consistency ---"
+          if diff -q /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt >/dev/null 2>&1; then
+            echo "✅ Ccache keys are identical across 3 runs - cache should be hitting!"
+          else
+            echo "🔴 Ccache keys differ between runs! This explains cache misses!"
+            echo "Diff Run1 vs Run2:"
+            diff -u /tmp/ttnn_run1_ccache_keys.txt /tmp/ttnn_run2_ccache_keys.txt || true
+            echo "Diff Run2 vs Run3:"
+            diff -u /tmp/ttnn_run2_ccache_keys.txt /tmp/ttnn_run3_ccache_keys.txt || true
+          fi
+          echo ""
+          echo "=== Sample from ccache debug log (cache decisions) ==="
+          grep -E "(cache hit|cache miss|No such file|Result|Hash)" /tmp/ttnn_ccache_run3.log | head -30 || echo "No hit/miss lines found"
 
       - name: Analyze final ccache stats
         run: |
@@ -250,6 +407,18 @@ jobs:
             /tmp/ttnn_first_run.log
             /tmp/ttnn_second_run.log
             /tmp/ttnn_third_run.log
+            /tmp/ttnn_ccache_run1.log
+            /tmp/ttnn_ccache_run2.log
+            /tmp/ttnn_ccache_run3.log
+            /tmp/ttnn_run1_ccache_keys.txt
+            /tmp/ttnn_run2_ccache_keys.txt
+            /tmp/ttnn_run3_ccache_keys.txt
+            /tmp/ttnn_run1_git_commit.txt
+            /tmp/ttnn_run2_git_commit.txt
+            /tmp/ttnn_run3_git_commit.txt
+            /tmp/ttnn_run1_env.txt
+            /tmp/ttnn_run2_env.txt
+            /tmp/ttnn_run3_env.txt
           retention-days: 14
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
