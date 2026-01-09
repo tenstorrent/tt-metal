@@ -329,59 +329,59 @@ WorkloadResult execute_workloads(
 // ============================================================================
 
 bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
-    auto retrain_count_increasing = [&](const std::vector<LinkStatus>& link_stats) {
-        uint32_t prev_retrain_count = link_stats[0].metrics.retrain_count;
-        for (const auto& dumped_stat : link_stats) {
-            const auto& metric = dumped_stat.metrics;
-            if (metric.retrain_count > prev_retrain_count) {
-                return true;
-            }
-            prev_retrain_count = metric.retrain_count;
-        }
-        return false;
-    };
+    // auto retrain_count_increasing = [&](const std::vector<LinkStatus>& link_stats) {
+    //     uint32_t prev_retrain_count = link_stats[0].metrics.retrain_count;
+    //     for (const auto& dumped_stat : link_stats) {
+    //         const auto& metric = dumped_stat.metrics;
+    //         if (metric.retrain_count > prev_retrain_count) {
+    //             return true;
+    //         }
+    //         prev_retrain_count = metric.retrain_count;
+    //     }
+    //     return false;
+    // };
 
-    auto zero_retrain_count = [&](const std::vector<LinkStatus>& link_stats) {
-        return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
-            return dumped_stat.metrics.retrain_count == 0;
-        });
-    };
+    // auto zero_retrain_count = [&](const std::vector<LinkStatus>& link_stats) {
+    //     return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
+    //         return dumped_stat.metrics.retrain_count == 0;
+    //     });
+    // };
 
-    auto crc_error_reported = [&](const std::vector<LinkStatus>& link_stats) {
-        return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
-            return dumped_stat.metrics.crc_error_count > 0;
-        });
-    };
+    // auto crc_error_reported = [&](const std::vector<LinkStatus>& link_stats) {
+    //     return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
+    //         return dumped_stat.metrics.crc_error_count > 0;
+    //     });
+    // };
 
-    auto uncorrected_codewords_increasing = [&](const std::vector<LinkStatus>& link_stats) {
-        uint32_t prev_uncorrected_codeword_count = link_stats[0].metrics.uncorrected_codeword_count;
-        for (const auto& dumped_stat : link_stats) {
-            const auto& metric = dumped_stat.metrics;
-            if (metric.uncorrected_codeword_count > prev_uncorrected_codeword_count) {
-                return true;
-            }
-            prev_uncorrected_codeword_count = metric.uncorrected_codeword_count;
-        }
-        return false;
-    };
+    // auto uncorrected_codewords_increasing = [&](const std::vector<LinkStatus>& link_stats) {
+    //     uint32_t prev_uncorrected_codeword_count = link_stats[0].metrics.uncorrected_codeword_count;
+    //     for (const auto& dumped_stat : link_stats) {
+    //         const auto& metric = dumped_stat.metrics;
+    //         if (metric.uncorrected_codeword_count > prev_uncorrected_codeword_count) {
+    //             return true;
+    //         }
+    //         prev_uncorrected_codeword_count = metric.uncorrected_codeword_count;
+    //     }
+    //     return false;
+    // };
 
-    auto uncorrected_codewords_detected = [&](const std::vector<LinkStatus>& link_stats) {
-        return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
-            return dumped_stat.metrics.uncorrected_codeword_count > 0;
-        });
-    };
+    // auto uncorrected_codewords_detected = [&](const std::vector<LinkStatus>& link_stats) {
+    //     return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
+    //         return dumped_stat.metrics.uncorrected_codeword_count > 0;
+    //     });
+    // };
 
     auto data_mismatch = [&](const std::vector<LinkStatus>& link_stats) {
         return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
             return dumped_stat.num_mismatched_words > 0;
         });
     };
-    bool retrain_count_increasing_ = retrain_count_increasing(link_stats);
-    bool crc_error_reported_ = crc_error_reported(link_stats);
-    bool uncorrected_codewords_detected_ = uncorrected_codewords_detected(link_stats);
-    bool uncorrected_codewords_increasing_ = uncorrected_codewords_increasing(link_stats);
+    // bool retrain_count_increasing_ = retrain_count_increasing(link_stats);
+    // bool crc_error_reported_ = crc_error_reported(link_stats);
+    // bool uncorrected_codewords_detected_ = uncorrected_codewords_detected(link_stats);
+    // bool uncorrected_codewords_increasing_ = uncorrected_codewords_increasing(link_stats);
     bool data_mismatch_ = data_mismatch(link_stats);
-    bool zero_retrain_count_ = zero_retrain_count(link_stats);
+    // bool zero_retrain_count_ = zero_retrain_count(link_stats);
 
     // A link is considered unhealthy if:
     // - The retrain count is increasing
@@ -389,9 +389,10 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
     // - Uncorrected codewords are detected but no retrains were issued
     // - Uncorrected codewords are increasing
     // - A data mismatch is detected
-    return retrain_count_increasing_ || crc_error_reported_ ||
-           (zero_retrain_count_ && uncorrected_codewords_detected_) || uncorrected_codewords_increasing_ ||
-           data_mismatch_;
+    return data_mismatch_;
+    // return retrain_count_increasing_ || crc_error_reported_ ||
+    //        (zero_retrain_count_ && uncorrected_codewords_detected_) || uncorrected_codewords_increasing_ ||
+    //        data_mismatch_;
 }
 
 LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
