@@ -23,11 +23,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-// read dest reg
 #include "chain_llk.hpp"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -56,6 +53,7 @@ struct x_minus_mean_node {
         .CB_OUT = cb_x_minus_mean,
         .fixed_CB_B_index = 0,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 1,
     };
 };
 constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
@@ -71,10 +69,14 @@ struct normed_output_node {
         .CB_OUT = normed_output_cb,
         .fixed_CB_B_index = 0,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 1,
     };
 };
 constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
 
+constexpr uint32_t Wt = get_compile_time_arg_val(0);
+constexpr uint32_t cb_length = get_compile_time_arg_val(7);
+constexpr uint32_t pop_gamma_beta = Wt == cb_length ? 0xDDDD : 0xFFFF;
 constexpr uint32_t cb_times_gamma_out = do_beta ? tt::CBIndex::c_13 : cb_out;
 struct gamma_optional_node {
     static constexpr LLK_Node node{
@@ -83,8 +85,9 @@ struct gamma_optional_node {
         .CB_A = cb_x_normed,
         .CB_B = cb_gamma,
         .CB_OUT = cb_times_gamma_out,
-        .fixed_CB_B_index = 0xFFFF,
+        .fixed_CB_B_index = pop_gamma_beta,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 1,
     };
 };
 constexpr uint32_t cb_in_beta = do_gamma ? cb_times_gamma_out : normed_output_cb;
@@ -96,8 +99,9 @@ struct beta_optional_node {
         .CB_A = cb_in_beta,
         .CB_B = cb_beta,
         .CB_OUT = cb_out,
-        .fixed_CB_B_index = 0xFFFF,
+        .fixed_CB_B_index = pop_gamma_beta,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 1,
     };
 };
 
@@ -108,7 +112,6 @@ void MAIN {
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(3) / 2;
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t cb_length = get_compile_time_arg_val(7);
     constexpr uint32_t onetile = 1;
 
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
@@ -137,12 +140,14 @@ void MAIN {
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
         add_tiles_init(cb_stats_reduced, cb_eps);
-        ACQ();
+        tile_regs_acquire();
+        tile_regs_wait();
         add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
         rsqrt_tile_init<true>();
         rsqrt_tile<true>(0);
         pack_tile(0, cb_recip_sqrt_var);
-        REL();
+        tile_regs_commit();
+        tile_regs_release();
         cb_push_back(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma && do_beta) {

@@ -6,18 +6,18 @@ import os
 import pytest
 import torch
 from loguru import logger
+from transformers.models.mixtral.modeling_mixtral import MixtralRMSNorm as RefRMSNorm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import RMSNorm as RefRMSNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "t3k_mesh_device",
+    "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
@@ -38,7 +38,7 @@ def test_rms_norm_inference(
     max_seq_len,
     batch_size,
     mode,
-    t3k_mesh_device,
+    mesh_device,
     reset_seeds,
     ensure_gc,
 ):
@@ -47,18 +47,18 @@ def test_rms_norm_inference(
     norm_type = "ffn"
     config_type = "MLP"
 
-    model_args = ModelArgs(t3k_mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + f"{norm_type}_norm."
     partial_state_dict = {k[-6:]: v for k, v in state_dict.items() if (k.startswith(f"layers.0.{norm_type}_norm."))}
-    reference_model = RefRMSNorm(dim=model_args.dim)
+    reference_model = RefRMSNorm(hidden_size=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
     # Create the inner RMSNormxw
     tt_inner_norm = RMSNorm(
-        device=t3k_mesh_device,
+        device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
@@ -74,14 +74,14 @@ def test_rms_norm_inference(
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_mesh_device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = tt_inner_norm(tt_input, mode="prefill")
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

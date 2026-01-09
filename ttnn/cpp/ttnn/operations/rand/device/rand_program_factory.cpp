@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <string.h>
+#include <cstring>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>

@@ -104,19 +104,25 @@ void configure_local_kernels(
     ClusterContext& ctx,
     const std::vector<uint32_t>& inputs,
     std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
-    size_t packet_size_bytes,
-    size_t packet_size_words,
-    size_t data_size,
+    uint32_t packet_size_bytes,
+    uint32_t packet_size_words,
+    uint32_t data_size,
     bool fwd) {
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     std::unordered_map<ChipId, std::vector<CoreCoord>> kernel_coords;
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
+
+    // Single ERISC Execution for BH for now, since ERISC0 needs to manage link recovery
+    auto erisc_id = tt::tt_metal::DataMovementProcessor::RISCV_0;
+    auto noc_id = tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE
+                      ? tt::tt_metal::NOC::NOC_1
+                      : tt::tt_metal::NOC::NOC_0;
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto curr_chip_id = ctx.asic_id_to_chip_id[*asic_id];
@@ -168,7 +174,8 @@ void configure_local_kernels(
                         fwd ? sender_kernel_path : receiver_kernel_path,
                         curr_coord,
                         tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .noc = noc_id,
+                            .processor = erisc_id,
                             .compile_args = fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words}
                                                 : std::vector<uint32_t>{}});
 
@@ -177,7 +184,8 @@ void configure_local_kernels(
                         fwd ? receiver_kernel_path : sender_kernel_path,
                         neighbor_coord,
                         tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .noc = noc_id,
+                            .processor = erisc_id,
                             .compile_args = fwd ? std::vector<uint32_t>{}
                                                 : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
                     tt::tt_metal::SetRuntimeArgs(
@@ -213,15 +221,21 @@ void configure_cross_host_kernels(
     ClusterContext& ctx,
     const std::vector<uint32_t>& inputs,
     std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
-    size_t packet_size_bytes,
-    size_t packet_size_words,
-    size_t data_size,
+    uint32_t packet_size_bytes,
+    uint32_t packet_size_words,
+    uint32_t data_size,
     bool fwd) {
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const uint32_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+
+    // Single ERISC Execution for BH for now, since ERISC0 needs to manage link recovery
+    auto erisc_id = tt::tt_metal::DataMovementProcessor::RISCV_0;
+    auto noc_id = tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE
+                      ? tt::tt_metal::NOC::NOC_1
+                      : tt::tt_metal::NOC::NOC_0;
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     for (const auto& host_neighbor : ctx.physical_system_descriptor.get_host_neighbors(host_name)) {
@@ -245,7 +259,7 @@ void configure_cross_host_kernels(
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
                     my_coord,
                     tt::tt_metal::EthernetConfig{
-                        .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
+                        .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}});
                 tt::tt_metal::SetRuntimeArgs(
                     my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
             } else {
@@ -256,7 +270,7 @@ void configure_cross_host_kernels(
                     my_program,
                     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
                     my_coord,
-                    tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0});
+                    tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id});
                 tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
             }
         }
@@ -412,7 +426,7 @@ LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
 
 void forward_link_metrics_to_controller(std::vector<EthernetLinkMetrics>& link_metrics) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto my_rank = *distributed_context.rank();
 
     std::vector<uint8_t> serialized_link_metrics;
@@ -521,9 +535,9 @@ void dump_link_stats(
     ClusterContext& ctx,
     std::vector<uint32_t>& inputs,
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
-    size_t data_size,
-    size_t packet_size_bytes) {
-    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    uint32_t data_size,
+    uint32_t packet_size_bytes) {
+    const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
@@ -584,10 +598,10 @@ std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
-    if constexpr (std::is_integral<ValueType>::value) {
+    if constexpr (std::is_integral_v<ValueType>) {
         std::uniform_int_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
-    } else if constexpr (std::is_floating_point<ValueType>::value) {
+    } else if constexpr (std::is_floating_point_v<ValueType>) {
         std::uniform_real_distribution<ValueType> dis(min, max);
         std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
     } else {
@@ -996,18 +1010,30 @@ LinkMetricsResult send_traffic_and_validate_links(
     }
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     std::vector<ChipId> device_ids;
     for (auto chip : cluster.all_chip_ids()) {
         device_ids.push_back(chip);
     }
-
-    auto devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-        device_ids,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+    // This is a non-trivial operation, since it loads management firmware onto all
+    // cores in the cluster.
+    // Issue a global barrier after this to ensure that all hosts in the cluster are ready
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices = {};
+    try {
+        devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+            device_ids,
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+    } catch (const std::exception& e) {
+        log_info(tt::LogDistributed, "Error starting devices to send traffic on rank: {}", *distributed_context.rank());
+        log_output_rank0("Error details: " + std::string(e.what()));
+        throw;
+    }
+    // Barrier here ensures that all ranks successfully started their devices before proceeding
+    distributed_context.barrier();
 
     ClusterContext ctx{physical_system_descriptor, asic_id_to_chip_id, devices};
 
@@ -1029,7 +1055,6 @@ LinkMetricsResult send_traffic_and_validate_links(
             bool did_hang_locally = (local_result == WorkloadResult::TimedOut);
 
             // Check if any rank experienced a hang/timeout
-            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
             bool any_rank_hung = false;
             distributed_context.all_reduce(
                 tt::stl::Span<bool>(&did_hang_locally, 1),
@@ -1050,7 +1075,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 }
 
 void point_to_point_barrier(const ResetPair& reset_pair) {
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     TT_FATAL(
         *distributed_context.rank() == reset_pair.src_rank || *distributed_context.rank() == reset_pair.dst_rank,
         "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
@@ -1064,14 +1089,14 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
         int sync_msg = 1;
         distributed_context.ssend(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-            tt::tt_metal::distributed::multihost::Rank{reset_pair.dst_rank},
-            tt::tt_metal::distributed::multihost::Tag{tag});
+            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.dst_rank)},
+            tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
     } else {
         int sync_msg = 0;
         distributed_context.recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-            tt::tt_metal::distributed::multihost::Rank{reset_pair.src_rank},
-            tt::tt_metal::distributed::multihost::Tag{tag});
+            tt::tt_metal::distributed::multihost::Rank{static_cast<int>(reset_pair.src_rank)},
+            tt::tt_metal::distributed::multihost::Tag{static_cast<int>(tag)});
     }
 }
 
@@ -1108,7 +1133,7 @@ void forward_link_reset_metadata_from_controller(
     std::vector<EthChannelIdentifier>& exit_nodes_to_reset,
     std::vector<ResetPair>& reset_pairs) {
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [rank, exit_nodes] : ordered_exit_nodes) {
@@ -1124,23 +1149,23 @@ void forward_link_reset_metadata_from_controller(
             distributed_context.send(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
 
             distributed_context.send(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
             distributed_context.send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
-                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(rank)},
                 tt::tt_metal::distributed::multihost::Tag{0});
         }
         exit_nodes_to_reset = ordered_exit_nodes[*distributed_context.rank()];
@@ -1209,9 +1234,9 @@ void reset_local_ethernet_links(
                 auto src_chan = eth_connection.src_chan;
                 auto dst_chan = eth_connection.dst_chan;
 
-                if (reset_cores[*dst_asic_id].find(dst_chan) != reset_cores[*dst_asic_id].end()) {
+                if (reset_cores[*dst_asic_id].contains(dst_chan)) {
                     TT_FATAL(
-                        reset_cores[*asic_id].find(src_chan) != reset_cores[*asic_id].end(),
+                        reset_cores[*asic_id].contains(src_chan),
                         "Expected channel {} on ASIC {} to already be reset",
                         src_chan,
                         *asic_id);
@@ -1261,8 +1286,7 @@ void get_cross_node_ethernet_links_to_reset(
                 // These links are being retrained for the second time if the current dst_asic was paired with the
                 // current src_asic in a previous iteration.
                 // In this case, we skip the link reset.
-                if (paired_asic_ids.find(*dst_asic_id) != paired_asic_ids.end() and
-                    paired_asic_ids[*dst_asic_id].find(*asic_id) != paired_asic_ids[*dst_asic_id].end()) {
+                if (paired_asic_ids.contains(*dst_asic_id) and paired_asic_ids[*dst_asic_id].contains(*asic_id)) {
                     continue;
                 }
                 paired_asic_ids[*asic_id].insert(*dst_asic_id);
@@ -1413,7 +1437,7 @@ AsicTopology generate_asic_topology_from_connections(
             src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
         auto dst_asic_id = physical_system_descriptor.get_asic_id(
             dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
-        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
+        if (!visited[src_asic_id].contains(dst_asic_id)) {
             asic_topology[src_asic_id].push_back(
                 {dst_asic_id,
                  {EthConnection(
@@ -1424,7 +1448,7 @@ AsicTopology generate_asic_topology_from_connections(
             asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
                 *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
         }
-        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
+        if (!visited[dst_asic_id].contains(src_asic_id)) {
             asic_topology[dst_asic_id].push_back(
                 {src_asic_id,
                  {EthConnection(
@@ -1460,7 +1484,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
 
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     TT_FATAL(
-        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        asic_descriptors.contains(dst_asic_id),
         "Could not find ASIC descriptor for destination ASIC ID: {}",
         dst_asic_id);
 
@@ -1534,25 +1558,22 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
                 "Expected exactly one host in the cluster when no deployment descriptor is provided");
             return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
                 .generate_factory_system_descriptor();
-        } else {
-            return tt::scaleout_tools::CablingGenerator(
-                       cabling_descriptor_path.value(), deployment_descriptor_path.value())
-                .generate_factory_system_descriptor();
         }
-    } else {
-        // Load FSD from file
-        fsd::proto::FactorySystemDescriptor fsd_proto;
-        std::ifstream fsd_file(fsd_path.value());
-        if (!fsd_file.is_open()) {
-            TT_THROW("Failed to open FSD file: {}", fsd_path.value());
-        }
-        std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
-        fsd_file.close();
-        if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
-            TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
-        }
-        return fsd_proto;
+        return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), deployment_descriptor_path.value())
+            .generate_factory_system_descriptor();
+
+    }  // Load FSD from file
+    fsd::proto::FactorySystemDescriptor fsd_proto;
+    std::ifstream fsd_file(fsd_path.value());
+    if (!fsd_file.is_open()) {
+        TT_THROW("Failed to open FSD file: {}", fsd_path.value());
     }
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd_proto)) {
+        TT_THROW("Failed to parse FSD protobuf from file: {}", fsd_path.value());
+    }
+    return fsd_proto;
 }
 
 tt_metal::AsicTopology validate_connectivity(

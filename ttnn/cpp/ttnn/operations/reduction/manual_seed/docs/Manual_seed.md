@@ -148,10 +148,10 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
 3. **Data Movement and Processing**:
    * Each core's reader kernel loads the user_ids tensor from DRAM to L1
    * The reader kernel checks if its core_id (passed at runtime) matches any ID in the tensor
-   * The match result is communicated to the compute kernel via mailbox
+   * The match result is communicated to the compute kernel via circular buffer
 
 4. **Seed Initialization**:
-   * The compute kernel reads the match result from the mailbox
+   * The compute kernel reads the match result from the CB message
    * If matched, it calls `rand_tile_init(seed)` to initialize RNG
    * Non-matching cores skip initialization and remain unmodified
 
@@ -170,13 +170,14 @@ The program factory creates a single reader kernel and a single compute kernel t
 Each core's reader kernel performs the following operations:
 1. Reads the user_ids tensor from DRAM into L1 memory using NoC operations
 2. Iterates through the user_ids array to check if its core ID (received as runtime argument) matches any entry
-3. Communicates the match result (boolean) to the compute kernel via mailbox writes to all compute threads
+3. Writes the match result (boolean) to a dedicated circular buffer for kernel communication
+4. Pushes the communication entry to make it available to the compute kernel
 
-The mailbox communication mechanism allows the reader kernel (running on the data movement processor) to pass information to the compute kernel threads without using circular buffers.
+The circular buffer communication mechanism provides a structured way for the reader kernel (running on the data movement processor) to pass information to the compute kernel.
 
 **Compute Kernel (`manual_seed_single_seed_receive_user_id.cpp`):**
 
-The compute kernel waits for the match result from the reader kernel via `mailbox_read()`. If the match is positive, it initializes the RNG by calling `rand_tile_init(seed)` with the seed value received as a compile-time argument. Non-matching cores skip initialization entirely.
+The compute kernel waits for data from the reader kernel via `cb_wait_front()` on the kernel communication circular buffer. It then reads the match result using `read_tile_value()`. If the match is positive, it initializes the RNG by calling `rand_tile_init(seed)` with the seed value received as a compile-time argument. After processing, it pops the communication entry with `cb_pop_front()`. Non-matching cores skip initialization entirely.
 
 ---
 
@@ -201,12 +202,12 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
    * Each core's reader kernel loads both user_ids and seeds tensors from DRAM to L1
    * The reader kernel checks if its core_id (passed at runtime) matches any ID in user_ids
    * If matched, it retrieves the corresponding seed from the seeds tensor at the same index
-   * Both the match result and the seed value are communicated to the compute kernel via mailbox
+   * Both the match result and the seed value are communicated to the compute kernel via circular buffer
    * Tensors must have identical shapes and volumes (1-dimensional)
 
 4. **Seed Initialization**:
-   * The compute kernel reads the match result from the mailbox
-   * If matched, it reads the seed value from the mailbox
+   * The compute kernel reads the match result from the CB message
+   * If matched, it reads the seed value from the CB message
    * Calls `rand_tile_init(seed)` with the matched seed value
    * Cores not listed in user_ids remain unmodified
 
@@ -227,13 +228,14 @@ Each core's reader kernel executes a more complex workflow:
 1. Reads both the user_ids tensor and seeds tensor from DRAM into separate L1 memory regions using NoC operations
 2. Iterates through the user_ids array to find if its core ID matches any entry
 3. If a match is found, retrieves the corresponding seed value from the seeds tensor at the same index
-4. Sends both the match result (boolean) and the seed value (if matched) to the compute kernel via mailbox writes
+4. Writes both the match result (boolean at index 0) and the seed value (at index 1) to the kernel communication circular buffer
+5. Pushes the communication entry to make it available to the compute kernel
 
-The dual-mailbox communication pattern allows passing both control information (whether to initialize) and data (the seed value) from the reader to the compute kernel.
+The circular buffer communication pattern allows passing both control information (whether to initialize) and data (the seed value) from the reader to the compute kernel in a single structured message.
 
 **Compute Kernel (`manual_seed_receive_all_data.cpp`):**
 
-The compute kernel reads the match result from the mailbox via `mailbox_read()`. If positive, it reads the seed value from a second mailbox message and calls `rand_tile_init(seed)` to initialize the RNG with the core-specific seed. This allows each core to receive a unique seed value while using the same kernel code.
+The compute kernel waits for data from the reader kernel via `cb_wait_front()` on the kernel communication circular buffer. It reads the match result from index 0 using `read_tile_value()`. If positive, it reads the seed value from index 1 and calls `rand_tile_init(seed)` to initialize the RNG with the core-specific seed. After processing, it pops the communication entry with `cb_pop_front()`. This allows each core to receive a unique seed value while using the same kernel code.
 
 ---
 

@@ -52,33 +52,21 @@ BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcas
             break;
 
         case SubtileBroadcastType::ROW_A:
-            compute_kernel = KernelName::ComputeNoBcast;
-            bcast_input = std::nullopt;
-            break;
-
         case SubtileBroadcastType::ROW_B:
             compute_kernel = KernelName::ComputeNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::ROW_B_COL_A:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-
         case SubtileBroadcastType::ROW_A_COL_B:
             compute_kernel = KernelName::ComputeBcast;
             bcast_input = 1;
-            break;
-
-        case SubtileBroadcastType::ROW_B_COL_A:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
             break;
     }
 }
@@ -414,7 +402,11 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {
-                return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+                return {"rsub_int_tile_init();", "rsub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"rsub_int_tile_init();", "rsub_uint32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"rsub_int_tile_init();", "rsub_uint16_tile"};
             } else {
                 return {"rsub_binary_tile_init();", "rsub_binary_tile"};
             }
@@ -513,12 +505,11 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;
-    } else {
-        auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
-        defines["BINARY_SFPU_INIT"] = std::move(tile_init);
-        defines["BINARY_SFPU_OP"] = std::move(tile_fn);
-        return defines;
     }
+    auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
+    defines["BINARY_SFPU_INIT"] = std::move(tile_init);
+    defines["BINARY_SFPU_OP"] = std::move(tile_fn);
+    return defines;
 }
 
 void add_activation_defines(
@@ -649,68 +640,5 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
     ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;
-}
-
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
-    return tensor_spec.memory_config().shard_spec();
-}
-
-inline auto is_uneven(const TensorSpec& t) {
-    if (not t.memory_config().is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = get_shard_spec(t)->shape;
-    const auto rank = shape.rank();
-
-    // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
-    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
-        volume_except_last *= shape[i];
-    }
-
-    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
-    // scalar value treated as interleaved
-    if (!b.has_value()) {
-        return false;
-    }
-
-    // does not work for width and block sharding, pcc error,
-    // maybe support later to improve performance
-    // if (!b.has_value() && a.memory_config().is_sharded()) {
-    //     return !is_uneven(a);
-    // }
-
-    if (!c.memory_config().is_sharded()) {
-        return false;
-    }
-
-    // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape()) &&
-        (a.memory_config().memory_layout() == b->memory_config().memory_layout())) {
-        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
-            return false;
-        }
-        if (a.memory_config().buffer_type() == BufferType::DRAM ||
-            b->memory_config().buffer_type() == BufferType::DRAM ||
-            c.memory_config().buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-    }
-
-    return false;
 }
 }  // namespace ttnn::operations::binary_ng

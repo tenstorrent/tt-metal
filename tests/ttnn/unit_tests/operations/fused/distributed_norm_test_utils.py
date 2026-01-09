@@ -162,6 +162,7 @@ def compute_ttnn_distributed_norm(
     weight_layout=ttnn.TILE_LAYOUT,
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
+    use_2d_core_grid=None,
 ):
     """
     Compute TTNN distributed normalization output.
@@ -178,6 +179,7 @@ def compute_ttnn_distributed_norm(
         weight_layout: Memory layout for weight tensor
         bias_layout: Memory layout for bias tensor
         use_welford: Use Welford algorithm for variance computation
+        use_2d_core_grid: Whether to use 2D core grid layout (optional, only for rms_norm)
 
     Returns:
         TTNN output converted to torch tensor
@@ -277,7 +279,7 @@ def compute_ttnn_distributed_norm(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            program_config=program_config,
+            use_2d_core_grid=use_2d_core_grid,
         )
     else:
         raise ValueError(f"Unknown norm_type: {norm_type}")
@@ -315,7 +317,7 @@ def compute_ttnn_distributed_norm(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            program_config=program_config,
+            use_2d_core_grid=use_2d_core_grid,
         )
 
     # Convert back to torch
@@ -372,6 +374,7 @@ def run_distributed_norm_test(
     weight_layout=ttnn.TILE_LAYOUT,
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
+    use_2d_core_grid=None,
 ):
     """
     Main test function for distributed normalization.
@@ -393,6 +396,7 @@ def run_distributed_norm_test(
         weight_layout: Memory layout for weight tensor (default: TILE_LAYOUT)
         bias_layout: Memory layout for bias tensor (default: TILE_LAYOUT)
         use_welford: Use Welford algorithm for variance computation (default: True)
+        use_2d_core_grid: Whether to use 2D core grid layout (optional, only for rms_norm)
 
     Returns:
         Tuple of (passes, max_abs_diff, max_rel_diff, mean_rel_diff)
@@ -426,6 +430,7 @@ def run_distributed_norm_test(
         weight_layout,
         bias_layout,
         use_welford,
+        use_2d_core_grid,
     )
 
     # Check average relative difference

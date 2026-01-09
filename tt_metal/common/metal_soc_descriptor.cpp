@@ -164,7 +164,8 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     for (const auto& logical_coord : this->get_cores(tt::CoreType::ETH, tt::CoordSystem::LOGICAL)) {
-        this->logical_eth_core_to_chan_map.insert({{logical_coord.x, logical_coord.y}, logical_coord.y});
+        this->logical_eth_core_to_chan_map.insert(
+            {{logical_coord.x, logical_coord.y}, static_cast<int>(logical_coord.y)});
     }
 }
 

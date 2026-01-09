@@ -50,7 +50,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
     V: B x NKH x S x DH
-    attn_mask: B x NQH x S x S
+    attn_mask: B x NQH x S x S  or  B x 1 x S x S
     */
 
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -95,6 +95,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
+    const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : true;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -129,6 +130,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
@@ -363,6 +365,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       num_cores,
                                                       (std::uint32_t)is_causal,
                                                       (std::uint32_t)use_provided_mask,
+                                                      (std::uint32_t)broadcast_provided_mask_heads,
                                                       (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
@@ -754,6 +757,7 @@ void SDPAProgramFactory::override_runtime_arguments(
     uint32_t chunked_q_chunk_offset = 0;
     if (is_chunked) {
         page_table_addr = tensor_args.page_table.value().buffer()->address();
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
     }
 

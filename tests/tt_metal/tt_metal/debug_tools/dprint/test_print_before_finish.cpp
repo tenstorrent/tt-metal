@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <variant>
@@ -78,12 +78,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
             expected_output.push_back(fmt::format("({},{}) After wait...", x, y));
         }
     }
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            DPrintMeshFixture::dprint_file_name,
-            expected_output
-        )
-    );
+    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, expected_output));
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {

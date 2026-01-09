@@ -178,8 +178,21 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     const auto num_input_cores = input_tensor_cores.num_cores();
     const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
     // Get only cores that have actual data
+    const auto& output_tensor_original_corerangeset = output_tensor.memory_config().shard_spec()->grid;
     const auto& cores_with_data = output_tensor.buffer()->buffer_distribution_spec()->cores_with_data();
-    const auto output_tensor_cores = CoreRangeSet(cores_with_data);
+
+    // filter output_tensor_cores to only include cores that have data and preserve original order
+    CoreRangeSet output_tensor_cores;
+    if (cores_with_data.size() == output_tensor_original_corerangeset.num_cores()) {
+        output_tensor_cores = output_tensor_original_corerangeset;
+    } else {
+        std::vector<CoreRange> output_core_ranges;
+        output_core_ranges.reserve(cores_with_data.size());
+        for (const auto& coord : cores_with_data) {
+            output_core_ranges.emplace_back(coord, coord);
+        }
+        output_tensor_cores = CoreRangeSet(output_core_ranges);
+    }
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();

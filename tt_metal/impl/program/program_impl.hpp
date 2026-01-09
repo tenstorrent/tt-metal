@@ -157,6 +157,7 @@ using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 // Internal class for holding a group of programs for parallel compilation.
 class ProgramCompileGroup {
 private:
+    std::mutex mutex_;
     std::unordered_map<IDevice*, std::unique_ptr<Program>> program_device_map_;
 
 public:
@@ -198,15 +199,15 @@ public:
     ProgramId get_runtime_id() const;
     ProgramId get_id() const;
     std::size_t num_kernels() const;
-    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+    std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     void add_buffer(std::shared_ptr<Buffer> buf);
     void release_buffers();
-    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord& core) const;
-    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_on_core(const CoreCoord& core) const;
+    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_on_corerange(const CoreRange& cr) const;
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
@@ -270,7 +271,7 @@ public:
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
 
-    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
+    std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
@@ -304,7 +305,7 @@ private:
     std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;
     ProgramTransferInfo program_transfer_info;
 
-    bool finalized_;
+    bool finalized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;
@@ -339,14 +340,14 @@ private:
     };
     uint32_t programmable_core_count_;
     uint64_t id;  // Need to make non-const due to move constructor
-    uint64_t runtime_id;
+    uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<CoreCoord> grid_extent_;
 
-    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
-    std::unordered_map<CBHandle, std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
+    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_;
+    std::unordered_map<CBHandle, std::shared_ptr<CircularBufferImpl>> circular_buffer_by_id_;
     // Tracks which circular buffer indices are being used
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
@@ -358,7 +359,7 @@ private:
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
-    bool local_circular_buffer_allocation_needed_;
+    bool local_circular_buffer_allocation_needed_{false};
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
@@ -374,7 +375,7 @@ private:
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
 
-    CBHandle add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer);
+    CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 

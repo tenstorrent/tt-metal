@@ -39,9 +39,15 @@ target_sources(
         FILES
             all_reduce_async/all_reduce_async.hpp
             all_gather_async/all_gather_async.hpp
-            all_gather_async/device/all_gather_async_op.hpp
+            all_gather_async/device/all_gather_async_device_operation.hpp
+            all_gather_async/device/all_gather_async_default_program_factory.hpp
+            all_gather_async/device/all_gather_async_llama_sharded_program_factory.hpp
+            all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
-            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -65,12 +71,13 @@ target_sources(
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.cpp
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
         all_gather_async/all_gather_async.cpp
-        all_gather_async/device/all_gather_async_op.cpp
-        all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+        all_gather_async/device/all_gather_async_device_operation.cpp
+        all_gather_async/device/all_gather_async_default_program_factory.cpp
+        all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
-        llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.cpp
-        llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp
-        llama_all_gather_matmul_async/device/llama_1d_mm_fusion_program_factory.cpp
+        llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
+        llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp
+        llama_all_gather_matmul_async/device/llama_1d_mm_fusion.cpp
         all_to_all_async/all_to_all_async.cpp
         all_to_all_async/device/all_to_all_async_device_operation.cpp
         all_to_all_async/device/all_to_all_async_program_factory.cpp
@@ -88,10 +95,10 @@ target_sources(
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
-        matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
-        matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
+        matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
+        matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
-        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op_device_operation.cpp
@@ -103,8 +110,8 @@ target_sources(
         neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
         neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
         slice_reshard_async/slice_reshard_async.cpp
-        slice_reshard_async/device/slice_reshard_async_op.cpp
-        slice_reshard_async/device/slice_reshard_async_program.cpp
+        slice_reshard_async/device/slice_reshard_async_device_operation.cpp
+        slice_reshard_async/device/slice_reshard_async_program_factory.cpp
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp

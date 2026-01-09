@@ -147,6 +147,7 @@ def test_qwen_decoder_ttt_inference(
         mesh_device,
         n_tensors=5,  # More tensors needed for decoder (attention + MLP)
         n_layers=1,
+        is_qwen=True,
     )
     mesh_device.set_sub_device_stall_group(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]

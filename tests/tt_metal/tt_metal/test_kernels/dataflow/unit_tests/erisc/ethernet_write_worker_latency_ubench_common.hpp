@@ -5,10 +5,10 @@
 #include <cstdint>
 #include <array>
 #include "eth_l1_address_map.h"
-#include "dataflow_api.h"
-#include "ethernet/dataflow_api.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/ethernet/dataflow_api.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "eth_ubenchmark_types.hpp"
 #include "risc_common.h"
 

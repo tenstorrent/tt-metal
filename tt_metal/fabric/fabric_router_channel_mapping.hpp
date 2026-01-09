@@ -82,7 +82,7 @@ class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
         Topology topology,
-        bool has_tensix_extension,
+        bool downstream_is_tensix_builder,
         RouterVariant variant,
         const IntermeshVCConfig* intermesh_config);
 

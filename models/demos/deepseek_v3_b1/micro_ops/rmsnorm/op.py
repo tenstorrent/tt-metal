@@ -35,7 +35,15 @@ class RMSNormSingleCore:
         return normalized * gamma_tensor
 
     @staticmethod
-    def op(input_tensor, gamma_tensor, output_tensor, epsilon=1e-6, numel=None, fp32_dest_acc_en=False):
+    def op(
+        input_tensor,
+        gamma_tensor,
+        output_tensor,
+        epsilon=1e-6,
+        numel=None,
+        fp32_dest_acc_en=False,
+        rsqrt_fast_approx=False,
+    ):
         """
         Execute RMS norm operation using generic_op.
 
@@ -46,6 +54,7 @@ class RMSNormSingleCore:
             epsilon: Small value to avoid division by zero
             numel: Number of elements to use for RMS calculation (defaults to input logical volume)
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
+            rsqrt_fast_approx: Whether to use fast approximation for rsqrt
 
         Returns:
             Output tensor with RMS norm applied
@@ -153,17 +162,15 @@ class RMSNormSingleCore:
         ]
 
         # Runtime args: epsilon + scalar (no buffer addresses since CBs are backed by sharded tensors)
-        reader_rt_args = [
-            epsilon_packed,
-            scalar_packed,
-        ]
+        reader_rt_args = []
+        reader_rt_args.append((ttnn.CoreCoord(0, 0), [epsilon_packed, scalar_packed]))
 
         reader_kernel_descriptor = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/rmsnorm/kernels/rmsnorm_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=reader_compile_time_args,
-            runtime_args=[[reader_rt_args]],
+            runtime_args=reader_rt_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
 
@@ -193,6 +200,7 @@ class RMSNormSingleCore:
             num_tiles,
             0,  # epsilon_index
             1,  # scalar_index
+            1 if rsqrt_fast_approx else 0,
         ]
 
         compute_kernel_descriptor = ttnn.KernelDescriptor(
@@ -200,7 +208,7 @@ class RMSNormSingleCore:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=compute_compile_time_args,
-            runtime_args=[[[]]],
+            runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,

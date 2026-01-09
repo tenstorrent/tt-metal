@@ -183,6 +183,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.hpp
 )
 
 # Manually select only specific files from metal ops
@@ -310,9 +312,9 @@ if(NOT TARGET TT::Metalium)
             "$ENV{TT_METAL_HOME}/tt_metal"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
             "$ENV{TT_METAL_HOME}/tt_metal/api/"
             "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
             "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"

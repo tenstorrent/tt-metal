@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -12,13 +11,15 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head import LMHead
-from models.demos.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
+    get_test_weight_config,
     pad_or_trim_seq_len,
     run_module_forward,
 )
@@ -49,9 +50,8 @@ class DeepseekV3LMHead(nn.Module):
     "mode,seq_len",
     [
         ("decode", 32),
-        ("prefill", 1024),
-        ("prefill", 2048),
-    ],
+    ]
+    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
 )
 def test_forward_pass(
     mode: str,
@@ -62,6 +62,11 @@ def test_forward_pass(
     cache_path: Path,
     set_deterministic_env: Any,
 ):
+    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
+    if mode == "prefill" and seq_len != 128:
+        pytest.skip(
+            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+        )
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
 
     reference_model = DeepseekV3LMHead(hf_config).eval()
@@ -72,17 +77,9 @@ def test_forward_pass(
     # Pad input to SEQ_LEN_CHUNK_SIZE if necessary
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
-    weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    weight_config = get_test_weight_config(
+        LMHead, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
     )
-
-    # Setup: Convert weights and get weight_config
-    weight_config = LMHead.convert_weights(hf_config, (state_dict,), weight_cache_path, mesh_device)
-    _check_weights_exist_and_convert(weight_cache_path, weight_config)
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

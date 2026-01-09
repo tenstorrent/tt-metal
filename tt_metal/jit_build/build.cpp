@@ -103,9 +103,8 @@ std::string get_default_root_path() {
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
-    } else {
-        return "/tmp/tt-metal-cache/";
     }
+    return "/tmp/tt-metal-cache/";
 }
 
 JitBuildEnv::JitBuildEnv() = default;
@@ -140,7 +139,6 @@ void JitBuildEnv::init(
     }
 
     this->out_root_ = this->out_root_ + git_hash + "/";
-    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: out_root after = '{}'", this->out_root_);
 #endif
 
     // Tools
@@ -202,6 +200,10 @@ void JitBuildEnv::init(
     // Flags
     string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
 
+    if (rtoptions.get_jit_analytics_enabled()) {
+        common_flags += "-fdump-rtl-all -fdump-tree-original ";
+    }
+
     if (rtoptions.get_riscv_debug_info_enabled()) {
         common_flags += "-g ";
     }
@@ -218,8 +220,8 @@ void JitBuildEnv::init(
 
     // Defines
     this->defines_ = "";
-    for (auto it = device_kernel_defines.begin(); it != device_kernel_defines.end(); ++it) {
-        this->defines_ += "-D" + it->first + "=" + it->second + " ";
+    for (const auto& device_kernel_define : device_kernel_defines) {
+        this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
@@ -246,6 +248,9 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
+    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+        this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
@@ -326,8 +331,8 @@ void JitBuildEnv::init(
         root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
-    for (size_t i = 0; i < includeDirs.size(); ++i) {
-        oss << "-I" << includeDirs[i] << " ";
+    for (const auto& includeDir : includeDirs) {
+        oss << "-I" << includeDir << " ";
     }
     this->includes_ = oss.str();
 
@@ -388,7 +393,10 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_, build_config.core_type, build_config.processor_class, build_config.processor_id};
+        this->is_fw_,
+        build_config.core_type,
+        build_config.processor_class,
+        static_cast<uint32_t>(build_config.processor_id)};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -419,6 +427,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->lflags_ += common_flags;
     }
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
+    this->lflags_ += jit_build_query.linker_flags(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
     // Source files
     {
