@@ -791,8 +791,13 @@ def test_gpt_oss_experts_device_perf(mode, seq_len):
     assert op_stats, "No device perf stats captured."
     total_kernel_us = total_kernel_ns / 1000.0
     total_op_to_op_us = total_op_to_op_ns / 1000.0
+    avg_kernel_us = total_kernel_us / DEVICE_PERF_ITERS
+    avg_op_to_op_us = total_op_to_op_us / DEVICE_PERF_ITERS
     logger.info(f"Device perf per-op averages (ns): {json.dumps(op_stats, indent=2)}")
-    logger.info(f"Device perf totals: kernel={total_kernel_us:.3f} us, op_to_op={total_op_to_op_us:.3f} us")
+    logger.info(
+        f"Device perf totals ({DEVICE_PERF_ITERS} iterations): kernel={total_kernel_us:.3f} us, op_to_op={total_op_to_op_us:.3f} us"
+    )
+    logger.info(f"Device perf per-iteration averages: kernel={avg_kernel_us:.3f} us, op_to_op={avg_op_to_op_us:.3f} us")
     assert total_kernel_ns > 0, "Total kernel duration must be positive."
     assert total_op_to_op_ns >= 0, "Total op-to-op latency must be non-negative."
 
@@ -824,6 +829,20 @@ def test_gpt_oss_experts_device_perf(mode, seq_len):
         step_name,
         "total_op_to_op_latency_us",
         total_op_to_op_us,
+    )
+    benchmark_data.add_measurement(
+        perf_profiler,
+        0,
+        step_name,
+        "avg_kernel_duration_us",
+        avg_kernel_us,
+    )
+    benchmark_data.add_measurement(
+        perf_profiler,
+        0,
+        step_name,
+        "avg_op_to_op_latency_us",
+        avg_op_to_op_us,
     )
     benchmark_data.save_partial_run_json(
         perf_profiler,
