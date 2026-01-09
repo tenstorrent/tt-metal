@@ -9,6 +9,7 @@ on:
       docker-image:
         required: true
         type: string
+
   pull_request:
     paths:
       - 'tests/ttnn/unit_tests/operations/eltwise/**'
@@ -22,10 +23,12 @@ on:
       - 'tests/ttnn/unit_tests/operations/debug/**'
       - 'tests/ttnn/unit_tests/base_functionality/**'
       - 'tests/ttnn/unit_tests/benchmarks/**'
+
 jobs:
   check-test-count:
     runs-on: ubuntu-latest
     name: "Check Test Count"
+
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -35,10 +38,12 @@ jobs:
       volumes:
         - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
+
     defaults:
       run:
         shell: bash
         working-directory: /work
+
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -49,6 +54,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y python3-pip git
+
       - name: Download built wheel
         if: ${{ inputs.wheel-artifact-name != '' }}
         uses: actions/download-artifact@v4
