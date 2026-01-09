@@ -118,7 +118,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
     CoreCoord core_grid_offset) {
     auto* mesh_device = input_tensor.device();
 
-    const uint32_t dim = 3;
     const uint32_t ring_size = 8;
 
     // op hyperparams
@@ -292,7 +291,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_C,                  // slice_C
         slice_Ht,                 // slice_Ht
         slice_Wt,                 // slice_Wt
-        dim,                      // dim normalized to 4D
     };
 
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
@@ -325,7 +323,6 @@ DeepseekReduceScatterProgramArtifacts build_deepseek_reduce_scatter_program_arti
         slice_C,                        // slice_C
         slice_Ht,                       // slice_Ht
         slice_Wt,                       // slice_Wt
-        dim                             // dim normalized to 4D
     };
 
     deepseek_append_fabric_mux_connection_ct_args(

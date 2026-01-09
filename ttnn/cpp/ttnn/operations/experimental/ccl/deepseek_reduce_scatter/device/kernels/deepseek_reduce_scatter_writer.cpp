@@ -41,14 +41,13 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(13);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(14);
-constexpr uint32_t dim = get_compile_time_arg_val(15);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(16);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(19);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(20);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(18);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(19);
 
-constexpr uint32_t num_ct_args = 21;
+constexpr uint32_t num_ct_args = 19;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -221,16 +220,7 @@ void kernel_main() {
             if (i < (ring_size - 1)) {
                 chunk_count = 0;
 
-                uint32_t intermediate_tile_id_start;
-                if constexpr (dim == 3) {
-                    intermediate_tile_id_start = actual_slice_idx * slice_Wt;
-                } else if constexpr (dim == 2) {
-                    intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
-                } else if constexpr (dim == 1) {
-                    intermediate_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt;
-                } else {
-                    ASSERT(false);
-                }
+                uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
                 for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
                     uint32_t intermediate_row_offset = start_row_offset;

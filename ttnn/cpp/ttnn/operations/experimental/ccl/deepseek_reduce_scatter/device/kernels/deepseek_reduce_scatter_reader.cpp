@@ -30,7 +30,8 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t dim = get_compile_time_arg_val(15);
+
+constexpr uint32_t num_ct_args = 13;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -49,11 +50,11 @@ void kernel_main() {
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<num_ct_args + 1>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
     auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
 
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<16 + ct_offset>();
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<num_ct_args + 1 + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 
     uint32_t chunk_count = 0;
@@ -80,20 +81,9 @@ void kernel_main() {
                 actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
             }
 
-            uint32_t input_tile_id_start;
-            uint32_t intermediate_tile_id_start;
-            if constexpr (dim == 3) {
-                input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
-                intermediate_tile_id_start = actual_slice_idx * slice_Wt;
-            } else if constexpr (dim == 2) {
-                input_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt + batch_offset;
-                intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
-            } else if constexpr (dim == 1) {
-                input_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt + batch_offset;
-                intermediate_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt;
-            } else {
-                ASSERT(false);
-            }
+            uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
+            uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
+
             chunk_count = 0;
             for (uint32_t c = 0; c < slice_C; ++c) {
                 uint32_t input_pages_read_in_row = start_pages_read_in_row;
