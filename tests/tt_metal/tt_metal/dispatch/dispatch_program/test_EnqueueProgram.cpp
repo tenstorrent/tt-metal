@@ -139,7 +139,7 @@ KernelHandle create_kernel(
                 kernel_path,
                 cr_set,
                 tt::tt_metal::EthernetConfig{
-                    .eth_mode = core_type == HalProgrammableCoreType::IDLE_ETH ? Eth::IDLE : Eth::RECEIVER,
+                    .eth_mode = core_type == HalProgrammableCoreType::IDLE_ETH ? Eth::IDLE : Eth::ACTIVE,
                     .noc = static_cast<NOC>(processor_id),
                     .processor = static_cast<DataMovementProcessor>(processor_id),
                     .compile_args = compile_args,

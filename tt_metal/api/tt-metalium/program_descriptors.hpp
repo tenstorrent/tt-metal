@@ -91,7 +91,7 @@ struct ComputeConfigDescriptor {
     bool math_approx_mode = false;
 };
 struct EthernetConfigDescriptor {
-    Eth eth_mode = Eth::SENDER;
+    Eth eth_mode = Eth::ACTIVE;
     NOC noc = NOC::NOC_0;
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
 };

@@ -182,7 +182,7 @@ KernelHandle FDKernel::configure_kernel_variant(
             path,
             logical_core_,
             tt::tt_metal::EthernetConfig{
-                .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
+                .eth_mode = is_active_eth_core ? Eth::ACTIVE : Eth::IDLE,
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,

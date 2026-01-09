@@ -99,7 +99,7 @@ static void test_sems_across_core_types(
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_across_core_types.cpp",
                 eth_core,
                 tt::tt_metal::EthernetConfig{
-                    .eth_mode = active_eth ? tt::tt_metal::Eth::RECEIVER : tt::tt_metal::Eth::IDLE,
+                    .eth_mode = active_eth ? tt::tt_metal::Eth::ACTIVE : tt::tt_metal::Eth::IDLE,
                     .noc = static_cast<tt_metal::NOC>(dm_processor),
                     .processor = dm_processor,
                     .compile_args = compile_args,
@@ -176,7 +176,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
                 "tt_metal/kernels/dataflow/blank.cpp",
                 eth_core,
                 tt::tt_metal::EthernetConfig{
-                    .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
+                    .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::ACTIVE,
                     .noc = static_cast<NOC>(erisc_idx),
                     .processor = dm_processor,
                 });
@@ -257,7 +257,10 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
             eth_core,
-            tt::tt_metal::EthernetConfig{.eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
+            tt::tt_metal::EthernetConfig{
+                .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::ACTIVE,
+                .noc = static_cast<NOC>(erisc_idx),
+                .processor = dm_processor});
 
         workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
@@ -341,7 +344,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
                 program,
                 "tt_metal/kernels/dataflow/blank.cpp",
                 core_coord,
-                EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
+                EthernetConfig{.eth_mode = Eth::ACTIVE, .noc = static_cast<NOC>(erisc_idx), .processor = dm_processor});
 
             workload.add_program(device_range, std::move(program));
             this->RunProgram(mesh_device, workload);

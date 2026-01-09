@@ -642,7 +642,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+            tt_metal::EthernetConfig{.eth_mode = Eth::ACTIVE, .noc = tt_metal::NOC::NOC_0});
 
         workload.add_program(device_range, std::move(program));
         auto& program_ref = workload.get_programs().at(device_range);
@@ -664,7 +664,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
             program_common_test,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+            tt_metal::EthernetConfig{.eth_mode = Eth::ACTIVE, .noc = tt_metal::NOC::NOC_0});
 
         auto device_range_common_test = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload_common_test;
@@ -682,7 +682,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
             program2,
             "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp",
             eth_core_range,
-            tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+            tt_metal::EthernetConfig{.eth_mode = Eth::ACTIVE, .noc = tt_metal::NOC::NOC_0});
 
         auto device_range2 = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload2;

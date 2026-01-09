@@ -387,7 +387,7 @@ bool initialize_program(
                 "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
                 *erisc_core,
                 tt::tt_metal::EthernetConfig{
-                    .eth_mode = Eth::RECEIVER,
+                    .eth_mode = Eth::ACTIVE,
                     .noc = NOC::NOC_0,
                     .defines = defines,
                 });

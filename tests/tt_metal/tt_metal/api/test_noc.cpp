@@ -599,7 +599,7 @@ void run_local_noc_stream_reg_inc(
             MetalContext::instance().hal().get_dev_addr(hal_programmable_core_type, HalL1MemAddrType::UNRESERVED);
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
         if (hal_programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            config.eth_mode = Eth::SENDER;
+            config.eth_mode = Eth::ACTIVE;
         } else if (hal_programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             config.eth_mode = Eth::IDLE;
         }

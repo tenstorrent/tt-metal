@@ -63,7 +63,7 @@ void RunTest(
     tt_metal::EthernetConfig config = {.noc = static_cast<tt_metal::NOC>(processor), .processor = processor};
     if (active) {
         test_cores = device->get_active_ethernet_cores(true);
-        config.eth_mode = Eth::SENDER;
+        config.eth_mode = Eth::ACTIVE;
     } else {
         test_cores = device->get_inactive_ethernet_cores();
         config.eth_mode = Eth::IDLE;

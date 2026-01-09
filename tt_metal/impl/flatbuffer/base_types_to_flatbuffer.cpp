@@ -34,8 +34,7 @@ flatbuffer::NOC_MODE to_flatbuffer(NOC_MODE in) {
 
 flatbuffer::EthMode to_flatbuffer(Eth in) {
     switch (in) {
-        case Eth::SENDER: return flatbuffer::EthMode::SENDER;
-        case Eth::RECEIVER: return flatbuffer::EthMode::RECEIVER;
+        case Eth::ACTIVE: return flatbuffer::EthMode::ACTIVE;
         case Eth::IDLE: return flatbuffer::EthMode::IDLE;
     }
     TT_THROW("Unsupported Eth to flatbuffer.");

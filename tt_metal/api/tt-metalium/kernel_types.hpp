@@ -98,7 +98,7 @@ struct ComputeConfig {
 };
 
 struct EthernetConfig {
-    Eth eth_mode = Eth::SENDER;
+    Eth eth_mode = Eth::ACTIVE;
     NOC noc = NOC::NOC_0;
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
     std::vector<uint32_t> compile_args;

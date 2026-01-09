@@ -23,9 +23,8 @@ enum NOC_MODE : byte {
 }
 
 enum EthMode : ubyte {
-  SENDER = 0,
-  RECEIVER = 1,
-  IDLE = 2
+  ACTIVE = 0,
+  IDLE = 1
 }
 
 enum MathFidelity : ubyte {

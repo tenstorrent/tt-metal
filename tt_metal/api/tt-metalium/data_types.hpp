@@ -45,9 +45,8 @@ enum NOC_MODE : uint8_t {
 };
 
 enum Eth : uint8_t {
-    SENDER = 0,
-    RECEIVER = 1,
-    IDLE = 2,
+    ACTIVE = 0,
+    IDLE = 1,
 };
 
 }  // namespace tt::tt_metal
