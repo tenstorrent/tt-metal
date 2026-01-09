@@ -75,13 +75,25 @@ protected:
     }
 
     // Helper: Wait for watcher exception with specific message
-    void ExpectWatcherException(const std::string& expected_message) {
+    void ExpectWatcherException(
+        const std::string& expected_message, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
         std::string exception;
-        while (exception.empty()) {
+        auto start = std::chrono::steady_clock::now();
+
+        while (std::chrono::steady_clock::now() - start < timeout) {
             exception = MetalContext::instance().watcher_server()->exception_message();
+            if (!exception.empty()) {
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        EXPECT_TRUE(exception.find(expected_message) != std::string::npos) << exception;
+        ASSERT_FALSE(exception.empty()) << "Timeout (" << timeout.count() << "ms) waiting for watcher exception.\n"
+                                        << "Expected: " << expected_message;
+
+        EXPECT_TRUE(exception.find(expected_message) != std::string::npos)
+            << "Watcher exception mismatch:\n"
+            << "  Expected substring: " << expected_message << "\n"
+            << "  Actual exception:   " << exception;
     }
 };
 

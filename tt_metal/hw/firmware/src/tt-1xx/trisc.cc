@@ -181,8 +181,10 @@ int main(int argc, char* argv[]) {
         }
 
         // Initialize CRTA count from L1 memory
-        // Set to 0 if offset is sentinel (no common args set)
-        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL) {
+        // Set to 0 if: 1. offset is sentinel (no common args set)
+        //              2. memory contains known garbage pattern 0xBEEF#### (unicast mode, kernel has no CRTAs)
+        if (launch_msg->kernel_config.rta_offset[PROCESSOR_INDEX].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+            ((crta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
             crta_count = 0;
         } else {
             crta_count = crta_l1_base[0];
