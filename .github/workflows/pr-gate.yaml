@@ -145,7 +145,7 @@ jobs:
       upload-coverage: false
 
   build:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -271,12 +271,12 @@ jobs:
       product: tt-nn
 
   APC-test-count-check:
-    needs: [ build, find-changed-files ]
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-nn-changed == 'true'
-      }}
+    needs: [ build ]
+    # if: ${{
+    #     github.ref_name == 'main' ||
+    #     needs.find-changed-files.outputs.cmake-changed == 'true' ||
+    #     needs.find-changed-files.outputs.tt-nn-changed == 'true'
+    #   }}
     uses: ./.github/workflows/validate-test-count.yaml
     with:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
