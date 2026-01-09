@@ -644,7 +644,7 @@ def test_demo(
     if any(is_special_tokens_produced):
         logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
         if is_ci_env:
-            assert False, "model produced special tokens"
+            raise RuntimeError("Model produced special tokens")
 
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)

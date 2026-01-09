@@ -54,7 +54,7 @@ class VisionBlock(LightweightModule):
         )
         # TODO: remove after (add issue number) is fixed
         extra_rmsnorm_kwargs = {}
-        if args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
+        if args.base_model_name in ("Qwen2.5-VL-7B",):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = RMSNorm(
             device=mesh_device,
