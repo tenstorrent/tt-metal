@@ -236,17 +236,18 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
         print(f"  Top-1: {matches_top1}/{total_compared} = {computed_top1:.4f} ({computed_top1 * 100:.2f}%)")
         print(f"  Top-5: {matches_top5}/{total_compared} = {computed_top5:.4f} ({computed_top5 * 100:.2f}%)")
 
-    min_expected_accuracy = 0.90
-    assert top1_acc >= min_expected_accuracy, (
+    min_expected_top1 = 0.93
+    min_expected_top5 = 1.00
+    assert top1_acc >= min_expected_top1, (
         f"Top-1 accuracy {top1_acc:.4f} is below minimum expected "
-        f"{min_expected_accuracy:.2f}. This may indicate a bug in teacher forcing "
+        f"{min_expected_top1:.2f}. This may indicate a bug in teacher forcing "
         f"or model non-determinism. Generated {len(tt_generated_tokens)} tokens, "
         f"reference has {gen_len} generated tokens."
     )
 
-    assert top5_acc >= min_expected_accuracy, (
+    assert top5_acc >= min_expected_top5, (
         f"Top-5 accuracy {top5_acc:.4f} is below minimum expected "
-        f"{min_expected_accuracy:.2f}. This may indicate a bug in teacher forcing "
+        f"{min_expected_top5:.2f}. This may indicate a bug in teacher forcing "
         f"or model non-determinism. Generated {len(tt_generated_tokens)} tokens, "
         f"reference has {gen_len} generated tokens."
     )

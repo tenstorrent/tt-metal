@@ -50,6 +50,7 @@ run_dual_galaxy_deepseekv3_tests() {
   echo "LOG_METAL: Running run_dual_galaxy_deepseekv3_tests"
 
   source python_env/bin/activate
+  mkdir -p logs
 
   local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
   local hosts="g10glx03,g10glx04"
