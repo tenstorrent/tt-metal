@@ -679,20 +679,6 @@ jobs:
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: tt-sweeps
-          POSTGRES_PASSWORD: tt.sweeps
-          POSTGRES_DB: tt-model-traces
-        volumes:
-          - ${{ github.workspace }}/docker-job:/work
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -729,94 +715,6 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: 🔌 Setup Local Database
-        if: |
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
-          (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *')
-        timeout-minutes: 5
-        env:
-          PGPASSWORD: tt.sweeps
-        run: |
-          echo "::group::🔧 Database Setup"
-
-          if ! python3 -c "import psycopg2" 2>/dev/null; then
-            pip install -q psycopg2-binary
-          fi
-
-          echo "⏳ Waiting for postgres service..."
-          for i in {1..30}; do
-            if python3 -c "import psycopg2; psycopg2.connect('postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces')" 2>/dev/null; then
-              echo "✅ Postgres ready"
-              break
-            fi
-            sleep 2
-          done
-
-          echo "♻ Restoring database from SQL dump..."
-
-          # Check if gzipped file exists, decompress if needed
-          SQL_FILE="/work/model_tracer/ttnn_operations_db.sql"
-          if [ -f "${SQL_FILE}.gz" ]; then
-            echo "📦 Found compressed SQL file, decompressing..."
-            if ! command -v gunzip &> /dev/null; then
-              echo "❌ Error: gunzip not found, installing gzip..."
-              apt-get update -qq && apt-get install -y -qq gzip
-            fi
-            gunzip -f "${SQL_FILE}.gz"
-            echo "✅ Decompression complete"
-          fi
-
-          if [ ! -f "$SQL_FILE" ]; then
-            echo "❌ Error: SQL file not found at $SQL_FILE"
-            exit 1
-          fi
-
-          # Get file size for logging
-          SQL_SIZE=$(du -h "$SQL_FILE" | cut -f1)
-          echo "📊 SQL file size: $SQL_SIZE"
-
-          # Use Python docker SDK to exec psql in the postgres container
-          pip install -q docker
-          python3 << 'EOF'
-          import docker
-
-          client = docker.from_env()
-
-          # Find postgres container
-          containers = client.containers.list(filters={"ancestor": "postgres:18"})
-          if not containers:
-              raise Exception("Postgres container not found")
-          postgres = containers[0]
-          print(f"Found postgres container: {postgres.name}")
-
-          # Run psql to restore the dump
-          exit_code, output = postgres.exec_run(
-              cmd=["psql", "-h", "localhost", "-U", "tt-sweeps", "-d", "tt-model-traces",
-                   "-f", "/work/model_tracer/ttnn_operations_db.sql"],
-              environment={"PGPASSWORD": "tt.sweeps"}
-          )
-
-          print(output.decode() if output else "")
-          if exit_code != 0:
-              raise Exception(f"psql failed with exit code {exit_code}")
-
-          print("✅ Database restored successfully")
-          EOF
-
-          echo "🔍 Verifying schema..."
-          python3 << 'EOF'
-          import psycopg2
-          conn = psycopg2.connect("postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces")
-          cur = conn.cursor()
-          cur.execute("SELECT COUNT(*) FROM operations")
-          print(f"Operations: {cur.fetchone()[0]}")
-          cur.execute("SELECT COUNT(*) FROM configurations")
-          print(f"Configurations: {cur.fetchone()[0]}")
-          conn.close()
-          EOF
-
-          echo "✅ Database ready"
-          echo "::endgroup::"
       - name: Run ttnn sweeps generation (single sweep)
         if: |
           github.event_name == 'workflow_dispatch' &&

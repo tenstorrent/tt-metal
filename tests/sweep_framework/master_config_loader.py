@@ -73,21 +73,7 @@ except ImportError:
 
 BASE_DIR = get_base_dir()
 
-
-# Database connection configuration
-# Auto-detect: CI uses GitHub Actions service (postgres:5432), local dev uses cloudflared (localhost:15432)
-def _get_default_db_config():
-    """Determine database connection based on environment"""
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        # CI: Use GitHub Actions PostgreSQL service
-        # Service containers are accessible via their service name as hostname
-        return "postgresql://tt-sweeps:tt.sweeps@postgres:5432/tt-model-traces"
-    else:
-        # Local dev: Use cloudflared tunnel
-        return "postgresql://tt-sweeps:tt.sweeps@localhost:25432/tt-model-traces"
-
-
-DEFAULT_DB_CONFIG = _get_default_db_config()
+DEFAULT_DB_CONFIG = "postgresql://sweep_reader:sweep_readonly_pw@ep-blue-credit-ah8iebt7-pooler.c-3.us-east-1.aws.neon.tech/tt-sweeps?sslmode=require&channel_binding=require"
 
 
 @dataclass
