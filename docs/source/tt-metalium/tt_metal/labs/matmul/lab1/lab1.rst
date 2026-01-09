@@ -754,15 +754,10 @@ Printing a tile in a writer (dataflow) kernel
 Data is passed between kernels using circular buffers (CBs), which often contain tiles of data.
 DPRINT can be combined with the ``TileSlice`` helper to print part or all of a tile from a CB.
 
-The key rules are:
-
-- You can only safely sample a tile from a CB **between** the appropriate CB API calls:
+You can only safely sample a tile from a CB **between** the appropriate CB API calls:
 
   - When reading from CBs (e.g. in writer kernels): between ``cb_wait_front()`` and ``cb_pop_front()``.
   - When writing to CBs (e.g. in reader kernels): between ``cb_reserve_back()`` and ``cb_push_back()``.
-
-- The math (compute) RISC cannot directly see CBs, so CB tile printing is most commonly done from
-  the reader or writer kernels.
 
 A simplified example of printing a full tile from an output CB in a writer kernel is shown below.
 
@@ -833,7 +828,9 @@ A few important caveats to keep in mind when using DPRINT:
 
   Each distinct DPRINT call embeds a format string (and often the file name and line number) into the kernel binary.
   Long or numerous debug strings increase kernel size and may cause it to not fit into available internal SRAM.
-  To avoid this, keep DPRINT messages short and remove or disable most DPRINTs once you have diagnosed the issue.
+  To avoid this, keep DPRINT messages short, particularly if printing within a loop with many iterations.
+  You can also reduce the number of iterations by reducing the problem size while debugging. 
+  Finally, remove or disable most DPRINTs once you have diagnosed the issue.
 
 Taken together, these practices let you use DPRINT as a practical, low-level debug tool in TT-Metalium kernels without
 needing deep knowledge of the underlying Tenstorrent architecture, while still avoiding common pitfalls.
@@ -949,7 +946,7 @@ Exercise 6: Using Device Profiling to Profile Kernels
 
 #. **Compute elapsed firmware time**
 
-   In the CSV log file, -V processor on each core has several rows of data, each indicating a unique timer event.
+   In the CSV log file, each RISC-V processor on each core has several rows of data, each indicating a unique timer event.
    Column ``time[cycles since reset]`` indicates the number of cycles since the reset of the device until the specific timer event.
    For this lab, it is sufficient to determine the overall firmware execution time. To compute it,
    simply subtract the maximum and minimum ``time[cycles since reset]`` values across all rows in the log file, and then multiply
@@ -1158,6 +1155,7 @@ In rare cases, a Tensix device may enter an undefined operational state if a pro
 In such a case, the ``tt-smi -r`` command can be used to reset the device.
 This operation restores the device to a clean state, allowing normal operation to resume.
 If you encounter unexplained behaviors, try resetting the device using this command.
+In an unlikely case that ``tt-smi -r`` gives an error, contact your system administrator.
 
 Additional information about TT-Metalium and the Tenstorrent architecture can be found in the following resources:
 

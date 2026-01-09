@@ -10,6 +10,7 @@
 
 namespace NAMESPACE {
 void MAIN {
+    // Note: The argument index to get_compile_time_arg_val() must be a compile time constant.
     uint32_t n_tiles = get_compile_time_arg_val(0);
 
     // We are going to read from these two circular buffers.
@@ -47,7 +48,7 @@ void MAIN {
 
         // Make sure destination register array is ready for FPU to write its result to.
         // Note that this will also initialize all the tiles in the destination register array to 0.
-        // The initalization is not needed for this example, but is quite useful for matrix multiply.
+        // The initialization is not needed for this example, but is quite useful for matrix multiply.
         tile_regs_acquire();
 
         // Add the tiles from the input circular buffers: 0, 0 are tile indices into cb_in0 and cb_in1
