@@ -53,21 +53,22 @@ static FORCE_INLINE void signal_dispatcher_completion() {
 void kernel_main() {
     write_args_to_l1(get_write_ptr(tt::CBIndex::c_0));
 
-#ifdef MAX_RTA_IDX
+#if defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
+    // Signal completion to BRISC before triggering assert
     signal_dispatcher_completion();
+#endif
+
+#ifdef MAX_RTA_IDX
     // Access RTA: this should have a watcher assert when MAX_RTA_IDX >= rta_count
     uint32_t rta = get_arg_val<uint32_t>(MAX_RTA_IDX);
 #endif
 #ifdef MAX_CRTA_IDX
-    signal_dispatcher_completion();
     // Access CRTA: this should have a watcher assert when MAX_CRTA_IDX >= crta_count
     uint32_t crta = get_common_arg_val<uint32_t>(MAX_CRTA_IDX);
 #endif
 }
 
 #else  // Compute Kernel
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 
 namespace NAMESPACE {
 void MAIN {
@@ -75,19 +76,19 @@ void MAIN {
         // Pass the CB base address as a compile time arg
         write_args_to_l1(get_compile_time_arg_val(0));
 
-#ifdef MAX_RTA_IDX
+#if defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
         // Signal completion to TRISC before triggering assert
-        volatile tt_l1_ptr uint8_t* const trisc_run =
-            &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
-        *trisc_run = RUN_SYNC_MSG_DONE;
+        volatile tt_l1_ptr mailboxes_t* mailbox = reinterpret_cast<volatile tt_l1_ptr mailboxes_t*>(MEM_MAILBOX_BASE);
+        volatile tt_l1_ptr subordinate_map_t* sync =
+            reinterpret_cast<volatile tt_l1_ptr subordinate_map_t*>(&mailbox->subordinate_sync);
+        sync->trisc0 = RUN_SYNC_MSG_DONE;
+#endif
+
+#ifdef MAX_RTA_IDX
         // Access RTA: this should have a watcher assert when MAX_RTA_IDX >= rta_count
         uint32_t rta = get_arg_val<uint32_t>(MAX_RTA_IDX);
 #endif
 #ifdef MAX_CRTA_IDX
-        // Signal completion to TRISC before triggering assert
-        volatile tt_l1_ptr uint8_t* const trisc_run =
-            &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
-        *trisc_run = RUN_SYNC_MSG_DONE;
         // Access CRTA: this should have a watcher assert when MAX_CRTA_IDX >= crta_count
         uint32_t crta = get_common_arg_val<uint32_t>(MAX_CRTA_IDX);
 #endif
