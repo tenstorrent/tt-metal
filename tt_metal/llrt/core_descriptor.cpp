@@ -295,7 +295,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     // Get logical compute grid dimensions and num workers
     static std::unordered_map<uint32_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
     // Unique hash generated based on the config that's being queried
-    uint32_t config_hash = ((uint8_t)(dispatch_core_config.get_core_type())) |
+    uint32_t config_hash = ((uint8_t)(get_core_type_from_config(dispatch_core_config))) |
                            ((uint8_t)(dispatch_core_config.get_dispatch_core_axis()) << 4) | (num_hw_cqs << 8) |
                            (device_id << 16);
     if (!physical_grid_config_cache.contains(config_hash)) {
