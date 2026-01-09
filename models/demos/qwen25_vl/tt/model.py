@@ -55,7 +55,7 @@ class VisionTransformer(LightweightModule):
 
         # Create transformation matrix for RoPE QK prefill
         transformation_mat_torch = get_rot_transformation_mat(
-            args.head_dim
+            args.qwen_vl_head_dim
         )  # todo)) args.head_dim is ignored inside the function
         self.transformation_mats = {
             "prefill": ttnn.as_tensor(
@@ -234,7 +234,7 @@ class DropInVisionTransformer(torch.nn.Module):
             cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
                 grid_thw=grid_thw,
-                head_dim=self.model_args.head_dim,
+                head_dim=self.model_args.qwen_vl_head_dim,
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
                 window_size=self.model_args.hf_config.vision_config.window_size,
                 patch_size=self.model_args.hf_config.vision_config.patch_size,

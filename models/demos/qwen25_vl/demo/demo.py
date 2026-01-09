@@ -646,10 +646,7 @@ def test_demo(
         if is_ci_env:
             assert False, "model produced special tokens"
 
-    # if is_ci_env and "bert-score" in test_id and "Qwen2.5-VL-7B" not in model_args.base_model_name:
     if is_ci_env and "bert-score" in test_id:
-        # todo: fix this issue before enabling BERTScore check for 7B model:
-        #        https://github.com/tenstorrent/tt-metal/issues/34167
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 
