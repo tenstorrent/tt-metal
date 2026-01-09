@@ -617,7 +617,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # --- Check Results ---
-    # Use high PCC threshold (0.999) since we have a proper golden function
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    # Use high PCC threshold (0.9997) to match reference test expectations
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
     return [pcc, e2e_perf]
