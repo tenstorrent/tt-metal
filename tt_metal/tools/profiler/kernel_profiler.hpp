@@ -132,7 +132,6 @@ __attribute__((noinline)) void init_profiler(
                 profiler_data_buffer[riscID].data[i] = 0;
             }
         }
-
         profiler_control_buffer[NOC_X] = my_x[0];
         profiler_control_buffer[NOC_Y] = my_y[0];
     }
@@ -141,6 +140,13 @@ __attribute__((noinline)) void init_profiler(
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID].data[i] = 0x80000000;
+        }
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+            // Update every risc's trace ID
+            profiler_data_buffer[riscID].data[ID_LH] =
+                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+#endif
         }
     }
 #endif
@@ -340,7 +346,7 @@ __attribute__((noinline)) void finish_profiler() {
 #else
         // Need to preserve the upper bits of ID_LH which contain the trace ID
         profiler_data_buffer[riscID].data[ID_LH] =
-            ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | riscID;
+            (profiler_data_buffer[riscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | riscID);
 #endif
         int hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER + riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
@@ -426,12 +432,8 @@ __attribute__((noinline)) void quick_push() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    profiler_data_buffer[myRiscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
-#else
     profiler_data_buffer[myRiscID].data[ID_LH] =
-        ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | myRiscID;
-#endif
+        (profiler_data_buffer[myRiscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | myRiscID);
 
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
