@@ -8,6 +8,7 @@ from transformers.integrations.sdpa_attention import sdpa_attention_forward
 
 import ttnn
 from models.tt_symbiote.core.module import TTNNModule
+from models.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.tt_symbiote.modules.linear import TTNNLinear
 
 
@@ -339,3 +340,158 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
         new_self_attention.sdpa.program_config = program_config
         new_self_attention.sdpa.compute_kernel_config = compute_kernel_config
         return new_self_attention
+
+
+class TTNNWhisperAttention(TTNNModule):
+    """Minimal TTNN Whisper Attention with KV cache."""
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        is_causal: bool = False,
+        layer_idx: Optional[int] = None,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scaling = self.head_dim**-0.5
+        self.is_causal = is_causal
+        self.layer_idx = layer_idx
+        self.dropout = dropout
+
+        if (self.head_dim * num_heads) != self.embed_dim:
+            raise ValueError(f"embed_dim={embed_dim} must be divisible by num_heads={num_heads}")
+
+        self.sdpa = TTNNSDPAAttention()
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+        self.sdpa.program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+            q_chunk_size=256,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+        self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    @classmethod
+    def from_torch(cls, whisper_attn: "WhisperAttention"):
+        new_attn = cls(
+            embed_dim=whisper_attn.embed_dim,
+            num_heads=whisper_attn.num_heads,
+            dropout=whisper_attn.dropout,
+            is_causal=whisper_attn.is_causal,
+            layer_idx=whisper_attn.layer_idx,
+        )
+        new_attn._fallback_torch_layer = whisper_attn
+
+        # Fuse Q/K/V for self-attention (zero-pad K bias)
+        qkv_weight = torch.cat([whisper_attn.q_proj.weight, whisper_attn.k_proj.weight, whisper_attn.v_proj.weight])
+        qkv_bias = torch.cat(
+            [whisper_attn.q_proj.bias, torch.zeros_like(whisper_attn.q_proj.bias), whisper_attn.v_proj.bias]
+        )
+        fused_qkv = torch.nn.Linear(whisper_attn.embed_dim, whisper_attn.embed_dim * 3, bias=True)
+        fused_qkv.weight = torch.nn.Parameter(qkv_weight)
+        fused_qkv.bias = torch.nn.Parameter(qkv_bias)
+        new_attn.qkv_proj = TTNNLinear.from_torch(fused_qkv)
+        new_attn.q_proj_ttnn = TTNNLinear.from_torch(whisper_attn.q_proj)
+        # Separate K/V for cross-attention
+        new_attn.k_proj_cross = TTNNLinear.from_torch(whisper_attn.k_proj)
+        new_attn.v_proj_cross = TTNNLinear.from_torch(whisper_attn.v_proj)
+        new_attn.out_proj = TTNNLinear.from_torch(whisper_attn.out_proj)
+
+        return new_attn
+
+    def _reshape_heads(self, x: ttnn.Tensor, seq_len: int, bsz: int) -> ttnn.Tensor:
+        x = ttnn.reshape(x, (bsz, seq_len, self.num_heads, self.head_dim))
+        return ttnn.permute(x, (0, 2, 1, 3))
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        key_value_states: Optional[ttnn.Tensor] = None,
+        past_key_value=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        is_cross = key_value_states is not None
+        bsz, tgt_len = hidden_states.shape[0], hidden_states.shape[1]
+
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Cache logic
+        cache = None
+        is_updated = False
+        if past_key_value is not None:
+            is_updated = past_key_value.is_updated.get(self.layer_idx, False)
+            cache = past_key_value.cross_attention_cache if is_cross else past_key_value.self_attention_cache
+            if is_cross:
+                past_key_value.is_updated[self.layer_idx] = True
+
+        # Q/K/V projection
+        if is_cross:
+            # Cross-attention: extract Q from fused weights
+            query = self.q_proj_ttnn(hidden_states)
+            query = ttnn.multiply(query.to_ttnn, self.scaling)
+            query = self._reshape_heads(query, tgt_len, bsz)
+
+            if cache and is_updated:
+                key, value = cache.key_cache[self.layer_idx], cache.value_cache[self.layer_idx]
+            else:
+                if key_value_states.layout != ttnn.TILE_LAYOUT:
+                    key_value_states = ttnn.to_layout(
+                        key_value_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                key = self.k_proj_cross(key_value_states).to_ttnn
+                value = self.v_proj_cross(key_value_states).to_ttnn
+                src_len = key.shape[1]
+                key = self._reshape_heads(key, src_len, bsz)
+                value = self._reshape_heads(value, src_len, bsz)
+                if cache is not None:
+                    key, value = cache.update(
+                        TorchTTNNTensor(key), TorchTTNNTensor(value), self.layer_idx, {"cache_position": None}
+                    )
+        else:
+            # Self-attention: fused QKV
+            hidden_states = ttnn.unsqueeze(hidden_states, 1)
+            query_key_value = self.qkv_proj(hidden_states).ttnn_tensor
+            query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
+            query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+                query_key_value,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_heads=self.num_heads,
+                num_kv_heads=self.num_heads,
+                transpose_k_heads=False,
+            )
+
+            ttnn.deallocate(query_key_value)
+            query = ttnn.multiply(query, self.scaling)
+            if cache is not None:
+                key, value = cache.update(
+                    TorchTTNNTensor(key),
+                    TorchTTNNTensor(value),
+                    self.layer_idx,
+                    {"cache_position": kwargs.get("cache_position")},
+                )
+
+        # SDPA
+        attn_out = self.sdpa(
+            self,
+            query,
+            key,
+            value,
+            attention_mask,
+            dropout=0.0,
+            scaling=1.0,
+            is_causal=self.is_causal and not is_cross,
+            transpose_output=True,
+        )
+        attn_out = ttnn.reshape(attn_out.to_ttnn, (bsz, tgt_len, self.embed_dim))
+        return self.out_proj(attn_out), None, past_key_value
