@@ -111,7 +111,7 @@ jobs:
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
-          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/tt-metalium-ci/manylinux_2_28_x86_64:main-ca8e3a662-20250107193817
+          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/manylinux-amd64:4b5109cda67b90f295ef687f30d1a759d6b42075
 
       - name: Set wheel artifact name
         id: set_wheel_artifact_name
