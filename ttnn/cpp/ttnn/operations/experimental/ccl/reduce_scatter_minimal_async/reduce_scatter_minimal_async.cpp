@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_minimal_async.hpp"
-#include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
+#include "device/reduce_scatter_minimal_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
