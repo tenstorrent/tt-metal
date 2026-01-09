@@ -29,7 +29,7 @@ class TtModelArgs:
     # Seqlen < 8k -> Batch_size = 32
     max_batch_size = 8  # Max batch size supported when max_seq_len = 32768
     max_seq_len = 32768  # Maximum supported sequence length
-    moe = True
+    is_mixture_of_experts = True
     num_experts = 8
     num_experts_per_tok = 2
 
