@@ -2,9 +2,93 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import contextlib
+import fcntl
+import os
+import time
+
 import pytest
 
 import ttnn
+
+# ==============================================================================
+# Device Lock - Coordinates exclusive access to TT devices across processes
+# ==============================================================================
+
+_TT_DEVICE_LOCK_PATH = os.environ.get("TT_DEVICE_LOCK_PATH", "/tmp/tt_device.lock")
+_TT_DEVICE_LOCK_TIMEOUT = float(os.environ.get("TT_DEVICE_LOCK_TIMEOUT", "60"))  # 1 min default
+
+
+class DeviceLockTimeout(Exception):
+    """Raised when acquiring the device lock times out."""
+
+
+@contextlib.contextmanager
+def tt_device_lock(lock_path: str = _TT_DEVICE_LOCK_PATH, timeout: float = _TT_DEVICE_LOCK_TIMEOUT):
+    """
+    Context manager for exclusive access to TT devices.
+
+    Uses flock for cross-process coordination. Blocks until lock is acquired
+    or timeout is reached.
+
+    Usage:
+        with tt_device_lock():
+            mesh = ttnn.open_mesh_device(...)
+            # ... do work ...
+            ttnn.close_mesh_device(mesh)
+
+    Debug stuck locks with: lsof /tmp/tt_device.lock
+
+    Environment variables:
+        TT_DEVICE_LOCK_PATH: Override lock file path (default: /tmp/tt_device.lock)
+        TT_DEVICE_LOCK_TIMEOUT: Override timeout in seconds (default: 300)
+    """
+    lock_dir = os.path.dirname(lock_path)
+    if lock_dir and not os.path.exists(lock_dir):
+        os.makedirs(lock_dir, exist_ok=True)
+
+    lock_file = open(lock_path, "a+")  # open the file in append mode to avoid truncation race condition among processes
+    start_time = time.monotonic()
+    lock_acquired = False
+
+    try:
+        # Poll for lock with timeout
+        logged_waiting = False
+        while True:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_acquired = True
+                break
+            except BlockingIOError:
+                pass  # Lock held by another process
+
+            if not logged_waiting:
+                print(f"[tt_device_lock] Waiting for device lock (held by another process)...")
+                print(f"[tt_device_lock] Debug with: lsof {lock_path}")
+                logged_waiting = True
+
+            if time.monotonic() - start_time >= timeout:
+                lock_file.close()
+                raise DeviceLockTimeout(
+                    f"Timed out after {timeout}s waiting for device lock. " f"Check: lsof {lock_path}"
+                )
+
+            time.sleep(1)  # sleep for 1 second to avoid busy-waiting
+
+        if logged_waiting:
+            print(f"[tt_device_lock] Lock acquired after {time.monotonic() - start_time:.1f}s")
+
+        # Write PID for debugging
+        lock_file.truncate(0)  # clear the file
+        lock_file.write(f"{os.getpid()}\n")
+        lock_file.flush()
+
+        yield
+
+    finally:
+        if lock_acquired:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
 
 
 def pytest_collection_modifyitems(config, items):
@@ -107,24 +191,27 @@ def ttnn_mesh_device(request):
     # offset behavior here (i.e. no explicit offset selection).
     parent_device = None
     submesh_device = None
-    try:
-        if req_shape != parent_shape:
-            parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
-            submesh_device = parent_device.create_submesh(ttnn.MeshShape(req_shape))
-            yield submesh_device
-        else:
-            parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
-            yield parent_device
-    except Exception as e:
-        pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
-    finally:
-        if submesh_device is not None:
-            ttnn.close_mesh_device(submesh_device)
-        if parent_device is not None:
-            ttnn.close_mesh_device(parent_device)
-        if fabric_config:
-            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-        del parent_device
+
+    # Acquire exclusive lock to prevent concurrent device access across processes
+    with tt_device_lock():
+        try:
+            if req_shape != parent_shape:
+                parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
+                submesh_device = parent_device.create_submesh(ttnn.MeshShape(req_shape))
+                yield submesh_device
+            else:
+                parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
+                yield parent_device
+        except Exception as e:
+            pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
+        finally:
+            if submesh_device is not None:
+                ttnn.close_mesh_device(submesh_device)
+            if parent_device is not None:
+                ttnn.close_mesh_device(parent_device)
+            if fabric_config:
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+            del parent_device
 
 
 def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:
