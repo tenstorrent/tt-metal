@@ -264,12 +264,13 @@ class WanCausalConv3d:
 
         padded_weight, padded_bias = maybe_pad_out_channels(state_dict["weight"], state_dict["bias"])
 
-        self.conv_weight, self.conv_bias = prepare_conv3d_weights(
+        self.conv_weight, self.conv_bias, iC_per_group_block = prepare_conv3d_weights(
             self.mesh_device,
             padded_weight,
             padded_bias,
             self.conv_config,
         )
+        self.conv_config.iC_per_group_block = iC_per_group_block
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -661,12 +662,13 @@ class WanConv2d:
 
         reshaped_weight = conv2d_to_conv3d_weight(state_dict["weight"])
 
-        self.conv_weight, self.conv_bias = prepare_conv3d_weights(
+        self.conv_weight, self.conv_bias, iC_per_group_block = prepare_conv3d_weights(
             self.mesh_device,
             reshaped_weight,
             state_dict["bias"],
             self.conv_config,
         )
+        self.conv_config.iC_per_group_block = iC_per_group_block
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]

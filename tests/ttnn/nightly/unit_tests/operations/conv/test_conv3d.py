@@ -33,30 +33,34 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     ],
     ids=["stride_111", "stride_135"],
 )
+@pytest.mark.parametrize("groups", [1, 2, 4], ids=["groups_1", "groups_2", "groups_4"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, groups, padding, padding_mode):
     if padding == (0, 0, 0) and padding_mode == "replicate":
         pytest.skip("Skipping padding (0, 0, 0) and padding_mode replicate because it's duplicate")
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
     kernel_size = kernel_size
     stride = stride
+    groups = groups
     padding = padding
     padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
-    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
+    run_conv3d_test(
+        device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, grid_size=grid_size
+    )
 
 
 @pytest.mark.parametrize(
-    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode",
     [
         [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
         [(3, 64, 8, 8, 8), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
     ],
 )
 @pytest.mark.timeout(1000)
-def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
     """
     For a specific shape, sweep through different block sizes.
     Constrain the sweep such that the num_patches in a block doesn't exceed 64
@@ -65,7 +69,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
 
     grid_size = device.compute_with_storage_grid_size()
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
@@ -93,7 +97,9 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
         # Prepare weights with specified C_in_block
         if prev_C_in_block != C_in_block:
             # Only prepare if changing C_in_block
-            tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+            tt_weight, tt_bias, iC_per_group_block = prepare_weights(
+                conv3d_module, C, out_channels, groups, device, C_in_block=C_in_block
+            )
             prev_C_in_block = C_in_block
 
         config = create_conv3d_config(
@@ -102,6 +108,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             W_out_block=W_out_block,
             C_out_block=C_out_block,
             C_in_block=C_in_block,
+            iC_per_group_block=iC_per_group_block,
             compute_with_storage_grid_size=grid_size,
         )
 
@@ -115,7 +122,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             stride=stride,
             padding=padding,
             padding_mode=padding_mode,
-            groups=1,
+            groups=groups,
             config=config,
             compute_kernel_config=kernel_config,
         )
@@ -133,13 +140,14 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
 
 
 @pytest.mark.parametrize(
-    "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
+    "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking",
     [
         [
             (1, 768, 4, 60, 106),
             768,
             (3, 3, 3),
             (1, 1, 1),
+            1,
             (0, 1, 1),
             "replicate",
             (128, 96, 1, 2, 16),
@@ -149,6 +157,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             512,
             (3, 3, 3),
             (1, 1, 1),
+            1,
             (0, 1, 1),
             "replicate",
             (128, 128, 1, 8, 4),
@@ -158,6 +167,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             256,
             (3, 3, 3),
             (1, 1, 1),
+            1,
             (0, 1, 1),
             "replicate",
             (128, 128, 4, 4, 2),
@@ -167,6 +177,7 @@ def test_conv3d_sweep_blocks(device, input_shape, out_channels, kernel_size, str
             128,
             (3, 3, 3),
             (1, 1, 1),
+            1,
             (0, 1, 1),
             "replicate",
             (128, 128, 1, 2, 16),
@@ -180,6 +191,7 @@ def test_conv3d_mochi_shapes(
     out_channels,
     kernel_size,
     stride,
+    groups,
     padding,
     padding_mode,
     blocking,
@@ -190,13 +202,15 @@ def test_conv3d_mochi_shapes(
 
     C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+    tt_weight, tt_bias, iC_per_group_block = prepare_weights(
+        conv3d_module, C, out_channels, groups, device, C_in_block=C_in_block
+    )
 
     config = create_conv3d_config(
         T_out_block=T_out_block,
@@ -204,6 +218,7 @@ def test_conv3d_mochi_shapes(
         W_out_block=W_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
+        iC_per_group_block=iC_per_group_block,
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
     )
 
