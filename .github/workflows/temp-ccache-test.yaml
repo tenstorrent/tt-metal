@@ -16,6 +16,254 @@ jobs:
       version: 22.04
       skip-tt-train: false
 
+  ttnn-ccache-test:
+    needs: build-artifact
+    name: TTNN CCache Test (3 runs on same machine)
+    runs-on: tt-ubuntu-2204-N150-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+        TT_METAL_LOGGER_LEVEL: Debug
+        TT_METAL_LOGGER_TYPES: BuildKernels
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+
+      - name: Create ccache tmpdir
+        run: mkdir -p /tmp/ccache
+
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: ⬇️ Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          enable-watcher: false
+
+      - name: Initial ccache configuration and stats
+        run: |
+          echo "=== TTNN RUN 1: Initial ccache configuration ==="
+          ccache --show-config | head -40
+          echo ""
+          echo "=== Redis Remote Storage Configuration ==="
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE:-not set}"
+          echo "CCACHE_REMOTE_ONLY: ${CCACHE_REMOTE_ONLY:-not set}"
+          echo "CCACHE_TEMPDIR: ${CCACHE_TEMPDIR:-not set}"
+          echo ""
+          echo "=== Git commit info ==="
+          echo "Git commit: $(git rev-parse HEAD)"
+          echo "Git commit short: $(git rev-parse --short=10 HEAD)"
+          echo ""
+          echo "=== Zeroing ccache stats ==="
+          ccache -z
+          echo "=== Initial ccache stats ==="
+          ccache -s
+
+      - name: Clear kernel caches to force fresh compilation
+        run: |
+          echo "=== Clearing all kernel caches to force JIT compilation ==="
+          rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
+          rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+          echo "Kernel caches cleared"
+
+      - name: Run TTNN tests (First run)
+        timeout-minutes: 30
+        run: |
+          echo "========================================="
+          echo "=== TTNN RUN 1: First ccache population ===="
+          echo "========================================="
+          pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_first_run.log
+
+      - name: Analyze ccache after Run 1
+        run: |
+          echo "=== TTNN RUN 1: ccache statistics after test ==="
+          ccache -s
+          echo ""
+          echo "=== Kernel cache locations ==="
+          echo "Checking ~/.cache/tt-metal-cache/:"
+          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | wc -l || echo "0"
+          echo ""
+          echo "=== Redis Key Check ==="
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_PASS="${{ secrets.REDIS_PASSWORD }}"
+
+          if [ -n "$REDIS_HOST" ] && [ -n "$REDIS_PASS" ]; then
+            if ! command -v redis-cli &> /dev/null; then
+              echo "Installing redis-cli..."
+              apt-get update -qq && apt-get install -y -qq redis-tools 2>&1 | grep -v "^Selecting\|^Preparing\|^Unpacking" || true
+            fi
+
+            TOTAL_KEYS=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --no-auth-warning -a "$REDIS_PASS" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || echo "0")
+            echo "Total keys in Redis after TTNN Run 1: ${TOTAL_KEYS}"
+          fi
+
+      - name: Clear kernel caches for Run 2 (but keep ccache)
+        run: |
+          echo ""
+          echo "========================================="
+          echo "=== Preparing TTNN RUN 2: Test ccache hits ==="
+          echo "========================================="
+          echo "Clearing kernel binaries to force recompilation (ccache should provide hits)"
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+          echo "Kernel binaries cleared, ccache intact"
+          echo ""
+          echo "=== Zeroing ccache stats for Run 2 ==="
+          ccache -z
+          ccache -s
+
+      - name: Run TTNN tests (Second run - expect ccache hits)
+        timeout-minutes: 30
+        run: |
+          echo "=== Running TTNN unit tests (RUN 2 - should hit ccache) ==="
+          pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_second_run.log
+
+      - name: Analyze ccache after Run 2
+        run: |
+          echo "=== TTNN RUN 2: ccache statistics after test ==="
+          ccache -s
+          echo ""
+          STATS=$(ccache -s)
+          CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
+          CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
+          TOTAL=$((CACHE_HITS + CACHE_MISS))
+
+          echo "=== Cache Hit Analysis ==="
+          if [ "$TOTAL" -gt 0 ]; then
+            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
+            echo "Cache hit rate: ${HIT_RATE}% (${CACHE_HITS} hits / ${TOTAL} total)"
+
+            if [ "$CACHE_HITS" -eq 0 ]; then
+              echo "🔴 ZERO CACHE HITS - ccache not working for TTNN tests!"
+            elif [ "$HIT_RATE" -gt 70 ]; then
+              echo "✅ Good cache hit rate!"
+            else
+              echo "⚠️  Lower than expected cache hit rate"
+            fi
+          else
+            echo "ℹ️  No cache activity detected"
+          fi
+
+      - name: Clear kernel caches for Run 3
+        run: |
+          echo ""
+          echo "========================================="
+          echo "=== Preparing TTNN RUN 3: Verify consistency ==="
+          echo "========================================="
+          echo "Clearing kernel binaries for third test"
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+          echo ""
+          echo "=== Zeroing ccache stats for Run 3 ==="
+          ccache -z
+          ccache -s
+
+      - name: Run TTNN tests (Third run)
+        timeout-minutes: 30
+        run: |
+          echo "=== Running TTNN unit tests (RUN 3) ==="
+          pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" 2>&1 | tee /tmp/ttnn_third_run.log
+
+      - name: Analyze final ccache stats
+        run: |
+          echo "=== TTNN RUN 3: Final ccache statistics ==="
+          ccache -s
+
+      - name: Publish ccache summary
+        run: |
+          echo '## CCache TTNN Unit Tests Results' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks if ccache works consistently for TTNN unit tests across rebuilds from the same commit using Redis as the remote storage backend.' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          STATS=$(ccache -s)
+          echo '### Final CCache Stats (TTNN Run 3)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$STATS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          CACHE_HITS=$(echo "$STATS" | grep -i "cache hit" | grep -oE '[0-9]+' | head -1 || echo "0")
+          CACHE_MISS=$(echo "$STATS" | grep -i "cache miss" | grep -oE '[0-9]+' | head -1 || echo "0")
+          TOTAL=$((CACHE_HITS + CACHE_MISS))
+
+          if [ "$TOTAL" -gt 0 ]; then
+            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
+            echo "- Cache hits: ${CACHE_HITS}" >> $GITHUB_STEP_SUMMARY
+            echo "- Cache misses: ${CACHE_MISS}" >> $GITHUB_STEP_SUMMARY
+            echo "- Hit rate: ${HIT_RATE}%" >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+
+            if [ "$HIT_RATE" -lt 30 ]; then
+              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for TTNN kernel compilation with Redis.' >> $GITHUB_STEP_SUMMARY
+            elif [ "$HIT_RATE" -lt 70 ]; then
+              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring with Redis backend.' >> $GITHUB_STEP_SUMMARY
+            else
+              echo '🟢 **GOOD**: High cache hit rate indicates ccache with Redis is working well for TTNN kernel compilation.' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo '⚪ **NO DATA**: No cache activity detected. Redis remote storage may not be configured properly.' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload TTNN debug logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ttnn-ccache-debug-logs-${{ github.run_id }}
+          path: |
+            /tmp/ttnn_first_run.log
+            /tmp/ttnn_second_run.log
+            /tmp/ttnn_third_run.log
+          retention-days: 14
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07ASPTGJTS
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/generated/test_reports/
+          prefix: "ttnn_test_reports_"
+
   tt-train-test-run-1:
     needs: build-artifact
     name: tt-train Run 1 (First ccache population)
