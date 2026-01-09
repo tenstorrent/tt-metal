@@ -215,12 +215,6 @@ def upsample_multicore_common(
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
-    ## output shard
-    shard_height = shard_height * scale_h * scale_w
-    shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
-
     scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
@@ -234,7 +228,6 @@ def upsample_multicore_common(
             input_tensor,
             scale_factor,
             mode="bilinear",
-            memory_config=out_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
         if run_twice:
@@ -243,14 +236,13 @@ def upsample_multicore_common(
                 input_tensor,
                 scale_factor,
                 mode="bilinear",
-                memory_config=out_sharded_mem_config,
                 compute_kernel_config=compute_kernel_config,
             )
     else:
-        output_tensor = ttnn.upsample(input_tensor, scale_factor, memory_config=out_sharded_mem_config)
+        output_tensor = ttnn.upsample(input_tensor, scale_factor)
         if run_twice:
             ttnn.deallocate(output_tensor, True)
-            output_tensor = ttnn.upsample(input_tensor, scale_factor, memory_config=out_sharded_mem_config)
+            output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -558,3 +550,58 @@ def test_nearest_upsample_with_uneven_input_shards(
 
     assert allclose
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape, scale_factor_h, scale_factor_w",
+    [
+        # Basic fractional upscaling
+        ((1, 8, 8, 64), 1.5, 1.5),
+        ((1, 16, 16, 128), 1.25, 1.25),
+        ((1, 8, 8, 32), 2.5, 2.5),
+        # Asymmetric float scales
+        ((1, 8, 16, 64), 1.5, 2.0),
+        ((1, 16, 8, 128), 2.0, 1.5),
+        # Downscaling
+        ((1, 16, 16, 64), 0.5, 0.5),
+        ((1, 32, 32, 128), 0.75, 0.75),
+        # Mixed upscale/downscale
+        ((1, 8, 16, 64), 2.0, 0.5),
+        ((1, 16, 8, 128), 0.5, 2.0),
+        # Typical ML shapes
+        ((1, 28, 28, 64), 2.0, 2.0),
+    ],
+)
+def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h, scale_factor_w):
+    """Test upsample with float scale factors using interleaved memory."""
+    torch.manual_seed(42)
+
+    batch, height, width, channels = input_shape
+    input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # PyTorch reference (uses NCHW)
+    input_nchw = input_nhwc.permute(0, 3, 1, 2)
+    torch_result_nchw = nn.functional.interpolate(
+        input_nchw, scale_factor=(scale_factor_h, scale_factor_w), mode="nearest"
+    )
+    torch_result = torch_result_nchw.permute(0, 2, 3, 1)
+
+    input_tensor = ttnn.from_torch(
+        input_nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    output_tensor = ttnn.upsample(input_tensor, [scale_factor_h, scale_factor_w], mode="nearest")
+    output_torch = ttnn.to_torch(output_tensor)
+
+    assert list(output_torch.shape) == list(
+        torch_result.shape
+    ), f"Shape mismatch: expected {list(torch_result.shape)}, got {list(output_torch.shape)}"
+
+    is_equal = torch.equal(output_torch, torch_result)
+    if not is_equal:
+        pcc_passed, pcc_message = assert_with_pcc(torch_result, output_torch, pcc=0.9999)
+        logger.info(pcc_message)
+        assert pcc_passed, f"PCC check failed: {pcc_message}"
