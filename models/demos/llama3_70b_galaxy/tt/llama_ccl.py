@@ -626,7 +626,7 @@ class TT_CCL:
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                    "WO": [(1, 1, seqlen, 2048)],
+                    "WO_AG": [(8, 1, seqlen, 2048)],
                     "FF1": [(1, 1, seqlen, 3584)],
                     "FF3": [(1, 1, seqlen, 3584)],
                     "FF2": [(1, 1, seqlen, 2048)],
@@ -637,7 +637,7 @@ class TT_CCL:
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                    "WO": [(1, 1, seqlen, 1280)],
+                    "WO_AG": [(8, 1, seqlen, 1280)],
                     "FF1": [(1, 1, seqlen, 3200)],
                     "FF3": [(1, 1, seqlen, 3200)],
                     "FF2": [(1, 1, seqlen, 1280)],
@@ -722,7 +722,7 @@ class TT_CCL:
                 persistent_buffer.deallocate(True)
 
         else:
-            if lm_head:
+            if buffer_key == "WO_AG" or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
                     dim=0,
@@ -1175,7 +1175,7 @@ class TT_CCL:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
-            if buffer_key != "LM_HEAD":
+            if buffer_key not in ["LM_HEAD", "WO_AG"]:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
