@@ -39,7 +39,7 @@ jobs:
           {
             name: "models_common_unit_tests",
             arch: wormhole_b0,
-            cmd: pytest --tb=short models/common/tests,
+            cmd: pytest --tb=short --ignore=models/common/tests/test_sampling.py models/common/tests && pytest --tb=short models/common/tests/test_sampling.py,
             timeout: 5,
             owner_id: U07RY6B5FLJ,  #Gongyu Wang
           },
