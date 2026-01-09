@@ -533,8 +533,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
     DataType dtype_a = input_tensor_a.dtype();
     DataType dtype_b = input_tensor_b.dtype();
-    bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
-        binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
+    bool is_sfpu_op =
+        (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
+    // std::cout << "is_sfpu_op: " << is_sfpu_op << std::endl;
+    // std::cout << "fast_and_approximate_mode: " << fast_and_approximate_mode.value_or(true) << std::endl;
     bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
