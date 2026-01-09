@@ -829,7 +829,7 @@ A few important caveats to keep in mind when using DPRINT:
   Each distinct DPRINT call embeds a format string (and often the file name and line number) into the kernel binary.
   Long or numerous debug strings increase kernel size and may cause it to not fit into available internal SRAM.
   To avoid this, keep DPRINT messages short, particularly if printing within a loop with many iterations.
-  You can also reduce the number of iterations by reducing the problem size while debugging.
+  You can also reduce the number of iterations by reducing the problem size while debugging. 
   Finally, remove or disable most DPRINTs once you have diagnosed the issue.
 
 Taken together, these practices let you use DPRINT as a practical, low-level debug tool in TT-Metalium kernels without

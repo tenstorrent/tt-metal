@@ -232,7 +232,7 @@ void eltwise_add_tensix(
     // functionality or performance.
     KernelHandle reader_id = tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_eltwise_binary/kernels/dataflow/read_tiles.cpp",
+        OVERRIDE_KERNEL_PREFIX "lab_eltwise_binary/kernels/dataflow/read_tiles.cpp",
         prog_state.core,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -243,7 +243,7 @@ void eltwise_add_tensix(
     TensorAccessorArgs(*dst_mesh_buffer).append_to(writer_compile_time_args);
     KernelHandle writer_id = tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_eltwise_binary/kernels/dataflow/write_tiles.cpp",
+        OVERRIDE_KERNEL_PREFIX "lab_eltwise_binary/kernels/dataflow/write_tiles.cpp",
         prog_state.core,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -259,7 +259,7 @@ void eltwise_add_tensix(
 
     tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp",
+        OVERRIDE_KERNEL_PREFIX "lab_eltwise_binary/kernels/compute/tiles_add.cpp",
         prog_state.core,
         tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
