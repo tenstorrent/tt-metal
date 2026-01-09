@@ -41,6 +41,11 @@ from helpers.utils import passed_test
 def test_pack_untilize(
     formats, dest_acc, input_dimensions, dest_sync, workers_tensix_coordinates
 ):
+    if TestConfig.WITH_COVERAGE and input_dimensions == [96, 288]:
+        pytest.skip(
+            "Skipping large dimension test in coverage mode, check issue: #1063 on TT-LLK repo"
+        )
+
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b format")
 
