@@ -18,7 +18,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES slice_write.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -32,16 +32,14 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_slice_write PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_slice_write
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_slice_write PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
         ttnn_op_experimental_slice_write
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/slice_write
