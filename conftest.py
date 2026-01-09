@@ -722,7 +722,12 @@ def reset_default_device(request):
     if "no_reset_default_device" in request.keywords:
         yield
         return
-    device = ttnn.GetDefaultDevice()
+
+    try:
+        device = ttnn.GetDefaultDevice()
+    except Exception:
+        logger.warning("Device handle is stale/crashed - setting saved device to None")
+        device = None
 
     yield
 
